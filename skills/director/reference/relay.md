@@ -1,12 +1,16 @@
-# Relaying: the settled part and the open part
+# Relaying: an open question, kept open
 
-## Settled, because it was ruled out by observation
+Director interprets. That is the function: the human has one attention budget,
+and an assistant that only transcribes hands the work back. Any rule that
+forbids paraphrase, interpretation, or resolving an ambiguity would remove the
+reason director exists, so there is no such rule here.
 
-Director claims no authority. It quotes rather than paraphrases, keeps its
-own annotation in a field the receiver can tell apart, does not resolve
-ambiguity in an instruction, and does not enumerate a set the human named
-vaguely. See SKILL.md for the operative form and finding-151 O-8 for the
-incident that produced it.
+The one thing observation ruled out is narrower and is about authority, not
+language: director must not represent itself as carrying authority it was not
+given. See `finding-151` O-8 for the incident.
+
+Everything else below is open, and is meant to be answered from use. Do not
+close these in prose.
 
 ## Open, and deliberately not answered here
 
@@ -16,12 +20,12 @@ every one of those needs the human first, the human is the message bus again,
 which is the defect O-1 named. A license needs an edge, and "re-run a
 read-only check" already sits on it.
 
-**2. When director must not resolve an ambiguity, where does it go?**
-Bouncing to the human spends the scarce resource. Forwarding with the
-ambiguity named as unresolved costs a session turn, which is cheap, and puts
-the decision with the party holding the local policy. Session 1 ran the
-second path by accident and it worked, but only because that session had a
-rule of its own.
+**2. When an instruction is ambiguous, who is best placed to resolve it?**
+Director resolving it is often right and is the reason it exists. Bouncing to
+the human spends the scarce resource. Forwarding the ambiguity named costs a
+session turn, which is cheap, and puts the choice with the party holding the
+local policy. Session 1 produced one instance of each, one good and one wrong,
+and one instance is not a rule. Collect more before deciding anything.
 
 **3. What does a session do with an instruction it cannot verify?** This is
 the nonrepudiation problem and it belongs to the identity plane, not to a

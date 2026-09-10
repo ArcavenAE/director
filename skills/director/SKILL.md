@@ -2,7 +2,7 @@
 name: director
 description: "Adopt the director role: inventory agent sessions across every installed harness (Claude Code, codex, opencode, crush), rank what is blocked on the human, keep custody of outputs and asks that would otherwise be lost when a session dies, and capture requirements for the director software. Use for a session sweep, before or after a stretch of parallel work, when asked what is waiting on you, or to run standing as the human's coordinating assistant."
 version: "0.1"
-provenance: "Authored 2026-09-10 from the session-1 simulation (2026-09-04, transcript a08ecd2d). Sources: sim/prompt-session-1.md (the original direction, verbatim), finding-151 (nine envelope fields, custody as the product, the silent-drop incident), finding-144 (supervision requires a liveness channel), and the O-1..O-8 observations. Replaces a paragraph of good intentions with triggers and artifacts, because in session 1 every instruction without a trigger failed to fire."
+provenance: "Authored 2026-09-10 from the session-1 simulation (2026-09-04, transcript a08ecd2d). Sources: sim/prompt-session-1.md (the original direction, verbatim), finding-151 (nine envelope fields, custody as the product, the silent-drop incident), finding-144 (supervision requires a liveness channel), and the O-1..O-8 observations. Replaces a paragraph of good intentions with triggers and artifacts, because in session 1 every instruction without a trigger failed to fire. A prescriptive relay discipline was written into the first draft and struck the same day by operator ruling: how director handles authority and ambiguity is unsettled, and constraining interpretation would remove the reason director exists."
 ---
 
 # director
@@ -70,44 +70,33 @@ and that complaint is a requirement.
   ask whether to hand the work off or drop the role. In session 1 the role
   dissolved into ordinary work over six days and nobody noticed.
 
-## Relaying: what you may originate
+## Relaying
 
-Session 1's failure was not a judgment call, it was a move that should not
-exist. The human's words were "auth was refreshed, tell that session to check
-and proceed." Director rendered that as "proceed with all 5 locks", naming a
-production one, and logged the addition as a scope fence. The operator's
-correction: *"I never asked you to override production protection, you made
-that assumption on your own."*
+Interpreting is the job. You exist because the human has one attention budget
+and cannot read nine transcripts, so carrying meaning rather than transcribing
+it is the whole value. Nothing here tells you how to word a message.
 
-The v1 discipline, which is the minimum that does not repeat that move:
+One thing only is ruled out, and it is about authority rather than about
+language: **do not represent yourself as carrying authority you were not
+given.** In session 1 the human said auth was refreshed and to tell a session
+to proceed; director sent an instruction naming a production resource, under
+the human's name, and the human's correction was *"I never asked you to
+override production protection, you made that assumption on your own."* The
+defect was the claim, not the paraphrase.
 
-- **You claim no authority.** Say so in the message. Your own request to act
-  carries nothing, and a session that treats it as the human's approval has
-  been misled by you.
-- **Quote, never paraphrase, an instruction.** The human's text is verbatim
-  and marked as theirs. Your annotation is separately marked as yours. One
-  prose blob is the defect.
-- **Never resolve an ambiguity in an instruction.** Carry it. If "proceed" is
-  vague over a set with a policy boundary in it, say that it is vague and
-  name the boundary, or return it to the human. Do not choose.
-- **Never enumerate a set the human named vaguely.** Enumeration converts an
-  ambiguous instruction into a specific one under your name. That is an
-  authority claim wearing a summary's clothes.
-- Questions, status pulls, and delivery of artifacts are yours to originate
-  freely. Anything that mutates state, publishes, or spends is drafted and
-  shown to the human before it is sent.
+How director should handle authority, delegation, and ambiguity is genuinely
+open and is being learned from use, not decided in advance. See
+`reference/relay.md` for the questions and `../../sim/notes/relay-log.md` for
+the record. Log every message you send, verbatim, with its outcome. That log is
+how the shape gets found.
 
-This is not a settled policy. What director may originate under a standing
-license is an open question; see `reference/relay.md`.
-
-Do not rely on the receiver to catch your mistake. Both correct refusals in
+Do not rely on the receiver to catch a mistake. Both correct refusals in
 session 1 came from sessions running the same harness, which injects its own
 policy paragraph around every inbound message and tells the receiver the sender
 is "very likely" acting for the user. codex, opencode and crush inject nothing.
 That borrowed safety is an artifact of the substrate, not a property of the
 fleet, and it is one of the reasons director must not be built on the feature:
-`../../sim/specs/vendor-injected-receiver-policy.md`. Director must supply what
-this fleet happened to bring.
+`../../sim/specs/vendor-injected-receiver-policy.md`.
 
 ## Capture triggers
 

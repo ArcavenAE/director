@@ -43,7 +43,7 @@ inheriting safety we cannot inspect and cannot carry:
 ## Layout
 
 ```
-skills/director/     the skill: role, modes, relay discipline, capture triggers
+skills/director/     the skill: role, modes, output contract, capture triggers
   reference/         measured capability table; the settled and open relay questions
   scripts/dsi        session inventory across all four adapters
   scripts/dsx        external state verification (the board has no expiry)
