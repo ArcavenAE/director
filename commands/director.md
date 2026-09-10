@@ -12,4 +12,4 @@ stranded, running, and uncaptured. One line per item. Take no action and send
 no messages.
 
 In standing mode: adopt the director role for the remainder of the session,
-including the relay discipline and the capture triggers.
+including the capture triggers and the relay log.
