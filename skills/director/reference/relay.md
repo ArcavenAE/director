@@ -31,15 +31,23 @@ correct refusal observed is luck.
 
 ## Why the harness makes this look easier than it is
 
-Claude Code injects its own policy paragraph around every inbound
-cross-session message, telling the receiver that the sender is *"not typed by
-your user, but very likely working on their behalf"* and to refuse permission
-laundering. "Very likely" is a probability estimate standing where a
-signature belongs, which is a fair description of the whole problem.
+Claude Code does not deliver a message; it delivers the message wrapped in a
+policy paragraph the RECEIVING harness writes, telling the receiver the sender
+is *"not typed by your user, but very likely working on their behalf"* and to
+refuse permission laundering. "Very likely" is a probability estimate standing
+where a signature belongs.
 
-Two consequences. That text is doing part of the safety work attributed to
-receiving sessions in finding-151. And it does not exist on codex, opencode,
-or crush, so the property vanishes the moment director addresses one of them.
+Two consequences while the simulation borrows the feature. That text is doing
+part of the safety work `finding-151` attributed to receiving sessions. And it
+does not exist on codex, opencode, or crush, so the property vanishes the
+moment director addresses one of them.
+
+Full requirement, three template variants, and the seven reasons a director
+that does not use this feature is better:
+`../../sim/specs/vendor-injected-receiver-policy.md`.
+
+Standing rule for the simulation: never record "the session refused correctly"
+without recording that the harness told it to.
 
 ## The harder problem, named and parked
 

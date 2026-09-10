@@ -30,6 +30,16 @@ and accounts. The measured capability table in
 `skills/director/reference/adapters.md` is the argument: of four harnesses
 installed on one machine, exactly one exposes presence or an address.
 
+There is a subtler reason too. Claude Code's own cross-session messaging does
+not deliver a message, it delivers the message wrapped in a policy paragraph
+the receiving harness writes, which tells the receiver the sender is "very
+likely" acting for the user. That hedge is a probability estimate standing
+where a signature belongs, it is not ours to version or extend, and no other
+harness ships anything like it. Building director on that feature means
+inheriting safety we cannot inspect and cannot carry:
+`skills/director/reference/relay.md` and
+`sim/specs/vendor-injected-receiver-policy.md`.
+
 ## Layout
 
 ```
