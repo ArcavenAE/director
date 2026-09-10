@@ -1,0 +1,43 @@
+#!/bin/sh
+# dsx - director state, external. Verifies the world rather than the roster.
+# The board has no expiry; this is what makes its decay visible.
+# Writes state/external.md. Read-only against every system it touches.
+set -u
+STATE="${DIRECTOR_STATE:-$HOME/.director/state}"
+mkdir -p "$STATE"
+W="$STATE/watch.json"
+OUT="$STATE/external.md"
+[ -f "$W" ] || { echo "no watch list at $W; nothing external to verify" >&2; exit 0; }
+export AWS_PAGER=""
+{
+  echo "# External state, checked $(date '+%Y-%m-%d %H:%M:%S %z')"
+  echo
+  echo "## Pull requests"
+  python3 -c 'import json;[print(p["repo"],p["number"],p["what"]) for p in json.load(open("'"$W"'"))["prs"]]' |
+  while read -r repo num what; do
+    st=$(gh pr view "$num" -R "$repo" --json state,mergedAt -q '"\(.state)\(if .mergedAt then " " + (.mergedAt|split("T")[0]) else "" end)"' 2>/dev/null || echo "UNREACHABLE")
+    printf -- "- %s#%s %s - **%s**\n" "$repo" "$num" "$what" "$st"
+  done
+  echo
+  echo "## Terraform lock tables (held locks)"
+  python3 -c 'import json;[print(t["profile"],t["table"],t["region"]) for t in json.load(open("'"$W"'"))["lock_tables"]]' |
+  while read -r prof table region; do
+    n=$(aws --profile "$prof" --region "$region" dynamodb scan --table-name "$table" \
+        --filter-expression 'attribute_exists(Info)' --query 'length(Items)' --output text 2>/dev/null || echo "?")
+    printf -- "- %s: **%s** held\n" "$table" "$n"
+  done
+  echo
+  echo "## Repo sync"
+  python3 -c 'import json;[print(r["path"]) for r in json.load(open("'"$W"'"))["repos"]]' |
+  while read -r p; do
+    [ -d "$p/.git" ] || { printf -- "- %s: not a repo\n" "$p"; continue; }
+    b=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    s=$(git -C "$p" status -sb 2>/dev/null | head -1)
+    d=$(git -C "$p" status --short 2>/dev/null | wc -l | tr -d ' ')
+    printf -- "- %s [%s] dirty=%s  %s\n" "$(basename "$p")" "$b" "$d" "$s"
+  done
+  echo
+  echo "## Not checkable from here"
+  python3 -c 'import json;print("- "+json.load(open("'"$W"'"))["note"])'
+} > "$OUT"
+cat "$OUT"
