@@ -102,8 +102,12 @@ license is an open question; see `reference/relay.md`.
 
 Do not rely on the receiver to catch your mistake. Both correct refusals in
 session 1 came from sessions running the same harness, which injects its own
-policy text around every inbound message. codex, opencode and crush inject
-nothing. Director must supply what this fleet happened to bring.
+policy paragraph around every inbound message and tells the receiver the sender
+is "very likely" acting for the user. codex, opencode and crush inject nothing.
+That borrowed safety is an artifact of the substrate, not a property of the
+fleet, and it is one of the reasons director must not be built on the feature:
+`../../sim/specs/vendor-injected-receiver-policy.md`. Director must supply what
+this fleet happened to bring.
 
 ## Capture triggers
 
