@@ -1,0 +1,471 @@
+#!/usr/bin/env python3
+"""dsi - director session inventory.
+
+Discovers agent sessions across every harness adapter it can see, normalizes
+them into one record shape, and writes machine state plus a human roster.
+
+Adapters declare what they can SUPPLY, not what the harness theoretically
+has. Director degrades per capability instead of assuming every harness looks
+like Claude Code: today only the claude adapter supplies presence or an
+address, and the rest supply history alone.
+
+  $DIRECTOR_STATE/sessions.json   machine state (survives compression)
+  $DIRECTOR_STATE/roster.md       compact human view
+
+Prototype instrument. It reads harness internals that director must not
+depend on later; the capability table is the durable part, not the paths.
+"""
+import json, os, re, sqlite3, sys, time, glob
+
+HOME = os.path.expanduser("~")
+STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
+WINDOW_DAYS = float(os.environ.get("DSI_DAYS", "4"))
+NOW = time.time()
+CUTOFF = NOW - WINDOW_DAYS * 86400
+
+# What each adapter supplies. "no" is a first-class answer and director must
+# read it rather than assume. See reference/adapters.md.
+CAPS = {
+    "claude": {"identity": "yes", "presence": "yes (idle/busy/shell)",
+               "liveness": "pid only", "inbox": "yes (unix socket)",
+               "transcript": "yes", "terminal": "no"},
+    "codex": {"identity": "yes", "presence": "no", "liveness": "no",
+              "inbox": "no", "transcript": "yes", "terminal": "no"},
+    "opencode": {"identity": "yes", "presence": "no", "liveness": "no",
+                 "inbox": "no", "transcript": "metadata only", "terminal": "no"},
+    "crush": {"identity": "yes", "presence": "no", "liveness": "no",
+              "inbox": "no", "transcript": "metadata only", "terminal": "no"},
+}
+
+
+def rec(adapter, sid, **kw):
+    """One session, normalized. Every adapter emits this shape."""
+    r = {"adapter": adapter, "session_id": sid, "name": "", "cwd": "",
+         "project": "", "status": "", "alive": None, "address": "",
+         "started_at": "", "last_ts": "", "mtime": 0.0, "goal": "",
+         "last_user": "", "last_assistant": "", "last_role": "",
+         "n_user": 0, "n_asst": 0, "size": 0, "branch": "", "summary": "",
+         "asks": [], "awaiting": False, "meta": {}}
+    r.update(kw)
+    r["age_h"] = round((NOW - r["mtime"]) / 3600, 1) if r["mtime"] else None
+    r["awaiting"] = bool(r["asks"])
+    return r
+
+
+# ---------------------------------------------------------------- helpers
+
+def txt(content):
+    if isinstance(content, str):
+        return content
+    out = []
+    for b in content or []:
+        if not isinstance(b, dict):
+            continue
+        t = b.get("type")
+        if t in ("text", "input_text", "output_text"):
+            out.append(b.get("text", ""))
+        elif t == "thinking":
+            pass
+        elif t == "tool_use":
+            out.append(f"[tool:{b.get('name')}]")
+        elif t == "tool_result":
+            out.append("[tool_result]")
+    return "\n".join(out)
+
+
+NOISE = re.compile(r"<(command-name|command-message|local-command-stdout|local-command-caveat|system-reminder|user-prompt-submit-hook)")
+
+
+def clean(s, n):
+    s = re.sub(r"<system-reminder>.*?</system-reminder>", "", s or "", flags=re.S)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:n]
+
+
+def tail_lines(path, budget=400_000):
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        if size > budget:
+            f.seek(size - budget)
+            f.readline()
+        return f.read().decode("utf-8", "replace").splitlines()
+
+
+def head_lines(path, n=60):
+    out = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for i, line in enumerate(f):
+            if i >= n:
+                break
+            out.append(line)
+    return out
+
+
+def _pid_alive(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except Exception:
+        return False
+
+
+def _ts(v):
+    """Epoch seconds from a value that may be seconds or milliseconds.
+    crush declares milliseconds in its schema comment but its own trigger
+    writes seconds, so neither store is trusted to say which it used."""
+    try:
+        v = float(v)
+    except Exception:
+        return 0.0
+    return v / 1000.0 if v > 1e12 else v
+
+
+def _iso(epoch):
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(epoch)) if epoch else ""
+
+
+def _sql(db, query, params=()):
+    """Read-only query against a harness store. Never writes, never blocks a
+    live harness: immutable mode opens even while the owner holds the file."""
+    try:
+        uri = f"file:{db}?immutable=1"
+        con = sqlite3.connect(uri, uri=True, timeout=2.0)
+        con.row_factory = sqlite3.Row
+        try:
+            return [dict(r) for r in con.execute(query, params)]
+        finally:
+            con.close()
+    except Exception:
+        return []
+
+
+ASK_RE = re.compile(
+    r"(parked|say the word|your (say-so|call)|tell me|let me know|parked on|"
+    r"needs? (you|your)|awaiting your|you haven'?t (said|chosen|confirmed|decided)|"
+    r"still (open|needs|parked)|parked pending|waiting (on|for) you|"
+    r"if you'?d rather|if you want me to|do you want|would you like|which (one|of these)|"
+    r"unverified|not filed|deferred|blocked on you|needs? a decision|"
+    r"i (can|could) (do|run|file|push|apply) .*? (if|when) you|confirm|approve)", re.I)
+DROP_RE = re.compile(r"^\s*(\||```|#|-{3,})")
+
+
+def extract_asks(atexts, per=4):
+    """Pull decision-request lines out of the trailing assistant turns.
+    Heuristic and lossy on purpose: this surfaces candidates for the human,
+    it is not authoritative, and the roster says so."""
+    out, seen = [], set()
+    for t in reversed(atexts[-3:]):
+        t = re.sub(r"<system-reminder>.*?</system-reminder>", "", t, flags=re.S)
+        chunks = re.split(r"(?<=[.!?])\s+|\n(?=\s*[-*\d])|\n\n", t)
+        for c in chunks:
+            c = re.sub(r"\s+", " ", c).strip()
+            if not c or len(c) < 25 or DROP_RE.match(c):
+                continue
+            if ASK_RE.search(c) or (c.endswith("?") and len(c) < 260):
+                k = c[:60].lower()
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(c[:240])
+            if len(out) >= per:
+                return out
+    return out
+
+
+# ------------------------------------------------------------- adapters
+
+def adapter_claude():
+    """Claude Code. The only adapter with presence and an address, which is
+    why it is the reference case and also why it flatters the problem."""
+    sess_dir, proj_dir = f"{HOME}/.claude/sessions", f"{HOME}/.claude/projects"
+    roster = {}
+    for f in glob.glob(f"{sess_dir}/*.json"):
+        try:
+            d = json.load(open(f))
+        except Exception:
+            continue
+        sid = d.get("sessionId")
+        if sid:
+            roster[sid] = d
+
+    out, seen = [], set()
+    for path in glob.glob(f"{proj_dir}/*/*.jsonl"):
+        sid = os.path.basename(path)[:-6]
+        mt = os.path.getmtime(path)
+        if mt < CUTOFF and sid not in roster:
+            continue
+        if sid in seen:
+            continue
+        seen.add(sid)
+        lv = roster.get(sid, {})
+        try:
+            p = _parse_claude_transcript(path)
+        except Exception as e:
+            p = {"meta": {"parse_error": str(e)}}
+        out.append(rec("claude", sid, mtime=mt,
+                       name=lv.get("name") or sid[:8],
+                       status=lv.get("status") or ("no-proc" if not lv else ""),
+                       alive=_pid_alive(lv.get("pid")) if lv else False,
+                       address=lv.get("messagingSocketPath", ""),
+                       started_at=lv.get("startedAt", ""),
+                       project=os.path.basename(os.path.dirname(path)),
+                       size=os.path.getsize(path),
+                       meta={"pid": lv.get("pid"), "version": lv.get("version"),
+                             "peer_features": lv.get("peerFeatures"),
+                             "kind": lv.get("kind"),
+                             "status_updated_at": lv.get("statusUpdatedAt"),
+                             "path": path},
+                       **p))
+    return out
+
+
+def _parse_claude_transcript(path):
+    r = {"goal": "", "last_assistant": "", "last_user": "", "last_ts": "",
+         "last_role": "", "cwd": "", "branch": "", "n_user": 0, "n_asst": 0,
+         "summary": "", "asks": []}
+    for line in head_lines(path, 80):
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("type") == "summary" and not r["summary"]:
+            r["summary"] = clean(d.get("summary", ""), 160)
+        r["cwd"] = r["cwd"] or d.get("cwd", "")
+        r["branch"] = r["branch"] or d.get("gitBranch", "") or ""
+        if d.get("type") == "user" and not d.get("isSidechain"):
+            t = txt((d.get("message") or {}).get("content"))
+            if t and not NOISE.search(t) and "[tool_result]" not in t[:20]:
+                c = clean(t, 320)
+                if c:
+                    r["goal"] = c
+                    break
+    atexts = []
+    for line in tail_lines(path):
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("isSidechain"):
+            continue
+        ty = d.get("type")
+        if ty == "assistant":
+            r["n_asst"] += 1
+            t = txt((d.get("message") or {}).get("content"))
+            if t.strip() and not t.strip().startswith("[tool"):
+                atexts.append(t)
+                r["last_assistant"] = clean(t, 1400)
+                r["last_role"] = "assistant"
+                r["last_ts"] = d.get("timestamp", "") or r["last_ts"]
+            elif t.strip():
+                r["last_role"] = "assistant-tool"
+                r["last_ts"] = d.get("timestamp", "") or r["last_ts"]
+        elif ty == "user":
+            t = txt((d.get("message") or {}).get("content"))
+            if t and not NOISE.search(t) and "[tool_result]" not in t[:20]:
+                r["n_user"] += 1
+                r["last_user"] = clean(t, 400)
+                r["last_role"] = "user"
+                r["last_ts"] = d.get("timestamp", "") or r["last_ts"]
+    r["asks"] = extract_asks(atexts)
+    return r
+
+
+def adapter_codex():
+    """Codex CLI. Rollout files under ~/.codex/sessions/YYYY/MM/DD/.
+    No presence and no inbox: a codex session can be read but not reached."""
+    out = []
+    for path in glob.glob(f"{HOME}/.codex/sessions/*/*/*/*.jsonl"):
+        mt = os.path.getmtime(path)
+        if mt < CUTOFF:
+            continue
+        meta, sid, cwd, started = {}, "", "", ""
+        for line in head_lines(path, 4):
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("type") == "session_meta":
+                meta = d.get("payload") or {}
+                sid = meta.get("id") or meta.get("session_id") or ""
+                cwd = meta.get("cwd", "")
+                started = meta.get("timestamp", "")
+                break
+        if not sid:
+            continue
+        goal, last_user, last_asst, last_ts, nu, na = "", "", "", "", 0, 0
+        atexts = []
+        for line in tail_lines(path):
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("type") != "response_item":
+                continue
+            p = d.get("payload") or {}
+            if p.get("type") != "message":
+                continue
+            role, t = p.get("role"), clean(txt(p.get("content")), 1400)
+            if not t:
+                continue
+            if role == "user":
+                nu += 1
+                last_user, last_ts = t[:400], d.get("timestamp", "") or last_ts
+                if not goal:
+                    goal = t[:320]
+            elif role == "assistant":
+                na += 1
+                atexts.append(t)
+                last_asst, last_ts = t, d.get("timestamp", "") or last_ts
+        out.append(rec("codex", sid, mtime=mt, name=f"codex:{sid[:8]}",
+                       cwd=cwd, project=os.path.basename(cwd) if cwd else "",
+                       started_at=started, last_ts=last_ts, goal=goal,
+                       last_user=last_user, last_assistant=last_asst,
+                       n_user=nu, n_asst=na, size=os.path.getsize(path),
+                       asks=extract_asks(atexts),
+                       status="subagent" if meta.get("thread_source") == "subagent" else "",
+                       meta={"cli_version": meta.get("cli_version"),
+                             "originator": meta.get("originator"),
+                             "thread_source": meta.get("thread_source"),
+                             "model_provider": meta.get("model_provider"),
+                             "path": path}))
+    return out
+
+
+def adapter_opencode():
+    """opencode. One sqlite store for every project. Session rows carry
+    identity, directory, model, cost and activity time but no presence."""
+    db = f"{HOME}/.local/share/opencode/opencode.db"
+    if not os.path.exists(db):
+        return []
+    rows = _sql(db, "select id, slug, title, directory, version, agent, model,"
+                    " cost, time_created, time_updated from session"
+                    " order by time_updated desc limit 2000")
+    out = []
+    for r in rows:
+        upd = _ts(r.get("time_updated"))
+        if upd < CUTOFF:
+            continue
+        cwd = r.get("directory") or ""
+        out.append(rec("opencode", r["id"], mtime=upd,
+                       name=f"oc:{r.get('slug') or r['id'][:8]}", cwd=cwd,
+                       project=os.path.basename(cwd) if cwd else "",
+                       started_at=_iso(_ts(r.get("time_created"))),
+                       last_ts=_iso(upd), summary=clean(r.get("title"), 160),
+                       meta={"version": r.get("version"), "agent": r.get("agent"),
+                             "model": r.get("model"), "cost": r.get("cost"),
+                             "db": db}))
+    return out
+
+
+def adapter_crush():
+    """crush. One sqlite store per project, registered in projects.json."""
+    reg = f"{HOME}/.local/share/crush/projects.json"
+    if not os.path.exists(reg):
+        return []
+    try:
+        projects = (json.load(open(reg)) or {}).get("projects") or []
+    except Exception:
+        return []
+    out = []
+    for p in projects:
+        db = os.path.join(p.get("data_dir") or "", "crush.db")
+        if not os.path.exists(db):
+            continue
+        for r in _sql(db, "select id, title, message_count, cost, created_at,"
+                          " updated_at, todos from sessions"
+                          " order by updated_at desc limit 500"):
+            upd = _ts(r.get("updated_at"))
+            if upd < CUTOFF:
+                continue
+            cwd = p.get("path") or ""
+            out.append(rec("crush", r["id"], mtime=upd,
+                           name=f"crush:{r['id'][:8]}", cwd=cwd,
+                           project=os.path.basename(cwd) if cwd else "",
+                           started_at=_iso(_ts(r.get("created_at"))),
+                           last_ts=_iso(upd), summary=clean(r.get("title"), 160),
+                           n_asst=r.get("message_count") or 0,
+                           meta={"cost": r.get("cost"), "todos": r.get("todos"),
+                                 "db": db}))
+    return out
+
+
+ADAPTERS = {"claude": adapter_claude, "codex": adapter_codex,
+            "opencode": adapter_opencode, "crush": adapter_crush}
+
+
+# ----------------------------------------------------------------- main
+
+def main():
+    want = [a for a in (os.environ.get("DSI_ADAPTERS") or ",".join(ADAPTERS)).split(",") if a]
+    for a in sys.argv[1:]:
+        if a.startswith("--adapters="):
+            want = a.split("=", 1)[1].split(",")
+        elif a.startswith("--days="):
+            globals()["WINDOW_DAYS"] = float(a.split("=", 1)[1])
+            globals()["CUTOFF"] = NOW - WINDOW_DAYS * 86400
+
+    sessions, errors = [], {}
+    for name in want:
+        fn = ADAPTERS.get(name)
+        if not fn:
+            errors[name] = "unknown adapter"
+            continue
+        try:
+            sessions.extend(fn())
+        except Exception as e:
+            errors[name] = f"{type(e).__name__}: {e}"
+    sessions.sort(key=lambda r: -(r.get("mtime") or 0))
+
+    os.makedirs(STATE, exist_ok=True)
+    blob = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "window_days": WINDOW_DAYS, "adapters": want,
+            "capabilities": {a: CAPS.get(a, {}) for a in want},
+            "adapter_errors": errors, "sessions": sessions}
+    json.dump(blob, open(f"{STATE}/sessions.json", "w"), indent=1)
+
+    L = [f"# Session roster - generated {blob['generated_at']} (window {WINDOW_DAYS}d)\n"]
+    counts = {}
+    for r in sessions:
+        counts[r["adapter"]] = counts.get(r["adapter"], 0) + 1
+    L.append("| adapter | sessions | presence | inbox | transcript |")
+    L.append("|---|---|---|---|---|")
+    for a in want:
+        c = CAPS.get(a, {})
+        L.append(f"| {a} | {counts.get(a, 0)} | {c.get('presence','?')} | "
+                 f"{c.get('inbox','?')} | {c.get('transcript','?')} |")
+    if errors:
+        L.append("\n**adapter errors:** " + "; ".join(f"{k}: {v}" for k, v in errors.items()))
+    L.append("\nAsks below are heuristic candidates mined from tails, not confirmed"
+             " with the session. Adapters without an inbox can be read but not reached.\n")
+
+    for r in sessions:
+        flag = " **AWAITING-INPUT**" if r.get("awaiting") else ""
+        reach = "" if r.get("address") else "  (no inbox)"
+        L.append(f"\n## [{r['adapter']}] {r['name']}  [{r['session_id'][:8]}]  "
+                 f"{r.get('status') or '-'}{flag}{reach}")
+        L.append(f"- cwd: `{r.get('cwd') or '?'}`  branch: {r.get('branch') or '-'}")
+        L.append(f"- last activity: {r['age_h']}h ago · turns u/a: "
+                 f"{r.get('n_user')}/{r.get('n_asst')} · {round((r.get('size') or 0)/1024)}KB")
+        if r.get("address"):
+            L.append(f"- address: `{r['address']}` alive={r.get('alive')}")
+        if r.get("summary"):
+            L.append(f"- summary: {r['summary']}")
+        if r.get("goal"):
+            L.append(f"- GOAL: {r['goal']}")
+        if r.get("last_user"):
+            L.append(f"- LAST HUMAN: {r['last_user']}")
+        for a in (r.get("asks") or []):
+            L.append(f"  - ASK? {a}")
+        if r.get("last_assistant"):
+            L.append(f"- TAIL ({r.get('last_role')}): {r['last_assistant'][:700]}")
+    open(f"{STATE}/roster.md", "w").write("\n".join(L) + "\n")
+    print(f"{len(sessions)} sessions across {len(want)} adapters -> "
+          f"{STATE}/sessions.json, {STATE}/roster.md")
+    for a in want:
+        print(f"  {a}: {counts.get(a, 0)}" + (f"  ERROR {errors[a]}" if a in errors else ""))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,14 @@
+# Third-party reference clones, kept locally, not vendored.
+multiclaude/
+tmate/
+
+# bd symlink into the orchestrator's shared tracker.
+.beads
+
+# Operational state and notes from the simulation. These describe live
+# client sessions and are never published. Durable requirements are
+# rewritten clean into specs/ or into the private kos graph.
+sim/state/
+sim/notes/
+
+.DS_Store
