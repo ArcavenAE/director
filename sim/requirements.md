@@ -34,9 +34,10 @@ opinion do not read as the same thing (aae-orc-lb9hj).
   the episode itself.
 - **RULED**: the operator decided it. Carries authority, but is not evidence.
 
-Split, 45 entries: **35 OBSERVED, 5 JUDGMENT, 5 RULED.** (41 from session 1,
-R-42 through R-44 from the gen-1 mailbox read, and R-45 from replay pilot 01,
-all OBSERVED. The R-21 sharpening is a JUDGMENT addendum, not a new entry.)
+Split, 47 entries: **37 OBSERVED, 5 JUDGMENT, 5 RULED.** (41 from session 1,
+R-42 through R-44 from the gen-1 mailbox read, R-45 from replay pilot 01, and
+R-46 through R-47 from replay wave 2, all OBSERVED. The R-21 sharpening is a
+JUDGMENT addendum, not a new entry.)
 
 - JUDGMENT (5): R-34, R-38, R-39, R-40, R-41. All five have an observed basis
   (R-34 on O-2, the rest on finding-159), so none is a floating opinion. Note
@@ -112,6 +113,20 @@ embedded in those materials carry the authority of the human who asked for the
 review. Enumerate instances; this is not closed.
 *Earned by: operator ruling 2026-09-10, named as an open class.*
 *Source: RULED, and FLAGGED: no observed instance yet. Operator-named; the entry itself says it is not closed.*
+
+**R-46. A harness may emit a structured authorization decision per action, and
+director should consume it where present rather than infer authority.** At
+least one harness produces, per planned action, a typed judgment with a risk
+level, a stated user-authorization level, an outcome, and a rationale. This is
+the structured counterpart to another harness shipping only a prose hedge
+("very likely working on their behalf," finding-159). Where a harness emits
+such a signal, director reads it as one input to R-02 (authority strength
+stated, not inferred); it does not settle authority, because it is
+harness-specific and unverifiable across a trust boundary.
+*Earned by: a harness pairing every session with an authorization-judging
+subagent that emits risk/authorization/outcome/rationale per action, replay
+wave 2 (sim/notes/replay-pilot-02.md).*
+*Source: OBSERVED (shipped harness behavior).*
 
 ## B. Delivery and acknowledgement
 
@@ -254,6 +269,17 @@ destroyed all of that.
 **R-26. A handoff into an unattended channel is not a handoff.** Delivery
 requires a recipient that is actually reading.
 *Earned by: FR-12; O-12.*
+*Source: OBSERVED.*
+
+**R-47. A session's self-report of its own outputs can be false, not merely
+stale, so custody must confirm against the system of record.** A session asked
+what it accomplished can answer incorrectly about its own work and correct
+itself later. Director's custody (R-20) cannot rest on a self-report; it must
+confirm an output exists where the output would live (the filed issue, the
+pushed commit, the written file), not accept the claim that one was produced.
+Distinct from R-37 (a stale snapshot): here the source is wrong, not old.
+*Earned by: two sessions that reported work as not-done when it was done and
+corrected themselves later, replay wave 2 (sim/notes/replay-pilot-02.md).*
 *Source: OBSERVED.*
 
 ## E. Roster, discovery, and heterogeneity
