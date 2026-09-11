@@ -266,6 +266,29 @@ software: a capture channel with no admission test collects whatever the
 session happens to be learning about anything. Fixed by the harvest mode and
 the admission test in the skill.
 
+## Queued work on the register itself
+
+Filed 2026-09-10 out of the casting-call ceremony, which ruled that the gap in
+this project was a method rather than a competency. The simulation has been
+running Wizard-of-Oz prototyping without using the technique's name or its
+safeguards.
+
+| id | item |
+|---|---|
+| aae-orc-dwkzw | counterfactual replay over the existing session corpus (553 sessions across four harnesses, currently unmined) |
+| aae-orc-uqhgq | read the gen-1 mailbox in `multiclaude/internal/messages` before collecting more messaging requirements |
+| aae-orc-bbttu | capture criterion becomes wizard-struggle and faked-it, not wizard-notice |
+| aae-orc-lb9hj | tag every entry here with its source class: observed, judgment, or ruled |
+| aae-orc-bhybq | admission test for the capture channel |
+| aae-orc-yoveo | harvest mode, so the flush has a trigger that is not the operator |
+
+The source-class one is the load-bearing correction to this file. Right now
+R-09 (five messages dropped while every send returned success) and R-03 (do
+not claim authority you were not given) render identically, and they are not
+the same kind of claim: one is a measurement, the other is a judgment the
+operator happened to agree with. Until the field exists, this register can
+launder wizard bias into the specification.
+
 ## Open, and deliberately not answered
 
 - Whether director holds a standing license to originate anything that asks a
