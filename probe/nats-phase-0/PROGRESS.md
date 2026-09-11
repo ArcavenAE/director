@@ -27,37 +27,45 @@ agent.audit. DEDUPE VERIFIED: two publishes with the same Nats-Msg-Id left
 exactly one message stored, which is R-13 (duplicate detection) satisfied at
 the transport rather than in application code.
 
-## Sub-probe 3: director-mcp shim + push-into-context. NOT BUILT. Early finding stands.
+## Sub-probe 3: director-mcp shim + push-into-context. BUILT AND PASSING.
 
-The shim is the multi-day core and is not built. But the probe's stated
-most-valuable output, "which delivery shape works," has an answer already
-grounded in this session's own evidence, ahead of the build:
+Shim at director-mcp/ (Go, ~600 lines, MCP stdio implemented directly, NATS
+via the official client). Five tools: send_message, wait_for_message,
+list_roster, set_presence, broadcast. Launched per agent with
+DIRECTOR_AGENT_ID / DIRECTOR_TEAM / DIRECTOR_WORKSPACE / NATS_URL, logs to
+stderr, JSON-RPC on stdout.
 
-Claude Code HAS push-into-context. Its native SendMessage delivers a
-cross-session message that appears in a peer session's context as
-<cross-session-message ...>, wrapped in the harness's own policy paragraph
-(finding-159). That is server-initiated push into the model's context, and it
-already works locally.
+End-to-end through the real MCP stdio path, two independent shim processes:
+- reviewer-a: initialize, tools/list (5 tools), send_message to
+  agent://ops/michael -> accepted for delivery with a ULID message_id.
+- michael: wait_for_message -> RECEIVED the envelope intact (REQUEST, correct
+  sender and recipient, sender.principal null), list_roster -> both agents
+  present from the KV.
 
-It is not available to an external MCP server. MCP is request/response: the
-client (the harness) calls the server; the server cannot unilaterally inject
-into the model's context. So an MCP-based director shim cannot achieve true
-push on its own. Two shapes remain, to be measured when the shim is built:
-1. wait_for_message as a long-poll tool the agent calls (the brief's fallback);
-   cost is tokens and a blocked turn.
-2. a hook that bridges NATS to the harness's own injection path (the mechanism
-   SendMessage already uses), if that path is reachable from a hook.
+PUSH-VS-POLL, SETTLED IN CODE: the working receive shape is wait_for_message,
+a poll the agent calls. MCP is request/response, so an MCP shim cannot
+originate a message into the model's context; the server answers, it never
+speaks first. This is the brief's fallback shape, and it is the only shape an
+MCP transport offers. The other shape (a hook bridging NATS to the harness
+injection path) is not an MCP concern and remains unbuilt. The finding-159
+sentence holds at the transport: the harness owns push and keeps it internal.
 
-This sharpens R-46 and finding-159: the harness owns the one capability the
-bus needs (push into context) and does not expose it to the bus. Director's
-independence from any one harness collides here with the fact that push is
-currently a harness-internal privilege. This is the load-bearing risk the shim
-build must resolve, and it is now stated before the build rather than after.
+## Sub-probe 4: offline queueing. PASS (fell out of sub-probe 3).
 
-## Sub-probes 4 (offline queueing) and 5 (human participation, latency): NOT RUN.
-Both depend on the shim. Offline queueing is partly pre-validated: JetStream
-limits retention + durable consumer already stores messages for an offline
-inbox (a consumer that connects later replays from the stream).
+reviewer-a sent and its process EXITED before michael ever connected. michael
+then connected and its first wait_for_message returned the message. JetStream
+limits retention plus a durable per-agent consumer with DeliverAll is
+store-and-forward: a message sent to an absent session waits in the stream and
+replays when that session first pulls. No loss, delivered in order.
+
+## Sub-probe 5: human participation + latency. NOT RUN (needs live wiring).
+The shim must be wired into an actual Claude Code session (claude mcp add) so
+the operator's own session joins as agent://ops/michael and a live two-way
+exchange can be timed. This is the harness-integration boundary and a config
+change to the user's Claude Code, held for operator go-ahead. The bus-level
+latency is sub-millisecond locally; the meaningful number is how long until
+the model next CALLS wait_for_message, which is a poll-cadence property, not a
+bus property.
 
 ## Kill criteria status
 Not triggered. The push risk is real but has at least the long-poll shape, so

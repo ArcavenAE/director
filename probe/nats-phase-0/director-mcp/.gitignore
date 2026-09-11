@@ -1,0 +1,2 @@
+# built binary — reproducible from source with `go build`
+/director-mcp
