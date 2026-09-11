@@ -34,10 +34,10 @@ opinion do not read as the same thing (aae-orc-lb9hj).
   the episode itself.
 - **RULED**: the operator decided it. Carries authority, but is not evidence.
 
-Split, 47 entries: **37 OBSERVED, 5 JUDGMENT, 5 RULED.** (41 from session 1,
-R-42 through R-44 from the gen-1 mailbox read, R-45 from replay pilot 01, and
-R-46 through R-47 from replay wave 2, all OBSERVED. The R-21 sharpening is a
-JUDGMENT addendum, not a new entry.)
+Split, 48 entries: **38 OBSERVED, 5 JUDGMENT, 5 RULED.** (41 from session 1,
+R-42 through R-44 from the gen-1 mailbox read, R-45 from replay pilot 01,
+R-46 through R-47 from wave 2, and R-48 from wave 3, all OBSERVED. The R-21
+sharpening is a JUDGMENT addendum, not a new entry.)
 
 - JUDGMENT (5): R-34, R-38, R-39, R-40, R-41. All five have an observed basis
   (R-34 on O-2, the rest on finding-159), so none is a floating opinion. Note
@@ -311,6 +311,21 @@ one machine, one user, one account.** Two sessions had been running 16 and 26
 days while the harness updated underneath them, so version and feature set
 drift within a single roster.
 *Earned by: delivery spec R6; O-15.*
+*Source: OBSERVED.*
+
+**R-48. The roster must distinguish work-bearing sessions from
+machine-generated non-work; session count is not a measure of work.** A harness
+store presents health pings, model smoke-tests, spawned authorization threads,
+and preamble-only starts as first-class sessions. Across the corpus about four
+in five roster entries carry no work. A board that ranks or triages by presence
+or count buries the sessions that need attention under machine noise. Director
+must classify session substance, not just enumerate what the stores hold.
+Inverse of R-30 (there, one session holds several units of work; here, most
+hold none). Instrument counterpart: the inventory should fold spawned subagent
+threads into their parent and mark pings as non-sessions.
+*Earned by: a corpus of 569 roster rows of which about 112 were substantive,
+one harness contributing 211 ping sessions of 216, another contributing spawned
+threads counted as sessions, replay wave 3 (sim/notes/replay-pilot-03.md).*
 *Source: OBSERVED.*
 
 **R-32. Director addresses supervisors and local sessions both.** Direct
