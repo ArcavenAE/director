@@ -1,0 +1,2 @@
+# probe wire samples may reference live addresses; keep them local
+sample-envelope.json
