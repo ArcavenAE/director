@@ -18,18 +18,23 @@ the product.
 
 ## The one sentence
 
-**Director's product is custody, not coordination.** Peers do good work that
-never reaches the human. Sessions die holding unanswered questions. Artifacts
+**Director's product is custody, not coordination.** Sessions do good work
+that never reaches the human. They die holding unanswered questions. Artifacts
 get promised and never written. Your first duty is that nothing produced is
 lost and nothing asked is dropped; routing messages is downstream of that.
 
-## Two modes
+## Three modes
 
 **sweep** (default, cheap). Regenerate the inventory, read the props, present
 what is blocked on the human, stop. Do not act. Most invocations are this.
 
 **standing**. Adopt the role for the session: sweep, then relay, track, and
-capture continuously. Say which mode you are in, once, at the start.
+capture continuously. A standing session ends with a harvest (below), so the
+flush has a trigger that is not the operator remembering to ask.
+
+**harvest**. Read the captured notes and promote what has hardened into the
+requirements register. Run it at the end of a standing session, or on its own
+when the notes have accumulated. Say which mode you are in, once, at the start.
 
 ## Mode: sweep
 
@@ -70,6 +75,38 @@ and that complaint is a requirement.
   ask whether to hand the work off or drop the role. In session 1 the role
   dissolved into ordinary work over six days and nobody noticed.
 
+## Replay: the retrospective evidence source
+
+Live capture is not the only source of requirements, and it is not the richest.
+Most of the evidence is already on disk in the session corpus, and replaying it
+reaches failure classes a live session cannot stage (a credential expiring
+under a long-idle process, R-45). The procedure, the sampling rule, and the one
+caveat that costs a pass if skipped (never trust the `awaiting` flag, confirm
+every ask against the transcript) are in `reference/replay.md`.
+
+## Mode: harvest
+
+Capture without harvest is a growing pile of notes and no better
+specification, which is the state session 1 sat in for six days. Harvest reads
+the captures and moves what has hardened into `sim/requirements.md`.
+
+1. Read `sim/notes/observations.md`, `friction.md`, `relay-log.md`, and
+   `shortcuts.md`, and any new `sim/specs/`.
+2. For each entry, decide: has it hardened into a requirement, is it still an
+   observation, or does it fail the admission test above?
+3. Apply the admission test to every candidate. An entry that fails it does not
+   enter the register; say where it goes instead (platform graph, or dropped).
+4. Write the survivors into `sim/requirements.md`. Each promoted entry carries
+   its source class: OBSERVED (a failure happened and was recorded), JUDGMENT
+   (you concluded it), or RULED (the operator decided it). Default to JUDGMENT
+   unless the capture records an actual failure, because a promoted judgment
+   read as a measurement is how wizard bias becomes specification.
+5. Report a diff: promoted, unchanged, rejected with a reason. A harvest that
+   only reports and does not write the register is session-1 behavior in a new
+   costume; writing the register is the point.
+
+Do not renumber existing requirements. New ones take the next R number.
+
 ## Relaying
 
 Interpreting is the job. You exist because the human has one attention budget
@@ -100,20 +137,49 @@ fleet, and it is one of the reasons director must not be built on the feature:
 
 ## Capture triggers
 
-Each of these fires a write. In session 1, every instruction without a
-trigger silently failed to fire.
+You are the wizard standing in for software that does not exist yet. The
+signal that names a requirement is not what you notice; it is where you
+STRUGGLED to act as the software would, or did its job by hand. Noticing is
+unbounded and fills the notes with things director does not need. Struggling
+is bounded, and every instance is a requirement with the software's own job
+attached to it.
 
-| When | Write to |
+Each row below names a struggle. When one happens, write before you move on;
+in session 1 every capture without a trigger silently failed to happen.
+
+| The struggle | Write to |
 |---|---|
-| A tool warning, quirk, or workaround, BEFORE applying it | `sim/notes/friction.md` |
-| A requirement discovered by simulating | `sim/notes/observations.md` (O-N) |
-| Any message sent to a session | `sim/notes/relay-log.md` (R-N: to, verbatim text, outcome) |
-| A requirement firm enough to constrain the software | `sim/specs/` |
-| A session's output that would otherwise be lost | `$DIRECTOR_STATE/board.md`, under Uncaptured |
+| You did by hand something the software would do (ranked the board, mined a transcript for an ask, re-verified external state). Log what you did, what it cost in time and turns, and what it got wrong | `sim/notes/observations.md` (O-N), tagged FAKED IT |
+| You could not act as the software would, so you quietly changed the expectation (dropped an ask you could not route, treated a dead session as done, narrowed a task the peer could not accept). The evidence is an absence, so name it or it is lost | `sim/notes/observations.md` (O-N), tagged COULD NOT DO IT |
+| A tool warning, quirk, or workaround fought you, BEFORE you apply the workaround | `sim/notes/friction.md` (FR-N) |
+| You leaned on a harness internal to get the job done | `sim/notes/shortcuts.md` |
+| You sent a message to a session | `sim/notes/relay-log.md` (R-N: to, verbatim text, outcome) |
+| A struggle has recurred enough to name a firm requirement | `sim/specs/` |
+| A session's output would otherwise be lost | `$DIRECTOR_STATE/board.md`, under Uncaptured |
+
+FAKED IT is the highest-yield trigger and it is the one a wizard skips,
+because doing the work by hand feels like progress rather than like evidence.
+It is the opposite: every hand-operation is the software's specification,
+measured. COULD NOT DO IT is the one that vanishes without a trigger, because
+its evidence is something that did not happen.
 
 `sim/notes/` and `$DIRECTOR_STATE/` are gitignored: they carry live
 operational detail. Anything published gets rewritten clean, never scrubbed
 by pattern.
+
+### The admission test
+
+Before an observation earns a place in the requirements register, one line
+settles it: **would this still be true if director existed and worked?**
+
+If yes, it is a director requirement. Five messages dropped while every send
+returned success fails that test (director existing fixes it), so it stays.
+If no, it is general practice, not a director requirement; it belongs in the
+platform graph, not here. A premature published diagnosis passes the test
+(director existing changes nothing about it), so it goes elsewhere. In session
+1 the channel had no admission test, and six of twenty-one observations were
+general work hygiene that drifted in because the notes file was the nearest
+place to write.
 
 ## What is real and what is a shortcut
 
