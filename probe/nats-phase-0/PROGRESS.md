@@ -126,6 +126,41 @@ Note: killing processes by a broad `director-mcp` pattern also kills the
 harness-spawned server for this session (it IS a director-mcp process).
 Scope any cleanup to the reviewer-a shims by env or fifo, not the binary name.
 
+## Reproducing a cross-harness exchange (2026-09-12)
+
+The worked script is `cross-harness-demo.sh` in this directory. The recipe is
+the durable part; the flags are easy to lose.
+
+Join a NON-Claude-Code harness to the bus by pointing its MCP client at the
+director-mcp binary, per invocation, without editing the user's config:
+
+- codex: `codex exec -c 'mcp_servers.director.command="<abs path>"' -c
+  'mcp_servers.director.env.DIRECTOR_AGENT_ID="codex-a"' -c '...TEAM' -c
+  '...WORKSPACE' -c '...NATS_URL' -C <cwd> "<prompt>"`. Overrides layer on top
+  of `~/.codex/config.toml`, so auth and model stay. Three gotchas: pass
+  `--skip-git-repo-check` for a non-git cwd; pass
+  `--dangerously-bypass-approvals-and-sandbox` or codex refuses the MCP tool
+  call with "requires approval, but approval policy is never"; redirect stdin
+  from `/dev/null` or `codex exec` blocks reading a piped stdin.
+- headless Claude Code: `claude -p --mcp-config '{"mcpServers":{"director":
+  {"command":"<abs>","env":{"DIRECTOR_AGENT_ID":"cc-planner", ...}}}}'
+  --allowedTools "mcp__director__set_presence,mcp__director__wait_for_message,
+  mcp__director__send_message,mcp__director__list_roster" --output-format text
+  "<prompt>"`. The allowlist lets a non-interactive run call the tools without
+  a permission prompt.
+
+Read the live roster without a client: `nats --server nats://127.0.0.1:4222 kv
+ls AGENT_STATE` and `kv get AGENT_STATE presence.<team>.<id> --raw`.
+
+Two operational cautions learned here:
+- Assign a DISTINCT id per session at the launcher. Two sessions launched with
+  the same id is the michael collision (R-49): shared durable, raced or
+  duplicated mail, one presence key.
+- Do NOT `pkill -f 'director-mcp'` to clean up shims. The harness-spawned
+  server for THIS session is also a director-mcp process, so the broad match
+  kills your own bus tools. Scope cleanup by env
+  (`pkill -f 'DIRECTOR_AGENT_ID=codex-a'`) or by fifo, never by the binary name.
+
 ## Kill criteria status
 Not triggered. The push risk is real but has at least the long-poll shape, so
 the probe is not dead; it is checkpointed at a clean foundation.
