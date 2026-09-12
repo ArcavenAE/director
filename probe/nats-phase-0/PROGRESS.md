@@ -58,7 +58,7 @@ limits retention plus a durable per-agent consumer with DeliverAll is
 store-and-forward: a message sent to an absent session waits in the stream and
 replays when that session first pulls. No loss, delivered in order.
 
-## Sub-probe 5: human participation + latency. NOT RUN (needs live wiring).
+## Sub-probe 5: human participation + latency. PARTIAL (transport floor measured; live model pending).
 The shim must be wired into an actual Claude Code session (claude mcp add) so
 the operator's own session joins as agent://ops/michael and a live two-way
 exchange can be timed. This is the harness-integration boundary and a config
@@ -66,6 +66,17 @@ change to the user's Claude Code, held for operator go-ahead. The bus-level
 latency is sub-millisecond locally; the meaningful number is how long until
 the model next CALLS wait_for_message, which is a poll-cadence property, not a
 bus property.
+
+TRANSPORT FLOOR MEASURED 2026-09-11. Two fresh shim processes (lat-rx
+blocked in wait_for_message, lat-tx sending): send_message to a
+blocked waiter surfaced the envelope end-to-end through the full MCP
+stdio + NATS durable-consumer path in ~20 ms (single run, 1 ms poll
+granularity in the harness; order is tens of ms, dominated by JetStream
+pull-consumer delivery scheduling, not the sub-ms core publish). This is
+the floor beneath the poll cadence, not the latency an operator feels.
+The felt latency is how long until the model next CALLS
+wait_for_message, which is seconds-plus and needs a live model to
+measure. That half stays held for operator go-ahead (claude mcp add).
 
 ## Kill criteria status
 Not triggered. The push risk is real but has at least the long-poll shape, so
