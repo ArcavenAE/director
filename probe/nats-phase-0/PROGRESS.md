@@ -126,6 +126,34 @@ Note: killing processes by a broad `director-mcp` pattern also kills the
 harness-spawned server for this session (it IS a director-mcp process).
 Scope any cleanup to the reviewer-a shims by env or fifo, not the binary name.
 
+## Sub-probe 6: per-session identity + shim-timer heartbeat. PASS (2026-09-12, aae-orc-lvzck).
+
+Motivated by a live finding: during the ArcavenAE-status task the roster read
+empty while a session's shim was running, because the shim set presence once on
+connect and never renewed, so the 90s TTL expired under a live session. Built
+R-49, R-50, R-56 into the shim (bus.go, main.go) and tested:
+
+- R-50, unique durable per session: the durable name now includes a per-session
+  instance ulid (mcp_<id>_<instance>). Two shims launched with the SAME id
+  (duptest) each got their own copy of one INFORM addressed to agent://ops/duptest;
+  neither silently lost it. A duplicate id degrades to duplication, not the
+  silent-loss race of a shared durable. The real fix stays distinct ids (R-49);
+  this is the safety net.
+- R-49, collision is loud: presence is now keyed per session
+  (presence.<team>.<id>.<instance>), so the roster showed two distinct duptest
+  entries rather than collapsing to one, and the second shim logged a WARNING
+  naming the other instance and pid. The probe chose warn-and-observe; whether
+  the shim should REFUSE to start or auto-disambiguate on collision is left open.
+- R-56, shim-timer heartbeat: a background goroutine renews presence every 30s
+  (TTL/3), off the model's poll. Verified: presence ts advanced 15:02:26 to
+  15:02:56 with no tool call. This closes the empty-roster gap that motivated
+  the sub-probe.
+
+Cost accepted for the probe: a per-instance durable under DeliverAll replays the
+stream on a fresh instance, so a restart re-reads history. A stable per-logical-
+session durable needs R-06's durable conversation identity, which does not exist
+yet. Recorded, not fixed here.
+
 ## Reproducing a cross-harness exchange (2026-09-12)
 
 The worked script is `cross-harness-demo.sh` in this directory. The recipe is

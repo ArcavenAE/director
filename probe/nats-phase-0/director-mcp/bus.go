@@ -11,11 +11,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/oklog/ulid/v2"
 )
 
 type Bus struct {
@@ -24,6 +27,18 @@ type Bus struct {
 	kv       jetstream.KeyValue
 	self     Sender
 	consumer jetstream.Consumer
+
+	// instance is a per-session id minted at startup. Two sessions launched
+	// with the same DIRECTOR_AGENT_ID (the michael collision, R-49) still get
+	// distinct instances, so their durable consumers and presence keys do not
+	// collapse into one (R-50). pid is recorded for the roster.
+	instance string
+	pid      int
+
+	// state is the last presence state the model set; the heartbeat re-writes
+	// it on the shim's own timer (R-56), never on a model tool call.
+	stateMu sync.Mutex
+	state   string
 }
 
 func connect(ctx context.Context, url string, self Sender) (*Bus, error) {
@@ -41,12 +56,14 @@ func connect(ctx context.Context, url string, self Sender) (*Bus, error) {
 		nc.Close()
 		return nil, fmt.Errorf("presence KV AGENT_STATE: %w (run the broker setup first)", err)
 	}
-	b := &Bus{nc: nc, js: js, kv: kv, self: self}
-	// Durable per-agent consumer on this agent's own inbox subject. This is
-	// the store-and-forward receive: messages sent while we were offline
-	// replay from the stream when we first pull.
+	b := &Bus{nc: nc, js: js, kv: kv, self: self, instance: ulid.Make().String(), pid: os.Getpid(), state: "idle"}
+	// Durable per-SESSION consumer. The durable name includes the per-session
+	// instance, so two sessions sharing one agent id do not bind one durable
+	// and race each other's mail (R-50); each gets its own copy instead of a
+	// silent loss. Cost, accepted for the probe: a fresh instance replays the
+	// stream under DeliverAll, so a restart re-reads history.
 	cons, err := js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", jetstream.ConsumerConfig{
-		Durable:       "mcp_" + sanitize(self.AgentID),
+		Durable:       "mcp_" + sanitize(self.AgentID) + "_" + b.instance,
 		FilterSubject: b.inboxSubject(self.Team, self.AgentID),
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		DeliverPolicy: jetstream.DeliverAllPolicy,
@@ -169,16 +186,79 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, er
 // TTL expires the key if no heartbeat lands within the window, so absence is
 // silence, not a message (section 2.1: presence is a transport concern).
 func (b *Bus) setPresence(ctx context.Context, state string) error {
+	b.stateMu.Lock()
+	b.state = state
+	b.stateMu.Unlock()
+	return b.writePresence(ctx, state)
+}
+
+// writePresence puts the presence record under a per-session key
+// (presence.<team>.<id>.<instance>), so N concurrent sessions under one id show
+// as N roster entries instead of last-writer-wins collapsing them to one.
+func (b *Bus) writePresence(ctx context.Context, state string) error {
 	rec := map[string]any{
 		"agent_id":  b.self.AgentID,
 		"team":      b.self.Team,
 		"workspace": b.self.Workspace,
+		"instance":  b.instance,
+		"pid":       b.pid,
 		"state":     state,
 		"ts":        time.Now().UTC().Format(time.RFC3339),
 	}
 	body, _ := json.Marshal(rec)
-	_, err := b.kv.Put(ctx, "presence."+sanitize(b.self.Team)+"."+sanitize(b.self.AgentID), body)
+	key := "presence." + sanitize(b.self.Team) + "." + sanitize(b.self.AgentID) + "." + b.instance
+	_, err := b.kv.Put(ctx, key, body)
 	return err
+}
+
+// heartbeat renews presence on the shim's own timer, never on a model tool
+// call (R-56). A model turn can run for minutes; if renewal rode the model's
+// poll, a long turn would let the presence key expire while the session is
+// alive, which is exactly what an empty roster beside a live shim showed.
+func (b *Bus) heartbeat(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			b.stateMu.Lock()
+			s := b.state
+			b.stateMu.Unlock()
+			_ = b.writePresence(ctx, s)
+		}
+	}
+}
+
+// checkCollision looks for another live session already present under this same
+// team and agent id but a different instance. It returns a human-readable
+// warning when it finds one, so an accidental duplicate id (R-49) is loud
+// rather than silent. It does not refuse; the probe observes rather than blocks.
+func (b *Bus) checkCollision(ctx context.Context) string {
+	keys, err := b.kv.Keys(ctx)
+	if err != nil {
+		return ""
+	}
+	prefix := "presence." + sanitize(b.self.Team) + "." + sanitize(b.self.AgentID) + "."
+	for _, k := range keys {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		entry, err := b.kv.Get(ctx, k)
+		if err != nil {
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal(entry.Value(), &rec) != nil {
+			continue
+		}
+		if inst, _ := rec["instance"].(string); inst != "" && inst != b.instance {
+			return fmt.Sprintf("another session is live under agent://%s/%s (instance %v, pid %v); addresses collide, assign a distinct id at spawn (R-49)",
+				b.self.Team, b.self.AgentID, rec["instance"], rec["pid"])
+		}
+	}
+	return ""
 }
 
 // roster reads the presence KV and returns every live entry.

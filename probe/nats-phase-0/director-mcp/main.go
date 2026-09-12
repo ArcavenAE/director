@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 )
 
 func env(k, def string) string {
@@ -51,7 +52,13 @@ func main() {
 	defer bus.close()
 	// Announce presence on start so a roster lists us immediately.
 	_ = bus.setPresence(ctx, "idle")
-	logf("connected to %s as agent://%s/%s in workspace %s", url, self.Team, self.AgentID, self.Workspace)
+	if warn := bus.checkCollision(ctx); warn != "" {
+		logf("WARNING: %s", warn)
+	}
+	// Renew presence on the shim's own timer, not the model's poll (R-56). The
+	// presence bucket TTL is 90s; renew at roughly TTL/3.
+	go bus.heartbeat(ctx, 30*time.Second)
+	logf("connected to %s as agent://%s/%s instance %s in workspace %s", url, self.Team, self.AgentID, bus.instance, self.Workspace)
 
 	srv := newServer(bus, logf)
 	if err := srv.serve(ctx, os.Stdin); err != nil {
