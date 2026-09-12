@@ -78,6 +78,28 @@ The felt latency is how long until the model next CALLS
 wait_for_message, which is seconds-plus and needs a live model to
 measure. That half stays held for operator go-ahead (claude mcp add).
 
+LIVE HARNESS BOUNDARY VERIFIED 2026-09-11. Registered the shim with the
+operator's Claude Code at local scope (claude mcp add --scope local
+director-mcp, env DIRECTOR_AGENT_ID=michael/TEAM=ops/WORKSPACE=aae-orc).
+`claude mcp list` reports director-mcp Connected: Claude Code's own MCP
+client launched the binary, connected to NATS, and completed
+initialize + tools/list. The connect fired the presence heartbeat, and
+presence.ops.michael landed in the KV (state idle, workspace aae-orc) as
+read back live. So a genuine Claude Code session joins the bus as
+agent://ops/michael, not a synthetic shim. That is the harness-integration
+boundary of sub-probe 5, done against a live harness.
+
+WHAT REMAINS, AND WHY: the tools (send_message, wait_for_message, ...) load
+at Claude Code session START, so the session that ADDED the server does not
+have them; a fresh session in this project does. The felt poll-cadence
+number is therefore measured from a session that has the tools loaded, i.e.
+after a restart. This is itself the finding-159/160 shape restated at the
+harness: even wired in, an inbound message waits until the model chooses to
+call wait_for_message. The harness offers no push into an already-running
+session's context; the poll is the receive.
+
+To remove the wiring: claude mcp remove director-mcp --scope local.
+
 ## Kill criteria status
 Not triggered. The push risk is real but has at least the long-poll shape, so
 the probe is not dead; it is checkpointed at a clean foundation.
