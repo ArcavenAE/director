@@ -4,10 +4,16 @@ Supervisor communications and multi-agent coordination for the Dark Atelier
 platform. The human's assistive agent for running work across many agent
 sessions on many machines, under many harnesses.
 
-**Status: simulation.** The software does not exist yet. What exists is a
-skill that has a Claude Code session play the role by hand, plus the
-instruments it uses and the requirements that fall out. This repo is the
-authoritative source for both, and the requirements are the point.
+**Status: simulation, with a proven transport.** The director software does
+not exist yet. What exists is a skill that has a session play the role by hand
+(plus the instruments it uses and the requirements that fall out), and a Phase
+0 probe that proves the message bus the software will ride: a local NATS broker
+and a small MCP shim carry the envelope between sessions end to end
+(`probe/nats-phase-0/`). This repo is the authoritative source for all of it,
+and the requirements are the point.
+
+Diagrams of the target shape, worked use cases, and the sequence and state
+diagrams live in `docs/architecture.md` and `docs/use-cases.md`.
 
 ## Why it exists
 
@@ -49,8 +55,14 @@ skills/director/     the skill: role, modes, output contract, capture triggers
   scripts/dsx        external state verification (the board has no expiry)
 commands/director.md thin command that invokes the skill
 install.sh           symlink or copy the skill and command into ~/.claude
+docs/                architecture and use-case diagrams (mermaid)
+  architecture.md      system overview, sequence, and state diagrams
+  use-cases.md         four worked use cases, each with a diagram
+probe/nats-phase-0/  the transport probe: NATS broker + director-mcp shim
+  PROGRESS.md          sub-probe results (poll is the receive, finding-160)
 sim/                 the simulation record
   prompt-session-1.md  the original direction, verbatim
+  requirements.md      the requirements register (the point)
   specs/               requirements firm enough to constrain the software
   artifacts/           work products the simulation produced
 ```
