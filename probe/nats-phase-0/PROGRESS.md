@@ -58,7 +58,7 @@ limits retention plus a durable per-agent consumer with DeliverAll is
 store-and-forward: a message sent to an absent session waits in the stream and
 replays when that session first pulls. No loss, delivered in order.
 
-## Sub-probe 5: human participation + latency. PARTIAL (transport floor measured; live model pending).
+## Sub-probe 5: human participation + latency. PASS (live two-party exchange through the operator's Claude Code, 2026-09-12).
 The shim must be wired into an actual Claude Code session (claude mcp add) so
 the operator's own session joins as agent://ops/michael and a live two-way
 exchange can be timed. This is the harness-integration boundary and a config
@@ -99,6 +99,32 @@ call wait_for_message. The harness offers no push into an already-running
 session's context; the poll is the receive.
 
 To remove the wiring: claude mcp remove director-mcp --scope local.
+
+LIVE TWO-PARTY EXCHANGE 2026-09-12. After a session restart the tools
+loaded, so this Claude Code session held director-mcp as agent://ops/michael
+and drove the full loop from inside the model:
+- set_presence(busy) + list_roster returned michael present (ops, aae-orc):
+  presence is live transport state read back by the real harness client.
+- An independent reviewer-a shim sent a REQUEST to agent://ops/michael and
+  exited. The live session then called wait_for_message and the envelope
+  surfaced intact (REQUEST, sender reviewer-a, principal null, refs kept,
+  conversation_id set). This is the receive-is-a-poll shape confirmed in the
+  real harness, not a script: the message sat in the durable inbox and
+  surfaced only on the model's own wait_for_message call. There is no push.
+- The session replied AGREE with in_reply_to set. reviewer-a was offline;
+  it rejoined and its wait_for_message returned the AGREE intact. So
+  store-and-forward (R-22) holds with the live session as the SENDER too,
+  and the REQUEST/AGREE handshake completes end-to-end through the harness.
+
+Felt latency, settled qualitatively: the number that dominates is not the
+~20 ms transport floor but how long the message waits for the model's next
+poll. That is a model-behavior property (when does the agent choose to call
+wait_for_message), not a bus property, and the live run makes it concrete:
+nothing arrived until the poll. finding-159/160 hold at the harness.
+
+Note: killing processes by a broad `director-mcp` pattern also kills the
+harness-spawned server for this session (it IS a director-mcp process).
+Scope any cleanup to the reviewer-a shims by env or fifo, not the binary name.
 
 ## Kill criteria status
 Not triggered. The push risk is real but has at least the long-poll shape, so
