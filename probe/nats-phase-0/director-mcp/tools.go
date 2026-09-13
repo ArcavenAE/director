@@ -11,6 +11,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/arcavenae/marvel/contracts/go/envelope"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/oklog/ulid/v2"
 )
@@ -89,17 +90,52 @@ func dispatchTool(ctx context.Context, bus *Bus, name string, rawArgs json.RawMe
 	return nil, errors.New("unknown tool: " + name)
 }
 
-func newEnvelope(self Sender) *Envelope {
+func newEnvelope(self Sender) *envelope.Envelope {
 	id := ulid.Make().String()
-	e := &Envelope{
+	cid := "cid-" + id
+	s := envelope.Sender{AgentID: self.AgentID, Workspace: self.Workspace}
+	if self.Role != "" {
+		role := self.Role
+		s.Role = &role
+	}
+	// Principal stays nil (reserved, R-53) and authority states none with a null
+	// seat: an agent speaking on its own behalf through the phase-0 shim holds no
+	// seat, so it carries no authority and says so rather than inferring one
+	// (R-02, R-03). direct and relayed are seat-bearing and arrive with the
+	// identity-lane seat work; the shim never emits them yet.
+	return &envelope.Envelope{
 		SchemaVersion:  1,
 		MessageID:      id,
-		ConversationID: "cid-" + id,
-		Sender:         self,
-		SentAt:         time.Now().UTC().Format(time.RFC3339),
+		ConversationID: &cid,
+		Sender:         s,
+		Authority:      envelope.Authority{Strength: envelope.StrengthNone, Seat: nil},
+		SentAt:         time.Now().UTC(),
 	}
-	e.Sender.Principal = nil // Phase 0: envelope validates with principal null
-	return e
+}
+
+// bodyBearing content types exist to carry a body in content.data. The schema
+// makes data optional (a signal carries none, a pointer carries refs), so an
+// empty text/task/result body is schema-valid yet worthless on the wire: an
+// envelope accepted for delivery with no body is silent loss, the class this
+// layer exists to prevent. This policy is enforced on emit, beside schema
+// validation, not by it (2026-09-13 empty-body regression).
+var bodyBearing = map[envelope.Type]bool{
+	envelope.TypeText:   true,
+	envelope.TypeTask:   true,
+	envelope.TypeResult: true,
+}
+
+func checkEmitPolicy(e *envelope.Envelope) error {
+	if bodyBearing[e.Content.Type] {
+		body, _ := e.Content.Data.(string)
+		if body == "" {
+			return errors.New("content.data is empty for type " + string(e.Content.Type) + "; a body-bearing message must not be accepted for delivery empty (silent loss)")
+		}
+	}
+	if e.Content.Type == envelope.TypePointer && len(e.Content.Refs) == 0 {
+		return errors.New("content.type is pointer but content.refs is empty; a pointer message must carry at least one ref")
+	}
+	return nil
 }
 
 func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
@@ -112,15 +148,19 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	}
 	e := newEnvelope(bus.self)
 	e.Recipient.Address = a.To
-	e.Performative = a.Performative
-	e.Content = Content{Type: "text", Data: a.Text, Refs: a.Refs}
-	e.InReplyTo = a.InReplyTo
-	e.ReplyBy = a.ReplyBy
+	e.Performative = envelope.Performative(a.Performative)
+	e.Content = envelope.Content{Type: envelope.TypeText, Data: a.Text, Refs: a.Refs}
 	if a.InReplyTo != "" {
-		e.CorrelationID = a.InReplyTo
+		e.InReplyTo = &a.InReplyTo
+		corr := a.InReplyTo
+		e.CorrelationID = &corr
 	}
-	if err := e.validate(); err != nil {
-		return nil, err
+	if a.ReplyBy != "" {
+		t, err := time.Parse(time.RFC3339, a.ReplyBy)
+		if err != nil {
+			return nil, errors.New("reply_by must be RFC3339: " + err.Error())
+		}
+		e.ReplyBy = &t
 	}
 	if err := bus.publish(ctx, e); err != nil {
 		return nil, err
@@ -190,12 +230,12 @@ func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, err
 	} else {
 		e.Recipient.Address = "broadcast://" + bus.self.Workspace + "/" + a.Team
 	}
-	e.Recipient.Team = a.Team
-	e.Performative = "INFORM"
-	e.Content = Content{Type: "text", Data: a.Text}
-	if err := e.validate(); err != nil {
-		return nil, err
+	if a.Team != "" {
+		team := a.Team
+		e.Recipient.Team = &team
 	}
+	e.Performative = envelope.PerformativeINFORM
+	e.Content = envelope.Content{Type: envelope.TypeText, Data: a.Text}
 	if err := bus.publish(ctx, e); err != nil {
 		return nil, err
 	}
