@@ -75,9 +75,14 @@ from the register; marvel-builder verified items one to six from the code
   three overrides that do exist: `marvel daemon --socket <path> --state-bolt
   <path>` and `MARVEL_TMUX_SOCKET=<name>`. The keys directory is then shared,
   which is acceptable for a local twin, and neither daemon binds the mrvl
-  TCP port unless asked. A daemon adopts only panes it has a record of and
-  leaves the rest (`AdoptOrLeave`), so the twin never touches the hand-run
-  fleet's panes.
+  TCP port unless asked. Confirmed in code: `internal/tmux/driver.go`
+  `SocketName()` returns `MARVEL_TMUX_SOCKET` when set and the sha256(Home)
+  name otherwise, so two same-HOME daemons with distinct values run
+  distinct tmux servers; the control socket is `--socket` and the state
+  store `--state-bolt`, and the only paths still shared under one home are
+  keys, known_hosts, and config.yaml. A daemon adopts only panes it has a
+  record of and leaves the rest (`AdoptOrLeave`), so the twin never touches
+  the hand-run fleet's panes.
 - **Shift is built**: rolling, new generation beside the old, workers first
   and supervisor last (`shiftOrder`, `controller.go:1729`), with a 10m timeout
   and rollback. A restarted or shifted interactive replica is a NEW session
