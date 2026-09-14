@@ -212,19 +212,19 @@ the research report's durable pattern and the lowest-priority piece here.
 Flat bd tickets, labels `aae-orc`, `director`, `source:session`, dependency
 edges only (no umbrella):
 
-1. Observed state with source label, Claude observer via ppid (1.1, 1.2), and
+1. (aae-orc-c911j) Observed state with source label, Claude observer via ppid (1.1, 1.2), and
    the `set_presence` skill-text change. First step is a one-command probe that
    `~/.claude/sessions/<ppid>.json` exists for a running shim.
-2. Shutdown edge and failure accounting for presence (1.5, 1.6).
-3. Seat lease in the shim: acquire, CAS renew on the tick, fail closed,
+2. (aae-orc-kz4t5) Shutdown edge and failure accounting for presence (1.5, 1.6).
+3. (aae-orc-c0n9d) Seat lease in the shim: acquire, CAS renew on the tick, fail closed,
    release on exit (1.4; SEAT-A..E). Independent of 1 and 2 in code, shares
    the ticker.
-4. opencode, codex, and crush observers behind the adapter gate (1.2), with
+4. (aae-orc-21c26) opencode, codex, and crush observers behind the adapter gate (1.2), with
    the launch-model preconditions in adapters.md. After 1.
-5. `director-watch` for shimless sessions (1.7). After 1.
-6. Live-broker test set: SIGSTOP harness, SIGKILL harness, broker restart,
+5. (aae-orc-buprm) `director-watch` for shimless sessions (1.7). After 1.
+6. (aae-orc-rcu0g) Live-broker test set: SIGSTOP harness, SIGKILL harness, broker restart,
    CAS conflict. After 1, 2, 3.
-7. Harvest BEAT-A..F into requirements.md section I with source classes and
+7. (aae-orc-f7y5q) Harvest BEAT-A..F into requirements.md section I with source classes and
    update adapters.md. After 1 and 3 have run against a live bus.
 
 ## 6. Open questions
