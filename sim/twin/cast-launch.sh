@@ -22,7 +22,7 @@ set -euo pipefail
 # operator names (precondition 1 wants a tag; until one exists WARDROBE_REF
 # records the sha the twin was cast from, and the spawn line carries tree=).
 WARDROBE_ROOT="${WARDROBE_ROOT:-$HOME/.local/share/wardrobe/contents}"
-SHIM_BIN="${DIRECTOR_SHIM_BIN:-/Users/michael.pursifull/work/aae-orc/director/probe/nats-phase-0/director-mcp/director-mcp}"
+SHIM_BIN="${DIRECTOR_SHIM_BIN:?cast-launch: set DIRECTOR_SHIM_BIN to the built director-mcp shim; there is no default so the launcher is portable across hosts}"
 NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 DIRECTOR_TEAM="${DIRECTOR_TEAM:-${MARVEL_TEAM:-fleet}}"
 DIRECTOR_WORKSPACE="${DIRECTOR_WORKSPACE:-${MARVEL_WORKSPACE:-ops2}}"
@@ -70,13 +70,15 @@ cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_RO
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
 cast_line+=" Your first act is to echo the last line of the spawn log (ruling 84)."
 
-# The session's working directory is the fleet's workspace, the orc root,
-# which the operator has already trusted in Claude Code and which every
-# hand-run fleet session uses. A pane inherits the tmux server's directory
-# (marvel passes no start directory), so an untrusted daemon cwd would stop
-# claude at the trust dialog before the shim ever loads. Never bypass the
-# dialog with dangerous permissions: the twin runs at the read floor.
-TWIN_CWD="${TWIN_CWD:-/Users/michael.pursifull/work/aae-orc}"
+# The session's working directory must be one the harness already trusts on
+# this host: a pane inherits the tmux server's directory (marvel passes no
+# start directory today), so an untrusted daemon cwd would stop claude at the
+# trust dialog before the shim ever loads. TWIN_CWD is required, with no
+# default, so a second host names its own trusted path rather than inheriting
+# one operator's home; marvel#255 (MARVEL_WORKDIR) retires this shim cd once it
+# ships. Never bypass the dialog with dangerous permissions: the twin runs at
+# the read floor.
+TWIN_CWD="${TWIN_CWD:?cast-launch: set TWIN_CWD to a directory the harness trusts on THIS host; there is no default, so a wrong same-named path cannot launch a session in the wrong place silently}"
 cd "$TWIN_CWD" || { echo "cast-launch: cannot cd to $TWIN_CWD (set TWIN_CWD to a trusted workspace)" >&2; exit 1; }
 
 echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL, cwd $TWIN_CWD" >&2

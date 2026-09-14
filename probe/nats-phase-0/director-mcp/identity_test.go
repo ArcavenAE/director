@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -79,11 +80,15 @@ func TestValidateIdentityCoversEveryLever(t *testing.T) {
 }
 
 // resolveSubject is the send-side gate: a target id with a wildcard or a dot
-// must be refused before a subject is built, on every address scheme.
+// must be refused before a subject is built, on every address scheme. The
+// target validation runs before workspace resolution, so an explicit workspace
+// hint (which skips the roster) still exercises the rejection path on a Bus
+// with no broker.
 func TestResolveSubjectRefusesWildcardTargets(t *testing.T) {
 	b := &Bus{self: Sender{AgentID: "builder", Team: "ops", Workspace: "aae-orc"}}
+	ctx := context.Background()
 
-	subject, durable, err := b.resolveSubject("agent://ops/planner")
+	subject, durable, err := b.resolveSubject(ctx, "agent://ops/planner", "aae-orc")
 	if err != nil || !durable || subject != "agent.aae-orc.ops.planner.inbox" {
 		t.Fatalf("agent://ops/planner = %q, %v, %v", subject, durable, err)
 	}
@@ -102,14 +107,14 @@ func TestResolveSubjectRefusesWildcardTargets(t *testing.T) {
 		"broadcast://aae-orc/o.ps",
 	}
 	for _, addr := range refused {
-		subject, _, err := b.resolveSubject(addr)
+		subject, _, err := b.resolveSubject(ctx, addr, "aae-orc")
 		if err == nil {
 			t.Errorf("%s resolved to %q, want rejection", addr, subject)
 		}
 	}
 
 	// Workspace-wide broadcast has no team token to validate and still routes.
-	subject, durable, err = b.resolveSubject("broadcast://aae-orc")
+	subject, durable, err = b.resolveSubject(ctx, "broadcast://aae-orc", "")
 	if err != nil || durable || subject != "agent.aae-orc.broadcast" {
 		t.Fatalf("broadcast://aae-orc = %q, %v, %v", subject, durable, err)
 	}
