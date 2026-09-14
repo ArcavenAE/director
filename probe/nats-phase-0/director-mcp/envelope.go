@@ -76,5 +76,31 @@ func (e *Envelope) validate() error {
 		!strings.HasPrefix(e.Recipient.Address, "broadcast://") {
 		return errors.New("recipient.address must be agent:// role:// or broadcast://")
 	}
+	if err := e.Content.validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// bodyBearing is the set of content types whose whole purpose is to carry a
+// body in content.data. A pointer carries refs instead; a signal is a bare
+// notification and may carry neither.
+var bodyBearing = map[string]bool{"text": true, "task": true, "result": true}
+
+// validate rejects a content block that would go on the bus empty. An envelope
+// accepted for delivery with no body is silent loss, the failure class the
+// director layer exists to prevent, so a body-bearing type with empty data is
+// refused at the send boundary and surfaces to the caller as an error rather
+// than a message_id. See the empty-body regression, 2026-09-13.
+func (c *Content) validate() error {
+	if c.Type == "" {
+		return errors.New("content.type required")
+	}
+	if bodyBearing[c.Type] && c.Data == "" {
+		return errors.New("content.data is empty for type " + c.Type + "; a body-bearing message must not be accepted for delivery empty (silent loss)")
+	}
+	if c.Type == "pointer" && len(c.Refs) == 0 {
+		return errors.New("content.type is pointer but content.refs is empty; a pointer message must carry at least one ref")
+	}
 	return nil
 }
