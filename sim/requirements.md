@@ -11,8 +11,9 @@ every entry now carries a source class (see the next section). An entry with no
 observed instance and no operator ruling behind it does not belong. Entries are
 stable once numbered; supersede rather than renumber.
 
-Status as of 2026-09-10, consolidated from session 1 (2026-09-04 through
-09-08). Evidence lives in `notes/observations.md` (O-N),
+Status as of 2026-09-14 (R-87 through R-90 added from Design brief 5, marvel
+finding-039, and the wake-channel incident). Consolidated from session 1
+(2026-09-04 through 09-08). Evidence lives in `notes/observations.md` (O-N),
 `notes/friction.md` (FR-N), `specs/`, and the platform graph
 (finding-144, finding-151, finding-159). The notes are gitignored because they
 carry live operational detail; this register is the clean surface derived from
@@ -38,19 +39,28 @@ opinion do not read as the same thing (aae-orc-lb9hj).
   carries authority like RULED and is never retired as declined because the
   current envelope cannot satisfy it. Added 2026-09-12 (R-83 through R-86).
 
-Split, 48 entries: **38 OBSERVED, 5 JUDGMENT, 5 RULED.** (41 from session 1,
-R-42 through R-44 from the gen-1 mailbox read, R-45 from replay pilot 01,
-R-46 through R-47 from wave 2, and R-48 from wave 3, all OBSERVED. The R-21
-sharpening is a JUDGMENT addendum, not a new entry.)
+Split. The session-1-plus-waves population, R-01 through R-48, is **38
+OBSERVED, 5 JUDGMENT, 5 RULED** (41 from session 1, R-42 through R-44 from the
+gen-1 mailbox read, R-45 from replay pilot 01, R-46 through R-47 from wave 2,
+and R-48 from wave 3, all OBSERVED; the R-21 sharpening is a JUDGMENT addendum,
+not a new entry). The later blocks carry their class inline and are not folded
+into that tally: section I (R-49 through R-82, the identity plane, the seat,
+custody and succession, and the naming registry) is predominantly JUDGMENT on
+an observed basis; R-83 through R-86 are FORWARD; the 2026-09-14 additions
+R-87 through R-91 (from Design brief 5, marvel finding-039, and the wake and
+stall-recovery observations) are two OBSERVED (R-87, R-89), two JUDGMENT (R-88,
+R-91), and one RULED-plus-JUDGMENT (R-90). A full per-class recount across sections I and the
+contract additions is not yet done; each entry's inline class is authoritative
+until it is.
 
-- JUDGMENT (5): R-34, R-38, R-39, R-40, R-41. All five have an observed basis
-  (R-34 on O-2, the rest on finding-159), so none is a floating opinion. Note
-  that four of them (R-38 through R-41, the whole substrate-independence
-  section) are design stances drawn from a single observation, the injected
-  receiver policy in finding-159. One instance, four requirements. That is not
-  a defect, but it is the thinnest evidence base in the register and worth
-  knowing.
-- RULED (5): R-05, R-07, R-20, R-32, R-35.
+- JUDGMENT in R-01 through R-48 (5): R-34, R-38, R-39, R-40, R-41. All five have
+  an observed basis (R-34 on O-2, the rest on finding-159), so none is a
+  floating opinion. Note that four of them (R-38 through R-41, the whole
+  substrate-independence section) are design stances drawn from a single
+  observation, the injected receiver policy in finding-159. One instance, four
+  requirements. That is not a defect, but it is the thinnest evidence base in
+  the register and worth knowing.
+- RULED in R-01 through R-48 (5): R-05, R-07, R-20, R-32, R-35.
 
 **Flagged for review, entries with no observed instance behind them.** The
 ticket asked specifically for JUDGMENT-class entries with no instance; there are
@@ -132,6 +142,22 @@ subagent that emits risk/authorization/outcome/rationale per action, replay
 wave 2 (sim/notes/replay-pilot-02.md).*
 *Source: OBSERVED (shipped harness behavior).*
 
+**R-90. A schema `$id` path names the owner of the vocabulary, decided by the
+subject test, and is fixed before any consumer pins it.** The envelope is
+`https://schema.arcaven.com/director/envelope/v1` (the director protocol family
+owns it); the adapter-event twin is
+`https://schema.arcaven.com/marvel/adapter-event/v1` (the marvel-owned seam);
+the shared base `https://schema.arcaven.com` is operator ruling D8. The subject
+test is the one that places a kos node: the path names the project the
+vocabulary is about, not a project it merely touches. Fix the path before any
+pin, because once a consumer pins an `$id` a rename costs one PR per pinning
+repo while before the pin it costs one line (the adapter-event twin was renamed
+at freeze, before beadle pinned it, for exactly this reason).
+*Earned by: marvel finding-039 section 7; operator ruling D8 (the shared base);
+the subject test from the kos process. Canonical home for the convention per
+finding-039.*
+*Source: RULED (D8) and JUDGMENT (the ownership principle).*
+
 ## B. Delivery and acknowledgement
 
 **R-08. Acknowledgement comes from the receiver, never from the send call.** A
@@ -174,6 +200,52 @@ side.
 second copy was indistinguishable from news.
 *Earned by: FR-13. Envelope field: `duplicate_of`, `in_reply_to`.*
 *Source: OBSERVED.*
+
+**R-87. A body-bearing message carries a non-empty body, enforced on the emit
+path before any acknowledgement, in every producer.** The envelope schema makes
+`content.data` optional by design (a signal carries no body, a pointer carries
+refs), so a passing `envelope.Validate()` does not prove a `text`, `task`, or
+`result` body is present: validation is necessary, not sufficient. Folding the
+guard into schema validation drops it the moment a producer adopts canonical
+validation, so it lives on the emit path, before any ack, in every producer. A
+bare wake is an explicit INFORM that carries content, not an empty body. The
+director-mcp shim enforces this in `publish()` and validates emit-only with a
+lenient receive path, so a migrated emitter never rejects un-migrated in-flight
+traffic.
+*Earned by: the empty-body regression on the live bus (planner and builder
+shims published empty bodies for a rebuild window while restarted shims sent
+full bodies; the AGENT_AUDIT stream dated it by `content.data` length),
+director#12 and #13, Design brief 5 sections 1 to 4
+(sim/design/shim-contract-and-bus-reliability.md), marvel finding-039 section
+5.*
+*Source: OBSERVED.*
+
+**R-88. A recipient receipt is the recipient's own durable write echoing a
+digest of what it received, never the transport ack.** The JetStream ack says
+the broker stored the message, not that the receiver processed it; the receipt
+is the receiver writing back a digest of the delivered content, which is the
+R-08 principle (acknowledgement from the receiver, not from the send call) made
+concrete at the content level. It is additive and rides an existing
+performative, so it is a forward slice, not a change to the frozen envelope.
+*Earned by: marvel finding-039 section 5, generalizing the R-08 and R-09
+observed drops; staged as a forward slice, not yet built.*
+*Source: JUDGMENT.*
+
+**R-89. The out-of-band wake channel a poll-based receiver depends on can be
+silently denied, and a denied wake is the R-09 drop re-entering through the wake
+path.** Receive is a poll (R-56, finding-160): the bus cannot wake an idle
+session, so every dispatch needs an out-of-band doorbell to make the recipient
+look. That doorbell can be dropped with no signal to either side (a recipient
+harness classifier silently declining the wake), and a completed report then
+sits unseen while a peer re-dispatches from stale state. The wake channel needs
+the loudness R-09 demands of delivery: a wake lands or fails loud, never
+silently, so custody does not go stale behind an undelivered nudge. Mitigation
+in hand: go to the durable artifact rather than re-transmit over the lossy wake
+wire.
+*Earned by: a silently-denied wake this session that left a completed report
+unseen and caused a stale re-dispatch (envoy, cross-session); R-56 and
+finding-160 (receive is a poll).*
+*Source: OBSERVED (this session).*
 
 ## C. Presence and liveness
 
@@ -510,6 +582,12 @@ proves recency, not identity (R-53 closes the identity gap later).
 the token; the same shape recurs for reassigned asks.*
 *Source: JUDGMENT. Design: design/director-seat-lease.md (SEAT-B),
 design/continuous-custody-succession.md (CUST-G).*
+*Sharpening (marvel finding-039 section 3): source the epoch from a separate
+monotone counter (a NATS KV revision serves), never from the shift generation.
+`abortStuckShift` rolls the shift generation backward, and a backward epoch
+breaks the guarantee a receiver relies on to reject a stale token (R-69). This
+constrains the identity-lane seat model that populates the epoch; nothing
+populates `authority.seat.epoch` today. Source: JUDGMENT.*
 
 **R-56. Liveness renewal (presence and seat) must be driven by the
 always-running shim on its own timer, never by the model calling a tool.**
@@ -592,6 +670,20 @@ acting.** Grounds R-42 (the store survives a restart with the queue intact).
 *Earned by: the stale-view adversarial pass and the NATS KV-plus-stream
 primitives.*
 *Source: JUDGMENT. Design: design/continuous-custody-succession.md (CUST-H).*
+
+**R-91. Per-session in-flight work state is externalized write-through, so a
+resumed or successor session can restore the specific interrupted work, not only
+the asks.** R-60 externalizes custody of asks continuously; a stalled or dead
+session leaves more than open asks behind, it leaves work partway done, and a
+wake that lands (R-89) finds nothing to resume against if the in-flight work
+state was never written out. This is R-60's write-through shape applied to
+worker task-progress, a requirement distinct from ask custody: getting a wake to
+land and having somewhere to resume from are two halves, and only the first is
+the wake channel.
+*Earned by: the stall-recovery gap observed across sessions
+(supervisor-role-atelier.md empirical-grounding, on main via #324); extends R-60
+from asks to worker in-flight state.*
+*Source: JUDGMENT.*
 
 ### The authority boundary
 
