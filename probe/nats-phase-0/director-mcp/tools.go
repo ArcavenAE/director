@@ -30,6 +30,7 @@ func toolCatalog() []toolDef {
 					"refs":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "pointers: bd:, finding:, file:, url:, pr:"},
 					"in_reply_to":  str("optional message_id being answered"),
 					"reply_by":     str("optional RFC3339 deadline"),
+					"workspace":    str("optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known cold mailbox (no live presence) verbatim."),
 				},
 				"required": []string{"to", "performative", "text"},
 			},
@@ -64,8 +65,9 @@ func toolCatalog() []toolDef {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"team": str("optional team; omit for whole workspace"),
-					"text": str("the message body"),
+					"team":      str("optional team; omit for whole workspace"),
+					"text":      str("the message body"),
+					"workspace": str("optional target workspace; omit to broadcast to your own"),
 				},
 				"required": []string{"text"},
 			},
@@ -102,15 +104,32 @@ func newEnvelope(self Sender) *Envelope {
 	return e
 }
 
-func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
-	var a struct {
-		To, Performative, Text, InReplyTo, ReplyBy string
-		Refs                                       []string
-	}
+// sendArgs are the send_message tool arguments. in_reply_to and reply_by carry
+// json tags because Go's case-insensitive field match does not bridge the
+// underscore in the schema key to the CamelCase field: without the tag both
+// would silently drop, and a reply would lose the in_reply_to that R-88
+// receipt correlation reads (in_reply_to -> CorrelationID below). to,
+// performative, text and refs bind without a tag, having no underscore.
+type sendArgs struct {
+	To           string
+	Performative string
+	Text         string
+	InReplyTo    string `json:"in_reply_to"`
+	ReplyBy      string `json:"reply_by"`
+	Workspace    string `json:"workspace"`
+	Refs         []string
+}
+
+// buildSendEnvelope parses and validates send_message args into an envelope,
+// returning the optional workspace hint separately. Split from toolSend so the
+// arg binding, notably in_reply_to -> CorrelationID (R-88 receipt
+// correlation), is testable without a broker.
+func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, error) {
+	var a sendArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	e := newEnvelope(bus.self)
+	e := newEnvelope(self)
 	e.Recipient.Address = a.To
 	e.Performative = a.Performative
 	e.Content = Content{Type: "text", Data: a.Text, Refs: a.Refs}
@@ -120,9 +139,17 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		e.CorrelationID = a.InReplyTo
 	}
 	if err := e.validate(); err != nil {
+		return nil, "", err
+	}
+	return e, a.Workspace, nil
+}
+
+func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
+	e, wsHint, err := buildSendEnvelope(bus.self, raw)
+	if err != nil {
 		return nil, err
 	}
-	if err := bus.publish(ctx, e); err != nil {
+	if err := bus.publish(ctx, e, wsHint); err != nil {
 		return nil, err
 	}
 	return map[string]any{
@@ -180,15 +207,23 @@ func toolPresence(ctx context.Context, bus *Bus, raw json.RawMessage) (any, erro
 func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	var a struct {
 		Team, Text string
+		Workspace  string `json:"workspace"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return nil, err
 	}
+	// The broadcast workspace goes into the address; omit it to broadcast to
+	// your own workspace, set it to reach another. resolveSubject builds the
+	// subject from the address's workspace, so no roster hint is needed here.
+	ws := a.Workspace
+	if ws == "" {
+		ws = bus.self.Workspace
+	}
 	e := newEnvelope(bus.self)
 	if a.Team == "" {
-		e.Recipient.Address = "broadcast://" + bus.self.Workspace
+		e.Recipient.Address = "broadcast://" + ws
 	} else {
-		e.Recipient.Address = "broadcast://" + bus.self.Workspace + "/" + a.Team
+		e.Recipient.Address = "broadcast://" + ws + "/" + a.Team
 	}
 	e.Recipient.Team = a.Team
 	e.Performative = "INFORM"
@@ -196,7 +231,7 @@ func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, err
 	if err := e.validate(); err != nil {
 		return nil, err
 	}
-	if err := bus.publish(ctx, e); err != nil {
+	if err := bus.publish(ctx, e, ""); err != nil {
 		return nil, err
 	}
 	return map[string]any{"status": "broadcast sent", "message_id": e.MessageID}, nil
