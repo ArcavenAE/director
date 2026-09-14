@@ -36,3 +36,7 @@ a probe before it hardens.
   (R-77) proven with two scratch leaves, the interim kinu placement and its
   LAN posture, marvel's build items (R-85), and the candidate requirements
   R-94 and R-95. Probe brief and artifacts in `probe/nats-global-tier/`.
+- `bus-credential-enrollment.md` (brief 9, approved 2026-09-14): marvel and
+  marvel keys as the enrollment and distribution plane for the global bus
+  credential; the flow, the transient `Credential` resource, the custody
+  argument, the multi-user boundary, and the seams for marvel-builder.
