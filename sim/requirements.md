@@ -12,7 +12,8 @@ observed instance and no operator ruling behind it does not belong. Entries are
 stable once numbered; supersede rather than renumber.
 
 Status as of 2026-09-14 (R-87 through R-90 added from Design brief 5, marvel
-finding-039, and the wake-channel incident; R-92 added from twin checks run 1). Consolidated from session 1
+finding-039, and the wake-channel incident; R-92 added from twin checks run 1; R-93 through R-95 ratified 2026-09-14 from
+finding-166 and design brief 8). Consolidated from session 1
 (2026-09-04 through 09-08). Evidence lives in `notes/observations.md` (O-N),
 `notes/friction.md` (FR-N), `specs/`, and the platform graph
 (finding-144, finding-151, finding-159). The notes are gitignored because they
@@ -287,6 +288,23 @@ idle can be accepting and discarding messages. Every observable short of the
 recipient's own record said the session was healthy.
 *Earned by: delivery spec R7; finding-144.*
 *Source: OBSERVED.*
+
+**R-93. A session whose director shim failed to connect, or whose bus is
+unprovisioned, surfaces loudly at spawn and is never reported running or
+healthy by the control plane; bus attachment is asserted by the shim's own
+timer (the R-56 beat) or by a pre-flight that fails closed, never inferred
+from a live pane.** On a fresh broker marvel reported nine sessions running
+with zero presence, zero buckets, and zero shim processes: a bare broker had
+no streams or bucket, the shim exited on connect, and `--strict-mcp-config`
+let the harness start without its tools, so nothing in the control plane
+said so. The same class runs the other way: a killed session's presence key
+lingers up to one bucket TTL. Presence is not a liveness signal in either
+direction; attachment is asserted, and a stranded durable consumer is the
+cheapest trace a dead session leaves (finding-166 addendum).
+*Earned by: finding-166 (second host, aae-orc#327; local twin checks run 1,
+3.4); fix shapes in aae-orc-z63a4 (the launcher pre-flight, director#27),
+the shim-fed heartbeat (shape 2), and the consumer reaper (aae-orc-8mcnf).*
+*Source: OBSERVED. Ratified by the operator 2026-09-14.*
 
 **R-15. Presence distinguishes present-and-receptive from
 present-and-unreachable.** Observed states on one harness: busy, idle, shell,
@@ -823,6 +841,38 @@ Filed 2026-09-12 from the naming party (casting: bmad-extras/rulings/2026-09-12-
 **R-86. The bus is two-tier: a local NATS inside each marvel cluster for team traffic, events, and heartbeats, and a global NATS for the director-supervisor channel across clusters and hosts.** An identity minted at the local tier must be routable at the global tier without a rename (R-06, R-79); the global tier is where the credential binding of R-77 stops being optional, because it is the first place a principal writes the bus from another host. Today marvel's Host resource is a stub (`internal/api/types.go:507`, unreferenced), each daemon reconciles its own host and knows nothing of its peers, and `mrvl://` named clusters are a client-side naming convention, so the global tier is director's to define and marvel's multi-host question (marvel F5, `question-multi-host`) to place.
 *Earned by: the operator's stated architecture, 2026-09-12; the Host stub and cluster config read the same day.*
 *Source: FORWARD (cross-cutting with marvel; topology named by the operator, unbuilt on both sides).*
+
+**R-94. A cluster name is a subject token in the identity class
+(`[A-Za-z0-9_-]`) and a namespace at the global tier; exactly two role words
+exist there, `supervisor` and `director`; a worker never holds a global
+address.** The global subjects are `global.<cluster>.supervisor.inbox` and
+`global.director.inbox`, one stream per direction per cluster, with presence
+under `presence.<cluster>.<role>.<instance>`; a supervisor keeps its local
+id and is addressed globally as `global://<cluster>/supervisor`, so nothing
+is renamed across tiers (R-06, R-79). marvel's `Cluster.Name` is unvalidated
+today and must take the same reject-not-rewrite check the shim applies
+(aae-orc-z37ux).
+*Earned by: design brief 8 (`sim/design/global-bus-tier.md`) sections 2 and
+4, proven on the kinu hub with two scratch leaves.*
+*Source: JUDGMENT, with the subject grammar OBSERVED on the running hub.
+Ratified by the operator 2026-09-14.*
+
+**R-95. Credentials bind principals to subtrees with one asymmetry at both
+tiers: the director is the only principal that publishes outward across a
+boundary (workspace locally, cluster globally), publish-only, reading nothing
+but its own inbox; every other principal publishes only into its own subtree
+and to the director.** At the hub one credential per cluster binds to that
+cluster's prefix and its own streams; at the local broker the global prefix
+binds to the supervisor role alone; a team credential never widens to
+`agent.*.<team>.>`; a session never holds the cluster credential. The grant
+table is brief 8 section 4.1. Consequence: under authorization, check 3.2d
+runs from the director seat's credential, and a refused publish surfaces as
+a failed JetStream ack, a tool error as loud as the R-92 refusal.
+*Earned by: the hub's authorization block proven 8 of 8; the residual skippy
+raised on aae-orc#327 (a team credential confined to its workspace refuses
+the cross-workspace publish R-92 makes), reconciled in brief 8 section 4.1.*
+*Source: OBSERVED (the hub binding); JUDGMENT (the asymmetry). Ratified by
+the operator 2026-09-14.*
 
 **Display form, not settled and deliberately not a requirement.** The register does not fix a suffix scheme. The shared floor: the routing token is a projection of the key alone, recomputable and never reconciled; a petname or slug appears only in human-facing renderings, never in a subject (Ezra corrected his own first take on this point, since a slug inside the token makes a petname change an address change, which R-71 forbids). Positions on record: Ezra (five Crockford base32 characters of the key; on collision extend the newcomer's suffix, never re-mint the incumbent; the same key twice is a duplicate launch and is refused); Null (eight base32 characters derived from the key, collision refuses the spawn, no auto-disambiguation because appending -2 is how an impersonating launcher gets a working seat); Wren (at a measured 9 percent duplicate rate the suffix is the real name and the petname a comment; withdrew "refuse at the petname table" as a standalone answer until the harness settle path is read against director's table); Dana (no suffix at seventeen sessions; if insisted, four characters of the key); Mary (the harness already parses `Name [a1b2c3]` with a 6 to 12 hex ref beside its roster builder, binding inferred by adjacency, so adopt the harness's display form rather than mint one).
 

@@ -249,7 +249,7 @@ Not yet proven, because the shim's global mode is unbuilt: receipts with
 `in_reply_to` across the link, presence from a real supervisor session, and
 the R-92 liveness refusal in the shim. Those are the shim ticket's tests.
 
-## 9. What the interim LAN posture leaves unprotected (operator ratifies)
+## 9. What the interim LAN posture leaves unprotected (ratified by the operator 2026-09-14)
 
 No TLS on 4242 or 7442. A device on the LAN can read every envelope on the
 wire and can attempt connections. It cannot publish, subscribe, or forge a
@@ -261,12 +261,12 @@ the 64 KiB message cap and the 24h stream age. Deferred to the cloud phase:
 TLS on both listeners with a fleet CA, mutual TLS on the leaf listener
 (`verify: true`), DNS, and public reachability.
 
-## 10. Candidate requirements (for the operator; not self-ratified)
+## 10. Requirements (ratified by the operator 2026-09-14; register text in `sim/requirements.md`)
 
-- **R-94 (candidate).** A cluster name is a subject token in the identity
+- **R-94.** A cluster name is a subject token in the identity
   class and a namespace at the global tier; exactly two role words exist
   there, `supervisor` and `director`; a worker never holds a global address.
-- **R-95 (candidate, reconciled 4.1).** Credentials bind principals to
+- **R-95 (reconciled 4.1).** Credentials bind principals to
   subtrees with one asymmetry at both tiers: the director is the only
   principal that publishes outward across a boundary (workspace locally,
   cluster globally), publish-only, reading nothing but its own inbox; every
