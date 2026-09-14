@@ -1,0 +1,137 @@
+# The marvel twin, S0: the hand-run fleet declared as one team, stood up
+# beside the running sessions (director brief 7, sim/design/
+# marvel-twin-manifest-and-cutover.md). Nothing here shuts anything down.
+#
+# Apply with the twin daemon, never the default one (brief 7 section 1):
+#   MARVEL_TMUX_SOCKET=marvel-twin marvel daemon \
+#     --socket ~/.marvel/run/twin.sock --state-bolt ~/.marvel/state/twin.bolt
+#   MARVEL_SOCKET=~/.marvel/run/twin.sock marvel work sim/twin/ops2-fleet.toml
+#
+# Every agent role runs through sim/twin/cast-launch.sh: it slices the
+# wardrobe role for MARVEL_ROLE, appends the spawn line, and execs claude
+# with the director shim wired in. `image = "claude"` selects marvel's claude
+# adapter (adapter resolution is by image; the command may be a wrapper), so
+# the adapter's --permission-mode and --settings flags ride through the
+# wrapper into claude. The wrapper passes its own --append-system-prompt,
+# which the adapter honours by not injecting its one-sentence identity.
+#
+# Identity at S0 (FORWARD R-84 is not built): the wrapper sets
+# DIRECTOR_AGENT_ID from MARVEL_SESSION, marvel's computed per-replica name,
+# so N sessions get N distinct addresses today with zero marvel changes.
+# When marvel-builder's baseEnv one-liner lands the wrapper defers to it,
+# and when the declared identity block lands the name becomes human-chosen.
+#
+# Roles with replicas = 0 are declared and not run (brief 7 section 2).
+# Permissions and restart policy are wardrobe's marvel-map projection of
+# permission_floor and spawn (read -> plan, persistent -> always).
+
+[workspace]
+name = "ops2"
+
+[[team]]
+name = "fleet"
+
+  # ---- standing roles, cast from wardrobe (all proposal at S0; the wrapper
+  # passes --allow-proposal, which rulings 47 and 61 make safe at the read floor)
+
+  [[team.role]]
+  name = "director"
+  replicas = 1
+  permissions = "plan"
+  restart_policy = "always"
+    [team.role.runtime]
+    image = "claude"
+    command = "sim/twin/cast-launch.sh"
+    context_feed = "statusline"
+
+  [[team.role]]
+  name = "supervisor"
+  replicas = 1
+  permissions = "plan"
+  restart_policy = "always"
+    [team.role.runtime]
+    image = "claude"
+    command = "sim/twin/cast-launch.sh"
+    context_feed = "statusline"
+
+  [[team.role]]
+  name = "envoy"
+  replicas = 1
+  permissions = "plan"
+  restart_policy = "always"
+    [team.role.runtime]
+    image = "claude"
+    command = "sim/twin/cast-launch.sh"
+    context_feed = "statusline"
+
+  [[team.role]]
+  name = "research-supervisor"
+  replicas = 1
+  permissions = "plan"
+  restart_policy = "always"
+    [team.role.runtime]
+    image = "claude"
+    command = "sim/twin/cast-launch.sh"
+    context_feed = "statusline"
+
+  # maintainer is the READER seat: wardrobe role `reader`; the wrapper maps
+  # the manifest role name to the wardrobe id (see WARDROBE_ROLE_MAP in it).
+  [[team.role]]
+  name = "maintainer"
+  replicas = 1
+  permissions = "plan"
+  restart_policy = "always"
+    [team.role.runtime]
+    image = "claude"
+    command = "sim/twin/cast-launch.sh"
+    context_feed = "statusline"
+
+  # Three scoped builders cast one wardrobe role (builder@0.1.0); the scope
+  # is a cast-time parameter the wrapper passes from the manifest role name
+  # (builder -> general, marvel-builder -> marvel, sideshow-builder ->
+  # sideshow and sideshow-packs) and the supervisor's cast record carries.
+  [[team.role]]
+  name = "builder"
+  replicas = 1
+  permissions = "plan"
+  restart_policy = "always"
+    [team.role.runtime]
+    image = "claude"
+    command = "sim/twin/cast-launch.sh"
+    context_feed = "statusline"
+
+  [[team.role]]
+  name = "marvel-builder"
+  replicas = 1
+  permissions = "plan"
+  restart_policy = "always"
+    [team.role.runtime]
+    image = "claude"
+    command = "sim/twin/cast-launch.sh"
+    context_feed = "statusline"
+
+  [[team.role]]
+  name = "sideshow-builder"
+  replicas = 1
+  permissions = "plan"
+  restart_policy = "always"
+    [team.role.runtime]
+    image = "claude"
+    command = "sim/twin/cast-launch.sh"
+    context_feed = "statusline"
+
+  [[team.role]]
+  name = "architect"
+  replicas = 1
+  permissions = "plan"
+  restart_policy = "always"
+    [team.role.runtime]
+    image = "claude"
+    command = "sim/twin/cast-launch.sh"
+    context_feed = "statusline"
+
+  # ---- declared, not run at S0 (marvel requires replicas >= 1 at parse
+  # time, so these rows stay commented until D5 lifts or a retro is pulled)
+  # [[team.role]]  name = "merge-queue"   (wardrobe merge-queue@0.1.0, write floor -> permissions "default")
+  # [[team.role]]  name = "retrospector"  (wardrobe retrospector@0.1.0)
+  # [[team.role]]  name = "nats-local"    (R-85, the local tier; S0 reuses nats://127.0.0.1:4222)
