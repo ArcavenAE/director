@@ -70,7 +70,16 @@ cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_RO
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
 cast_line+=" Your first act is to echo the last line of the spawn log (ruling 84)."
 
-echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL" >&2
+# The session's working directory is the fleet's workspace, the orc root,
+# which the operator has already trusted in Claude Code and which every
+# hand-run fleet session uses. A pane inherits the tmux server's directory
+# (marvel passes no start directory), so an untrusted daemon cwd would stop
+# claude at the trust dialog before the shim ever loads. Never bypass the
+# dialog with dangerous permissions: the twin runs at the read floor.
+TWIN_CWD="${TWIN_CWD:-/Users/michael.pursifull/work/aae-orc}"
+cd "$TWIN_CWD" || { echo "cast-launch: cannot cd to $TWIN_CWD (set TWIN_CWD to a trusted workspace)" >&2; exit 1; }
+
+echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL, cwd $TWIN_CWD" >&2
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$cast_line"$'\n\n'"$slice" \

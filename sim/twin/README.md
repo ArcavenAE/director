@@ -76,7 +76,11 @@ write floor; merge-queue, which is, is not run).
 4. Apply: `MARVEL_SOCKET=~/.marvel/run/twin.sock marvel work
    director/sim/twin/ops2-fleet.toml`, run from a cwd where the relative
    `command` resolves (the director repo root), or set an absolute path.
-5. Watch: `marvel get sessions -w` on the twin socket; the roster from the
+5. Trust: sessions start in `TWIN_CWD` (default the orc root), which the
+   operator has already trusted, so no trust dialog blocks the shim. Do not
+   answer the dialog with `dangerous_permissions`; it also drops the `plan`
+   permission mode the wardrobe read floor projects to.
+6. Watch: `marvel get sessions -w` on the twin socket; the roster from the
    live director (`list_roster`) should show nine new `fleet` entries beside
    the nine `ops` ones.
 
