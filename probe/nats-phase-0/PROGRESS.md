@@ -16,7 +16,10 @@ nats-server -js on 127.0.0.1:4222 (monitor :8222), config in this dir, data in
   after 90s of silence. Adequate for presence; revisit if per-key TTL needed.
 
 Not yet persisted to launchd (deliberate, per staging: prove before persist).
-Restart: nats-server -c probe/nats-phase-0/nats-server.conf &
+Restart: probe/nats-phase-0/start.sh & (sets DIRECTOR_PHASE0_HOME, default
+~/.director/nats, and execs nats-server on the base config; store_dir is
+env-driven now, so a bare `nats-server -c nats-server.conf` needs the variable
+exported first).
 
 ## Sub-probe 2: envelope-v1 on the wire. PASS.
 Published envelope-v1 (REQUEST, agent://ops/michael) to
