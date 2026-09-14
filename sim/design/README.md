@@ -31,3 +31,7 @@ a probe before it hardens.
   and wardrobe casts, the FORWARD identity block (R-84), and the cutover
   criteria as checks (R-49/R-84, R-08/R-09, R-56, R-42, R-60/R-61) plus the
   cross-host trial stage (R-86, R-77).
+- `bus-credential-enrollment.md` (brief 9, shape for review): marvel and
+  marvel keys as the enrollment and distribution plane for the global bus
+  credential; the flow, the transient `Credential` resource, the custody
+  argument, the multi-user boundary, and the seams for marvel-builder.
