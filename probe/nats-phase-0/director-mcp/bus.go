@@ -42,7 +42,25 @@ type Bus struct {
 }
 
 func connect(ctx context.Context, url string, self Sender) (*Bus, error) {
-	nc, err := nats.Connect(url, nats.Name("director-mcp/"+self.AgentID))
+	opts := []nats.Option{nats.Name("director-mcp/" + self.AgentID)}
+	// Shim side of director#4 (R-77): present a credential when the launcher
+	// supplied one. The broker's authorization block (the broker side, a
+	// separate change) binds a credential to the subjects it may use, so a
+	// process holding the ops credential cannot act as another team.
+	// Backward-compatible on purpose: with neither variable set the shim still
+	// connects anonymously, so this lands without a flag day. Activation is a
+	// coordinated relaunch that flips the broker to require auth and has every
+	// session present a credential at once; the broker is not hot-reloaded with
+	// auth under a live fleet.
+	//
+	//	DIRECTOR_NATS_CREDS  path to a .creds file (NKey/JWT), wins when set
+	//	DIRECTOR_NATS_USER   user name, with DIRECTOR_NATS_PASS, when no creds file
+	if creds := os.Getenv("DIRECTOR_NATS_CREDS"); creds != "" {
+		opts = append(opts, nats.UserCredentials(creds))
+	} else if user := os.Getenv("DIRECTOR_NATS_USER"); user != "" {
+		opts = append(opts, nats.UserInfo(user, os.Getenv("DIRECTOR_NATS_PASS")))
+	}
+	nc, err := nats.Connect(url, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +81,7 @@ func connect(ctx context.Context, url string, self Sender) (*Bus, error) {
 	// silent loss. Cost, accepted for the probe: a fresh instance replays the
 	// stream under DeliverAll, so a restart re-reads history.
 	cons, err := js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", jetstream.ConsumerConfig{
-		Durable:       "mcp_" + sanitize(self.AgentID) + "_" + b.instance,
+		Durable:       "mcp_" + self.AgentID + "_" + b.instance,
 		FilterSubject: b.inboxSubject(self.Team, self.AgentID),
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		DeliverPolicy: jetstream.DeliverAllPolicy,
@@ -77,8 +95,43 @@ func connect(ctx context.Context, url string, self Sender) (*Bus, error) {
 	return b, nil
 }
 
-func sanitize(s string) string {
-	return strings.NewReplacer(".", "_", "*", "_", ">", "_", " ", "_").Replace(s)
+// validToken enforces the closed identity character class, [A-Za-z0-9_-], on
+// every string that becomes a NATS subject token or a presence key segment.
+// It validates and rejects; it never rewrites (director#3, R-76).
+//
+// The class is exactly what is safe as ONE subject token: no "." (the token
+// separator), no "*" or ">" (wildcards), no whitespace. The prior sanitize()
+// rewrote those characters to "_", but only in the durable consumer name and
+// the presence key, not in the three subject builders below. That split let
+// an id of "*" build the filter subject agent.<ws>.<team>.*.inbox and read
+// every inbox on the team, and let "ops.planner" and "ops_planner" share one
+// presence row while routing to two inboxes. A token that is legal everywhere
+// or rejected before any subject is built removes the split.
+func validToken(kind, s string) error {
+	if s == "" {
+		return fmt.Errorf("%s is empty; an identity is assigned at spawn, never blank (director#3, R-78)", kind)
+	}
+	for _, r := range s {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '-'
+		if !ok {
+			return fmt.Errorf("%s %q contains %q; the identity class is [A-Za-z0-9_-] and a value is rejected, not rewritten, because a dot, star or right angle bracket would build a subject that is not yours (director#3, R-76)", kind, s, string(r))
+		}
+	}
+	return nil
+}
+
+// validateIdentity checks the launcher-assigned identity levers before any
+// subject is built, so a malformed id fails loud at spawn (R-78) instead of
+// reaching the bus.
+func validateIdentity(self Sender) error {
+	if err := validToken("DIRECTOR_WORKSPACE", self.Workspace); err != nil {
+		return err
+	}
+	if err := validToken("DIRECTOR_TEAM", self.Team); err != nil {
+		return err
+	}
+	return validToken("DIRECTOR_AGENT_ID", self.AgentID)
 }
 
 func (b *Bus) inboxSubject(team, id string) string {
@@ -107,6 +160,15 @@ func (b *Bus) resolveSubject(addr string) (subject string, durable bool, err err
 		if !ok {
 			return "", false, errors.New("agent address must be agent://{team}/{id}")
 		}
+		// The send target is validated too (director#3): a "." or "*" in a
+		// target id would add subject tokens or a wildcard, so it is refused
+		// here rather than published to a subject the sender did not name.
+		if err := validToken("agent team", team); err != nil {
+			return "", false, err
+		}
+		if err := validToken("agent id", id); err != nil {
+			return "", false, err
+		}
 		return b.inboxSubject(team, id), true, nil
 	case strings.HasPrefix(addr, "role://"):
 		rest := strings.TrimPrefix(addr, "role://")
@@ -114,10 +176,21 @@ func (b *Bus) resolveSubject(addr string) (subject string, durable bool, err err
 		if !ok {
 			return "", false, errors.New("role address must be role://{team}/{role}")
 		}
+		if err := validToken("role team", team); err != nil {
+			return "", false, err
+		}
+		if err := validToken("role", role); err != nil {
+			return "", false, err
+		}
 		return b.roleSubject(team, role), true, nil
 	case strings.HasPrefix(addr, "broadcast://"):
 		rest := strings.TrimPrefix(addr, "broadcast://")
 		_, team, _ := strings.Cut(rest, "/") // broadcast://{ws}[/{team}]
+		if team != "" {
+			if err := validToken("broadcast team", team); err != nil {
+				return "", false, err
+			}
+		}
 		return b.broadcastSubject(team), false, nil
 	}
 	return "", false, errors.New("unroutable address: " + addr)
@@ -206,7 +279,7 @@ func (b *Bus) writePresence(ctx context.Context, state string) error {
 		"ts":        time.Now().UTC().Format(time.RFC3339),
 	}
 	body, _ := json.Marshal(rec)
-	key := "presence." + sanitize(b.self.Team) + "." + sanitize(b.self.AgentID) + "." + b.instance
+	key := "presence." + b.self.Team + "." + b.self.AgentID + "." + b.instance
 	_, err := b.kv.Put(ctx, key, body)
 	return err
 }
@@ -240,7 +313,7 @@ func (b *Bus) checkCollision(ctx context.Context) string {
 	if err != nil {
 		return ""
 	}
-	prefix := "presence." + sanitize(b.self.Team) + "." + sanitize(b.self.AgentID) + "."
+	prefix := "presence." + b.self.Team + "." + b.self.AgentID + "."
 	for _, k := range keys {
 		if !strings.HasPrefix(k, prefix) {
 			continue
