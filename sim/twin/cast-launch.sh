@@ -81,6 +81,16 @@ cast_line+=" Your first act is to echo the last line of the spawn log (ruling 84
 TWIN_CWD="${TWIN_CWD:?cast-launch: set TWIN_CWD to a directory the harness trusts on THIS host; there is no default, so a wrong same-named path cannot launch a session in the wrong place silently}"
 cd "$TWIN_CWD" || { echo "cast-launch: cannot cd to $TWIN_CWD (set TWIN_CWD to a trusted workspace)" >&2; exit 1; }
 
+# Pre-flight the bus before the harness starts (finding-166, candidate R-93):
+# the shim as an MCP server exits nonzero on an unreachable or unprovisioned
+# broker, but --strict-mcp-config lets claude start without it, and the session
+# then reports running with no presence. Crash here instead, so marvel sees a
+# failed session and backs off loudly. --preflight creates no consumer and
+# writes no presence.
+DIRECTOR_TEAM="$DIRECTOR_TEAM" DIRECTOR_WORKSPACE="$DIRECTOR_WORKSPACE" NATS_URL="$NATS_URL" \
+  "$SHIM_BIN" --preflight \
+  || { echo "cast-launch: bus pre-flight failed for agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL; not starting the harness (finding-166)" >&2; exit 1; }
+
 echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL, cwd $TWIN_CWD" >&2
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
