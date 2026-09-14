@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/arcavenae/marvel/contracts/go/envelope"
 	"os"
 	"strings"
 	"sync"
@@ -200,10 +201,23 @@ func (b *Bus) resolveSubject(addr string) (subject string, durable bool, err err
 // audit stream. Dedupe rides on Nats-Msg-Id = message_id (R-13, verified at
 // transport in sub-probe 2). Returns "accepted for delivery" semantics only:
 // this is a send acknowledgement, never a delivery or read one (R-08).
-func (b *Bus) publish(ctx context.Context, e *Envelope) error {
+func (b *Bus) publish(ctx context.Context, e *envelope.Envelope) error {
+	// Emit-path policy: a body-bearing type must carry a body. The schema makes
+	// content.data optional, so this is enforced here, not by Validate (the
+	// 2026-09-13 empty-body regression: an empty body was accepted for delivery).
+	if err := checkEmitPolicy(e); err != nil {
+		return err
+	}
 	body, err := json.Marshal(e)
 	if err != nil {
 		return err
+	}
+	// Validate on EMIT only, against the canonical schema, so the shim never puts
+	// a malformed frame on the bus. Receive stays lenient (it never calls this),
+	// so a migrated shim does not poison in-flight traffic from shims that have
+	// not adopted the authority block yet.
+	if err := envelope.Validate(body); err != nil {
+		return fmt.Errorf("envelope fails the canonical schema: %w", err)
 	}
 	if len(body) > maxEnvelopeBytes {
 		return fmt.Errorf("envelope %d bytes exceeds 64 KiB; use content.refs pointers", len(body))
@@ -235,13 +249,13 @@ func (b *Bus) publish(ctx context.Context, e *Envelope) error {
 // durable consumer, waiting up to timeout, and acks it. This is the shape the
 // probe set out to measure: the agent CALLS to receive, because MCP cannot
 // push into the model's context (see PROGRESS.md sub-probe 3).
-func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, error) {
+func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*envelope.Envelope, error) {
 	msgs, err := b.consumer.Fetch(1, jetstream.FetchMaxWait(timeout))
 	if err != nil {
 		return nil, err
 	}
 	for m := range msgs.Messages() {
-		var e Envelope
+		var e envelope.Envelope
 		if err := json.Unmarshal(m.Data(), &e); err != nil {
 			_ = m.Term() // poison message: do not redeliver a thing we cannot parse
 			return nil, fmt.Errorf("undecodable message on inbox: %w", err)
