@@ -56,6 +56,24 @@ FORWARD, and the manifest does not pretend otherwise:
 | 3 | spawn log writable, line appended before exec | slice.sh appends to `${WARDROBE_SPAWN_LOG:-~/.local/state/wardrobe/spawn.log}` | build-lead confirms the path is writable by the daemon's uid |
 | 4 | ruleset on main with `validate` required | human repo setting; PRs #2 to #9 went through review | operator confirms |
 | 5 | stale-reader grep over `repos.yaml` checkouts empty | not run today | build-lead runs it before the first cast |
+| 6 | the broker is provisioned, not bare: `AGENT_INBOX`, `AGENT_AUDIT`, and the `AGENT_STATE` bucket exist before `marvel work` | pre-existed on the origin host from phase 0; absent on a fresh broker (skippy, aae-orc#327, finding-166) | build-lead runs the block below and the verify line before the first cast |
+
+Precondition 6, the exact spec that connected the shim on the second host
+(the same objects `probe/nats-phase-0/verify-auth.sh:85-92` creates):
+
+```sh
+nats stream add AGENT_INBOX --subjects 'agent.*.*.*.inbox,agent.*.*.role.*.inbox' \
+  --storage file --retention limits --max-age 24h --max-msg-size 65536 --dupe-window 2m
+nats stream add AGENT_AUDIT --subjects 'agent.audit' --storage file --retention limits --max-age 720h
+nats kv add AGENT_STATE --ttl 90s --storage file
+```
+
+Verify: `nats stream ls` shows both streams, `nats kv ls` shows `AGENT_STATE`,
+and a hand run of the shim prints `connected to ... as agent://...` rather
+than `presence KV AGENT_STATE: nats: bucket not found`. A bare broker fails
+silently otherwise: `--strict-mcp-config` makes a dead shim a non-error, the
+harness starts without its tools, and marvel reports the session running
+(finding-166; fix shapes and candidate R-93 there).
 
 Until precondition 1 holds, a cast is a development run: `ALLOW_DIRTY=1`
 lets slice.sh proceed with `tree=dirty` in the spawn line, and every such
