@@ -139,6 +139,45 @@ mint, paste, reload, hand over. Static NKey users are the right size for a
 handful of clusters; the operator/JWT model is the step when adding a cluster
 becomes frequent enough that editing the hub config is the bottleneck.
 
+### 4.1 The grant table, reconciled with the local block (R-95)
+
+Skippy's green 3.2 board ran on an anonymous broker, which proves R-92's
+routing and says nothing about whether the cross-workspace publish is
+permitted. Under the director#4 block a team credential is confined to
+`agent.<workspace>.<team>.>`, so the send R-92 deliberately publishes into
+the recipient's workspace is refused as a permissions violation. The
+reconciliation is an asymmetry, the same one at both tiers: the director is
+the only principal that publishes outward across a boundary; every other
+principal publishes only into its own subtree and to the director. Team
+credentials never gain `agent.*.<team>.>`; a cross-boundary send by anyone
+but the director routes through the director or does not exist.
+
+| tier | principal | publish allow | subscribe allow |
+|---|---|---|---|
+| global (hub) | director (`director` user, or `leaf-kinu` while the seat rides the kinu leaf) | `global.*.supervisor.inbox`, `global.director.>`; JetStream API for `GLOBAL_TO_DIRECTOR` and `KV_GLOBAL_PRESENCE` only; `$JS.ACK.>` | `global.director.>`, `_INBOX.>` |
+| global (hub) | `leaf-<cluster>` (one per cluster, held by the broker process) | `global.director.inbox`, `global.<cluster>.>`; JetStream API for `GLOBAL_TO_<cluster>` and `KV_GLOBAL_PRESENCE` only; `$JS.ACK.>` | `global.<cluster>.>`, `_INBOX.>` |
+| global (hub) | any worker | nothing; workers hold no global address | nothing |
+| local (director#4 block) | team credential (`ops`, per session once R-85 mints) | `agent.<workspace>.<team>.>`, `agent.audit`, JetStream and KV plumbing (unchanged) | `agent.<workspace>.<team>.>`, `agent.<workspace>.broadcast`, KV, `_INBOX.>` (unchanged) |
+| local | supervisor credential (the team grants plus the global prefix; the only local principal that may reach the hub) | team grants plus `global.director.inbox`, `$JS.<domain>.API.>` narrowed to its own stream and the presence bucket, `$JS.ACK.>` | team grants plus `global.<cluster>.>` |
+| local | director seat credential (its own, not a team's) | `agent.*.*.*.inbox`, `agent.*.*.role.*.inbox`, `agent.*.*.broadcast`, `agent.*.broadcast`, `agent.audit`, plumbing; publish-only across workspaces | its own inbox `agent.<workspace>.<team>.<id>.inbox`, its own team subtree, KV; it reads no other workspace |
+
+Consequences. (a) At the global tier the subjects carry no workspace token
+(`global.<cluster>.<role>.inbox`), so the local confinement never meets
+R-92's workspace resolution there; R-92 at this tier is the liveness half
+only, and the as-built hub already has the asymmetry (no
+supervisor-to-supervisor grant exists; cross-cluster traffic is
+director-mediated). (b) Within one cluster, a second workspace on the same
+broker is the S0 twin shortcut, not the target shape; in the target shape a
+second workspace is a second cluster with its own broker and reaches the
+director over the hub. On the shared broker the director seat's credential
+is the one cross-workspace publisher, outward only. (c) A team credential
+therefore never carries `agent.*.<team>.>`; the check 3.2d under
+authorization is run from the director seat's credential (3.2 is
+director-facing by definition), and 3.2e's workspace escape hatch is
+director-only. A refused publish surfaces at the shim as a failed JetStream
+ack, which is a tool error, so the permission refusal is as loud as the
+R-92 refusal.
+
 ## 5. The multi-user boundary (SOUL section 3)
 
 The global bus is shared transport, not shared identity. skippy's supervisor
@@ -227,10 +266,15 @@ TLS on both listeners with a fleet CA, mutual TLS on the leaf listener
 - **R-94 (candidate).** A cluster name is a subject token in the identity
   class and a namespace at the global tier; exactly two role words exist
   there, `supervisor` and `director`; a worker never holds a global address.
-- **R-95 (candidate).** The global tier binds one credential per cluster to
-  that cluster's prefix and streams at the hub, and the local broker binds
-  the global prefix to the supervisor role alone; a session never holds the
-  cluster credential.
+- **R-95 (candidate, reconciled 4.1).** Credentials bind principals to
+  subtrees with one asymmetry at both tiers: the director is the only
+  principal that publishes outward across a boundary (workspace locally,
+  cluster globally), publish-only, reading nothing but its own inbox; every
+  other principal publishes only into its own subtree and to the director.
+  At the hub one credential per cluster binds to that cluster's prefix and
+  streams; at the local broker the global prefix binds to the supervisor
+  role alone; a team credential never widens to `agent.*.<team>.>`; a
+  session never holds the cluster credential.
 
 ## 11. Build sequence and tickets
 
