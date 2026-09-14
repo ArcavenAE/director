@@ -1,0 +1,20 @@
+# Add to a cluster's LOCAL nats-server.conf to join the global tier as a leaf.
+# <cluster> is the cluster's subject token ([A-Za-z0-9_-]); it must match the
+# hub user the operator minted for this cluster (leaf-<cluster>).
+# Adding a domain to an existing broker keeps its streams, KV, and
+# default-prefix clients working (verified 2026-09-14 on 2.14.6).
+jetstream {
+  store_dir: "<existing store dir>"
+  domain: <cluster>
+}
+leafnodes {
+  remotes: [
+    { urls: ["nats-leaf://192.168.100.110:7442"], nkey: $DIRECTOR_LEAF_NKEY }
+  ]
+}
+# Start with the seed in the environment, never in the file:
+#   DIRECTOR_LEAF_NKEY="$(grep -m1 '^SU' ~/.director/nats/leaf-<cluster>.nk)" nats-server -c nats-server.conf
+#
+# If the local broker runs the director#4 authorization block, the supervisor
+# user gains, in publish allow: "global.director.inbox", "$JS.global.API.>",
+# "$JS.ACK.>"; in subscribe allow: "global.<cluster>.>", "_INBOX.>".
