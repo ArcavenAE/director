@@ -42,20 +42,22 @@ type Bus struct {
 	state   string
 }
 
-func connect(ctx context.Context, url string, self Sender) (*Bus, error) {
+// dial opens the NATS connection and JetStream context, presenting the R-77
+// credential the launcher supplied (if any). Shared by connect() and
+// preflight() so both reach the broker the same way with the same credential.
+//
+//	DIRECTOR_NATS_CREDS  path to a .creds file (NKey/JWT), wins when set
+//	DIRECTOR_NATS_USER   user name, with DIRECTOR_NATS_PASS, when no creds file
+//
+// director#4 (R-77): the broker's authorization block binds a credential to
+// the subjects it may use, so a process holding the ops credential cannot act
+// as another team. Backward-compatible: with neither variable set the shim
+// connects anonymously, so this lands without a flag day. Activation is the
+// coordinated relaunch that flips the broker to require auth with every
+// session presenting a credential at once; the broker is not hot-reloaded with
+// auth under a live fleet.
+func dial(url string, self Sender) (*nats.Conn, jetstream.JetStream, error) {
 	opts := []nats.Option{nats.Name("director-mcp/" + self.AgentID)}
-	// Shim side of director#4 (R-77): present a credential when the launcher
-	// supplied one. The broker's authorization block (the broker side, a
-	// separate change) binds a credential to the subjects it may use, so a
-	// process holding the ops credential cannot act as another team.
-	// Backward-compatible on purpose: with neither variable set the shim still
-	// connects anonymously, so this lands without a flag day. Activation is a
-	// coordinated relaunch that flips the broker to require auth and has every
-	// session present a credential at once; the broker is not hot-reloaded with
-	// auth under a live fleet.
-	//
-	//	DIRECTOR_NATS_CREDS  path to a .creds file (NKey/JWT), wins when set
-	//	DIRECTOR_NATS_USER   user name, with DIRECTOR_NATS_PASS, when no creds file
 	if creds := os.Getenv("DIRECTOR_NATS_CREDS"); creds != "" {
 		opts = append(opts, nats.UserCredentials(creds))
 	} else if user := os.Getenv("DIRECTOR_NATS_USER"); user != "" {
@@ -63,11 +65,44 @@ func connect(ctx context.Context, url string, self Sender) (*Bus, error) {
 	}
 	nc, err := nats.Connect(url, opts...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	js, err := jetstream.New(nc)
 	if err != nil {
 		nc.Close()
+		return nil, nil, err
+	}
+	return nc, js, nil
+}
+
+// preflight verifies the broker is reachable and provisioned before the
+// harness starts: the credential connects, the AGENT_STATE presence bucket
+// exists, and the AGENT_INBOX stream exists. It creates NO durable consumer,
+// so a repeated preflight leaves nothing behind (unlike connect, so it does
+// not feed the orphaned-consumer accumulation of R-50 and aae-orc-8mcnf).
+// cast-launch runs it before exec claude and exits nonzero on failure, so an
+// unprovisioned or unreachable bus crashes the pane and marvel backs off
+// loudly, rather than the harness starting shimless under --strict-mcp-config
+// with the session reporting running and no presence (finding-166, candidate
+// R-93).
+func preflight(ctx context.Context, url string, self Sender) error {
+	nc, js, err := dial(url, self)
+	if err != nil {
+		return fmt.Errorf("broker unreachable at %s: %w", url, err)
+	}
+	defer nc.Close()
+	if _, err := js.KeyValue(ctx, "AGENT_STATE"); err != nil {
+		return fmt.Errorf("presence KV AGENT_STATE missing: %w (provision the broker first; the streams and KV come from the broker setup, not the shim)", err)
+	}
+	if _, err := js.Stream(ctx, "AGENT_INBOX"); err != nil {
+		return fmt.Errorf("stream AGENT_INBOX missing: %w (provision the broker first)", err)
+	}
+	return nil
+}
+
+func connect(ctx context.Context, url string, self Sender) (*Bus, error) {
+	nc, js, err := dial(url, self)
+	if err != nil {
 		return nil, err
 	}
 	kv, err := js.KeyValue(ctx, "AGENT_STATE")

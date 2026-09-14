@@ -32,6 +32,14 @@ func env(k, def string) string {
 }
 
 func main() {
+	// --preflight: connect, verify the broker is provisioned, and exit. Used by
+	// cast-launch before starting the harness (finding-166, R-93).
+	preflightMode := false
+	for _, a := range os.Args[1:] {
+		if a == "--preflight" || a == "-preflight" {
+			preflightMode = true
+		}
+	}
 	self := Sender{
 		AgentID:   env("DIRECTOR_AGENT_ID", ""),
 		Team:      env("DIRECTOR_TEAM", "default"),
@@ -50,6 +58,15 @@ func main() {
 		os.Exit(2)
 	}
 	url := env("NATS_URL", "nats://127.0.0.1:4222")
+
+	if preflightMode {
+		if err := preflight(context.Background(), url, self); err != nil {
+			fmt.Fprintf(os.Stderr, "director-mcp preflight: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "director-mcp preflight: ok")
+		return
+	}
 
 	logf := func(format string, a ...any) {
 		log.Printf("[director-mcp %s] "+format, append([]any{self.AgentID}, a...)...)
