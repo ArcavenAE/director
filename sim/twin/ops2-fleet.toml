@@ -22,8 +22,9 @@
 # and when the declared identity block lands the name becomes human-chosen.
 #
 # Roles with replicas = 0 are declared and not run (brief 7 section 2).
-# Permissions and restart policy are wardrobe's marvel-map projection of
-# permission_floor and spawn (read -> plan, persistent -> always).
+# Restart policy is wardrobe's marvel-map projection of spawn (persistent ->
+# always). Permission mode is the operator's S0 ruling: auto, overriding the
+# read-floor step-down to plan; passed verbatim to claude --permission-mode.
 
 [workspace]
 name = "ops2"
@@ -37,7 +38,7 @@ name = "fleet"
   [[team.role]]
   name = "director"
   replicas = 1
-  permissions = "plan"
+  permissions = "auto"
   restart_policy = "always"
     [team.role.runtime]
     image = "claude"
@@ -47,7 +48,7 @@ name = "fleet"
   [[team.role]]
   name = "supervisor"
   replicas = 1
-  permissions = "plan"
+  permissions = "auto"
   restart_policy = "always"
     [team.role.runtime]
     image = "claude"
@@ -57,7 +58,7 @@ name = "fleet"
   [[team.role]]
   name = "envoy"
   replicas = 1
-  permissions = "plan"
+  permissions = "auto"
   restart_policy = "always"
     [team.role.runtime]
     image = "claude"
@@ -67,7 +68,7 @@ name = "fleet"
   [[team.role]]
   name = "research-supervisor"
   replicas = 1
-  permissions = "plan"
+  permissions = "auto"
   restart_policy = "always"
     [team.role.runtime]
     image = "claude"
@@ -79,7 +80,7 @@ name = "fleet"
   [[team.role]]
   name = "maintainer"
   replicas = 1
-  permissions = "plan"
+  permissions = "auto"
   restart_policy = "always"
     [team.role.runtime]
     image = "claude"
@@ -93,7 +94,7 @@ name = "fleet"
   [[team.role]]
   name = "builder"
   replicas = 1
-  permissions = "plan"
+  permissions = "auto"
   restart_policy = "always"
     [team.role.runtime]
     image = "claude"
@@ -103,7 +104,7 @@ name = "fleet"
   [[team.role]]
   name = "marvel-builder"
   replicas = 1
-  permissions = "plan"
+  permissions = "auto"
   restart_policy = "always"
     [team.role.runtime]
     image = "claude"
@@ -113,7 +114,7 @@ name = "fleet"
   [[team.role]]
   name = "sideshow-builder"
   replicas = 1
-  permissions = "plan"
+  permissions = "auto"
   restart_policy = "always"
     [team.role.runtime]
     image = "claude"
@@ -123,7 +124,7 @@ name = "fleet"
   [[team.role]]
   name = "architect"
   replicas = 1
-  permissions = "plan"
+  permissions = "auto"
   restart_policy = "always"
     [team.role.runtime]
     image = "claude"
