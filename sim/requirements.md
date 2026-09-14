@@ -12,7 +12,7 @@ observed instance and no operator ruling behind it does not belong. Entries are
 stable once numbered; supersede rather than renumber.
 
 Status as of 2026-09-14 (R-87 through R-90 added from Design brief 5, marvel
-finding-039, and the wake-channel incident). Consolidated from session 1
+finding-039, and the wake-channel incident; R-92 added from twin checks run 1). Consolidated from session 1
 (2026-09-04 through 09-08). Evidence lives in `notes/observations.md` (O-N),
 `notes/friction.md` (FR-N), `specs/`, and the platform graph
 (finding-144, finding-151, finding-159). The notes are gitignored because they
@@ -246,6 +246,30 @@ wire.
 unseen and caused a stale re-dispatch (envoy, cross-session); R-56 and
 finding-160 (receive is a poll).*
 *Source: OBSERVED (this session).*
+
+**R-92. The routing subject is derived from the recipient's resolved identity,
+never from the sender's context.** A recipient's identity is workspace, team,
+id, and instance, which is exactly what its presence record carries. The
+phase-0 shim built the inbox subject as `agent.<sender workspace>.<team>.<id>.inbox`
+from the sender's own `DIRECTOR_WORKSPACE`, because `agent://<team>/<id>`
+carries no workspace; a send from workspace `aae-orc` to a twin role in
+workspace `ops2` returned a message id and "accepted for delivery" and landed
+on a subject no consumer filters. That is the R-09 drop re-entering through
+the addressing layer, and the roster made it worse by listing every
+workspace's entries as if they were addressable from anywhere. R-86's two-tier
+bus is cross-workspace and cross-cluster by definition, so a sender-derived
+subject fails the load-bearing case, not an edge. Contract: the sender
+resolves the address to the recipient's full identity (roster lookup by team
+and id, or an address that carries the workspace) and builds the subject from
+that; zero matches and ambiguous matches (the same team and id live in two
+workspaces) refuse loudly before publish, which also gives R-09 its loud
+failure for a dead target within one presence TTL. The two-segment address is
+frozen with the envelope; a fully qualified form is a schema change and rides
+the R-86 envelope work.
+*Earned by: twin checks run 1 (`sim/twin/checks-2026-09-14.md`, finding 1),
+one send proven by `nats stream subjects` and the consumer's pending count;
+`probe/nats-phase-0/director-mcp/bus.go` `inboxSubject`.*
+*Source: OBSERVED.*
 
 ## C. Presence and liveness
 
