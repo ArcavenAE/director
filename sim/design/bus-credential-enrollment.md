@@ -1,7 +1,10 @@
 # Design brief 9: marvel as the enrollment and distribution plane for the global bus credential
 
-Status: shape for the operator's review, 2026-09-14. Not a build; tickets
-follow approval. Second half of one credential story with brief 8 section
+Status: shape approved by the operator, 2026-09-14, directing its build
+with three rulings: S5 (key scopes) lands first, before any second-party
+cluster enrolls; no interim hand-carry of the seed, the built path is the
+delivery mechanism; the build is done only when it is installed from the
+brew tap and verified. Tickets in section 10. Second half of one credential story with brief 8 section
 4.1 (R-95, the grant table): that half says which subjects a cluster's
 credential may use; this half says how the credential reaches the cluster
 without a hand-carried seed. The interim hand-carry in
@@ -169,3 +172,26 @@ credential; the daemon and the broker process do.
    full-admin trust on his daemon is acceptable for the interim.
 4. Whether the interim `--reveal` start line is acceptable until broker
    supervision exists, or whether E3 waits for aae-orc-xy1dh.
+
+## 10. Tickets (filed 2026-09-14 on approval; labels aae-orc, director, marvel, source:session)
+
+- aae-orc-rlb8h (P1, S5, first): per-key scopes on marvel keys; enrollment
+  lands on a credential-push key, never full admin.
+- aae-orc-qecha (P1, S1): transient `Credential` resource, never in bolt,
+  metadata-only listing.
+- aae-orc-gdum6 (P1, S2, after S1 and S5): credential put, get, delete, list
+  methods and verbs, events with the caller fingerprint.
+- aae-orc-sl9q2 (P1, S3, after S2): reveal on the local socket only; the
+  interim start line skippy uses before broker supervision.
+- aae-orc-8br8d (P2, S4, after S1): reexec handoff of transient resources or
+  the documented push-again rule.
+- aae-orc-vqq2c (P2, S6, after S1 and the broker-supervision items
+  aae-orc-xy1dh and aae-orc-e9g8i): the broker takes the credential from its
+  daemon at start.
+- aae-orc-juesa (P1, release gate, after S1 to S5): the tap release, the
+  operator's upgrade and verification on both hosts, then enrollment (E1)
+  and the push (E2). The cross-host stage aae-orc-av2v1 waits on it.
+
+Decisions 1 to 4 of section 9 are answered by the rulings above: approved;
+runtime-only confirmed; S5 first; the interim reveal line is acceptable once
+S3 exists.
