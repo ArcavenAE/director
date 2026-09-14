@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -82,7 +83,7 @@ func connect(ctx context.Context, url string, self Sender) (*Bus, error) {
 	// stream under DeliverAll, so a restart re-reads history.
 	cons, err := js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", jetstream.ConsumerConfig{
 		Durable:       "mcp_" + self.AgentID + "_" + b.instance,
-		FilterSubject: b.inboxSubject(self.Team, self.AgentID),
+		FilterSubject: b.inboxSubject(self.Workspace, self.Team, self.AgentID),
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		MaxDeliver:    -1,
@@ -134,25 +135,36 @@ func validateIdentity(self Sender) error {
 	return validToken("DIRECTOR_AGENT_ID", self.AgentID)
 }
 
-func (b *Bus) inboxSubject(team, id string) string {
-	return fmt.Sprintf("agent.%s.%s.%s.inbox", b.self.Workspace, team, id)
+// The subject builders take the workspace explicitly rather than reading
+// b.self.Workspace, because a directed subject names the RECIPIENT's workspace,
+// not the sender's (R-92). For the self-subscribe in connect() that workspace
+// is b.self.Workspace; for a send it is the recipient's, resolved from the
+// roster (or supplied verbatim by the tools' optional workspace argument).
+func (b *Bus) inboxSubject(workspace, team, id string) string {
+	return fmt.Sprintf("agent.%s.%s.%s.inbox", workspace, team, id)
 }
 
-func (b *Bus) roleSubject(team, role string) string {
-	return fmt.Sprintf("agent.%s.%s.role.%s.inbox", b.self.Workspace, team, role)
+func (b *Bus) roleSubject(workspace, team, role string) string {
+	return fmt.Sprintf("agent.%s.%s.role.%s.inbox", workspace, team, role)
 }
 
-func (b *Bus) broadcastSubject(team string) string {
+func (b *Bus) broadcastSubject(workspace, team string) string {
 	if team == "" {
-		return fmt.Sprintf("agent.%s.broadcast", b.self.Workspace)
+		return fmt.Sprintf("agent.%s.broadcast", workspace)
 	}
-	return fmt.Sprintf("agent.%s.%s.broadcast", b.self.Workspace, team)
+	return fmt.Sprintf("agent.%s.%s.broadcast", workspace, team)
 }
 
-// resolveSubject turns a director address into a NATS subject. role:// binding
-// without marvel is a static lookup; in the probe it maps to the role inbox
-// subject and any holder consuming that subject receives it.
-func (b *Bus) resolveSubject(addr string) (subject string, durable bool, err error) {
+// resolveSubject turns a director address into a NATS subject. A directed
+// subject (agent://, role://) is built from the RECIPIENT's workspace, not the
+// sender's (R-92): the address carries only {team}/{id} or {team}/{role}, so
+// the workspace is resolved from the recipient's live presence, or supplied
+// verbatim by wsHint (the tools' optional workspace argument, for a cold
+// mailbox with no live presence). A recipient no live session would consume,
+// or one live in more than one workspace, is refused here before publish
+// rather than sent to a subject nobody filters (R-09). wsHint is ignored for
+// broadcast, whose address already carries the workspace.
+func (b *Bus) resolveSubject(ctx context.Context, addr, wsHint string) (subject string, durable bool, err error) {
 	switch {
 	case strings.HasPrefix(addr, "agent://"):
 		rest := strings.TrimPrefix(addr, "agent://")
@@ -162,14 +174,20 @@ func (b *Bus) resolveSubject(addr string) (subject string, durable bool, err err
 		}
 		// The send target is validated too (director#3): a "." or "*" in a
 		// target id would add subject tokens or a wildcard, so it is refused
-		// here rather than published to a subject the sender did not name.
+		// here rather than published to a subject the sender did not name. This
+		// runs before any workspace resolution, so a wildcard target is refused
+		// whether or not the roster has a match.
 		if err := validToken("agent team", team); err != nil {
 			return "", false, err
 		}
 		if err := validToken("agent id", id); err != nil {
 			return "", false, err
 		}
-		return b.inboxSubject(team, id), true, nil
+		ws, err := b.subjectWorkspace(ctx, wsHint, "presence."+team+"."+id+".", addr)
+		if err != nil {
+			return "", false, err
+		}
+		return b.inboxSubject(ws, team, id), true, nil
 	case strings.HasPrefix(addr, "role://"):
 		rest := strings.TrimPrefix(addr, "role://")
 		team, role, ok := strings.Cut(rest, "/")
@@ -182,25 +200,128 @@ func (b *Bus) resolveSubject(addr string) (subject string, durable bool, err err
 		if err := validToken("role", role); err != nil {
 			return "", false, err
 		}
-		return b.roleSubject(team, role), true, nil
+		// A role has no id in the presence key, so the workspace is resolved
+		// over the team's live members (presence.<team>.*): they share one
+		// workspace, or the send is ambiguous and refused.
+		ws, err := b.subjectWorkspace(ctx, wsHint, "presence."+team+".", addr)
+		if err != nil {
+			return "", false, err
+		}
+		return b.roleSubject(ws, team, role), true, nil
 	case strings.HasPrefix(addr, "broadcast://"):
 		rest := strings.TrimPrefix(addr, "broadcast://")
-		_, team, _ := strings.Cut(rest, "/") // broadcast://{ws}[/{team}]
+		ws, team, _ := strings.Cut(rest, "/") // broadcast://{ws}[/{team}]
+		// The broadcast workspace comes from the address, not b.self.Workspace,
+		// so a sender in one workspace can broadcast into another; the old
+		// builder ignored the address's workspace, the same defect class R-92
+		// fixes for directed sends.
+		if err := validToken("broadcast workspace", ws); err != nil {
+			return "", false, err
+		}
 		if team != "" {
 			if err := validToken("broadcast team", team); err != nil {
 				return "", false, err
 			}
 		}
-		return b.broadcastSubject(team), false, nil
+		return b.broadcastSubject(ws, team), false, nil
 	}
 	return "", false, errors.New("unroutable address: " + addr)
+}
+
+// subjectWorkspace picks the workspace a directed subject is built from. An
+// explicit hint (the tools' optional workspace argument) wins and is used
+// verbatim, so a cold mailbox with no live presence can still be addressed;
+// with no hint the workspace is resolved from the recipient's live presence
+// (R-92). The chosen workspace is validated as a subject token either way, so
+// neither an untrusted hint nor a roster record with a malformed workspace can
+// build a stray subject.
+func (b *Bus) subjectWorkspace(ctx context.Context, hint, prefix, addr string) (string, error) {
+	ws := hint
+	if ws == "" {
+		resolved, err := b.resolveRecipientWorkspace(ctx, prefix, addr)
+		if err != nil {
+			return "", err
+		}
+		ws = resolved
+	}
+	if err := validToken("workspace", ws); err != nil {
+		return "", err
+	}
+	return ws, nil
+}
+
+// resolveRecipientWorkspace reads the presence keys under prefix and returns
+// the single workspace the recipient is live in. This is the R-92 fix: the
+// recipient's own presence record names its inbox workspace, so a
+// cross-workspace send lands where a consumer actually filters, instead of on
+// a subject built from the sender's workspace that nobody reads.
+func (b *Bus) resolveRecipientWorkspace(ctx context.Context, prefix, addr string) (string, error) {
+	keys, err := b.kv.Keys(ctx)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrNoKeysFound) {
+			return "", noPresenceErr(addr)
+		}
+		return "", err
+	}
+	var workspaces []string
+	for _, k := range keys {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		entry, err := b.kv.Get(ctx, k)
+		if err != nil {
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal(entry.Value(), &rec) != nil {
+			continue
+		}
+		if ws, _ := rec["workspace"].(string); ws != "" {
+			workspaces = append(workspaces, ws)
+		}
+	}
+	return pickWorkspace(addr, workspaces)
+}
+
+func noPresenceErr(addr string) error {
+	return fmt.Errorf("no live presence for %s; no session would consume this send, so it is refused rather than sent to a subject nobody filters (R-92)", addr)
+}
+
+// pickWorkspace collapses the workspaces of a recipient's live presence records
+// to the one that names its subject. Zero is a refusal (no live consumer), two
+// or more is a refusal (ambiguous, and it lists them), both loud before publish
+// (R-09); exactly one resolves. Split from the KV read so it is unit-testable
+// without a broker.
+func pickWorkspace(addr string, workspaces []string) (string, error) {
+	seen := map[string]bool{}
+	for _, ws := range workspaces {
+		seen[ws] = true
+	}
+	switch len(seen) {
+	case 1:
+		for ws := range seen {
+			return ws, nil
+		}
+	case 0:
+		return "", noPresenceErr(addr)
+	}
+	list := make([]string, 0, len(seen))
+	for ws := range seen {
+		list = append(list, ws)
+	}
+	sort.Strings(list)
+	return "", fmt.Errorf("recipient %s is live in more than one workspace (%s); pass an explicit workspace to disambiguate rather than guess (R-92)", addr, strings.Join(list, ", "))
 }
 
 // publish sends the envelope to its recipient subject and mirrors it to the
 // audit stream. Dedupe rides on Nats-Msg-Id = message_id (R-13, verified at
 // transport in sub-probe 2). Returns "accepted for delivery" semantics only:
-// this is a send acknowledgement, never a delivery or read one (R-08).
-func (b *Bus) publish(ctx context.Context, e *Envelope) error {
+// this is a send acknowledgement, never a delivery or read one (R-08). wsHint
+// is the tools' optional workspace argument, passed through to resolveSubject
+// for a cold mailbox; empty means resolve the recipient's workspace from the
+// roster. A resolution refusal (R-92) returns here before any subject is built,
+// so nothing lands on the inbox or the audit stream.
+func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) error {
 	body, err := json.Marshal(e)
 	if err != nil {
 		return err
@@ -208,7 +329,7 @@ func (b *Bus) publish(ctx context.Context, e *Envelope) error {
 	if len(body) > maxEnvelopeBytes {
 		return fmt.Errorf("envelope %d bytes exceeds 64 KiB; use content.refs pointers", len(body))
 	}
-	subject, durable, err := b.resolveSubject(e.Recipient.Address)
+	subject, durable, err := b.resolveSubject(ctx, e.Recipient.Address, wsHint)
 	if err != nil {
 		return err
 	}
