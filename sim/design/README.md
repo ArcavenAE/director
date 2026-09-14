@@ -31,3 +31,8 @@ a probe before it hardens.
   and wardrobe casts, the FORWARD identity block (R-84), and the cutover
   criteria as checks (R-49/R-84, R-08/R-09, R-56, R-42, R-60/R-61) plus the
   cross-host trial stage (R-86, R-77).
+- `global-bus-tier.md` (brief 8): the R-86 global tier as built, leaf nodes
+  with one hub domain, the subject partition, the per-cluster NKey binding
+  (R-77) proven with two scratch leaves, the interim kinu placement and its
+  LAN posture, marvel's build items (R-85), and the candidate requirements
+  R-94 and R-95. Probe brief and artifacts in `probe/nats-global-tier/`.
