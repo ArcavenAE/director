@@ -16,8 +16,8 @@ routing), the director#4 authorization block, the R-56 shim timer, marvel's
 `identity-at-launch-and-managed-nats.md` (section 4 and its open question on
 the global credential story), and marvel-builder's R-85 answers of this date.
 NATS facts were verified against the 2.10 to 2.14 documentation and server
-source (research file in the session record; the load-bearing ones are cited
-inline).
+source (`probe/nats-global-tier/nats-mechanics.md`, with a URL per fact and
+the unverified items marked; the load-bearing ones are cited inline).
 
 ## 0. What is running
 
