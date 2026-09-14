@@ -189,6 +189,30 @@ Two operational cautions learned here:
   kills your own bus tools. Scope cleanup by env
   (`pkill -f 'DIRECTOR_AGENT_ID=codex-a'`) or by fifo, never by the binary name.
 
+## Sub-probe 8: broker authorization (director#4). PASS (2026-09-12).
+
+Closes the open ">" defect (director#4, R-77, R-82). authorization.conf adds an
+authorization block that binds a credential to the subjects it may use;
+nats-server-auth.conf is the activation config (base plus authorization),
+launched only at a coordinated relaunch, so nats-server.conf stays anonymous
+and no routine restart drops the live fleet. It matches the shim contract in
+bus.go connect() (DIRECTOR_NATS_USER, DIRECTOR_NATS_PASS). DIRECTOR_NATS_CREDS
+(JWT or NKey) is the forward path and is deliberately not wired at the broker in
+Phase 0, since full JWT needs operator plus account plus resolver mode.
+Passwords are environment interpolated, so no secret is committed.
+
+Verified on a throwaway broker on :4223 with its own store (verify-auth.sh),
+the live :4222 untouched. 7 of 7: anonymous publish refused; the ops credential
+publishes and subscribes inside agent.aae-orc.ops.>, drives the team broadcast,
+and reads and writes the presence KV; the ops credential is refused both
+publishing to and subscribing into agent.aae-orc.secops.>.
+
+Two residuals, both forward (marvel-owned) and not this fix: one credential per
+team rather than per session, which per-session minting closes (R-85); and
+JetStream is account-scoped, so per-team stream isolation needs per-team
+accounts or streams (R-86). The defect closed here is the unauthenticated open
+">".
+
 ## Kill criteria status
 Not triggered. The push risk is real but has at least the long-poll shape, so
 the probe is not dead; it is checkpointed at a clean foundation.
