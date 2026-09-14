@@ -23,3 +23,6 @@ a probe before it hardens.
 - `authority-never-in-content.md` (INJ-A..C): why authority rides an
   out-of-band channel and never message or document content, and the R-07
   graduation.
+- `shim-timer-heartbeat.md` (BEAT-A..F): the R-56 build plan; one shim timer
+  serving presence and seat, observed state separated from declared state,
+  the shutdown edge, failure accounting, and a watcher for shimless sessions.
