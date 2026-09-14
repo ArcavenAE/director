@@ -26,3 +26,8 @@ a probe before it hardens.
 - `shim-timer-heartbeat.md` (BEAT-A..F): the R-56 build plan; one shim timer
   serving presence and seat, observed state separated from declared state,
   the shutdown edge, failure accounting, and a watcher for shimless sessions.
+- `marvel-twin-manifest-and-cutover.md`: the operator's stand-up-alongside
+  program; the target manifest mapping the nine fleet functions to marvel roles
+  and wardrobe casts, the FORWARD identity block (R-84), and the cutover
+  criteria as checks (R-49/R-84, R-08/R-09, R-56, R-42, R-60/R-61) plus the
+  cross-host trial stage (R-86, R-77).
