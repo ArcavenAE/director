@@ -227,9 +227,17 @@ is the receiver writing back a digest of the delivered content, which is the
 R-08 principle (acknowledgement from the receiver, not from the send call) made
 concrete at the content level. It is additive and rides an existing
 performative, so it is a forward slice, not a change to the frozen envelope.
+Evidence form (sharpened 2026-09-14): the receipt is a content digest, a
+sha256 over the delivered `content.data` that the sender can recompute on its
+own copy, written durably by the recipient and carried on the reply with
+`in_reply_to`; "observe a durable write" is not the criterion, because a
+write that never read the content satisfies it, whereas a matching digest is
+checkable by a third party holding only the sender's copy.
 *Earned by: marvel finding-039 section 5, generalizing the R-08 and R-09
-observed drops; staged as a forward slice, not yet built.*
-*Source: JUDGMENT.*
+observed drops; staged as a forward slice, not yet built. Evidence form from
+skippy's second-host 3.2 board (aae-orc#327), where the digest echo was what
+made the receipts third-party-checkable.*
+*Source: JUDGMENT; evidence form OBSERVED (second host).*
 
 **R-89. The out-of-band wake channel a poll-based receiver depends on can be
 silently denied, and a denied wake is the R-09 drop re-entering through the wake
