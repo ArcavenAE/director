@@ -5,6 +5,10 @@
 # Public keys are pasted into nats-server.conf; seeds never leave the keys dir.
 set -euo pipefail
 export DIRECTOR_GLOBAL_HOME="${DIRECTOR_GLOBAL_HOME:-$HOME/.director/nats-global}"
+# nats-server substitutes an environment variable only as a whole unquoted
+# value; "$VAR/store" stays literal (a ./$VAR directory under cwd, silently),
+# so the conf reads the full store path from one variable.
+export DIRECTOR_GLOBAL_STORE="$DIRECTOR_GLOBAL_HOME/store"
 mkdir -p "$DIRECTOR_GLOBAL_HOME"/{store,keys,log}
 chmod 700 "$DIRECTOR_GLOBAL_HOME/keys"
 conf="$DIRECTOR_GLOBAL_HOME/nats-server.conf"
