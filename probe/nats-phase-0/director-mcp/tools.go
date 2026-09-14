@@ -104,16 +104,32 @@ func newEnvelope(self Sender) *Envelope {
 	return e
 }
 
-func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
-	var a struct {
-		To, Performative, Text, InReplyTo, ReplyBy string
-		Workspace                                  string `json:"workspace"`
-		Refs                                       []string
-	}
+// sendArgs are the send_message tool arguments. in_reply_to and reply_by carry
+// json tags because Go's case-insensitive field match does not bridge the
+// underscore in the schema key to the CamelCase field: without the tag both
+// would silently drop, and a reply would lose the in_reply_to that R-88
+// receipt correlation reads (in_reply_to -> CorrelationID below). to,
+// performative, text and refs bind without a tag, having no underscore.
+type sendArgs struct {
+	To           string
+	Performative string
+	Text         string
+	InReplyTo    string `json:"in_reply_to"`
+	ReplyBy      string `json:"reply_by"`
+	Workspace    string `json:"workspace"`
+	Refs         []string
+}
+
+// buildSendEnvelope parses and validates send_message args into an envelope,
+// returning the optional workspace hint separately. Split from toolSend so the
+// arg binding, notably in_reply_to -> CorrelationID (R-88 receipt
+// correlation), is testable without a broker.
+func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, error) {
+	var a sendArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	e := newEnvelope(bus.self)
+	e := newEnvelope(self)
 	e.Recipient.Address = a.To
 	e.Performative = a.Performative
 	e.Content = Content{Type: "text", Data: a.Text, Refs: a.Refs}
@@ -123,9 +139,17 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		e.CorrelationID = a.InReplyTo
 	}
 	if err := e.validate(); err != nil {
+		return nil, "", err
+	}
+	return e, a.Workspace, nil
+}
+
+func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
+	e, wsHint, err := buildSendEnvelope(bus.self, raw)
+	if err != nil {
 		return nil, err
 	}
-	if err := bus.publish(ctx, e, a.Workspace); err != nil {
+	if err := bus.publish(ctx, e, wsHint); err != nil {
 		return nil, err
 	}
 	return map[string]any{
