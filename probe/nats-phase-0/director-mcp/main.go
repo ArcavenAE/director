@@ -13,6 +13,17 @@
 // credentials: DIRECTOR_NATS_CREDS (a .creds file) or DIRECTOR_NATS_USER with
 // DIRECTOR_NATS_PASS; unset means an anonymous connection, as before.
 //
+// The global tier (R-86) is off unless DIRECTOR_GLOBAL_DOMAIN names the hub's
+// JetStream domain, and needs two more levers when it is on:
+//
+//	DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=mokuzai \
+//	DIRECTOR_GLOBAL_ROLE=supervisor director-mcp
+//
+// The shim then keeps its one connection to the local broker and reaches the
+// hub through that broker's leaf link: it consumes its cluster's global inbox,
+// beats presence into GLOBAL_PRESENCE, and accepts global:// addresses. It
+// holds no hub credential; the leaf link does (sim/design/global-bus-tier.md).
+//
 // Logs go to stderr so stdout stays clean JSON-RPC.
 package main
 
@@ -58,9 +69,18 @@ func main() {
 		os.Exit(2)
 	}
 	url := env("NATS_URL", "nats://127.0.0.1:4222")
+	// The global levers are validated here, before anything connects, for the
+	// same reason the local identity is: a bad role or a cluster name that is
+	// not a subject token would build a subject that is not ours, so it is
+	// refused at spawn and never rewritten (R-76, R-94).
+	gcfg, err := loadGlobalConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "director-mcp: %v\n", err)
+		os.Exit(2)
+	}
 
 	if preflightMode {
-		if err := preflight(context.Background(), url, self); err != nil {
+		if err := preflight(context.Background(), url, self, gcfg); err != nil {
 			fmt.Fprintf(os.Stderr, "director-mcp preflight: %v\n", err)
 			os.Exit(1)
 		}
@@ -74,21 +94,26 @@ func main() {
 	log.SetOutput(os.Stderr)
 
 	ctx := context.Background()
-	bus, err := connect(ctx, url, self)
+	bus, err := connect(ctx, url, self, gcfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "director-mcp: bus connect failed: %v\n", err)
 		os.Exit(1)
 	}
 	defer bus.close()
 	// Announce presence on start so a roster lists us immediately.
-	_ = bus.setPresence(ctx, "idle")
+	globalWarn, _ := bus.setPresence(ctx, "idle")
+	bus.reportGlobalWarn(globalWarn, logf)
 	if warn := bus.checkCollision(ctx); warn != "" {
 		logf("WARNING: %s", warn)
 	}
 	// Renew presence on the shim's own timer, not the model's poll (R-56). The
-	// presence bucket TTL is 90s; renew at roughly TTL/3.
-	go bus.heartbeat(ctx, 30*time.Second)
+	// presence bucket TTL is 90s; renew at roughly TTL/3. The same tick carries
+	// the global row and re-attaches a hub that was down at startup.
+	go bus.heartbeat(ctx, 30*time.Second, logf)
 	logf("connected to %s as agent://%s/%s instance %s in workspace %s", url, self.Team, self.AgentID, bus.instance, self.Workspace)
+	if gcfg != nil {
+		logf("global tier on: %s, consuming %s from stream %s in domain %q", gcfg.selfAddress(), gcfg.inboxSubject(), gcfg.streamName(), gcfg.Domain)
+	}
 
 	srv := newServer(bus, logf)
 	if err := srv.serve(ctx, os.Stdin); err != nil {

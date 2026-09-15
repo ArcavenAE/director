@@ -20,8 +20,13 @@ type Sender struct {
 }
 
 type Recipient struct {
-	Address string `json:"address"` // agent://{team}/{id} | role://{team}/{role} | broadcast://{ws}[/{team}]
-	Team    string `json:"team,omitempty"`
+	// agent://{team}/{id} | role://{team}/{role} | broadcast://{ws}[/{team}]
+	// | global://director | global://{cluster}/supervisor
+	Address string `json:"address"`
+	// Team is empty for a global address: the global tier's subjects carry a
+	// cluster and a role and no team, and a supervisor's team is a local fact
+	// its presence record already carries (brief 8 section 2, R-94).
+	Team string `json:"team,omitempty"`
 }
 
 type Content struct {
@@ -71,10 +76,15 @@ func (e *Envelope) validate() error {
 	if e.Recipient.Address == "" {
 		return errors.New("recipient.address required")
 	}
+	// The global forms are an address-grammar addition, not a schema change:
+	// schema_version stays 1 and every other field means what it did (brief 8
+	// section 6). recipient.team stays optional and is empty for a global
+	// address, so validation must not ask for it.
 	if !strings.HasPrefix(e.Recipient.Address, "agent://") &&
 		!strings.HasPrefix(e.Recipient.Address, "role://") &&
-		!strings.HasPrefix(e.Recipient.Address, "broadcast://") {
-		return errors.New("recipient.address must be agent:// role:// or broadcast://")
+		!strings.HasPrefix(e.Recipient.Address, "broadcast://") &&
+		!strings.HasPrefix(e.Recipient.Address, "global://") {
+		return errors.New("recipient.address must be agent:// role:// broadcast:// or global://")
 	}
 	if err := e.Content.validate(); err != nil {
 		return err

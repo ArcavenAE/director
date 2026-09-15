@@ -15,29 +15,42 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-func toolCatalog() []toolDef {
+// toolCatalog describes the tools this session actually has. The global forms
+// appear only when the launcher turned the global tier on, so a session with
+// no hub is never told about addresses it cannot route (gcfg nil = off).
+func toolCatalog(gcfg *globalConfig) []toolDef {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+	toDesc := "recipient address: agent://{team}/{id}, role://{team}/{role}, or broadcast://{workspace}[/{team}]"
+	sendDesc := "Send a director envelope to another session or role. Returns accepted-for-delivery with a message_id; this is a send acknowledgement, not a delivery or read receipt."
+	waitDesc := "Block up to timeout_seconds for the next message addressed to this session, then return it. This is a poll: the model must call it. The server cannot push a message into context on its own."
+	rosterDesc := "List the sessions currently present, from the presence store. Absence means silence, not a negative report."
+	if gcfg != nil {
+		toDesc += ", or across hosts global://director and global://{cluster}/supervisor. A global send is refused before publish when nobody is live at that address."
+		sendDesc += " This session is " + gcfg.selfAddress() + " at the global tier: reply to a global message with global://director, and name a cluster (list_roster shows them) to reach its supervisor."
+		waitDesc += " It polls the local inbox and this session's global inbox, and the result names the tier the message came from."
+		rosterDesc += " Rows from both tiers are merged and carry a tier column; global rows carry the cluster and role that address them."
+	}
 	return []toolDef{
 		{
 			Name:        "send_message",
-			Description: "Send a director envelope to another session or role. Returns accepted-for-delivery with a message_id; this is a send acknowledgement, not a delivery or read receipt.",
+			Description: sendDesc,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"to":           str("recipient address: agent://{team}/{id}, role://{team}/{role}, or broadcast://{workspace}[/{team}]"),
+					"to":           str(toDesc),
 					"performative": str("one of INFORM REQUEST AGREE REFUSE FAILURE CFP PROPOSE ACCEPT-PROPOSAL REJECT-PROPOSAL CANCEL QUERY NOT-UNDERSTOOD"),
 					"text":         str("the message body"),
 					"refs":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "pointers: bd:, finding:, file:, url:, pr:"},
 					"in_reply_to":  str("optional message_id being answered"),
 					"reply_by":     str("optional RFC3339 deadline"),
-					"workspace":    str("optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known cold mailbox (no live presence) verbatim."),
+					"workspace":    str("optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known cold mailbox (no live presence) verbatim. Ignored for a global:// address, whose subject carries no workspace."),
 				},
 				"required": []string{"to", "performative", "text"},
 			},
 		},
 		{
 			Name:        "wait_for_message",
-			Description: "Block up to timeout_seconds for the next message addressed to this session, then return it. This is a poll: the model must call it. The server cannot push a message into context on its own.",
+			Description: waitDesc,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -47,7 +60,7 @@ func toolCatalog() []toolDef {
 		},
 		{
 			Name:        "list_roster",
-			Description: "List the sessions currently present, from the presence store. Absence means silence, not a negative report.",
+			Description: rosterDesc,
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
 		{
@@ -149,14 +162,24 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := bus.publish(ctx, e, wsHint); err != nil {
+	res, err := bus.publish(ctx, e, wsHint)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	out := map[string]any{
 		"status":     "accepted for delivery",
 		"message_id": e.MessageID,
+		"tier":       res.Tier,
 		"note":       "accepted is not delivered or read; the recipient reports those (R-08)",
-	}, nil
+	}
+	// The stream and sequence are the hub's (or the local broker's) own word
+	// that the bytes are stored. It matters most at the global tier, where a
+	// leaf-side sender is not permitted to read the director's stream back.
+	if res.Stream != "" {
+		out["stream"] = res.Stream
+		out["sequence"] = res.Sequence
+	}
+	return out, nil
 }
 
 func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
@@ -170,22 +193,35 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if a.TimeoutSeconds > 120 {
 		a.TimeoutSeconds = 120
 	}
-	e, err := bus.receive(ctx, time.Duration(a.TimeoutSeconds)*time.Second)
+	res, err := bus.receiveTiered(ctx, time.Duration(a.TimeoutSeconds)*time.Second)
 	if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
 		return nil, err
 	}
-	if e == nil {
-		return map[string]any{"message": nil, "note": "no message within the window; this is silence, not failure"}, nil
+	out := map[string]any{"message": res.Env}
+	if res.Env == nil {
+		out["note"] = "no message within the window; this is silence, not failure"
+	} else {
+		out["tier"] = res.Tier
 	}
-	return map[string]any{"message": e}, nil
+	// A global-tier failure is reported beside the answer rather than instead
+	// of it: the local tier keeps working through a hub outage, so the poll
+	// does too, and the caller still hears that the hub did not answer.
+	if res.GlobalWarn != "" {
+		out["global_warning"] = res.GlobalWarn
+	}
+	return out, nil
 }
 
 func toolRoster(ctx context.Context, bus *Bus) (any, error) {
-	r, err := bus.roster(ctx)
+	rows, globalWarn, err := bus.rosterMerged(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"present": r, "count": len(r)}, nil
+	out := map[string]any{"present": rows, "count": len(rows)}
+	if globalWarn != "" {
+		out["global_warning"] = globalWarn
+	}
+	return out, nil
 }
 
 func toolPresence(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
@@ -198,10 +234,15 @@ func toolPresence(ctx context.Context, bus *Bus, raw json.RawMessage) (any, erro
 	if a.State == "" {
 		a.State = "idle"
 	}
-	if err := bus.setPresence(ctx, a.State); err != nil {
+	globalWarn, err := bus.setPresence(ctx, a.State)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"status": "presence recorded", "state": a.State}, nil
+	out := map[string]any{"status": "presence recorded", "state": a.State}
+	if globalWarn != "" {
+		out["global_warning"] = globalWarn
+	}
+	return out, nil
 }
 
 func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
@@ -231,7 +272,7 @@ func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, err
 	if err := e.validate(); err != nil {
 		return nil, err
 	}
-	if err := bus.publish(ctx, e, ""); err != nil {
+	if _, err := bus.publish(ctx, e, ""); err != nil {
 		return nil, err
 	}
 	return map[string]any{"status": "broadcast sent", "message_id": e.MessageID}, nil

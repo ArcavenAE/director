@@ -29,6 +29,19 @@ type Bus struct {
 	self     Sender
 	consumer jetstream.Consumer
 
+	// The global tier (R-86), off unless the launcher set
+	// DIRECTOR_GLOBAL_DOMAIN. globalCfg is the validated configuration and is
+	// immutable; global is the attached hub context, which is built lazily so
+	// a hub that is down at startup degrades to local-only and loud rather
+	// than taking the session with it (brief 8 section 1: the local broker
+	// keeps serving, a global publish fails loud). globalWarn holds the last
+	// reported attach or presence failure so a hub outage logs on the
+	// transition instead of every 30 seconds.
+	globalCfg  *globalConfig
+	globalMu   sync.Mutex
+	global     *globalTier
+	globalWarn string
+
 	// instance is a per-session id minted at startup. Two sessions launched
 	// with the same DIRECTOR_AGENT_ID (the michael collision, R-49) still get
 	// distinct instances, so their durable consumers and presence keys do not
@@ -85,7 +98,12 @@ func dial(url string, self Sender) (*nats.Conn, jetstream.JetStream, error) {
 // loudly, rather than the harness starting shimless under --strict-mcp-config
 // with the session reporting running and no presence (finding-166, candidate
 // R-93).
-func preflight(ctx context.Context, url string, self Sender) error {
+// With the global tier configured it also verifies the hub half through the
+// domain: the presence bucket and this session's own inbox stream. That is the
+// same finding-166 argument one tier up. A supervisor cast with global mode on
+// but no leaf link, or against a hub whose streams were never provisioned,
+// would otherwise come up looking healthy and be unreachable from the director.
+func preflight(ctx context.Context, url string, self Sender, gcfg *globalConfig) error {
 	nc, js, err := dial(url, self)
 	if err != nil {
 		return fmt.Errorf("broker unreachable at %s: %w", url, err)
@@ -97,10 +115,13 @@ func preflight(ctx context.Context, url string, self Sender) error {
 	if _, err := js.Stream(ctx, "AGENT_INBOX"); err != nil {
 		return fmt.Errorf("stream AGENT_INBOX missing: %w (provision the broker first)", err)
 	}
-	return nil
+	if gcfg == nil {
+		return nil
+	}
+	return preflightGlobal(ctx, nc, *gcfg)
 }
 
-func connect(ctx context.Context, url string, self Sender) (*Bus, error) {
+func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (*Bus, error) {
 	nc, js, err := dial(url, self)
 	if err != nil {
 		return nil, err
@@ -110,7 +131,7 @@ func connect(ctx context.Context, url string, self Sender) (*Bus, error) {
 		nc.Close()
 		return nil, fmt.Errorf("presence KV AGENT_STATE: %w (run the broker setup first)", err)
 	}
-	b := &Bus{nc: nc, js: js, kv: kv, self: self, instance: ulid.Make().String(), pid: os.Getpid(), state: "idle"}
+	b := &Bus{nc: nc, js: js, kv: kv, self: self, instance: ulid.Make().String(), pid: os.Getpid(), state: "idle", globalCfg: gcfg}
 	// Durable per-SESSION consumer. The durable name includes the per-session
 	// instance, so two sessions sharing one agent id do not bind one durable
 	// and race each other's mail (R-50); each gets its own copy instead of a
@@ -348,6 +369,17 @@ func pickWorkspace(addr string, workspaces []string) (string, error) {
 	return "", fmt.Errorf("recipient %s is live in more than one workspace (%s); pass an explicit workspace to disambiguate rather than guess (R-92)", addr, strings.Join(list, ", "))
 }
 
+// sendResult is what a send is able to say about itself: which tier carried
+// it, and, when the transport gave one, the stream and sequence the message
+// was stored under. It remains "accepted for delivery" and nothing more
+// (R-08); a stream sequence is the transport's word that the bytes are
+// stored, not the recipient's word that they were read.
+type sendResult struct {
+	Tier     string
+	Stream   string
+	Sequence uint64
+}
+
 // publish sends the envelope to its recipient subject and mirrors it to the
 // audit stream. Dedupe rides on Nats-Msg-Id = message_id (R-13, verified at
 // transport in sub-probe 2). Returns "accepted for delivery" semantics only:
@@ -356,35 +388,68 @@ func pickWorkspace(addr string, workspaces []string) (string, error) {
 // for a cold mailbox; empty means resolve the recipient's workspace from the
 // roster. A resolution refusal (R-92) returns here before any subject is built,
 // so nothing lands on the inbox or the audit stream.
-func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) error {
+//
+// A global:// address routes to the hub instead (R-86). The workspace hint has
+// no meaning there: a global subject carries no workspace token, so the
+// address alone determines it and R-92 reduces to the liveness half.
+func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendResult, error) {
 	body, err := json.Marshal(e)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(body) > maxEnvelopeBytes {
-		return fmt.Errorf("envelope %d bytes exceeds 64 KiB; use content.refs pointers", len(body))
+		return nil, fmt.Errorf("envelope %d bytes exceeds 64 KiB; use content.refs pointers", len(body))
+	}
+	if strings.HasPrefix(e.Recipient.Address, "global://") {
+		return b.publishGlobal(ctx, e, body)
 	}
 	subject, durable, err := b.resolveSubject(ctx, e.Recipient.Address, wsHint)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	msg := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
 	msg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
+	res := &sendResult{Tier: "local"}
 	if durable {
-		if _, err := b.js.PublishMsg(ctx, msg); err != nil {
-			return fmt.Errorf("publish to %s: %w", subject, err)
+		ack, err := b.js.PublishMsg(ctx, msg)
+		if err != nil {
+			return nil, fmt.Errorf("publish to %s: %w", subject, err)
 		}
+		res.Stream, res.Sequence = ack.Stream, ack.Sequence
 	} else {
 		// broadcast is core NATS, no durable queue (section 2.5)
 		if err := b.nc.PublishMsg(msg); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	// audit: every envelope lands on the append-only stream (section 2.3)
+	b.auditMirror(ctx, e, body)
+	return res, nil
+}
+
+// publishGlobal carries one envelope over the hub. The audit mirror stays on
+// the LOCAL audit stream: the sending session's own record of what it sent is
+// a local concern, and the hub carries the director channel only (brief 8
+// section 2).
+func (b *Bus) publishGlobal(ctx context.Context, e *Envelope, body []byte) (*sendResult, error) {
+	g, err := b.globalReady(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ack, err := g.publish(ctx, e, body)
+	if err != nil {
+		return nil, err
+	}
+	b.auditMirror(ctx, e, body)
+	return &sendResult{Tier: "global", Stream: ack.Stream, Sequence: ack.Sequence}, nil
+}
+
+// auditMirror puts a copy on the append-only local stream (section 2.3). Best
+// effort in the probe: a missing audit stream must not fail a send that the
+// recipient's inbox already accepted.
+func (b *Bus) auditMirror(ctx context.Context, e *Envelope, body []byte) {
 	amsg := &nats.Msg{Subject: "agent.audit", Data: body, Header: nats.Header{}}
 	amsg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
-	_, _ = b.js.PublishMsg(ctx, amsg) // audit is best-effort in the probe
-	return nil
+	_, _ = b.js.PublishMsg(ctx, amsg)
 }
 
 // receive is the long-poll. It pulls the next message for this agent from its
@@ -411,14 +476,153 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, er
 	return nil, nil // timed out, no message: a clean empty, not an error
 }
 
+// globalReady returns the attached hub context, attaching it on first use and
+// after a failed attempt. Attaching lazily is what lets a session start while
+// the hub is down: the local tier comes up, the global one reports its refusal
+// per call, and the next heartbeat or tool call picks the hub up when it is
+// back, with no restart (brief 8 section 1, and the brief's success signal 4).
+func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
+	if b.globalCfg == nil {
+		return nil, errors.New("the global tier is off for this session: DIRECTOR_GLOBAL_DOMAIN is unset, so it holds no global address and reaches no hub (R-86)")
+	}
+	b.globalMu.Lock()
+	defer b.globalMu.Unlock()
+	if b.global != nil {
+		return b.global, nil
+	}
+	g, err := attachGlobal(ctx, b.nc, *b.globalCfg, b.self.AgentID, b.instance)
+	if err != nil {
+		return nil, err
+	}
+	b.global = g
+	return g, nil
+}
+
+// tierPollSlice is how long one tier is polled before the other gets a turn.
+// The alternative, splitting the caller's budget in half, makes a message on
+// the second tier wait out the first tier's whole share; slicing bounds the
+// added latency on either tier at roughly one slice while keeping the count of
+// pull requests low (a JetStream fetch is a server-side long poll, not a spin).
+const tierPollSlice = 5 * time.Second
+
+// pollResult is one wait_for_message outcome: the envelope if one arrived, the
+// tier it came from, and any global-tier trouble worth telling the caller
+// about. A global failure is a warning, not an error: the local tier keeps
+// working through a hub outage and the poll must keep working with it.
+type pollResult struct {
+	Env        *Envelope
+	Tier       string
+	GlobalWarn string
+}
+
+// receiveTiered polls local first, then global, in slices until the budget is
+// spent. With the global tier off it is exactly the old single-tier poll.
+func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollResult, error) {
+	if b.globalCfg == nil {
+		e, err := b.receive(ctx, timeout)
+		if err != nil {
+			return pollResult{}, err
+		}
+		return pollResult{Env: e, Tier: tierOf(e, "local")}, nil
+	}
+	var res pollResult
+	deadline := time.Now().Add(timeout)
+	for {
+		slice, ok := sliceLeft(deadline)
+		if !ok {
+			return res, nil
+		}
+		e, err := b.receive(ctx, slice)
+		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
+			return res, err
+		}
+		if e != nil {
+			res.Env, res.Tier = e, "local"
+			return res, nil
+		}
+		slice, ok = sliceLeft(deadline)
+		if !ok {
+			return res, nil
+		}
+		g, err := b.globalReady(ctx)
+		if err != nil {
+			// The hub is unreachable or refuses. Say so, keep polling local
+			// for the rest of the budget rather than failing the whole call.
+			res.GlobalWarn = err.Error()
+			if _, ok := sliceLeft(deadline); !ok {
+				return res, nil
+			}
+			continue
+		}
+		e, discarded, err := g.receive(ctx, slice, b.self.AgentID, b.instance)
+		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
+			res.GlobalWarn = fmt.Sprintf("global inbox poll failed: %v", err)
+			continue
+		}
+		res.GlobalWarn = ""
+		if discarded > 0 {
+			res.GlobalWarn = fmt.Sprintf("discarded %d undecodable message(s) on the global inbox; the hub stream is shared and not everything on it is a director envelope", discarded)
+		}
+		if e != nil {
+			res.Env, res.Tier = e, "global"
+			return res, nil
+		}
+	}
+}
+
+// sliceLeft returns the next poll slice and whether any budget remains.
+func sliceLeft(deadline time.Time) (time.Duration, bool) {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0, false
+	}
+	if remaining < tierPollSlice {
+		return remaining, true
+	}
+	return tierPollSlice, true
+}
+
+func tierOf(e *Envelope, tier string) string {
+	if e == nil {
+		return ""
+	}
+	return tier
+}
+
 // setPresence writes this agent's heartbeat into the presence KV. The bucket
 // TTL expires the key if no heartbeat lands within the window, so absence is
 // silence, not a message (section 2.1: presence is a transport concern).
-func (b *Bus) setPresence(ctx context.Context, state string) error {
+//
+// With the global tier on it writes both rows. The local write is the one that
+// can fail the call: a hub that is down must not stop a session recording
+// presence on its own broker, so the global failure comes back as a warning
+// for the caller to see rather than an error that hides the local success.
+func (b *Bus) setPresence(ctx context.Context, state string) (globalWarn string, err error) {
 	b.stateMu.Lock()
 	b.state = state
 	b.stateMu.Unlock()
-	return b.writePresence(ctx, state)
+	if err := b.writePresence(ctx, state); err != nil {
+		return "", err
+	}
+	return b.writeGlobalPresence(ctx, state), nil
+}
+
+// writeGlobalPresence puts this session's row in GLOBAL_PRESENCE, returning a
+// warning string rather than an error because every caller wants to carry on
+// without it. Off (no domain configured) returns an empty warning: nothing is
+// wrong, there is simply no global row to write.
+func (b *Bus) writeGlobalPresence(ctx context.Context, state string) string {
+	if b.globalCfg == nil {
+		return ""
+	}
+	g, err := b.globalReady(ctx)
+	if err != nil {
+		return err.Error()
+	}
+	if err := g.writePresence(ctx, b.self, b.instance, b.pid, state); err != nil {
+		return fmt.Sprintf("global presence write failed: %v", err)
+	}
+	return ""
 }
 
 // writePresence puts the presence record under a per-session key
@@ -444,7 +648,14 @@ func (b *Bus) writePresence(ctx context.Context, state string) error {
 // call (R-56). A model turn can run for minutes; if renewal rode the model's
 // poll, a long turn would let the presence key expire while the session is
 // alive, which is exactly what an empty roster beside a live shim showed.
-func (b *Bus) heartbeat(ctx context.Context, every time.Duration) {
+//
+// The same tick carries the global row when the global tier is on, so one
+// timer keeps both presences alive and the hub bucket's TTL measures the same
+// liveness the local one does. It also makes the tick the re-attach path: a
+// hub that was down at startup is picked up within one beat, with no restart.
+// Failures log on the transition, not every beat, so an outage is loud once
+// and quiet thereafter.
+func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(string, ...any)) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -456,8 +667,26 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration) {
 			s := b.state
 			b.stateMu.Unlock()
 			_ = b.writePresence(ctx, s)
+			b.reportGlobalWarn(b.writeGlobalPresence(ctx, s), logf)
 		}
 	}
+}
+
+// reportGlobalWarn logs a change in the global tier's health: the first
+// failure, a different failure, and the recovery. Repeats stay silent.
+func (b *Bus) reportGlobalWarn(warn string, logf func(string, ...any)) {
+	b.globalMu.Lock()
+	prev := b.globalWarn
+	b.globalWarn = warn
+	b.globalMu.Unlock()
+	if warn == prev || logf == nil {
+		return
+	}
+	if warn == "" {
+		logf("global tier recovered: presence is writing to %s again", globalPresenceBucket)
+		return
+	}
+	logf("WARNING: global tier unavailable, local tier unaffected: %s", warn)
 }
 
 // checkCollision looks for another live session already present under this same
@@ -488,6 +717,38 @@ func (b *Bus) checkCollision(ctx context.Context) string {
 		}
 	}
 	return ""
+}
+
+// rosterMerged reads both presence stores and returns one list with a tier
+// column. The global rows are the fleet's other clusters, which is the whole
+// point of listing them here: a director picks the cluster to address from
+// this list. A hub that will not answer degrades to the local rows plus a
+// warning, never an empty roster and never an error.
+func (b *Bus) rosterMerged(ctx context.Context) (rows []map[string]any, globalWarn string, err error) {
+	local, err := b.roster(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, r := range local {
+		r["tier"] = "local"
+		rows = append(rows, r)
+	}
+	if b.globalCfg == nil {
+		return rows, "", nil
+	}
+	g, gerr := b.globalReady(ctx)
+	if gerr != nil {
+		return rows, gerr.Error(), nil
+	}
+	global, gerr := g.records(ctx, "")
+	if gerr != nil {
+		return rows, fmt.Sprintf("global roster read failed: %v", gerr), nil
+	}
+	for _, r := range global {
+		r["tier"] = "global"
+		rows = append(rows, r)
+	}
+	return rows, "", nil
 }
 
 // roster reads the presence KV and returns every live entry.
