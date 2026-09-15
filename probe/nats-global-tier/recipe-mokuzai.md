@@ -76,13 +76,35 @@ nats --js-domain global consumer next GLOBAL_TO_mokuzai sup --raw
 A publish to any other cluster's prefix, or a consumer on the director's
 stream, fails with "no responders" and stores nothing; that is expected.
 
-## 4. When the shim global mode lands
+## 4. Casting a supervisor onto the global tier
 
-Cast your supervisor with `DIRECTOR_GLOBAL_DOMAIN=global`,
-`DIRECTOR_CLUSTER=mokuzai`, `DIRECTOR_GLOBAL_ROLE=supervisor`. The shim then
-keeps its one local connection, consumes `GLOBAL_TO_mokuzai` through the
-domain, beats presence into `GLOBAL_PRESENCE`, and accepts
-`global://director` as a send address. Nothing else in the supervisor changes.
+The shim's global mode is built (aae-orc-gvf6k). Cast your supervisor with
+three more environment variables and nothing else changes:
+
+```sh
+DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=mokuzai \
+  DIRECTOR_GLOBAL_ROLE=supervisor director-mcp
+```
+
+The shim keeps its one connection to your local broker, consumes
+`GLOBAL_TO_mokuzai` through the domain, beats presence into `GLOBAL_PRESENCE`
+on the same 30s timer as its local presence, and accepts `global://director`
+as a send address. `wait_for_message` polls both inboxes and names the tier it
+found; `list_roster` shows both with a tier column. All three variables are
+validated at spawn: the role is `supervisor` or `director` and nothing else,
+and the cluster and domain are subject tokens.
+
+Leave `DIRECTOR_GLOBAL_DOMAIN` unset and the shim behaves exactly as it did
+before: local tier only, no hub traffic, no global addresses.
+
+Run `director-mcp --preflight` with those variables set before casting: it
+verifies the stream and the bucket through the domain and exits nonzero if the
+link or the provisioning is missing, which is what keeps a supervisor from
+coming up healthy and unreachable.
+
+To prove the whole path on your host, `probe/nats-global-tier/verify-global-shim.sh`
+runs 14 checks against the real hub with a throwaway leaf broker of its own,
+leaving your live broker alone.
 
 ## What the interim LAN posture does not protect
 

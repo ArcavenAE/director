@@ -216,6 +216,66 @@ JetStream is account-scoped, so per-team stream isolation needs per-team
 accounts or streams (R-86). The defect closed here is the unauthenticated open
 ">".
 
+## Sub-probe 9: the shim's global mode (R-86). PASS (2026-09-15).
+
+Ticket aae-orc-gvf6k, the shim half of design brief 8
+(`sim/design/global-bus-tier.md`). The shim reaches a second host without a
+second connection and without holding a hub credential: it keeps its one
+connection to the local broker and addresses the hub's JetStream domain over
+that broker's leaf link (`jetstream.NewWithDomain`). The leaf link holds the
+cluster credential, the broker holds the leaf link, the session holds neither.
+
+Off unless cast with it. `DIRECTOR_GLOBAL_DOMAIN` unset is the whole switch,
+and with it unset nothing in the shim's behaviour changed. With it set,
+`DIRECTOR_CLUSTER` and `DIRECTOR_GLOBAL_ROLE` are required; the role is one of
+exactly two words and anything else is refused at spawn, before a connection,
+the same reject-never-rewrite check the local identity levers take (R-76,
+R-94).
+
+What it adds, all in `global.go` plus the wiring in `bus.go`:
+
+- A second JetStream context on the same connection, attached lazily. A hub
+  that is down at startup leaves the local tier working and reports per call;
+  the 30s presence tick is the re-attach path, so the link resumes with no
+  restart (brief 8 section 1).
+- The global inbox: a durable `mcp_global_<id>_<instance>` on
+  `GLOBAL_TO_DIRECTOR` filtered to `global.director.inbox` for the director,
+  or on `GLOBAL_TO_<cluster>` filtered to `global.<cluster>.supervisor.inbox`
+  for a supervisor. DeliverAll, AckExplicit, and an InactiveThreshold one hour
+  longer than the hub streams' 24h max age, so cleanup can only ever discard a
+  durable whose replay had already expired.
+- Presence on the same R-56 timer, into `GLOBAL_PRESENCE` under
+  `presence.<cluster>.<role>.<instance>` (or `presence.director.<instance>`),
+  carrying cluster and role beside the local id, workspace, team, instance,
+  pid, state and ts. Both tiers therefore name the same session and nothing is
+  renamed across them (R-06, R-79).
+- `global://director` and `global://<cluster>/supervisor` as send addresses,
+  with R-92's liveness half: zero live records under the recipient's presence
+  prefix refuses before publish, so nothing is stored and the audit mirror
+  stays empty. A publish carries `Nats-Msg-Id` as the local tier does, and no
+  responders or a timeout is a tool error, never a queued send.
+- `wait_for_message` polls local then global in slices and names the tier it
+  found; `list_roster` merges both with a tier column; the envelope validates
+  `global://` with an empty `recipient.team`, which is an address-grammar
+  addition and not a schema change (brief 8 section 6).
+- `--preflight` verifies the hub stream and the bucket through the domain when
+  one is configured, so a supervisor cast with global mode on but no link
+  crashes its pane instead of coming up healthy and unreachable
+  (finding-166 one tier up).
+
+One thing the hub taught that the local broker had not: the global stream is
+SHARED, and this shim is not its only publisher. A raw line put there by an
+operator or a verify script is not a director envelope, so the global poll
+terminates what it cannot decode, carries on inside the same budget, and
+reports the count. On the local inbox an undecodable message is still surfaced
+at once.
+
+Verified end to end against the running kinu hub by
+`probe/nats-global-tier/verify-global-shim.sh`, 14 of 14, from mokuzai over the
+real leaf link, with a throwaway leaf broker of its own so the live :4222 and
+its live sessions were untouched. Broker-free unit tests cover the address
+grammar and every derivation (`global_test.go`); the suite is 25 tests.
+
 ## Kill criteria status
 Not triggered. The push risk is real but has at least the long-poll shape, so
 the probe is not dead; it is checkpointed at a clean foundation.
