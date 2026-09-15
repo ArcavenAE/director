@@ -7,9 +7,20 @@
 # Isolation: it starts one throwaway leaf broker of its own, with its own port,
 # store and JetStream domain, so the live local broker and its live sessions
 # are untouched (the same isolation verify-auth.sh and verify-global.sh keep).
-# It does touch the shared hub, by design: the point is the real link. What it
-# leaves there it removes (the stand-in director presence row, its own durable);
-# its own presence rows expire with the bucket TTL.
+# It does touch the shared hub, by design: the point is the real link.
+#
+# What it leaves there (director#38). The stand-in director presence row and its
+# own durable are removed in cleanup; its own presence rows expire with the
+# bucket TTL. The MESSAGES it stores are recorded as it goes and deleted by
+# sequence in cleanup, never purged, because these are real inboxes and a purge
+# to a sequence would take other principals' messages with it. A run can delete
+# from the stream it consumes (this cluster's own GLOBAL_TO_<cluster>) and not
+# from the one it publishes to (GLOBAL_TO_DIRECTOR), which is brief 8 section
+# 4.1's asymmetry and is enforced at the hub by the credential. Whatever is left
+# is printed with its stream and sequence at the end of the run rather than
+# claimed clean: draining with a consumer does NOT remove a message, so residue
+# on a DeliverAll inbox is replayed to the next real cast within the 24h max
+# age.
 #
 # Usage, from anywhere:
 #   probe/nats-global-tier/verify-global-shim.sh
@@ -36,10 +47,19 @@ work="$(mktemp -d)"
 pids=()
 STANDIN=""
 DURABLE=""
+RESIDUE_LEFT=0
 LOCAL=(nats -s "nats://127.0.0.1:$PORT")
 HUB=(nats -s "nats://127.0.0.1:$PORT" --js-domain "$DOMAIN")
 
+# The hub-message ledger. Sourced before the trap is set, so cleanup can always
+# call hub_drop. It reads HUB and DOMAIN from here.
+# shellcheck source=hub-residue.sh
+. "$here/hub-residue.sh"
+
 cleanup() {
+  # Messages first, and before the pids are killed: the throwaway leaf broker is
+  # one of those pids and it is the route to the hub.
+  hub_drop || true
   [[ -n "$STANDIN" ]] && "${HUB[@]}" kv del GLOBAL_PRESENCE "$STANDIN" -f >/dev/null 2>&1 || true
   [[ -n "$DURABLE" ]] && "${HUB[@]}" consumer rm "GLOBAL_TO_$CLUSTER" "$DURABLE" -f >/dev/null 2>&1 || true
   for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done
@@ -139,6 +159,18 @@ call() { # id tool args-json -> the tool result text (or the isError text)
 }
 text_of() { jq -r '.result.content[0].text // "NO RESULT"'; }
 iserr_of() { jq -r '.result.isError // false'; }
+# A successful global send returns the hub stream and sequence it was stored at.
+# Record them so cleanup accounts for them, even though a cluster credential
+# cannot delete from GLOBAL_TO_DIRECTOR: an unremovable message that is named
+# and disclosed is the honest outcome, an unremovable message nobody mentions
+# is what director#38 found.
+record_tool_send() { # tool-result-text what
+  local st sq
+  st="$(jq -r '.stream // empty' <<<"$1" 2>/dev/null)" || return 0
+  sq="$(jq -r '.sequence // empty' <<<"$1" 2>/dev/null)" || return 0
+  [[ -n "$st" && -n "$sq" ]] && hub_record "$st" "$sq" "$2"
+  return 0
+}
 
 start_shim "${run_shim_env[@]}"
 sleep 1
@@ -196,8 +228,9 @@ resp="$(call 5 send_message "$(jq -nc --arg t "global://$CLUSTER/director" '{to:
 STANDIN="presence.director.VERIFYSHIM$RANDOM"
 "${HUB[@]}" kv put GLOBAL_PRESENCE "$STANDIN" \
   "$(jq -nc --arg i "$STANDIN" '{cluster:"kinu",role:"director",agent_id:"verify-standin",instance:$i,state:"idle"}')" >/dev/null
-resp="$(call 6 send_message '{"to":"global://director","performative":"INFORM","text":"hello from the shim"}')"
+resp="$(call 6 send_message '{"to":"global://director","performative":"INFORM","text":"verify-global-shim.sh self test, not real traffic"}')"
 out="$(text_of <<<"$resp")"
+record_tool_send "$out" "outbound leg, test 10"
 if [[ "$(iserr_of <<<"$resp")" != "true" ]] && \
    jq -e 'select(.tier=="global" and .stream=="GLOBAL_TO_DIRECTOR" and .sequence>0)' <<<"$out" >/dev/null; then
   ok "a send to global://director is stored in GLOBAL_TO_DIRECTOR on the hub (seq $(jq -r .sequence <<<"$out"))"
@@ -207,13 +240,21 @@ fi
 
 # 11. Inbound: the director's leg of the channel, published into this cluster's
 #     hub stream, is delivered to the shim and marked as the global tier.
+# The envelope is recorded so cleanup can delete it by sequence, and it is
+# built to be harmless if a delete is ever refused and it survives: INFORM
+# rather than REQUEST, from this run's own workspace rather than a real one,
+# and sender "verify-global-shim" rather than a "verify-director" principal
+# that does not exist. A replayed REQUEST on a DeliverAll inbox is the case
+# director#38 was filed about.
 NONCE="verify-$RANDOM"
-"${HUB[@]}" pub "global.$CLUSTER.supervisor.inbox" --jetstream "$(jq -nc --arg n "$NONCE" --arg t "$CLUSTER" '{
+hub_publish "global.$CLUSTER.supervisor.inbox" "$(jq -nc --arg n "$NONCE" --arg t "$CLUSTER" --arg w "$WS" '{
   schema_version:1, message_id:$n, conversation_id:("cid-"+$n),
-  sender:{agent_id:"verify-director", workspace:"aae-orc", principal:null},
+  sender:{agent_id:"verify-global-shim", workspace:$w, principal:null},
   recipient:{address:("global://"+$t+"/supervisor")},
-  performative:"REQUEST", content:{type:"text", data:"status please"},
-  sent_at:"2026-09-15T00:00:00Z", trace:{otel_traceparent:null}}')" >/dev/null 2>&1
+  performative:"INFORM",
+  content:{type:"text", data:"verify-global-shim.sh self test, not director traffic; safe to ignore"},
+  sent_at:"2026-09-15T00:00:00Z", trace:{otel_traceparent:null}}')" \
+  "inbound envelope, test 11" || true
 got=""
 for _ in 1 2 3 4 5 6; do
   out="$(RPC_TIMEOUT=40 call 7 wait_for_message '{"timeout_seconds":20}' | text_of)"
@@ -229,8 +270,9 @@ fi
 #     reply carries in_reply_to, correlates, and is stored in the hub's
 #     director stream. The local audit mirror is what lets this side read back
 #     what it sent, since a cluster credential cannot consume that stream.
-resp="$(call 8 send_message "$(jq -nc --arg n "$NONCE" '{to:"global://director",performative:"AGREE",text:"on it",in_reply_to:$n}')")"
+resp="$(call 8 send_message "$(jq -nc --arg n "$NONCE" '{to:"global://director",performative:"AGREE",text:"verify-global-shim.sh self test receipt",in_reply_to:$n}')")"
 out="$(text_of <<<"$resp")"
+record_tool_send "$out" "receipt, test 12"
 reply_id="$(jq -r '.message_id // ""' <<<"$out")"
 mirrored="$("${LOCAL[@]}" stream get AGENT_AUDIT --last-for agent.audit -j 2>/dev/null | jq -r '.data' | base64 -d 2>/dev/null || true)"
 if jq -e 'select(.stream=="GLOBAL_TO_DIRECTOR" and .tier=="global")' <<<"$out" >/dev/null \
@@ -266,5 +308,8 @@ resp="$(call 11 send_message '{"to":"global://director","performative":"INFORM",
   || bad "global-off refusal" "$(text_of <<<"$resp")"
 stop_shim
 
+# cleanup runs on EXIT, after this line, so the residue count it prints appears
+# below the summary. Say so rather than printing a number that is not final yet.
 echo "$pass passed, $fail failed"
+echo "hub messages recorded this run: ${#residue_stream[@]}; cleanup reports below what it could not remove"
 [[ $fail -eq 0 ]]

@@ -113,7 +113,8 @@ leaf enforces it locally, which is why a refused publish returns "no
 responders" at once instead of a timeout. `leaf-mokuzai` may publish
 `global.director.inbox` and `global.mokuzai.>`, the JetStream API only for
 `GLOBAL_TO_mokuzai` and `KV_GLOBAL_PRESENCE` (consumer create, info, next,
-delete; stream info; the KV put, get, and watch subjects), and acks; it may
+delete; stream info; message delete by sequence on `GLOBAL_TO_mokuzai` alone;
+the KV put, get, and watch subjects), and acks; it may
 subscribe `global.mokuzai.>` and `_INBOX.>`. `leaf-kinu` (the director's
 host) mirrors that against `global.*.supervisor.inbox`, `global.director.>`,
 and `GLOBAL_TO_DIRECTOR`. `director` is the same binding for a direct client
@@ -154,12 +155,25 @@ but the director routes through the director or does not exist.
 
 | tier | principal | publish allow | subscribe allow |
 |---|---|---|---|
-| global (hub) | director (`director` user, or `leaf-kinu` while the seat rides the kinu leaf) | `global.*.supervisor.inbox`, `global.director.>`; JetStream API for `GLOBAL_TO_DIRECTOR` and `KV_GLOBAL_PRESENCE` only; `$JS.ACK.>` | `global.director.>`, `_INBOX.>` |
-| global (hub) | `leaf-<cluster>` (one per cluster, held by the broker process) | `global.director.inbox`, `global.<cluster>.>`; JetStream API for `GLOBAL_TO_<cluster>` and `KV_GLOBAL_PRESENCE` only; `$JS.ACK.>` | `global.<cluster>.>`, `_INBOX.>` |
+| global (hub) | director (`director` user, or `leaf-kinu` while the seat rides the kinu leaf) | `global.*.supervisor.inbox`, `global.director.>`; JetStream API for `GLOBAL_TO_DIRECTOR` and `KV_GLOBAL_PRESENCE` only, message delete by sequence on `GLOBAL_TO_DIRECTOR`; `$JS.ACK.>` | `global.director.>`, `_INBOX.>` |
+| global (hub) | `leaf-<cluster>` (one per cluster, held by the broker process) | `global.director.inbox`, `global.<cluster>.>`; JetStream API for `GLOBAL_TO_<cluster>` and `KV_GLOBAL_PRESENCE` only, message delete by sequence on `GLOBAL_TO_<cluster>`; `$JS.ACK.>` | `global.<cluster>.>`, `_INBOX.>` |
 | global (hub) | any worker | nothing; workers hold no global address | nothing |
 | local (director#4 block) | team credential (`ops`, per session once R-85 mints) | `agent.<workspace>.<team>.>`, `agent.audit`, JetStream and KV plumbing (unchanged) | `agent.<workspace>.<team>.>`, `agent.<workspace>.broadcast`, KV, `_INBOX.>` (unchanged) |
 | local | supervisor credential (the team grants plus the global prefix; the only local principal that may reach the hub) | team grants plus `global.director.inbox`, `$JS.<domain>.API.>` narrowed to its own stream and the presence bucket, `$JS.ACK.>` | team grants plus `global.<cluster>.>` |
 | local | director seat credential (its own, not a team's) | `agent.*.*.*.inbox`, `agent.*.*.role.*.inbox`, `agent.*.*.broadcast`, `agent.*.broadcast`, `agent.audit`, plumbing; publish-only across workspaces | its own inbox `agent.<workspace>.<team>.<id>.inbox`, its own team subtree, KV; it reads no other workspace |
+
+One refinement, added 2026-09-15 for director#38. Each credential also holds
+`STREAM.MSG.DELETE` on the stream it CONSUMES, and on no other: `leaf-mokuzai`
+on `GLOBAL_TO_mokuzai`, `leaf-kinu` on `GLOBAL_TO_DIRECTOR`. Delete by sequence,
+never `STREAM.PURGE`, which takes a range and on a shared inbox would take other
+principals' messages. It is the smallest grant that lets a principal clear its
+own inbox, and it leaves the asymmetry exactly where 4.1 puts it: a cluster
+still cannot reach into the director's stream, so a cluster-side run can remove
+what it stored on its own supervisor inbox and can only report what it stored on
+the director's. Without it a message put on a hub stream cannot be removed at
+all before the 24h max age, because consuming and acking advances one consumer
+and does not delete: a fresh `DeliverAll` durable replays it. That is what
+director#38 measured, on a real supervisor inbox.
 
 Consequences. (a) At the global tier the subjects carry no workspace token
 (`global.<cluster>.<role>.inbox`), so the local confinement never meets
