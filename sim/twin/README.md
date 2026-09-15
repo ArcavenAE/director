@@ -17,8 +17,16 @@ validation against criteria 3.1 to 3.6.
 - `cast-launch.sh`: the launcher. Slices the wardrobe role for `MARVEL_ROLE`
   (the spawn line is the side effect), sets `DIRECTOR_AGENT_ID` from
   `MARVEL_SESSION` unless marvel already set it, wires the director shim in
-  with `--strict-mcp-config`, and execs claude with the slice as the system
-  prompt. It adds no refusal of its own; every refusal is slice.sh's.
+  with `--strict-mcp-config`, decides per role whether the session holds a
+  global address, and execs claude with the slice as the system prompt.
+  slice.sh owns the wardrobe refusals; the launcher owns the ones about the
+  session it is about to start (the id class, `TWIN_CWD`, the global-tier
+  levers, the bus pre-flight).
+- `verify-cast-launch.sh`: proves the launcher's per-role handling of the
+  global tier without a broker and without casting anything. claude, the
+  shim, the wardrobe root and slice.sh are stubs; each case checks both the
+  mcp-config claude is handed and the environment claude and the pre-flight
+  actually run with. 17 checks.
 
 ## What is real today, and what is FORWARD
 
@@ -46,6 +54,43 @@ FORWARD, and the manifest does not pretend otherwise:
 - A marvel-supervised broker (R-85): S0 reuses the Phase 0 broker at
   nats://127.0.0.1:4222 under the `fleet` team token, so twin subjects and
   presence keys never collide with the live `ops` team.
+
+## Casting into the global tier (R-86, R-94)
+
+Off unless the operator sets it, and set on the DAEMON, not per role:
+
+```sh
+DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=mokuzai marvel daemon ...
+```
+
+The launcher derives the third lever, `DIRECTOR_GLOBAL_ROLE`, from the cast.
+Exactly two role words exist at the global tier, `supervisor` and `director`,
+and a worker never holds a global address, so only those two casts receive the
+levers. Every other role gets all three UNSET before the pre-flight runs.
+
+That clearing is not tidiness. The shim refuses a `DIRECTOR_GLOBAL_ROLE`
+outside the two words at spawn, before it opens a connection, and the launcher
+treats a failed pre-flight as fatal. A builder that inherited
+`DIRECTOR_GLOBAL_DOMAIN` would therefore fail its pre-flight and marvel would
+crash-loop it. Omitting the levers from the mcp-config is not enough on its
+own: the shim inherits the launcher's environment and the mcp-config's `env`
+map is merged over it.
+
+Do not set `DIRECTOR_GLOBAL_ROLE` on the daemon. A value that contradicts the
+cast is refused rather than rewritten (R-76); the cast decides the role.
+
+The supervisor's cast log names both addresses, which is the quickest
+confirmation the tier is on for the right session and no other:
+
+```
+cast-launch: fleet-supervisor-g1-0 -> role/supervisor identity=none as
+agent://fleet/fleet-supervisor-g1-0 and global://mokuzai/supervisor on ...
+```
+
+Preconditions: the hub is provisioned for this cluster (`GLOBAL_TO_<cluster>`
+and `GLOBAL_PRESENCE` exist) and the local broker holds this cluster's leaf
+link. Both are brief 8's; a bare hub is the finding-166 failure at the global
+tier, and the pre-flight names the missing stream.
 
 ## Cast preconditions (wardrobe `recommended-shape.md` 4.12), state at S0
 

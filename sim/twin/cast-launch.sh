@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Launcher for the marvel twin (director brief 7, S0). marvel runs this as the
 # role's command with `image = "claude"`, so the claude adapter's flags arrive
-# in "$@" and are passed through to claude unchanged. The wrapper does three
+# in "$@" and are passed through to claude unchanged. The wrapper does four
 # things and nothing else:
 #   1. slices the wardrobe role for MARVEL_ROLE (scripts/slice.sh prints the
 #      slice and appends the spawn line; ruling 84: the helper prints and
@@ -10,9 +10,14 @@
 #      from MARVEL_SESSION unless marvel already set it), and wires the
 #      director shim in with --strict-mcp-config so no project-scoped shim
 #      with a baked id loads beside it (R-49);
-#   3. execs claude with the slice as --append-system-prompt.
-# Refusals come from slice.sh (dirty tree, writable root, retirement marker,
-# proposal without the flag, write-floor proposal); this script adds none.
+#   3. decides, per role, whether this session holds a global address at all,
+#      and hands the global tier's three levers to the roles that do while
+#      clearing them for every role that does not (R-86, R-94; see below);
+#   4. execs claude with the slice as --append-system-prompt.
+# Refusals: slice.sh owns the wardrobe ones (dirty tree, writable root,
+# retirement marker, proposal without the flag, write-floor proposal); this
+# script owns the ones about the session it is about to start (the id class,
+# TWIN_CWD, the global-tier levers, the bus pre-flight).
 set -euo pipefail
 
 : "${MARVEL_ROLE:?cast-launch: MARVEL_ROLE is set by marvel baseEnv; run under marvel}"
@@ -22,7 +27,14 @@ set -euo pipefail
 # operator names (precondition 1 wants a tag; until one exists WARDROBE_REF
 # records the sha the twin was cast from, and the spawn line carries tree=).
 WARDROBE_ROOT="${WARDROBE_ROOT:-$HOME/.local/share/wardrobe/contents}"
-SHIM_BIN="${DIRECTOR_SHIM_BIN:?cast-launch: set DIRECTOR_SHIM_BIN to the built director-mcp shim; there is no default so the launcher is portable across hosts}"
+# ~/.director is already this tool's on-host home: the leaf seed lives under
+# ~/.director/nats/, the hub's own state under ~/.director/nats-global/. The
+# built shim belongs beside them, so that is the default. It exists because the
+# alternative measured on the live fleet was a path into a session scratchpad
+# under /private/tmp: the moment that directory is reaped every later cast
+# fails the -x check below, with 11 sessions already running against it.
+# DIRECTOR_SHIM_BIN still wins, so a host that builds elsewhere names its path.
+SHIM_BIN="${DIRECTOR_SHIM_BIN:-$HOME/.director/bin/director-mcp}"
 NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 DIRECTOR_TEAM="${DIRECTOR_TEAM:-${MARVEL_TEAM:-fleet}}"
 DIRECTOR_WORKSPACE="${DIRECTOR_WORKSPACE:-${MARVEL_WORKSPACE:-ops2}}"
@@ -45,7 +57,7 @@ case "$WROLE" in
 esac
 
 [[ -d "$WARDROBE_ROOT/roles" ]] || { echo "cast-launch: no wardrobe root at $WARDROBE_ROOT (set WARDROBE_ROOT)" >&2; exit 1; }
-[[ -x "$SHIM_BIN" ]] || { echo "cast-launch: director shim not executable at $SHIM_BIN (set DIRECTOR_SHIM_BIN)" >&2; exit 1; }
+[[ -x "$SHIM_BIN" ]] || { echo "cast-launch: director shim not executable at $SHIM_BIN; build and install it there (go build -o \"\$HOME/.director/bin/director-mcp\" ./probe/nats-phase-0/director-mcp) or set DIRECTOR_SHIM_BIN to its path. Never point it inside a temporary directory: a scratchpad path is reaped and every later cast fails here" >&2; exit 1; }
 slice_sh="$(dirname "$WARDROBE_ROOT")/scripts/slice.sh"
 [[ -x "$slice_sh" ]] || { echo "cast-launch: $slice_sh missing; the install root is a full checkout" >&2; exit 1; }
 
@@ -63,8 +75,65 @@ export DIRECTOR_AGENT_ID="${DIRECTOR_AGENT_ID:-$MARVEL_SESSION}"
 if [[ ! "$DIRECTOR_AGENT_ID" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ ]]; then
   echo "cast-launch: refusing id '$DIRECTOR_AGENT_ID'; it must match the closed class (R-76), never rewritten" >&2; exit 1
 fi
-mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"}}}}' \
-  "$SHIM_BIN" "$DIRECTOR_AGENT_ID" "$DIRECTOR_TEAM" "$DIRECTOR_WORKSPACE" "$NATS_URL")"
+# The global tier (R-86, R-94; design brief 8, sim/design/global-bus-tier.md).
+# Off unless the operator sets DIRECTOR_GLOBAL_DOMAIN and DIRECTOR_CLUSTER on
+# the marvel daemon. That is a per-DAEMON switch, and the tier is a per-ROLE
+# property, so this is where the two meet: exactly two role words exist at the
+# global tier, supervisor and director, and a worker never holds a global
+# address (R-94).
+#
+# Applying them blanket breaks the fleet. The shim refuses a DIRECTOR_GLOBAL_ROLE
+# outside those two words at spawn, before it opens a connection, so a builder or
+# an envoy that saw the domain would fail the pre-flight below and marvel would
+# crash-loop it.
+#
+# Leaving them out of mcp_json is NOT enough to prevent that. The shim inherits
+# this process's environment and mcp_json's env map is merged over it, so a value
+# set on the daemon reaches every session cast from it whatever mcp_json says.
+# The roles that hold no global address therefore get the levers UNSET here, and
+# the unset happens before the pre-flight, which runs the same shim.
+#
+# The role is derived from the cast, never read from the environment: the
+# operator names the cluster, the wardrobe role decides whether this session has
+# a global address at all.
+case "$WROLE" in
+  supervisor) GROLE=supervisor;;
+  director)   GROLE=director;;
+  *)          GROLE="";;
+esac
+
+if [[ -n "${DIRECTOR_GLOBAL_DOMAIN:-}" && -n "$GROLE" ]]; then
+  : "${DIRECTOR_CLUSTER:?cast-launch: DIRECTOR_GLOBAL_DOMAIN is set and this cast holds a global address, so DIRECTOR_CLUSTER must name this cluster (R-94); set both on the marvel daemon or neither}"
+  # Both become subject tokens ("$JS.<domain>.API.>", "global.<cluster>.>") and
+  # both are interpolated into the mcp_json below, so each takes the same class
+  # check the id takes: rejected, never rewritten (R-76).
+  if [[ ! "$DIRECTOR_GLOBAL_DOMAIN" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "cast-launch: refusing DIRECTOR_GLOBAL_DOMAIN '$DIRECTOR_GLOBAL_DOMAIN'; the class is [A-Za-z0-9_-] (R-76)" >&2; exit 1
+  fi
+  if [[ ! "$DIRECTOR_CLUSTER" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "cast-launch: refusing DIRECTOR_CLUSTER '$DIRECTOR_CLUSTER'; the class is [A-Za-z0-9_-] (R-76)" >&2; exit 1
+  fi
+  if [[ -n "${DIRECTOR_GLOBAL_ROLE:-}" && "${DIRECTOR_GLOBAL_ROLE}" != "$GROLE" ]]; then
+    echo "cast-launch: DIRECTOR_GLOBAL_ROLE='$DIRECTOR_GLOBAL_ROLE' in the environment contradicts the cast (role/$WROLE derives '$GROLE'); the global role comes from the cast, not from the daemon" >&2; exit 1
+  fi
+  export DIRECTOR_GLOBAL_DOMAIN DIRECTOR_CLUSTER
+  export DIRECTOR_GLOBAL_ROLE="$GROLE"
+  global_env="$(printf ',"DIRECTOR_GLOBAL_DOMAIN":"%s","DIRECTOR_CLUSTER":"%s","DIRECTOR_GLOBAL_ROLE":"%s"' \
+    "$DIRECTOR_GLOBAL_DOMAIN" "$DIRECTOR_CLUSTER" "$DIRECTOR_GLOBAL_ROLE")"
+  # The director is one seat for the whole fleet, not one per cluster (R-94).
+  if [[ "$DIRECTOR_GLOBAL_ROLE" == director ]]; then
+    GLOBAL_ADDR="global://director"
+  else
+    GLOBAL_ADDR="global://$DIRECTOR_CLUSTER/$DIRECTOR_GLOBAL_ROLE"
+  fi
+else
+  unset DIRECTOR_GLOBAL_DOMAIN DIRECTOR_CLUSTER DIRECTOR_GLOBAL_ROLE
+  global_env=""
+  GLOBAL_ADDR=""
+fi
+
+mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"%s}}}}' \
+  "$SHIM_BIN" "$DIRECTOR_AGENT_ID" "$DIRECTOR_TEAM" "$DIRECTOR_WORKSPACE" "$NATS_URL" "$global_env")"
 
 cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_ROLE in team $DIRECTOR_TEAM, address agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID."
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
@@ -91,7 +160,7 @@ DIRECTOR_TEAM="$DIRECTOR_TEAM" DIRECTOR_WORKSPACE="$DIRECTOR_WORKSPACE" NATS_URL
   "$SHIM_BIN" --preflight \
   || { echo "cast-launch: bus pre-flight failed for agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL; not starting the harness (finding-166)" >&2; exit 1; }
 
-echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL, cwd $TWIN_CWD" >&2
+echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD" >&2
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$cast_line"$'\n\n'"$slice" \
