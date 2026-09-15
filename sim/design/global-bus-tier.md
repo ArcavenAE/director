@@ -245,9 +245,44 @@ By hand, also this sitting: with the hub killed, local publishes continue
 and a global publish fails loud; after restart both leaves relink and both
 streams hold their messages; anonymous connections to 4242 get an
 authorization violation; the `director` NKey works over the LAN address.
-Not yet proven, because the shim's global mode is unbuilt: receipts with
-`in_reply_to` across the link, presence from a real supervisor session, and
-the R-92 liveness refusal in the shim. Those are the shim ticket's tests.
+
+### 8.1 The shim's global mode (verify-global-shim.sh, 2026-09-15, 14 of 14)
+
+aae-orc-gvf6k, run from mokuzai over the real leaf link with a throwaway leaf
+broker of its own, so the live local broker was untouched. It closes the three
+items section 8 left open, bar one: presence and the receipt are proven from a
+verify-cast shim, not yet from a real supervisor session under marvel, which is
+the cross-host stage's (aae-orc-av2v1).
+
+1. A role outside the two global words is refused at spawn, before connecting.
+2. `--preflight` verifies the hub stream and `GLOBAL_PRESENCE` through the
+   domain; it refuses an unprovisioned cluster and names the missing stream;
+   with the tier off it is the local check it always was.
+3. The catalog advertises the session's own global address, so a receiver
+   knows how it can be answered.
+4. `GLOBAL_PRESENCE` carries cluster, role, agent_id, workspace, team,
+   instance, pid, state and ts, read back from the hub.
+5. `list_roster` merges local and global rows with a tier column.
+6. The R-92 liveness refusal: a global address with no live record refuses
+   before publish and stores nothing, audit mirror included.
+7. `global://<cluster>/director` is refused; the director is one seat (R-94).
+8. A send to `global://director` is stored in `GLOBAL_TO_DIRECTOR` on the hub,
+   proven by the hub's own PubAck, which the tool returns because a cluster
+   credential cannot read that stream back.
+9. The director's leg, published into `GLOBAL_TO_<cluster>`, is delivered to
+   the shim and marked `tier=global`.
+10. The receipt across the link: the reply carries `in_reply_to` and
+    `correlation_id` and an empty `recipient.team`, and lands in the hub's
+    director stream.
+11. A local message still arrives and is marked `tier=local`.
+12. With the tier off, a `global://` address is refused and the refusal names
+    the lever.
+
+One correction to what section 2 assumed: the hub stream is shared, and the
+shim is not its only publisher. A raw line from an operator or a verify script
+is not an envelope, so the global poll terminates what it cannot decode,
+carries on inside the same budget, and reports the count rather than spending a
+whole poll on it.
 
 ## 9. What the interim LAN posture leaves unprotected (ratified by the operator 2026-09-14)
 
@@ -283,7 +318,8 @@ Filed at close; ids in the closing note of the probe brief.
 1. Shim global mode (director-mcp): domain-qualified JetStream context,
    global inbox durable, presence into `GLOBAL_PRESENCE`, `global://`
    addresses with liveness refusal, preflight extension. Builder:
-   marvel-builder, after director#27 merges.
+   marvel-builder, after director#27 merges. BUILT 2026-09-15, proven in
+   section 8.1.
 2. Phase-0 broker relaunch as the kinu leaf (coordinated: config plus
    restart, shims reconnect; add `domain: kinu` and the `leaf-kinu` remote),
    with the director#4 authorization activated in the same window or the next.
