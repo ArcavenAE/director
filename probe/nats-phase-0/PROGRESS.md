@@ -274,7 +274,8 @@ Verified end to end against the running kinu hub by
 `probe/nats-global-tier/verify-global-shim.sh`, 14 of 14, from mokuzai over the
 real leaf link, with a throwaway leaf broker of its own so the live :4222 and
 its live sessions were untouched. Broker-free unit tests cover the address
-grammar and every derivation (`global_test.go`); the suite is 25 tests.
+grammar and every derivation (`global_test.go`), 13 new tests there and 28
+in the package.
 
 ## Kill criteria status
 Not triggered. The push risk is real but has at least the long-poll shape, so
