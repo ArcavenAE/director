@@ -40,3 +40,9 @@ a probe before it hardens.
   marvel keys as the enrollment and distribution plane for the global bus
   credential; the flow, the transient `Credential` resource, the custody
   argument, the multi-user boundary, and the seams for marvel-builder.
+- `local-broker-supervision.md` (brief 10, shape for review 2026-09-15): the
+  local nats-server as marvel's first supervised non-agent workload, ruled
+  as a daemon-owned child process; the `bus` section on Cluster, the
+  rendered conf and authorization file, the R-93 spawn hold, leaf state on
+  the events ring, S6's seed path, and the ordered gap list to a functional
+  cross-host service. Candidate R-96.
