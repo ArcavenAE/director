@@ -54,7 +54,7 @@ type Server struct {
 
 func newServer(bus *Bus, logf func(string, ...any)) *Server {
 	s := &Server{bus: bus, out: bufio.NewWriter(os.Stdout), log: logf}
-	s.tools = toolCatalog()
+	s.tools = toolCatalog(bus.globalCfg)
 	return s
 }
 
