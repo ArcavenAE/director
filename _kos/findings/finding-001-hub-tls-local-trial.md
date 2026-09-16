@@ -210,7 +210,7 @@ Recovery after a backout: the hub is plaintext again exactly as before; the moku
    remotes: [
 -    { urls: ["nats-leaf://192.168.100.110:7442"], nkey: $DIRECTOR_LEAF_NKEY }
 +    { urls: ["tls://192.168.100.110:7442"], nkey: $DIRECTOR_LEAF_NKEY,
-+      tls { ca_file: "/home/<skippy>/.director/nats/hub-ca.pem" } }
++      tls { ca_file: "/Users/skippy/.director/nats/hub-ca.pem" } }
    ]
  }
 ```
