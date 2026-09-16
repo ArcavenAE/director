@@ -28,7 +28,9 @@
 # Usage, from anywhere:
 #   probe/nats-global-tier/verify-global-tls.sh
 # Knobs: HUB_NAME (SAN, default global-hub), HUB_LAN_IP (SAN, default the
-# first 192.168 address on this host), KEEP=1 keeps the work dir.
+# first 192.168 address on this host), KEEP=1 keeps the work dir, TLS_DIR=<dir>
+# uses that dir's ca.pem, hub.pem, hub-key.pem as the hub's material instead
+# of minting one (the rehearsal check for a ceremony-issued chain, CEREMONY.md).
 set -euo pipefail
 
 command -v nats-server >/dev/null || { echo "nats-server not on PATH"; exit 2; }
@@ -95,7 +97,17 @@ mkcert() { # dir cn-suffix
   chmod 600 "$d"/*-key.pem
 }
 mkdir -p "$work/tls/real" "$work/tls/rogue"
-mkcert "$work/tls/real" "$NONCE"
+if [[ -n "${TLS_DIR:-}" ]]; then
+  for f in ca.pem hub.pem hub-key.pem; do
+    [[ -r "$TLS_DIR/$f" ]] || { echo "TLS_DIR=$TLS_DIR lacks $f" >&2; exit 2; }
+    cp "$TLS_DIR/$f" "$work/tls/real/$f"
+  done
+  openssl verify -CAfile "$work/tls/real/ca.pem" "$work/tls/real/hub.pem" >/dev/null 2>&1 \
+    && ok "TLS_DIR chain verifies: hub.pem is issued by ca.pem ($(openssl x509 -in "$work/tls/real/ca.pem" -noout -subject | cut -d= -f2-))" \
+    || bad "TLS_DIR chain" "$(openssl verify -CAfile "$work/tls/real/ca.pem" "$work/tls/real/hub.pem" 2>&1)"
+else
+  mkcert "$work/tls/real" "$NONCE"
+fi
 mkcert "$work/tls/rogue" "rogue-$NONCE"
 openssl x509 -in "$work/tls/real/hub.pem" -noout -ext subjectAltName | grep -q "IP Address:$HUB_LAN_IP" \
   && ok "hub cert SAN covers $HUB_NAME, $(hostname -s), localhost, $HUB_LAN_IP, 127.0.0.1" \
