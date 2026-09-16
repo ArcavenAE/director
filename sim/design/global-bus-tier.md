@@ -310,6 +310,14 @@ the 64 KiB message cap and the 24h stream age. Deferred to the cloud phase:
 TLS on both listeners with a fleet CA, mutual TLS on the leaf listener
 (`verify: true`), DNS, and public reachability.
 
+Local TLS, 2026-09-15 (`_kos/findings/finding-001-hub-tls-local-trial.md`,
+bd aae-orc-4vx98): server TLS on both listeners with a locally minted CA is
+proven on a scratch hub end to end (leaf link, shim preflight in global mode,
+refusal of an unsigned cert), with the live cutover written up as an
+operator-gated step (hub restart plus one leaf reload, rollback by the same
+path). The live hub is still plaintext until that step runs. The fleet CA,
+mutual TLS on the leaf, DNS, and public reachability stay with the cloud phase.
+
 ## 10. Requirements (ratified by the operator 2026-09-14; register text in `sim/requirements.md`)
 
 - **R-94.** A cluster name is a subject token in the identity

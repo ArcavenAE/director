@@ -7,6 +7,11 @@ set -euo pipefail
 HOME_DIR="${DIRECTOR_GLOBAL_HOME:-$HOME/.director/nats-global}"
 HUB_LEAF="${HUB_LEAF:-127.0.0.1:7442}"
 HUB_URL="${HUB_URL:-nats://127.0.0.1:4242}"
+# After the TLS cutover (finding-001): HUB_CA=~/.director/nats-global/tls/ca.pem
+# puts tls { ca_file } on the throwaway leaves and --tlsca on the admin client.
+HUB_CA="${HUB_CA:-}"
+LEAF_TLS=""; [[ -n "$HUB_CA" ]] && LEAF_TLS=", tls { ca_file: \"$HUB_CA\" }"
+TLSCA=(); [[ -n "$HUB_CA" ]] && TLSCA=(--tlsca "$HUB_CA")
 work="$(mktemp -d)"; pids=()
 cleanup() { for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; rm -rf "$work"; }
 trap cleanup EXIT
@@ -16,7 +21,7 @@ start_leaf() { # name port
 server_name: verify-$1
 listen: 127.0.0.1:$2
 jetstream { store_dir: "$work/$1/store", domain: verify$1 }
-leafnodes { remotes: [ { urls: ["nats-leaf://$HUB_LEAF"], nkey: \$LEAF_NKEY } ] }
+leafnodes { remotes: [ { urls: ["nats-leaf://$HUB_LEAF"], nkey: \$LEAF_NKEY$LEAF_TLS } ] }
 CONF
   LEAF_NKEY="$(grep -m1 '^SU' "$HOME_DIR/keys/leaf-$1.nk")" nats-server -c "$work/$1/nats.conf" -l "$work/$1/log" &
   pids+=($!)
@@ -24,7 +29,7 @@ CONF
 start_leaf kinu 4262; start_leaf mokuzai 4263; sleep 2
 K=(nats -s nats://127.0.0.1:4262 --js-domain global)
 M=(nats -s nats://127.0.0.1:4263 --js-domain global)
-A=(nats -s "$HUB_URL" --nkey "$HOME_DIR/keys/admin.nk")
+A=(nats -s "$HUB_URL" "${TLSCA[@]}" --nkey "$HOME_DIR/keys/admin.nk")
 pass=0; fail=0
 ok()   { echo "PASS $1"; pass=$((pass+1)); }
 bad()  { echo "FAIL $1"; fail=$((fail+1)); }

@@ -25,7 +25,8 @@
 # Usage, from anywhere:
 #   probe/nats-global-tier/verify-global-shim.sh
 # Knobs: DIRECTOR_CLUSTER (default mokuzai), DIRECTOR_LEAF_SEED,
-# DIRECTOR_GLOBAL_DOMAIN (default global), HUB_LEAF, VERIFY_PORT.
+# DIRECTOR_GLOBAL_DOMAIN (default global), HUB_LEAF, VERIFY_PORT, and after the
+# TLS cutover (finding-001) HUB_CA, the hub CA the throwaway leaf trusts.
 #
 # Exit nonzero on any miss.
 set -euo pipefail
@@ -35,6 +36,8 @@ DOMAIN="${DIRECTOR_GLOBAL_DOMAIN:-global}"
 SEED_FILE="${DIRECTOR_LEAF_SEED:-$HOME/.director/nats/leaf-$CLUSTER.nk}"
 HUB_LEAF="${HUB_LEAF:-192.168.100.110:7442}"
 PORT="${VERIFY_PORT:-4272}"
+HUB_CA="${HUB_CA:-}"
+LEAF_TLS=""; [[ -n "$HUB_CA" ]] && LEAF_TLS=", tls { ca_file: \"$HUB_CA\" }"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHIM_SRC="$here/../nats-phase-0/director-mcp"
 
@@ -77,7 +80,7 @@ cat > "$work/nats.conf" <<CONF
 server_name: verify-shim-$CLUSTER
 listen: 127.0.0.1:$PORT
 jetstream { store_dir: "$work/store", domain: verifyshim$CLUSTER }
-leafnodes { remotes: [ { urls: ["nats-leaf://$HUB_LEAF"], nkey: \$DIRECTOR_LEAF_NKEY } ] }
+leafnodes { remotes: [ { urls: ["nats-leaf://$HUB_LEAF"], nkey: \$DIRECTOR_LEAF_NKEY$LEAF_TLS } ] }
 CONF
 DIRECTOR_LEAF_NKEY="$(grep -m1 '^SU' "$SEED_FILE")" \
   nats-server -c "$work/nats.conf" -l "$work/broker.log" &
