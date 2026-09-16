@@ -137,6 +137,8 @@ The window's length is the gap between the two steps, whichever order. With the 
 
 ### 6.2 Preconditions (both hosts)
 
+Superseded on 2026-09-16 by finding-002 section 3: the CA and the hub certificate come from the root ceremony (`hub/CEREMONY.md`), not from `tls-mint.sh`, and `ca.pem` is digest-matched on mokuzai before the flip. The rest of this section 6 stands.
+
 - On kinu: `hub/tls-mint.sh`, once. Writes `~/.director/nats-global/tls/{ca.pem,ca-key.pem,hub.pem,hub-key.pem}`. Check the SAN it prints carries `IP Address:192.168.100.110`; that is the name mokuzai dials.
 - Ship `ca.pem` to mokuzai (public material; any channel). Suggested path there: `~/.director/nats/hub-ca.pem`, readable by the broker's user.
 - On kinu: `cp ~/.director/nats-global/nats-server.conf ~/.director/nats-global/nats-server.conf.pre-tls`. On mokuzai: the same for skippy's broker conf.
