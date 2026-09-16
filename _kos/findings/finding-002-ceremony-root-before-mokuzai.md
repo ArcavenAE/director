@@ -54,8 +54,9 @@ Nothing below has been applied. The operator gates the ceremony and the flip; sk
    ```
    The issuer is `CN=director fleet root 2026`, not `TRIAL` and not `REHEARSAL`; the expiry is about 825 days out; the SAN carries the LAN IP.
 4. Ship `ca.pem` to mokuzai (public material; any channel), to `~/.director/nats/hub-ca.pem`. Skippy runs `shasum -a 256 ~/.director/nats/hub-ca.pem` and the digest matches step 3. A mismatch stops here.
-5. Backups: `cp ~/.director/nats-global/nats-server.conf ~/.director/nats-global/nats-server.conf.pre-tls` on kinu; the same for skippy's broker conf.
-6. Agree the time and the 5-minute backout deadline (finding-001 6.2).
+5. On mokuzai, the broker conf must already have a durable home. Measured 2026-09-16: the running broker is started with `-c <an ephemeral per-session directory>/nats-mokuzai.conf`, and `store_dir` and `logfile` point into the same directory, so there is no file for step 6 to back up and nothing for the 6.6 rollback to restore. Skippy relocates conf, store and log under `~/.director/nats/` and restarts the broker once, before the window, not inside it. The leaf seed is already durable at `~/.director/nats/leaf-mokuzai.nk` and still reaches the broker only as `$DIRECTOR_LEAF_NKEY`.
+6. Backups: `cp ~/.director/nats-global/nats-server.conf ~/.director/nats-global/nats-server.conf.pre-tls` on kinu; the same for skippy's broker conf, which step 5 has made possible.
+7. Agree the time and the 5-minute backout deadline (finding-001 6.2).
 
 **Hub diff** (unchanged from finding-001 6.3; the file names are the ones the ceremony writes)
 
@@ -90,7 +91,7 @@ Nothing below has been applied. The operator gates the ceremony and the flip; sk
 ```diff
 -    { urls: ["nats-leaf://192.168.100.110:7442"], nkey: $DIRECTOR_LEAF_NKEY }
 +    { urls: ["tls://192.168.100.110:7442"], nkey: $DIRECTOR_LEAF_NKEY,
-+      tls { ca_file: "/home/<skippy>/.director/nats/hub-ca.pem" } }
++      tls { ca_file: "/Users/skippy/.director/nats/hub-ca.pem" } }
 ```
 
 **Order**: finding-001 6.3 and 6.5, leaf-first recommended. Step for step: skippy applies the remote diff and reloads (the link drops with `TLS Handshake Failure` once a second; his local bus continues); the operator applies the hub diff, `nats-server --config ... -t`, stops the hub, starts it; the link is back within a second or two.
