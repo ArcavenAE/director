@@ -317,6 +317,10 @@ refusal of an unsigned cert), with the live cutover written up as an
 operator-gated step (hub restart plus one leaf reload, rollback by the same
 path). The live hub is still plaintext until that step runs. The fleet CA,
 mutual TLS on the leaf, DNS, and public reachability stay with the cloud phase.
+Amended 2026-09-16 (`_kos/findings/finding-002-ceremony-root-before-mokuzai.md`):
+the root that ships to mokuzai comes from the offline ceremony in
+`probe/nats-global-tier/hub/CEREMONY.md` (five years, two encrypted copies,
+one log line per signature), not from the trial minter.
 
 ## 10. Requirements (ratified by the operator 2026-09-14; register text in `sim/requirements.md`)
 
