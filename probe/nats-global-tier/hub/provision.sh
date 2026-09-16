@@ -4,7 +4,11 @@
 set -euo pipefail
 HOME_DIR="${DIRECTOR_GLOBAL_HOME:-$HOME/.director/nats-global}"
 URL="${DIRECTOR_GLOBAL_URL:-nats://127.0.0.1:4242}"
-A=(nats -s "$URL" --nkey "$HOME_DIR/keys/admin.nk")
+# After the TLS cutover (finding-001): DIRECTOR_GLOBAL_URL=tls://127.0.0.1:4242
+# and HUB_CA=$HOME_DIR/tls/ca.pem (the default once that file exists).
+HUB_CA="${HUB_CA:-}"; [[ -z "$HUB_CA" && -r "$HOME_DIR/tls/ca.pem" ]] && HUB_CA="$HOME_DIR/tls/ca.pem"
+TLSCA=(); [[ -n "$HUB_CA" ]] && TLSCA=(--tlsca "$HUB_CA")
+A=(nats -s "$URL" "${TLSCA[@]}" --nkey "$HOME_DIR/keys/admin.nk")
 clusters=("$@")
 [[ ${#clusters[@]} -gt 0 ]] || clusters=(kinu mokuzai)
 add_stream() {
