@@ -40,6 +40,15 @@ cc-planner's AGREE, correlated by in_reply_to, reached codex-a). The bus is not
 the problem. The collision is purely an identity-source problem, and distinct
 identities route cleanly. This is OBSERVED, this session.
 
+## A second live instance (2026-09-17)
+
+A later run sharpened the incident with OS-level process ancestry. Two shims again registered as `agent://ops/michael`, but this time they were different-purpose sessions, not two director-flavored ones:
+
+- pid 74798 (ttys025), parent `claude --resume director`: the genuine director seat, instance `01M2M33CE6C8S8PP7T82XJBWZW`.
+- pid 43993 (ttys047), parent `claude --resume architect` (pid 86260): an architect session whose shim loaded the same project-scope config and claimed the director address by accident.
+
+The only roster fields that differed were the instance ULID and the shim pid; the addressable `agent_id` was identical. So the failure is not "two directors ran," it is "every session in the project dir is michael, and one of them is the director." This is the same root cause (identity from the OS user via a project-scope MCP config) with a worse symptom: an unrelated role silently occupying the human's director address. R-49 and R-50 remain the fixes; ID-A closes it now. Recorded as finding-003 in director's graph; the presence-liveness half of the same run is finding-166 instance (c) in the orc graph.
+
 ## Three concepts the collision had fused
 
 - **Address**: where to reach a session (`agent://team/id`), the inbox subject.
