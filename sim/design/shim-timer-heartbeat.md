@@ -186,6 +186,20 @@ the research report's durable pattern and the lowest-priority piece here.
   informational. Readers compute staleness from the KV revision age where
   available, not from the client stamp.
 
+- **Stale presence after a quit, observed 2026-09-17.** The operator quit an
+  architect tab (its harness pid 86260 and shim pid 43993 both dead at the OS
+  level). `list_roster` kept reporting that session `present` across three
+  polls, its `ts` frozen at `2026-09-17T21:42:21Z` while every live seat
+  advanced about 40s. This is section 0 item 4 in the wild: no shutdown edge, so
+  the key ages out over the 90s TTL, and separately the reader applies no
+  cutoff, so a frozen record reads `present` until then. The only
+  roster-visible liveness signal was a recent-and-advancing `ts`, not list
+  membership. This is another live instance of R-93 (presence is not a
+  liveness signal in either direction, ratified 2026-09-14 from finding-166),
+  so the requirement already exists; what is missing is the mechanism.
+  Recorded as finding-166 instance (c) in the orc graph; the writer-side
+  deregister is tracked by aae-orc-kz4t5 and aae-orc-lebdu.
+
 ## 4. Candidate requirements (provisional tags, source-classed)
 
 - **BEAT-A.** A presence record separates declared state from observed state
@@ -206,6 +220,18 @@ the research report's durable pattern and the lowest-priority piece here.
 - **BEAT-F.** A session with no shim is roster-visible only through an external
   watcher and is marked unreachable; presence never implies an inbox. Source:
   JUDGMENT over finding-159 (OBSERVED).
+
+- **BEAT-G.** The roster reader applies a liveness cutoff at read time:
+  `list_roster` marks or drops any entry whose presence record is older than a
+  staleness bound (from the KV revision age where available, else the record
+  `ts`), so a stale key never reads as plainly `present`. This is distinct from
+  the writer-side deregister (BEAT-C): deregister removes the key on an orderly
+  exit, the read-time cutoff covers the ungraceful case within the observation
+  window instead of waiting the full TTL. It is a candidate mechanism under the
+  already-ratified R-93 (presence is not a liveness signal in either
+  direction), alongside BEAT-C and receipt-based liveness (R-88); R-93 is the
+  requirement, these are the mechanisms serving it. Source: JUDGMENT, earned by
+  the 2026-09-17 stale-presence instance (finding-166 c).
 
 ## 5. Build plan
 
