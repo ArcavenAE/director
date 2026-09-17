@@ -194,8 +194,11 @@ the research report's durable pattern and the lowest-priority piece here.
   the key ages out over the 90s TTL, and separately the reader applies no
   cutoff, so a frozen record reads `present` until then. The only
   roster-visible liveness signal was a recent-and-advancing `ts`, not list
-  membership. Recorded as finding-166 instance (c) in the orc graph; the
-  writer-side deregister is tracked by aae-orc-kz4t5 and aae-orc-lebdu.
+  membership. This is another live instance of R-93 (presence is not a
+  liveness signal in either direction, ratified 2026-09-14 from finding-166),
+  so the requirement already exists; what is missing is the mechanism.
+  Recorded as finding-166 instance (c) in the orc graph; the writer-side
+  deregister is tracked by aae-orc-kz4t5 and aae-orc-lebdu.
 
 ## 4. Candidate requirements (provisional tags, source-classed)
 
@@ -224,8 +227,11 @@ the research report's durable pattern and the lowest-priority piece here.
   `ts`), so a stale key never reads as plainly `present`. This is distinct from
   the writer-side deregister (BEAT-C): deregister removes the key on an orderly
   exit, the read-time cutoff covers the ungraceful case within the observation
-  window instead of waiting the full TTL. Source: JUDGMENT, earned by the
-  2026-09-17 stale-presence instance (finding-166 c).
+  window instead of waiting the full TTL. It is a candidate mechanism under the
+  already-ratified R-93 (presence is not a liveness signal in either
+  direction), alongside BEAT-C and receipt-based liveness (R-88); R-93 is the
+  requirement, these are the mechanisms serving it. Source: JUDGMENT, earned by
+  the 2026-09-17 stale-presence instance (finding-166 c).
 
 ## 5. Build plan
 

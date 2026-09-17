@@ -140,6 +140,10 @@ Instance 2: a quit session read `present` for the full 90s TTL with a frozen
   from dead in Instance 2. Tradeoff: every consumer must implement the check,
   and presence membership becomes advisory.
 
+The ratified requirement already exists: R-93 (presence is not a liveness
+signal in either direction, earned by finding-166). So the three options are
+candidate mechanisms serving R-93, not a new requirement to add.
+
 These layer rather than compete. A is the cheapest and already ticketed, B is
 the reader-side gap this run surfaced, and C is the doctrine that presence
 implies possibly-stale while liveness is a receipt. Liveness meets identity at
