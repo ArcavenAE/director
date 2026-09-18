@@ -672,6 +672,35 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 	}
 }
 
+// deregister deletes this session's presence rows on an orderly exit (BEAT-C,
+// sim/design/shim-timer-heartbeat.md). Presence membership is not a liveness
+// signal (R-93), so the graceful path removes the key at once rather than
+// leaving a live-looking row until the TTL lapses; a crash that skips this path
+// falls to that TTL. Best-effort by design: every failure is logged and none is
+// fatal, because a shim that cannot delete its own key is still exiting. Local
+// presence always; the global row too when the global tier is on. There is no
+// lease to release here: the party pulled the seat lease back to the architect,
+// so deregister acts on presence only.
+func (b *Bus) deregister(ctx context.Context, logf func(string, ...any)) {
+	key := "presence." + b.self.Team + "." + b.self.AgentID + "." + b.instance
+	if err := b.kv.Delete(ctx, key); err != nil && logf != nil {
+		logf("deregister: local presence delete failed, falls to TTL: %v", err)
+	}
+	if b.globalCfg == nil {
+		return
+	}
+	g, err := b.globalReady(ctx)
+	if err != nil {
+		if logf != nil {
+			logf("deregister: global tier not ready, global presence falls to TTL: %v", err)
+		}
+		return
+	}
+	if err := g.deletePresence(ctx, b.instance); err != nil && logf != nil {
+		logf("deregister: global presence delete failed, falls to TTL: %v", err)
+	}
+}
+
 // reportGlobalWarn logs a change in the global tier's health: the first
 // failure, a different failure, and the recovery. Repeats stay silent.
 func (b *Bus) reportGlobalWarn(warn string, logf func(string, ...any)) {
