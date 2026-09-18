@@ -1,8 +1,10 @@
 # Global NATS leaf-attach: moving the global bus onto shared infrastructure
 
-Status: direction, recorded 2026-09-17. Not yet built. Extends
-[global-bus-tier.md](global-bus-tier.md); it does not supersede it. The buildable
-marvel-side work is tracked as bd `aae-orc-ct0l4`.
+Status: direction, recorded 2026-09-17, revised 2026-09-18. The marvel leaf attach
+and detach lifecycle is built: connect, disconnect, and reconnect ship, tracked as
+bd `aae-orc-ct0l4`. Moving the global tier off the laptop onto the shared
+infrastructure NATS stays direction. Extends
+[global-bus-tier.md](global-bus-tier.md); it does not supersede it.
 
 ## Why this shift
 
@@ -136,6 +138,92 @@ envelope's principal fields and never the link
 ([authority-never-in-content.md](authority-never-in-content.md), R-01, R-05); a
 leaf or gateway link confers no authority by being connected.
 
+## Cluster identity and the seed
+
+A cluster's identity is a single typeable token, charset `[A-Za-z0-9_-]`. That one
+token serves four surfaces at once:
+
+- the JetStream domain (marvel `Spec.Domain`);
+- the `global.<label>.>` subject partition and the `GLOBAL_TO_<label>` stream on the tier;
+- the `leaf-<label>` NKey user and its seed filename;
+- the display binding on the `bus/leaf` credential.
+
+Keeping it one token is what stops those four from disagreeing. Split the identity
+across more than one field and the fields drift; the single source of truth is the
+property this scheme protects.
+
+The charset is narrower than a hostname on purpose, because a raw hostname is not a
+safe NATS token. A subject token cannot contain a dot, so `kinu.local` is illegal,
+and a JetStream domain folds into `$JS.<domain>.API` and inherits the same rule.
+Default macOS Computer Names carry spaces and apostrophes (for example "Avi's
+MacBook Pro"). NATS subject tokens are case-sensitive while hostnames are not, so
+`Kinu` and `kinu` read as one host but two subjects. And hostnames are not unique.
+marvel rejects an unsafe token rather than rewriting it (`validToken` in render.go,
+R-76; `ValidateClusterName` in config.go, R-94). "The hostname is the natural choice"
+stays a convention for the human picking a label, never an automatic derivation.
+
+The label is operator-chosen at cluster creation (`AddCluster(name, addr,
+identity)`), lowercase by convention. Lowercase is a convention, not a code rewrite:
+a guard may reject an uppercase label with a message, but it must never silently
+downcase the input. That reject-not-rewrite posture is deliberate; a silent downcase
+would make one operator's `global.Kinu.>` and the next operator's `global.kinu.>`
+two namespaces that never meet.
+
+Uniqueness is scoped to the tier the cluster leafs to. Because the label is the
+subject partition and the stream name on that tier, it must be unique among every
+cluster attached to the same shared-tier NATS. Two sub-cases follow from that rule:
+
+- Several clusters on one host each take a distinct label (`kinu-a` and `kinu-b`, or
+  `kinu-dev` and `kinu-ci`). The host segment is convention for legibility; the whole
+  label is the unique key.
+- Two physically distinct hosts that share a hostname are unsupported by derivation.
+  The operator assigns distinct labels (`avi-laptop`, `avi-laptop-2`); the platform
+  does not auto-suffix, because auto-suffixing is a rewrite that pollutes the
+  namespace with a number nobody chose. This is safe to state as unsupported because
+  trust does not ride the label: the separate SSH-key identity in `AddCluster` backs
+  trust, so two same-named hosts are an addressing collision the operator resolves by
+  labeling, never a security ambiguity.
+
+The seed has no path on the daemon, by design. The leaf seed is a Store credential
+named `bus/leaf` (kind `nats-nkey-seed`, `Persist: false`), read into
+`DIRECTOR_LEAF_NKEY` at broker start and held on disk nowhere
+([bus-credential-enrollment.md](bus-credential-enrollment.md) E2 and E3;
+[local-broker-supervision.md](local-broker-supervision.md), "No credential path
+field"). The one seed that touches disk is the operator-side transient stage
+`~/.director/nats/leaf-<label>.nk`, mode 0600, consumed by `credential put` and then
+removable. The NKey user is `leaf-<label>`, and the hub tier home is
+`~/.director/nats-global`.
+
+The setup payoff: an operator naming a second cluster on one host, or a cluster on a
+second tier, has a rule to follow instead of reaching for the hostname (which breaks
+as a NATS token), and the no-daemon-path design keeps the seed from being staged on
+disk where it would fall out of step with the Store.
+
+## Operational rules and failure modes
+
+A few rules follow from the identity and seed model above, and one silent failure is
+worth stating outright.
+
+Staying attached is not automatic across a restart. Every daemon reexec, stop, or
+restart drops the `bus/leaf` credential (the Store holds it `Persist: false`) and
+re-renders the broker conf without the leafnodes block, so the leaf detaches. Pair
+every lifecycle event with `marvel credential put bus/leaf`; a routine restart
+without the re-push leaves the cluster silently local-only.
+
+The global grants render off a role literally named `supervisor`. Rename that role
+and the global tier is lost silently: nothing errors at render and nothing errors at
+connect, the cluster simply never receives its global grants
+([local-broker-supervision.md](local-broker-supervision.md) section 5). A rename that
+costs the global tier with no message is the kind of setup failure that burns hours
+without a documented cause, so treat the `supervisor` role name as load-bearing.
+
+The per-cluster global address belongs to the supervisor. The two-role property (only
+the supervisor and the director hold a global address, R-86 and R-94) does not mean
+each cluster runs both roles: per cluster it is the supervisor that carries the
+cluster's global address, while the director address is the one fleet seat, not a
+per-cluster role. An operator reading the two-role rule should not expect a
+per-cluster director to hold a global address, because it does not.
+
 ## Operating modes
 
 Diagrams of the modes this topology serves. Most are DIRECTION (designed, not
@@ -245,10 +333,69 @@ flowchart TB
   ga <-->|gateway| gb
 ```
 
+Mode E: several clusters on one host. One host runs two local marvel clusters, each
+its own broker with a distinct label (`kinu-a`, `kinu-b`), each leafing up to the
+same shared-tier NATS with its own `leaf-<label>` seed. The labels are the
+disambiguator, the host is convention, and the two clusters share nothing but the
+tier they leaf to. This is the operator's own two-local-marvels goal drawn concretely.
+DIRECTION.
+
+```mermaid
+flowchart TB
+  gt[(Shared-tier NATS<br/>one global tier)]
+  subgraph H[One host]
+    subgraph CA[marvel cluster kinu-a]
+      ba[(local broker)]
+      sa[supervisor<br/>global address]
+      wa[workers<br/>local only]
+      sa --- ba
+      wa --- ba
+    end
+    subgraph CB[marvel cluster kinu-b]
+      bb[(local broker)]
+      sb[supervisor<br/>global address]
+      wb[workers<br/>local only]
+      sb --- bb
+      wb --- bb
+    end
+  end
+  ba -->|leaf, seed leaf-kinu-a| gt
+  bb -->|leaf, seed leaf-kinu-b| gt
+```
+
+Mode F: one operator, two global tiers, no gateway. Two clusters whose hub URLs point
+at two different tiers the same operator runs; each cluster leafs to its own tier
+with its own seed. Label uniqueness is per-tier, so a label need only be unique within
+the tier it leafs to; the safe convention is globally distinct labels even across
+tiers that do not touch yet, so a future gateway join between the tiers finds no
+collision. This is distinct from Mode D: Mode D is the cross-person case where a
+gateway joins two people's tiers, while Mode F is one operator running two tiers with
+no gateway between them. DIRECTION.
+
+```mermaid
+flowchart TB
+  ta[(Global tier A<br/>shared infrastructure)]
+  tb[(Global tier B<br/>shared infrastructure)]
+  subgraph CA[marvel cluster one]
+    ca[(local broker)]
+    csa[supervisor<br/>global address]
+    ca --- csa
+  end
+  subgraph CB[marvel cluster two]
+    cb[(local broker)]
+    csb[supervisor<br/>global address]
+    cb --- csb
+  end
+  ca -->|leaf, own seed| ta
+  cb -->|leaf, own seed| tb
+```
+
 ## Open questions
 
 - Per-person isolation on the shared tier: an account per person on one server,
-  or a server per person? The choice shapes the gateway story later.
+  or a server per person? The choice shapes the gateway story later. It does not
+  change the identity scheme: the label is unique per tier either way, and Mode F is
+  the concrete answer for one operator running more than one tier.
 - Hub stream retention sizing against real isolation windows (finding-004): the
   reconcile mechanism is clean, but a long isolation past the hub stream's
   retention loses the evicted messages. The retention number per cluster is a
