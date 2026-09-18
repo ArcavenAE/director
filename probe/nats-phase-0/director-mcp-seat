@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+#
+# director-mcp-seat — launch director-mcp for either a marvel-managed agent or a
+# hand-run seat, without a per-case registration.
+#
+# Register it once, with no identity of its own:
+#
+#     codex mcp add director -- /path/to/director-mcp-seat
+#
+# and the same registration is then correct in both modes.
+#
+# ---------------------------------------------------------------------------
+# Why this exists
+#
+# A literal `--env DIRECTOR_AGENT_ID=… --env DIRECTOR_NATS_USER=…` registration
+# is correct in exactly one of the two modes and wrong in the other:
+#
+#   * A marvel-MANAGED session already has the right values. marvel's baseEnv
+#     stamps MARVEL_SESSION / MARVEL_TEAM / MARVEL_WORKSPACE and the session's
+#     own DIRECTOR_NATS_USER / _PASS. Hardcoding any of them OVERRIDES marvel,
+#     so the agent joins the bus under a hand-chosen id on the wrong broker
+#     user -- breaking the "the bus id is the session name" binding (R-84) and
+#     handing a worker the seat's grants.
+#
+#   * A HAND-RUN session (a codex or claude the operator starts themselves) has
+#     none of them, and needs the `director` user marvel renders from the
+#     cluster's `bus.seat` block.
+#
+# So: defer to the environment, and fall back to the seat only when there is
+# nothing to defer to.
+#
+# ---------------------------------------------------------------------------
+# codex operators: one extra line is required
+#
+# codex does NOT pass its environment to an MCP server. The child receives a
+# fixed allowlist (HOME LANG LOGNAME PATH PWD SHELL SHLVL TERM TMPDIR USER) and
+# none of marvel's stamps, so on its own this script cannot see a managed
+# session and will fall back to the seat. `shell_environment_policy.inherit`
+# does NOT change this -- that policy governs shell children, not MCP launches.
+#
+# The supported fix is per-server, and belongs in the marvel manifest beside the
+# command registration:
+#
+#     -c 'mcp_servers.director.env_vars=["MARVEL_SESSION","MARVEL_TEAM",
+#          "MARVEL_WORKSPACE","DIRECTOR_NATS_USER","DIRECTOR_NATS_PASS",
+#          "NATS_URL"]'
+#
+# Diagnostic: if a marvel-managed agent shows up on the roster as the seat id
+# rather than its session name, that env_vars line is missing from its role.
+#
+# Measured on codex 0.154.0, marvel 0.1.0-alpha.20260918.023529.f071461.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+: "${DIRECTOR_MCP_BIN:=$HOME/.director/bin/director-mcp}"
+: "${MARVEL_BUS_STATE:=$HOME/.marvel/state/nats}"
+SEAT_PASS_FILE="$MARVEL_BUS_STATE/director.pass"
+
+if [ ! -x "$DIRECTOR_MCP_BIN" ]; then
+  echo "director-mcp-seat: no director-mcp at $DIRECTOR_MCP_BIN" >&2
+  echo "  build it from probe/nats-phase-0/director-mcp and install it there," >&2
+  echo "  or set DIRECTOR_MCP_BIN to its path." >&2
+  exit 1
+fi
+
+export NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
+
+# Identity: what marvel stamped, else an explicit override, else the seat.
+export DIRECTOR_AGENT_ID="${DIRECTOR_AGENT_ID:-${MARVEL_SESSION:-director-seat}}"
+[ -n "${MARVEL_TEAM:-}" ]      && : "${DIRECTOR_TEAM:=$MARVEL_TEAM}"
+[ -n "${MARVEL_WORKSPACE:-}" ] && : "${DIRECTOR_WORKSPACE:=$MARVEL_WORKSPACE}"
+
+if [ -z "${DIRECTOR_TEAM:-}" ] || [ -z "${DIRECTOR_WORKSPACE:-}" ]; then
+  echo "director-mcp-seat: DIRECTOR_TEAM and DIRECTOR_WORKSPACE are required" >&2
+  echo "  outside a marvel session. Set them in the registration, or run this" >&2
+  echo "  inside a session marvel spawned." >&2
+  exit 1
+fi
+export DIRECTOR_TEAM DIRECTOR_WORKSPACE
+
+# Bus auth: only fall back to the seat when the session brought no credentials
+# of its own. A marvel-managed session always does.
+if [ -z "${DIRECTOR_NATS_USER:-}" ] || [ -z "${DIRECTOR_NATS_PASS:-}" ]; then
+  if [ ! -r "$SEAT_PASS_FILE" ]; then
+    echo "director-mcp-seat: no bus credentials in the environment, and no seat" >&2
+    echo "  password at $SEAT_PASS_FILE." >&2
+    echo "  Either run inside a marvel session, or declare a seat on the" >&2
+    echo "  cluster's bus and restart the daemon:" >&2
+    echo "    bus: { managed: true, seat: { workspace: <ws>, team: <team> } }" >&2
+    exit 1
+  fi
+  export DIRECTOR_NATS_USER="director"
+  DIRECTOR_NATS_PASS="$(cat "$SEAT_PASS_FILE")"
+  export DIRECTOR_NATS_PASS
+fi
+
+exec "$DIRECTOR_MCP_BIN" "$@"

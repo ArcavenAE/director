@@ -76,6 +76,66 @@ nats --js-domain global consumer next GLOBAL_TO_mokuzai sup --raw
 A publish to any other cluster's prefix, or a consumer on the director's
 stream, fails with "no responders" and stores nothing; that is expected.
 
+## 3b. The shim launcher: `director-mcp-seat`
+
+`probe/nats-phase-0/director-mcp-seat` launches `director-mcp` for either a
+marvel-managed agent or a hand-run seat, so one registration serves both:
+
+```sh
+codex mcp add director -- /path/to/director-mcp-seat
+```
+
+Note the registration carries **no identity**. That is the point. A literal
+`--env DIRECTOR_AGENT_ID=… --env DIRECTOR_NATS_USER=…` is correct in exactly one
+of the two modes: it is what a hand-run seat needs, and it OVERRIDES what marvel
+already stamped into a managed session, so the agent joins the bus under a
+hand-chosen id on the wrong broker user. The launcher defers to the environment
+and falls back to the seat only when there is nothing to defer to.
+
+The seat half needs a seat to fall back to. Declare one on the cluster's bus
+(`~/.marvel/config.yaml`), which renders a broker user named `director` and
+writes its password to `<StateDir>/nats/director.pass`:
+
+```yaml
+bus:
+  managed: true
+  seat: { workspace: <workspace>, team: <team> }
+```
+
+Without it, a hand-run shim against a managed broker fails with
+`nats: Authorization Violation`, because a managed broker renders an
+authorization block and a hand-launched shim gets no credentials from marvel.
+
+### codex needs one more line
+
+codex does not pass its environment to an MCP server: the child gets a fixed
+allowlist (`HOME LANG LOGNAME PATH PWD SHELL SHLVL TERM TMPDIR USER`) and none
+of marvel's stamps. `shell_environment_policy.inherit` does not change it —
+that policy governs shell children, not MCP launches. Forward them per-server,
+in the marvel manifest beside the command registration:
+
+```yaml
+runtime:
+  image: codex
+  command: codex
+  args:
+    - "-c"
+    - 'mcp_servers.director.command="/path/to/director-mcp-seat"'
+    - "-c"
+    - 'mcp_servers.director.env_vars=["MARVEL_SESSION","MARVEL_TEAM","MARVEL_WORKSPACE","DIRECTOR_NATS_USER","DIRECTOR_NATS_PASS","NATS_URL"]'
+    - "-c"
+    - 'mcp_servers.director.default_tools_approval_mode="approve"'
+```
+
+The `-c` registration is required rather than a convenience: marvel gives each
+codex session a private `CODEX_HOME` seeded symlink-only, so a global
+`codex mcp add` never reaches it. `default_tools_approval_mode` defaults to
+`auto`, which still prompts on every director call and parks a standing agent
+forever; `approve` is the value that lets it run unattended.
+
+**Diagnostic.** If a marvel-managed agent appears on the roster as `director-seat`
+instead of its session name, the `env_vars` line is missing from its role.
+
 ## 4. Casting a supervisor onto the global tier
 
 The shim's global mode is built (aae-orc-gvf6k). Cast your supervisor with
