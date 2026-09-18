@@ -111,7 +111,10 @@ nats-server 2.14.6; throwaway brokers only, the live hub untouched):
   mirror reconciles only to the surviving window. This is what a long isolation
   actually risks: size the hub stream's retention for the longest loss-free
   isolation a cluster must survive, or accept that a very late return starts from
-  the oldest surviving message.
+  the oldest surviving message. This loss is specific to durable JetStream
+  streams mirrored across the leaf; ephemeral A2A request and reply over core
+  NATS is not mirrored and not subject to it, and during a partition it fails
+  loud rather than losing anything silently.
 - Back-pressure during the outage is fail-fast, not queue-and-block. Local
   publishes keep working and stay local; a cross-domain operation to the hub
   fails loud rather than hanging; the mirror stalls at its last sequence without

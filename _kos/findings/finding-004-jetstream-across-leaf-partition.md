@@ -46,6 +46,7 @@ PASS mirror reconciled to the surviving window (first_seq=16, 10 messages)
 ## 4. Scope and what is not characterized
 
 - Measured on the edge topology (leaf mirrors the hub down), which is the current work. A leaf that sources many upstream messages faster than the link drains is a different flow and is not measured here; the edge case does not exhibit it.
+- The retention-eviction loss is specific to durable JetStream streams mirrored across the leaf. Ephemeral request and reply over core NATS (the A2A envelope's synchronous path) is not mirrored and not subject to it; during a partition such a call fails loud with no responders, the P1 behavior, and loses nothing silently. The loss here is about persisted stream state, not about all bus traffic.
 - Retention sizing against real isolation windows is a per-deployment decision, not a mechanism; this finding gives the model, not a number.
 - No auth in the probe: the credential-to-subject binding is already proven in `finding-001` and `global-bus-tier.md` section 4 and is orthogonal to the JetStream reconciliation measured here.
 
