@@ -8,10 +8,14 @@ mode ships; then it is three environment variables in the cast.
 ## 0. What you receive out of band
 
 One file from the operator, handed privately (never on GitHub, never on the
-bus): the NKey seed for your cluster's leaf link. Store it as
-`~/.director/nats/leaf-mokuzai.nk`, mode 0600. It is a bus credential the
-operator can revoke and re-mint; it is not your OAuth and it is not a
-credential at any third party.
+bus): the NKey seed for your cluster's leaf link. Store it at the standard
+operator-side stage path `~/.director/nats/leaf-<label>.nk`, mode 0600; here
+`<label>` is `mokuzai`, so the file is `~/.director/nats/leaf-mokuzai.nk`. It is a
+bus credential the operator can revoke and re-mint; it is not your OAuth and it is
+not a credential at any third party. This interim recipe reads the seed from that
+file at each broker start (section 1); once your broker is marvel-supervised, the
+seed instead lives in the daemon Store and the daemon keeps no seed path on disk (the
+model in [bus-credential-enrollment.md](../../sim/design/bus-credential-enrollment.md)).
 
 ## 1. Broker config (local nats-server.conf)
 
