@@ -45,9 +45,13 @@ party.
 
 ## 3. The flow
 
-**E0. Mint (hub operator, kinu).** `nats auth nkey gen user` for
-`leaf-<cluster>`; the public key goes into the hub config and the hub
-reloads. Unchanged from brief 8; the hub is not marvel-managed by decision.
+**E0. Mint (hub operator, kinu).** `nats auth nkey gen user` for the NKey user
+`leaf-<cluster>` (the cluster label), staging the seed at the standard operator-side
+path `~/.director/nats/leaf-<cluster>.nk`, mode 0600 and transient. The filename
+embeds the label, so the seed file, the NKey user, and the subject partition all read
+the same token. The public key goes into the hub config and the hub reloads.
+Unchanged from brief 8 apart from naming that stage path as the standard; the hub is
+not marvel-managed by decision.
 
 **E1. Enroll (both parties, by hand, once).** The cluster owner runs
 `marvel keys authorize <operator-pubkey>` on their daemon and sends back
@@ -58,11 +62,14 @@ Symmetric consent: the owner can `marvel keys revoke <fp>` at any time.
 Nothing secret moves in this step.
 
 **E2. Push (operator, kinu).**
-`marvel --cluster <cluster> credential put bus/leaf --kind nats-nkey-seed --stdin < leaf-<cluster>.nk`.
+`marvel --cluster <cluster> credential put bus/leaf --kind nats-nkey-seed --stdin < ~/.director/nats/leaf-<cluster>.nk`.
 The seed travels inside the SSH session, lands in the remote daemon's Store
 as a `Credential` with `Persist: false`, and is acknowledged with its
 metadata only. The daemon emits `credential.put` on the events ring with the
-caller's key fingerprint and the credential name, never the value.
+caller's key fingerprint and the credential name, never the value. Once the push is
+acknowledged, the staged `~/.director/nats/leaf-<cluster>.nk` is removable: the
+daemon holds no seed path, and the Store value read into `DIRECTOR_LEAF_NKEY` at
+broker start is the whole story.
 
 **E3. Consume (cluster daemon, at broker start).** The daemon supervises the
 local broker (aae-orc-xy1dh) and renders its conf (aae-orc-e9g8i) with the
