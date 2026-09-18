@@ -356,6 +356,14 @@ func (g *globalTier) writePresence(ctx context.Context, self Sender, instance st
 	return err
 }
 
+// deletePresence removes this session's row from GLOBAL_PRESENCE on an orderly
+// exit (BEAT-C, sim/design/shim-timer-heartbeat.md). It mirrors writePresence;
+// a failure here, or a crash that never reaches it, falls to the bucket TTL,
+// which vacates a dead holder without cooperation.
+func (g *globalTier) deletePresence(ctx context.Context, instance string) error {
+	return g.kv.Delete(ctx, g.cfg.presenceKey(instance))
+}
+
 // records reads GLOBAL_PRESENCE and returns every record whose key starts with
 // prefix. An empty prefix reads the whole bucket (the roster); a principal's
 // prefix reads its live records (the liveness check).

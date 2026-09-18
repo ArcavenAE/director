@@ -32,6 +32,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -93,7 +95,12 @@ func main() {
 	}
 	log.SetOutput(os.Stderr)
 
-	ctx := context.Background()
+	// A signal-aware context so a SIGTERM/SIGINT (the harness stopping the MCP
+	// server, or an operator) cancels the heartbeat and the serve loop and
+	// reaches the writer-side deregister below, instead of the process dying
+	// with defers unrun and a live-looking presence row left behind (BEAT-C).
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 	bus, err := connect(ctx, url, self, gcfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "director-mcp: bus connect failed: %v\n", err)
@@ -116,7 +123,20 @@ func main() {
 	}
 
 	srv := newServer(bus, logf)
-	if err := srv.serve(ctx, os.Stdin); err != nil {
-		logf("serve ended: %v", err)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.serve(ctx, os.Stdin) }()
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			logf("serve ended: %v", err)
+		}
+	case <-ctx.Done():
+		logf("shutdown signal received, deregistering presence")
 	}
+	// BEAT-C: delete this session's presence on an orderly exit. ctx is already
+	// cancelled on the signal path, so deregister runs on a fresh bounded
+	// context; bus.close() (the deferred drain) then closes the connection.
+	dctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	bus.deregister(dctx, logf)
+	cancel()
 }
