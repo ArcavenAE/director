@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One Token, Four Jobs</title>
+<style>
+  :root{
+    --bg:#0f1113; --panel:#171a1d; --ink:#d5d8d6; --muted:#9aa0a0; --line:#2a2f33;
+    --ident:#8fce9b; --tobi:#6fc9d6; --rem:#e3c96b; --wend:#b79ae0; --skarp:#e08b8b;
+    --accent:#9fd6a0; --drop:#c98a8a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;padding:32px 16px}
+  .wrap{max-width:880px;margin:0 auto}
+  header{text-align:center;margin-bottom:6px}
+  h1{font-size:26px;margin:0 0 4px;font-weight:650}
+  .date{color:var(--muted);font-size:13px;letter-spacing:.4px;text-transform:uppercase}
+  .lede{color:var(--muted);text-align:center;max-width:640px;margin:14px auto 26px;font-size:15px}
+  .verdict{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:10px;padding:16px 18px;margin:0 0 26px}
+  .verdict b{color:var(--accent)}
+  .fig{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px;margin-bottom:26px}
+  .fig h2{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 14px;text-align:center}
+  .flow{stroke-dasharray:5 4;animation:flow 2.6s linear infinite}
+  @keyframes flow{to{stroke-dashoffset:-18}}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:26px}
+  @media (max-width:640px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card h3{margin:0 0 2px;font-size:15px;display:flex;align-items:center;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 auto}
+  .role{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px}
+  .card p{margin:0;font-size:14px}
+  .id .dot{background:var(--ident)} .id h3{color:var(--ident)}
+  .to .dot{background:var(--tobi)} .to h3{color:var(--tobi)}
+  .re .dot{background:var(--rem)} .re h3{color:var(--rem)}
+  .we .dot{background:var(--wend)} .we h3{color:var(--wend)}
+  .sk .dot{background:var(--skarp)} .sk h3{color:var(--skarp)}
+  .mach{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:26px}
+  .mach h2{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 12px}
+  .row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .row:last-child{border-bottom:none}
+  .tag{font-size:11px;font-weight:650;padding:2px 8px;border-radius:20px;flex:0 0 auto;width:60px;text-align:center}
+  .keep{background:rgba(159,214,160,.15);color:var(--accent)}
+  .dropt{background:rgba(201,138,138,.16);color:var(--drop)}
+  .row .why{color:var(--muted);font-size:12.5px}
+  .clash{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:26px}
+  .clash h2{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 10px}
+  .clash p{margin:0 0 8px;font-size:14px}
+  footer{color:var(--muted);font-size:12px;text-align:center;margin-top:18px;line-height:1.7}
+  code{background:#12151a;border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:12.5px;color:#c9d3cf}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>One Token, Four Jobs</h1>
+    <div class="date">A design party &middot; 2026-09-18</div>
+  </header>
+  <p class="lede">A ticket asked whether to split the cluster name into two fields or build a bigger identity machine. Five researchers read the code first, and came back saying the name already does everything, and quietly.</p>
+
+  <div class="verdict">
+    <b>The verdict.</b> Keep the single typeable token. It is the JetStream domain, the subject partition, the leaf seed's name, and the credential binding, all at once, and its narrow charset is on purpose because a raw hostname is not a safe NATS token. No bus.domain override, no wider primitive. The label is operator-chosen, lowercase by convention, unique per tier. The seed has no path on the daemon by design; the one on-disk copy is a transient operator-side stage.
+  </div>
+
+  <div class="fig">
+    <h2>The token, and the four surfaces it serves</h2>
+    <svg viewBox="0 0 760 210" width="100%" role="img" aria-label="One label token feeds the JetStream domain, the global subject partition, the leaf seed and NKey user, and the credential binding">
+      <defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6a7075"/></marker></defs>
+      <rect x="300" y="86" width="160" height="42" rx="9" fill="#171a1d" stroke="#8fce9b"/>
+      <text x="380" y="106" fill="#8fce9b" font-size="13" text-anchor="middle">the label token</text>
+      <text x="380" y="120" fill="#9aa0a0" font-size="10.5" text-anchor="middle">[A-Za-z0-9_-], lowercase</text>
+      <line class="flow" x1="300" y1="100" x2="150" y2="52" stroke="#6fc9d6" stroke-width="2" marker-end="url(#a)"/>
+      <rect x="16" y="30" width="150" height="40" rx="8" fill="#171a1d" stroke="#6fc9d6"/>
+      <text x="91" y="48" fill="#6fc9d6" font-size="11.5" text-anchor="middle">JetStream domain</text>
+      <text x="91" y="62" fill="#9aa0a0" font-size="10" text-anchor="middle">Spec.Domain</text>
+      <line class="flow" x1="300" y1="108" x2="150" y2="150" stroke="#e3c96b" stroke-width="2" marker-end="url(#a)"/>
+      <rect x="16" y="140" width="150" height="40" rx="8" fill="#171a1d" stroke="#e3c96b"/>
+      <text x="91" y="158" fill="#e3c96b" font-size="11" text-anchor="middle">subject partition</text>
+      <text x="91" y="172" fill="#9aa0a0" font-size="10" text-anchor="middle">global.&lt;label&gt;.&gt;</text>
+      <line class="flow" x1="460" y1="100" x2="610" y2="52" stroke="#b79ae0" stroke-width="2" marker-end="url(#a)"/>
+      <rect x="594" y="30" width="150" height="40" rx="8" fill="#171a1d" stroke="#b79ae0"/>
+      <text x="669" y="48" fill="#b79ae0" font-size="11" text-anchor="middle">leaf seed + user</text>
+      <text x="669" y="62" fill="#9aa0a0" font-size="10" text-anchor="middle">leaf-&lt;label&gt;.nk</text>
+      <line class="flow" x1="460" y1="108" x2="610" y2="150" stroke="#9fd6a0" stroke-width="2" marker-end="url(#a)"/>
+      <rect x="594" y="140" width="150" height="40" rx="8" fill="#171a1d" stroke="#9fd6a0"/>
+      <text x="669" y="158" fill="#9fd6a0" font-size="11" text-anchor="middle">credential binding</text>
+      <text x="669" y="172" fill="#9aa0a0" font-size="10" text-anchor="middle">bus/leaf</text>
+    </svg>
+    <p style="color:#9aa0a0;font-size:12.5px;text-align:center;margin:6px 0 0">Split the token and any two of these four can disagree. Keep it, and they cannot.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card id">
+      <h3><span class="dot"></span>Ident</h3>
+      <div class="role">Addressing architecture</div>
+      <p>The token is already the identity primitive. One value, four surfaces, no second source of truth. That is not an accident to refactor; it is the property worth defending.</p>
+    </div>
+    <div class="card to">
+      <h3><span class="dot"></span>Tobi</h3>
+      <div class="role">NATS naming and charset</div>
+      <p>A subject cannot hold a dot, a domain folds into <code>$JS.&lt;domain&gt;.API</code>, and subjects are case-sensitive while hostnames are not. The narrow charset is the safe intersection, not an arbitrary limit.</p>
+    </div>
+    <div class="card re">
+      <h3><span class="dot"></span>Rem</h3>
+      <div class="role">Render and Terraform</div>
+      <p>The Terraform clusters map key is the label, and a map cannot hold two identical keys. Per-tier uniqueness is enforced structurally, for free. The only add is a charset check on the key.</p>
+    </div>
+    <div class="card we">
+      <h3><span class="dot"></span>Wend</h3>
+      <div class="role">Operator experience</div>
+      <p>The human names it once, legibly. Derive it from the hostname and two "MacBook Pro" machines collide. Two clusters on one host? Distinct labels. Two hosts, one name? The operator labels them; the platform will not guess.</p>
+    </div>
+    <div class="card sk" style="grid-column:1 / -1">
+      <h3><span class="dot"></span>Skarp</h3>
+      <div class="role">The keep-it-simple skeptic</div>
+      <p>My whole case was one sentence: the token exists, it is validated, it is already the domain and the subject; the work is a convention and two doc modes, not a code change. The room did not make it grow, so I had nothing left to object to.</p>
+    </div>
+  </div>
+
+  <div class="clash">
+    <h2>The one real argument</h2>
+    <p>Tobi wanted lowercase enforced in code, to close the <code>Kinu</code> versus <code>kinu</code> trap. Wend refused: enforcing it means silently rewriting the operator's input, which is exactly the surprise the codebase's reject-not-rewrite ruling exists to prevent.</p>
+    <p>They settled on the posture already in the code: reject an uppercase label with a message, never downcase it behind the operator's back. Lowercase is the convention; the guard rejects, it does not launder.</p>
+  </div>
+
+  <div class="mach">
+    <h2>What happened to the ticket's two options</h2>
+    <div class="row"><span class="tag dropt">REJECT</span><span>bus.domain override (marvel#309)</span><span class="why">the token already is the domain; a second field can drift from the first. Reopen only on real evidence of a need.</span></div>
+    <div class="row"><span class="tag dropt">REJECT</span><span>a wider cluster-identity primitive</span><span class="why">the token, gated by validToken, already is the primitive; an abstraction over it is machinery without a need.</span></div>
+    <div class="row"><span class="tag keep">KEEP</span><span>the single token, affirmed</span><span class="why">operator-chosen, lowercase by convention, unique per tier</span></div>
+    <div class="row"><span class="tag keep">ADD</span><span>a charset guard on the TF map key</span><span class="why">and per-tier uniqueness falls out of the map for free</span></div>
+    <div class="row"><span class="tag keep">ADD</span><span><code>~/.director/nats/leaf-&lt;label&gt;.nk</code>, 0600</span><span class="why">the one on-disk seed, transient; the daemon keeps none by design</span></div>
+  </div>
+
+  <footer>
+    Decision held for the operator, and folded into the setup-docs harvest plan. Full rationale, the two new topology modes, and the render and Terraform impact in recommendation.md.<br>
+    Every load-bearing fact was verified against the render and config code and the NATS documentation before anyone took a position.
+  </footer>
+</div>
+</body>
+</html>

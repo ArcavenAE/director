@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Retrospector Keeps No Secret Drawer</title>
+<style>
+  :root{
+    --bg:#0f1113; --panel:#171a1d; --ink:#d5d8d6; --muted:#9aa0a0; --line:#2a2f33;
+    --sage:#8fce9b; --ravi:#e3c96b; --sable:#b79ae0; --isolde:#e6a15c; --accent:#9fd6a0; --drop:#c98a8a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;padding:32px 16px}
+  .wrap{max-width:860px;margin:0 auto}
+  header{text-align:center;margin-bottom:6px}
+  h1{font-size:25px;margin:0 0 4px;font-weight:650}
+  .date{color:var(--muted);font-size:13px;letter-spacing:.4px;text-transform:uppercase}
+  .lede{color:var(--muted);text-align:center;max-width:640px;margin:14px auto 26px;font-size:15px}
+  .verdict{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:10px;padding:16px 18px;margin:0 0 26px}
+  .verdict b{color:var(--accent)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:26px}
+  @media (max-width:620px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card h3{margin:0 0 2px;font-size:15px;display:flex;align-items:center;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 auto}
+  .role{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px}
+  .card p{margin:0;font-size:14px}
+  .s .dot{background:var(--sage)} .s h3{color:var(--sage)}
+  .r .dot{background:var(--ravi)} .r h3{color:var(--ravi)}
+  .b .dot{background:var(--sable)} .b h3{color:var(--sable)}
+  .i .dot{background:var(--isolde)} .i h3{color:var(--isolde)}
+  .fig{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px;margin-bottom:26px}
+  .fig h2{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 14px;text-align:center}
+  .tiers{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  @media (max-width:620px){.tiers{grid-template-columns:1fr}}
+  .tier{border:1px solid var(--line);border-radius:9px;padding:12px}
+  .tier h4{margin:0 0 6px;font-size:13px;color:var(--accent)}
+  .tier p{margin:0;font-size:12.5px;color:var(--muted)}
+  .tier .go{color:var(--ink);font-size:12.5px;margin-top:6px}
+  .mach{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:26px}
+  .mach h2{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 12px}
+  .row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .row:last-child{border-bottom:none}
+  .tag{font-size:11px;font-weight:650;padding:2px 8px;border-radius:20px;flex:0 0 auto;width:52px;text-align:center}
+  .keep{background:rgba(159,214,160,.15);color:var(--accent)}
+  .dropt{background:rgba(201,138,138,.16);color:var(--drop)}
+  .row .why{color:var(--muted);font-size:12.5px}
+  footer{color:var(--muted);font-size:12px;text-align:center;margin-top:18px;line-height:1.7}
+  .anim{stroke-dasharray:4 4;animation:flow 2.6s linear infinite}
+  @keyframes flow{to{stroke-dashoffset:-16}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>The Retrospector Keeps No Secret Drawer</h1>
+    <div class="date">A design party &middot; 2026-09-17</div>
+  </header>
+  <p class="lede">A role that studies how the team works had been told to stash its notes outside the repo, behind a small fortress of write locks. The room sent it back to what the old hand already did: write in the open, propose, and let someone else land the change.</p>
+
+  <div class="verdict">
+    <b>The verdict.</b> The retrospector owns no path outside a project's own repository and keeps no private state drawer. It writes only its own append-only record, named the way the reviewer names its store, "the record the team reads," and never a fixed path. It proposes; a consuming seat or a human applies the change. Most of the write-restriction machinery falls away.
+  </div>
+
+  <div class="fig">
+    <h2>Propose, hand off, land: the shape worth keeping</h2>
+    <svg viewBox="0 0 720 120" width="100%" role="img" aria-label="Retrospector appends to a record; a consuming seat or human applies a governed change; the retrospector never touches code or the library">
+      <defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6a7075"/></marker></defs>
+      <rect x="16" y="40" width="150" height="44" rx="9" fill="#171a1d" stroke="#8fce9b"/>
+      <text x="91" y="60" fill="#8fce9b" font-size="12.5" text-anchor="middle">retrospector</text>
+      <text x="91" y="76" fill="#9aa0a0" font-size="10.5" text-anchor="middle">reads, proposes</text>
+      <line class="anim" x1="166" y1="62" x2="300" y2="62" stroke="#e3c96b" stroke-width="2" marker-end="url(#a)"/>
+      <text x="233" y="52" fill="#e3c96b" font-size="10.5" text-anchor="middle">append</text>
+      <rect x="300" y="40" width="150" height="44" rx="9" fill="#171a1d" stroke="#e3c96b"/>
+      <text x="375" y="60" fill="#e3c96b" font-size="12" text-anchor="middle">the record</text>
+      <text x="375" y="76" fill="#9aa0a0" font-size="10.5" text-anchor="middle">in-repo, per project</text>
+      <line class="anim" x1="450" y1="62" x2="560" y2="62" stroke="#9fd6a0" stroke-width="2" marker-end="url(#a)"/>
+      <text x="505" y="52" fill="#9fd6a0" font-size="10.5" text-anchor="middle">consume</text>
+      <rect x="560" y="40" width="150" height="44" rx="9" fill="#171a1d" stroke="#9fd6a0"/>
+      <text x="635" y="60" fill="#9fd6a0" font-size="12" text-anchor="middle">seat or human</text>
+      <text x="635" y="76" fill="#9aa0a0" font-size="10.5" text-anchor="middle">governed change</text>
+    </svg>
+    <p style="color:#9aa0a0;font-size:12.5px;text-align:center;margin:6px 0 0">The retrospector's arrow stops at the record. It never reaches the code or the library; that is somebody else's, through a governed change.</p>
+  </div>
+
+  <div class="fig">
+    <h2>Three tiers, one write, three consumers</h2>
+    <div class="tiers">
+      <div class="tier"><h4>Tier 1</h4><p>code and PR vs the spec</p><div class="go">Goes to the surface already there: a note on the PR or the story. Read by the seat on that PR.</div></div>
+      <div class="tier"><h4>Tier 2</h4><p>spec vs PRD and architecture</p><div class="go">An append-only record. The spec or architecture seat lands a governed change.</div></div>
+      <div class="tier"><h4>Tier 3</h4><p>root cause at charter and doctrine</p><div class="go">The same record, tagged, routed to a human. No cross-project drawer the retrospector owns.</div></div>
+    </div>
+  </div>
+
+  <div class="mach">
+    <h2>What happened to the fortress</h2>
+    <div class="row"><span class="tag keep">KEEP</span><span>codex trust-strip</span><span class="why">a real documented bypass that threatens the code and the library; pin the version</span></div>
+    <div class="row"><span class="tag keep">KEEP</span><span>reserved tools field</span><span class="why">one cheap line, orthogonal to where output lands</span></div>
+    <div class="row"><span class="tag dropt">DROP</span><span>the ~/.marvel/retro path</span><span class="why">an in-repo record needs no drawer outside git, and it assumed marvel</span></div>
+    <div class="row"><span class="tag dropt">DROP</span><span>the write_surface schema field</span><span class="why">a prose write domain and a CANNOT list already do the job; the field was documentation dressed as a control</span></div>
+  </div>
+
+  <div class="grid">
+    <div class="card s">
+      <h3><span class="dot"></span>Sage</h3>
+      <div class="role">Prior-art harvest</div>
+      <p>The old hand kept its record in the repo and let another agent land the change. Drop the outside-git drawer. If a cross-project home is ever forced, the standard shape exists; an invented path is not it.</p>
+    </div>
+    <div class="card r">
+      <h3><span class="dot"></span>Ravi</h3>
+      <div class="role">Hand-off design</div>
+      <p>Emit, do not hoard state. Resume from the tail of your own record, each line noting what it was written against. One model across tiers; only the consumer changes.</p>
+    </div>
+    <div class="card b">
+      <h3><span class="dot"></span>Sable</h3>
+      <div class="role">Sandbox and security</div>
+      <p>A misdirected write inside git is revertible; a trust-bypassed write to the library is not. Keep the trust-strip for that asymmetry; drop the schema field the harness never reads.</p>
+    </div>
+    <div class="card i">
+      <h3><span class="dot"></span>Isolde</h3>
+      <div class="role">Component independence</div>
+      <p>A fleet-wide drawer, by any name, is the dependency the operator already rejected. Tier 3 emits and hands off. Bare mode is not a fallback; it is the only mode the code must support.</p>
+    </div>
+  </div>
+
+  <footer>
+    Recommendation held for the operator; wardrobe#11 stays held and the role stays not-live. The write-surface schema field (P3) is retired before landing.<br>
+    Full model, per-tier table, machinery disposition, and the one open sub-decision (track or gitignore the record) in recommendation.md.
+  </footer>
+</div>
+</body>
+</html>
