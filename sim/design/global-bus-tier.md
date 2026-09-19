@@ -327,6 +327,11 @@ one log line per signature), not from the trial minter.
 - **R-94.** A cluster name is a subject token in the identity
   class and a namespace at the global tier; exactly two role words exist
   there, `supervisor` and `director`; a worker never holds a global address.
+  Holding a global address means being addressable and having a presence row;
+  it does not restrict sending. The constraint is on SUBSCRIBE (a worker's
+  read narrows to its own inbox, which closes the read leak), not on PUBLISH
+  (a send upward stays open under R-95). Added 2026-09-18 from skippy's #355
+  read (finding-179).
 - **R-95 (reconciled 4.1).** Credentials bind principals to
   subtrees with one asymmetry at both tiers: the director is the only
   principal that publishes outward across a boundary (workspace locally,
