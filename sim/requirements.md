@@ -849,13 +849,20 @@ address.** The global subjects are `global.<cluster>.supervisor.inbox` and
 `global.director.inbox`, one stream per direction per cluster, with presence
 under `presence.<cluster>.<role>.<instance>`; a supervisor keeps its local
 id and is addressed globally as `global://<cluster>/supervisor`, so nothing
-is renamed across tiers (R-06, R-79). marvel's `Cluster.Name` is unvalidated
-today and must take the same reject-not-rewrite check the shim applies
-(aae-orc-z37ux).
+is renamed across tiers (R-06, R-79). Holding a global address means being
+addressable and having a presence row; it does not restrict sending. The
+constraint is on SUBSCRIBE, where a worker's read narrows to its own inbox
+and that is what closes the read leak, not on PUBLISH, where a send upward
+stays open under R-95's asymmetry (every non-director principal publishes
+into its own subtree and to the director). marvel's `Cluster.Name` is
+unvalidated today and must take the same reject-not-rewrite check the shim
+applies (aae-orc-z37ux).
 *Earned by: design brief 8 (`sim/design/global-bus-tier.md`) sections 2 and
 4, proven on the kinu hub with two scratch leaves.*
 *Source: JUDGMENT, with the subject grammar OBSERVED on the running hub.
-Ratified by the operator 2026-09-14.*
+Ratified by the operator 2026-09-14. The address-versus-send clause was added
+2026-09-18 from skippy's #355 read (finding-179): a clarification of the
+ratified intent, not a change to it.*
 
 **R-95. Credentials bind principals to subtrees with one asymmetry at both
 tiers: the director is the only principal that publishes outward across a

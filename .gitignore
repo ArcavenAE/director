@@ -11,4 +11,8 @@ tmate/
 sim/state/
 sim/notes/
 
+# Leaf remote include carrying the local broker's nkey seed (0600, host-local).
+# The seed is a credential; it never enters git. See probe/nats-phase-0.
+probe/nats-phase-0/leaf-kinu.conf
+
 .DS_Store
