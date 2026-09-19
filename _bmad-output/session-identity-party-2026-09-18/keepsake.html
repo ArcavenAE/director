@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Three Things, Never Fused</title>
+<style>
+  :root{
+    --bg:#0f1113; --panel:#171a1d; --ink:#d5d8d6; --muted:#9aa0a0; --line:#2a2f33;
+    --sol:#6fc9d6; --ida:#8fce9b; --vere:#e07a7a; --hollis:#b79ae0; --prue:#e3c96b;
+    --accent:#9fd6a0; --defer:#8a8f8f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;padding:32px 16px}
+  .wrap{max-width:880px;margin:0 auto}
+  header{text-align:center;margin-bottom:6px}
+  h1{font-size:26px;margin:0 0 4px;font-weight:650}
+  .date{color:var(--muted);font-size:13px;letter-spacing:.4px;text-transform:uppercase}
+  .lede{color:var(--muted);text-align:center;max-width:640px;margin:14px auto 26px;font-size:15px}
+  .verdict{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:10px;padding:16px 18px;margin:0 0 26px}
+  .verdict b{color:var(--accent)}
+  .fig{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px;margin-bottom:26px}
+  .fig h2{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 14px;text-align:center}
+  .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  @media (max-width:620px){.three{grid-template-columns:1fr}}
+  .concept{border:1px solid var(--line);border-radius:9px;padding:12px;text-align:center}
+  .concept h4{margin:0 0 6px;font-size:13px;color:var(--accent)}
+  .concept p{margin:0;font-size:12.5px;color:var(--muted)}
+  .concept code{color:#c9d3cf;font-size:11.5px}
+  .unblock{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:16px}
+  .step{background:#12151a;border:1px solid var(--line);border-radius:20px;padding:5px 12px;font-size:12.5px;color:var(--ink)}
+  .arrow{color:#6a7075}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:26px}
+  @media (max-width:640px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card h3{margin:0 0 2px;font-size:15px;display:flex;align-items:center;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 auto}
+  .role{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px}
+  .card p{margin:0;font-size:14px}
+  .so .dot{background:var(--sol)} .so h3{color:var(--sol)}
+  .id .dot{background:var(--ida)} .id h3{color:var(--ida)}
+  .ve .dot{background:var(--vere)} .ve h3{color:var(--vere)}
+  .ho .dot{background:var(--hollis)} .ho h3{color:var(--hollis)}
+  .pr .dot{background:var(--prue)} .pr h3{color:var(--prue)}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:26px}
+  @media (max-width:620px){.split{grid-template-columns:1fr}}
+  .col{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .col h2{font-size:12.5px;text-transform:uppercase;letter-spacing:.5px;margin:0 0 10px}
+  .col.now h2{color:var(--accent)} .col.later h2{color:var(--defer)}
+  .col ul{margin:0;padding-left:16px} .col li{font-size:13px;margin-bottom:6px}
+  .col.later li{color:var(--muted)}
+  .clash{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:26px}
+  .clash h2{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 10px}
+  .clash p{margin:0 0 8px;font-size:14px}
+  footer{color:var(--muted);font-size:12px;text-align:center;margin-top:18px;line-height:1.7}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Three Things, Never Fused</h1>
+    <div class="date">A design party &middot; 2026-09-18</div>
+  </header>
+  <p class="lede">Every session on the host answered to one name, and the director's seat was just an address anyone could occupy. The room pulled three concepts apart and gave the crossing the design it front-ran.</p>
+
+  <div class="verdict">
+    <b>The verdict.</b> Ship the physical-access scheme now, name the crypto trajectory. A session's name is assigned at spawn, not taken from the OS user. The director seat is a fenced lease, acquired and never inherited. Authority is proven by a recency token while every host is the human's own; the signature waits for the second operator. The crossing re-clears with three clean actions, not an address grab.
+  </div>
+
+  <div class="fig">
+    <h2>The collision fused three things; the design keeps them apart</h2>
+    <div class="three">
+      <div class="concept"><h4>Address</h4><p>where to reach a session</p><p><code>agent://team/id</code>, spawn-assigned</p></div>
+      <div class="concept"><h4>Seat</h4><p>whether a session is the director</p><p><code>seat.ws.director</code>, a lease</p></div>
+      <div class="concept"><h4>Durable identity</h4><p>the handle that survives a restart</p><p>keyed per R-06</p></div>
+    </div>
+    <div class="unblock">
+      <span class="step">name the cluster label</span>
+      <span class="arrow">+</span>
+      <span class="step">acquire the seat (lease)</span>
+      <span class="arrow">+</span>
+      <span class="step">spawn a distinct id</span>
+    </div>
+    <p style="color:#9aa0a0;font-size:12.5px;text-align:center;margin:12px 0 0">The crossing enable is those three, kept separate. It front-ran the design because "resume the seat" meant grabbing the one colliding address.</p>
+  </div>
+
+  <div class="split">
+    <div class="col now">
+      <h2>Ships now (physical-access phase)</h2>
+      <ul>
+        <li>ID-A: launcher-assigned name, strict-mcp-config, per-session durable</li>
+        <li>The seat as a fenced KV lease: create-only single-holder, fencing token</li>
+        <li>Shim-driven renewal (SEAT-D), fail-closed (SEAT-E)</li>
+        <li>Acquire-not-inherit shiftchange, two-phase terminal marker</li>
+        <li>Launcher as minting authority; writer-side deregister</li>
+      </ul>
+    </div>
+    <div class="col later">
+      <h2>Named, deferred (crypto trajectory)</h2>
+      <ul>
+        <li>ID-B: self-minted DID + JWS-signed AgentCard</li>
+        <li>Signed principal on the envelope (R-01)</li>
+        <li>Nonrepudiation log (R-05)</li>
+        <li>Receipt-based liveness as doctrine (R-88)</li>
+        <li>Returns when the boundary leaves the host (a second operator)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card so">
+      <h3><span class="dot"></span>Sol</h3>
+      <div class="role">Leases and fencing</div>
+      <p>The seat is a lease, not a name. Create-only KV gives single-holder for free; a dead holder's silence is the release. The one I die on: renewal runs on the shim's timer, never on the model calling a tool, or a long turn vacates a held seat.</p>
+    </div>
+    <div class="card id">
+      <h3><span class="dot"></span>Ida</h3>
+      <div class="role">The principal model</div>
+      <p>Address, seat, durable identity: three things the michael bug wore as one hat. ID-A now, the DID attaches to the same name later. The cluster label is not the session id is not the seat key. The crossing touches all three without fusing them.</p>
+    </div>
+    <div class="card ve">
+      <h3><span class="dot"></span>Vere</h3>
+      <div class="role">Security and nonrepudiation</div>
+      <p>The fencing token proves recency, not identity. Write down why that is enough: multi-host is not multi-trust-boundary while every host is the human's. The signature lands with the second operator, and the axis is named so the token is not a dead end.</p>
+    </div>
+    <div class="card ho">
+      <h3><span class="dot"></span>Hollis</h3>
+      <div class="role">The human's seat</div>
+      <p>A stuck lease that locks the human out is worse than a brief double-address. The lease frees a dead holder promptly and guarantees one holder; a live-but-useless holder is a human override, not an automatic fence. That honesty is what let me sign it.</p>
+    </div>
+    <div class="card pr" style="grid-column:1 / -1">
+      <h3><span class="dot"></span>Prue</h3>
+      <div class="role">Proportionality and doctrine</div>
+      <p>There are no peers. The receiver's only question is whether the human's director authorized this, and in this phase the minting authority is the launcher and the grant is the fencing token. The crossing needs three things, not the whole durable plane. Build the crypto plane when the boundary leaves the host, not before.</p>
+    </div>
+  </div>
+
+  <div class="clash">
+    <h2>The two real arguments</h2>
+    <p>Hollis feared a wedged holder. Sol split it: a dead holder ages out on the TTL, a disconnected holder fails closed, and a live-but-useless holder is a human override, not something the lease pretends to solve. SEAT-D keeps a long model turn from looking wedged when it is only thinking.</p>
+    <p>Vere wanted the signed principal now, at the crossing. Prue drew the line: the crossing is multi-host but single-trust-boundary, because every host is the human's own. The signature waits for a second operator; the fencing token is proportionate until then.</p>
+  </div>
+
+  <footer>
+    Decided, held for the operator, and fed to the director requirements. Minimal crossing unblock: ID-A, the lease acquisition, writer-side deregister. One operator call left open: the minimal spawn token now, or with the dedicated identity study.<br>
+    Grounded in the three director design docs, R-01 / R-05 / R-06 / R-86 / R-93, and the "there are no peers" doctrine.
+  </footer>
+</div>
+</body>
+</html>

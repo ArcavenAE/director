@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where the Director Attaches</title>
+<style>
+  :root{
+    --bg:#0f1113; --panel:#171a1d; --ink:#d5d8d6; --muted:#9aa0a0;
+    --line:#2a2f33;
+    --nyx:#e6a15c; --winston:#e08bb5; --per:#6fc9d6; --quinn:#e07a7a; --mara:#7fa8e0;
+    --accent:#9fd6a0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    padding:32px 16px}
+  .wrap{max-width:860px;margin:0 auto}
+  header{text-align:center;margin-bottom:8px}
+  h1{font-size:26px;margin:0 0 4px;font-weight:650;letter-spacing:.2px}
+  .date{color:var(--muted);font-size:13px;letter-spacing:.4px;text-transform:uppercase}
+  .lede{color:var(--muted);text-align:center;max-width:620px;margin:14px auto 26px;font-size:15px}
+  .verdict{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:10px;padding:16px 18px;margin:0 0 28px}
+  .verdict b{color:var(--accent)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:28px}
+  @media (max-width:620px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card h3{margin:0 0 2px;font-size:15px;display:flex;align-items:center;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 auto}
+  .role{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px}
+  .card p{margin:0;font-size:14px;color:var(--ink)}
+  .n .dot{background:var(--nyx)} .n h3{color:var(--nyx)}
+  .w .dot{background:var(--winston)} .w h3{color:var(--winston)}
+  .p .dot{background:var(--per)} .p h3{color:var(--per)}
+  .q .dot{background:var(--quinn)} .q h3{color:var(--quinn)}
+  .m .dot{background:var(--mara)} .m h3{color:var(--mara)}
+  .fig{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px;margin-bottom:26px}
+  .fig h2{font-size:14px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 14px;text-align:center}
+  .leaf{stroke-dasharray:5 4;animation:flow 2.4s linear infinite}
+  @keyframes flow{to{stroke-dashoffset:-18}}
+  .clash{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:26px}
+  .clash h2{font-size:14px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 10px}
+  .clash p{margin:0 0 8px;font-size:14px}
+  footer{color:var(--muted);font-size:12px;text-align:center;margin-top:18px;line-height:1.7}
+  .ruled{color:var(--muted)}
+  .ruled s{color:#6a6f6f}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Where the Director Attaches</h1>
+    <div class="date">A design party &middot; 2026-09-17</div>
+  </header>
+  <p class="lede">One director, one local marvel, and a question that sounds small: which NATS server does the director dial? Five researchers went to the source and came back agreeing.</p>
+
+  <div class="verdict">
+    <b>The verdict.</b> The director attaches to the broker on its own host and to nothing else. When a durable global tier exists, that local broker is a leaf of the shared infrastructure NATS, and the leaf carries global and cross-cluster reach. The director's code is the same in every deployment; only the local broker's leaf config changes. The peer the director must never lose is its own supervisor, one hop away, so no wide-area link sits in the path that must not break.
+  </div>
+
+  <div class="fig">
+    <h2>The adopted shape: local-only, leaf bridge</h2>
+    <svg viewBox="0 0 760 200" width="100%" role="img" aria-label="Director attaches to local broker; local broker leafs up to the shared infrastructure NATS; remote cluster leafs up too">
+      <defs>
+        <marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="#6a7075"/>
+        </marker>
+      </defs>
+      <!-- local cluster -->
+      <rect x="16" y="60" width="250" height="120" rx="10" fill="none" stroke="#2a2f33"/>
+      <text x="30" y="80" fill="#9aa0a0" font-size="11" letter-spacing=".5">LOCAL HOST</text>
+      <rect x="34" y="96" width="96" height="34" rx="7" fill="#171a1d" stroke="#e08bb5"/>
+      <text x="82" y="117" fill="#e08bb5" font-size="12" text-anchor="middle">director</text>
+      <rect x="150" y="96" width="96" height="34" rx="7" fill="#171a1d" stroke="#6fc9d6"/>
+      <text x="198" y="117" fill="#6fc9d6" font-size="12" text-anchor="middle">local broker</text>
+      <text x="82" y="150" fill="#9aa0a0" font-size="10" text-anchor="middle">supervisor</text>
+      <text x="82" y="163" fill="#9aa0a0" font-size="10" text-anchor="middle">+ workers</text>
+      <line x1="130" y1="113" x2="150" y2="113" stroke="#6a7075" marker-end="url(#a)"/>
+      <!-- tier -->
+      <rect x="470" y="70" width="140" height="60" rx="10" fill="#171a1d" stroke="#9fd6a0"/>
+      <text x="540" y="96" fill="#9fd6a0" font-size="12" text-anchor="middle">shared</text>
+      <text x="540" y="112" fill="#9fd6a0" font-size="12" text-anchor="middle">infrastructure NATS</text>
+      <!-- leaf up -->
+      <line class="leaf" x1="266" y1="113" x2="470" y2="100" stroke="#7fa8e0" stroke-width="2" marker-end="url(#a)"/>
+      <text x="360" y="98" fill="#7fa8e0" font-size="10" text-anchor="middle">leaf</text>
+      <!-- remote -->
+      <rect x="628" y="60" width="116" height="120" rx="10" fill="none" stroke="#2a2f33"/>
+      <text x="642" y="80" fill="#9aa0a0" font-size="11">REMOTE</text>
+      <rect x="642" y="96" width="88" height="34" rx="7" fill="#171a1d" stroke="#6fc9d6"/>
+      <text x="686" y="117" fill="#6fc9d6" font-size="11" text-anchor="middle">broker</text>
+      <line class="leaf" x1="628" y1="110" x2="612" y2="104" stroke="#7fa8e0" stroke-width="2" marker-end="url(#a)"/>
+    </svg>
+    <p style="color:#9aa0a0;font-size:12.5px;text-align:center;margin:6px 0 0">The director's socket lands on the local broker. Everything global rides the animated leaf link, which the director never has to hold or manage.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card n">
+      <h3><span class="dot"></span>Nyx</h3>
+      <div class="role">NATS internals</div>
+      <p>A client attaches to one server at a time. Two connections mean two deliveries per publish on any shared subject, continuously, not just under fault. Soundest: the leaf bridge. Inadvisable: tandem.</p>
+    </div>
+    <div class="card w">
+      <h3><span class="dot"></span>Winston</h3>
+      <div class="role">Architecture</div>
+      <p>Attach where the peer you must not lose is closest. That is the local supervisor. The leaf gives global reach at zero extra connection cost. One default for every shape.</p>
+    </div>
+    <div class="card p">
+      <h3><span class="dot"></span>Per</h3>
+      <div class="role">Platform ops</div>
+      <p>A local patch bounces one connection into reconnecting, buffers in order, resubscribes on return. Set reconnect to unlimited so the client waits out the update. Global-only would route local work through the tier's uptime.</p>
+    </div>
+    <div class="card q">
+      <h3><span class="dot"></span>Dr. Quinn</h3>
+      <div class="role">Failure analysis</div>
+      <p>Rule tandem out: subject overlap across two live connections is a duplicate-delivery pattern in NATS's own issue history. One connection moves split-brain from client logic to a single, controllable broker fact.</p>
+    </div>
+    <div class="card m" style="grid-column:1 / -1">
+      <h3><span class="dot"></span>Mara</h3>
+      <div class="role">Availability</div>
+      <p>A home-internet blip is the most likely outage. A local connection has no wide-area hop in its failure path, so the blip cannot touch the director-to-local-cluster link. The adaptivity lives in the leaf config, a deploy-time fact, not in the director's code.</p>
+    </div>
+  </div>
+
+  <div class="clash">
+    <h2>The one real argument</h2>
+    <p>Winston wanted to keep tandem in reserve for a real need: reaching remote clusters when the local leaf is down. Dr. Quinn wanted it ruled out. Nyx settled it from the internals: the duplicate is structural and steady-state, not a fault-window tax, so tandem's cost is paid every day, not only on a bad one.</p>
+    <p class="ruled">Rejected, with reasons kept: <s>global-only</s> (nothing to dial in the common case, wrong link in the other), <s>migrate</s> (a move is a disconnect and a lossy cutover), <s>tandem</s> (a standing duplicate that needs dedup and a presence-owner rule to behave).</p>
+  </div>
+
+  <footer>
+    Recommendation held for the operator. Full rationale, failure block diagram, sequence and transaction views in recommendation.md.<br>
+    Every load-bearing fact was web-verified against the NATS documentation before anyone took a position.
+  </footer>
+</div>
+</body>
+</html>
