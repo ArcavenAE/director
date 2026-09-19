@@ -175,18 +175,39 @@ DIRECTOR_TEAM="$DIRECTOR_TEAM" DIRECTOR_WORKSPACE="$DIRECTOR_WORKSPACE" NATS_URL
 # pre-flight loud-failure precedent (finding-166), so a broken backend
 # selector fails the launch rather than starting a session on the wrong
 # backend silently.
+#
+# marvel already projects the session's policy as a --settings file that
+# arrives in "$@", and claude takes the LAST --settings wholesale (no merge
+# across two --settings). So the overlay cannot be a second bare --settings: as
+# an earlier flag it is overridden by marvel's policy; as a later flag it drops
+# that policy. Merge instead: marvel's policy first, the overlay on top so it
+# wins on the backend keys while the policy is preserved, and pass the merged
+# file as the last --settings. jq is required for the merge; its absence with an
+# overlay present is itself a loud failure.
 settings_args=()
 overlay_file="$MARVEL_OVERLAY_ROOT/by-role/$MARVEL_ROLE.json"
 if [[ -f "$overlay_file" ]]; then
-  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$overlay_file" 2>/dev/null \
+  command -v jq >/dev/null 2>&1 \
+    || { echo "cast-launch: jq is required to attach a backend overlay but is not installed; not starting the harness (finding-166)" >&2; exit 1; }
+  jq -e . "$overlay_file" >/dev/null 2>&1 \
     || { echo "cast-launch: backend overlay $overlay_file is not valid JSON; not starting the harness (finding-166)" >&2; exit 1; }
-  settings_args=(--settings "$overlay_file")
-  echo "cast-launch: attaching backend overlay $overlay_file for role $MARVEL_ROLE" >&2
+  # marvel's projected policy is the last --settings already in "$@" (if any).
+  policy_settings=""; prev=""
+  for a in "$@"; do [[ "$prev" == "--settings" ]] && policy_settings="$a"; prev="$a"; done
+  merged="$(mktemp "${TMPDIR:-/tmp}/cast-overlay.XXXXXX")"
+  if [[ -n "$policy_settings" && -f "$policy_settings" ]]; then
+    jq -s '.[0] * .[1]' "$policy_settings" "$overlay_file" > "$merged" \
+      || { echo "cast-launch: failed to merge marvel policy $policy_settings with backend overlay $overlay_file; not starting the harness (finding-166)" >&2; exit 1; }
+  else
+    cp "$overlay_file" "$merged"
+  fi
+  settings_args=(--settings "$merged")
+  echo "cast-launch: attaching backend overlay $overlay_file for role $MARVEL_ROLE (merged over marvel policy as --settings $merged)" >&2
 fi
 
 echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD" >&2
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$cast_line"$'\n\n'"$slice" \
-  ${settings_args[@]+"${settings_args[@]}"} \
-  "$@"
+  "$@" \
+  ${settings_args[@]+"${settings_args[@]}"}
