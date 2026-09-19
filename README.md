@@ -4,16 +4,26 @@ Supervisor communications and multi-agent coordination for the Dark Atelier
 platform. The human's assistive agent for running work across many agent
 sessions on many machines, under many harnesses.
 
-**Status: simulation, with a proven transport.** The director software does
-not exist yet. What exists is a skill that has a session play the role by hand
-(plus the instruments it uses and the requirements that fall out), and a Phase
-0 probe that proves the message bus the software will ride: a local NATS broker
-and a small MCP shim carry the envelope between sessions end to end
-(`probe/nats-phase-0/`). This repo is the authoritative source for all of it,
-and the requirements are the point.
+**Status: simulation, with a proven transport and a cross-host tier.** The
+director software does not exist yet. What exists:
 
-Diagrams of the target shape, worked use cases, and the sequence and state
-diagrams live in `docs/architecture.md` and `docs/use-cases.md`.
+- a skill that has a session play the role by hand, plus the instruments it
+  uses and the requirements that fall out (`skills/director/`,
+  `sim/requirements.md`);
+- a Phase 0 probe that proves the message bus the software will ride: a
+  local NATS broker and a small MCP shim carry the director envelope between
+  sessions end to end, across Claude Code and codex, with store-and-forward,
+  deduplication, presence, and broker-enforced authorization
+  (`probe/nats-phase-0/`);
+- a global tier that connects one host's broker to another's through a hub,
+  so a director reaches a remote supervisor without a rename and without
+  holding a hub credential (`probe/nats-global-tier/`, design brief 8);
+- the marvel twin: the hand-run fleet declared as one marvel manifest, cast
+  from wardrobe roles, with the check runbook that decides cutover
+  (`sim/twin/`, design brief 7).
+
+This repo is the authoritative source for all of it, and the requirements
+are the point.
 
 ## Why it exists
 
@@ -46,6 +56,17 @@ inheriting safety we cannot inspect and cannot carry:
 `skills/director/reference/relay.md` and
 `sim/specs/vendor-injected-receiver-policy.md`.
 
+## Documentation
+
+| Read this | For |
+|---|---|
+| [docs/getting-started.md](docs/getting-started.md) | running the broker, provisioning it, building the shim, joining Claude Code and codex sessions, sending and receiving, authorization, the global tier, marvel |
+| [docs/shim-reference.md](docs/shim-reference.md) | every environment variable, tool, address scheme, subject, stream, and envelope field the shim uses |
+| [docs/architecture.md](docs/architecture.md) | the target shape in diagrams: bus, addressing, receive-is-a-poll, acknowledgement, the marvel seam, ask lifecycle, the performative handshake, the global tier |
+| [docs/use-cases.md](docs/use-cases.md) | worked use cases from the simulation, each with a diagram and the requirements it exercises |
+| `sim/requirements.md` | the requirements register, R-01 onward, each traced to the observation that earned it |
+| `sim/design/` | design briefs: identity at spawn, the seat lease, continuous custody, the shim heartbeat, the twin, the global tier, credential enrollment, broker supervision |
+
 ## Layout
 
 ```
@@ -55,15 +76,19 @@ skills/director/     the skill: role, modes, output contract, capture triggers
   scripts/dsx        external state verification (the board has no expiry)
 commands/director.md thin command that invokes the skill
 install.sh           symlink or copy the skill and command into ~/.claude
-docs/                architecture and use-case diagrams (mermaid)
-  architecture.md      system overview, sequence, and state diagrams
-  use-cases.md         four worked use cases, each with a diagram
+docs/                operator guide, shim reference, architecture and use-case diagrams
 probe/nats-phase-0/  the transport probe: NATS broker + director-mcp shim
-  PROGRESS.md          sub-probe results (poll is the receive, finding-160)
+  director-mcp/        the shim (Go): five tools, local and global tiers, preflight
+  PROGRESS.md          sub-probe results 1 through 9 (poll is the receive, finding-160)
+  authorization.conf   the credential-to-subject binding (director#4)
+  cross-harness-demo.sh  codex and headless Claude Code joining the bus
+probe/nats-global-tier/  the R-86 hub: config, provisioning, leaf recipe, verify scripts
 sim/                 the simulation record
   prompt-session-1.md  the original direction, verbatim
   requirements.md      the requirements register (the point)
   specs/               requirements firm enough to constrain the software
+  design/              design briefs 1 through 10 (candidates, not specs)
+  twin/                the marvel twin: manifest, cast launcher, check runbook
   artifacts/           work products the simulation produced
 ```
 
@@ -72,13 +97,29 @@ gitignored. They carry live operational detail about real sessions and are
 never published; anything durable is rewritten clean into `sim/specs/` or
 into the platform's knowledge graph.
 
-## Install
+## Install the skill
 
 ```sh
 ./install.sh          # symlink into ~/.claude, edits go live
 /director             # sweep: what is blocked on you
 /director standing    # adopt the role for the session
 ```
+
+## Run the bus
+
+```sh
+probe/nats-phase-0/start.sh &                              # local broker, loopback, JetStream
+nats stream add AGENT_INBOX --subjects 'agent.*.*.*.inbox,agent.*.*.role.*.inbox' \
+  --storage file --retention limits --max-age 24h --max-msg-size 65536 --dupe-window 2m
+nats stream add AGENT_AUDIT --subjects 'agent.audit' --storage file --retention limits --max-age 720h
+nats kv add AGENT_STATE --ttl 90s --storage file
+(cd probe/nats-phase-0/director-mcp && go build -o director-mcp .)
+```
+
+Then join a session by handing the harness the shim with an identity in its
+environment. The [getting-started guide](docs/getting-started.md) walks
+each step, both harnesses, and what to do when a message does not arrive.
+Under marvel, a cluster with a managed bus does the broker half itself.
 
 ## Reference clones
 
