@@ -1,0 +1,156 @@
+id: question-director-seat-startup
+type: question
+confidence: frontier
+title: "How does a person start, restart, and hand off the director seat, and what does that path cost a new user?"
+tags: [director, atelier, onboarding]
+content: |
+  Opened 2026-09-19 from a live attempt to answer "how do I start Claude as
+  the director seat on this system" on kinu, the director's host. Subject is
+  the seat's startup, restart, and handoff path as a user experiences it, so
+  it is filed here and not at the orc. The measured startup itself is in the
+  orc draft docs/drafts/director-seat-quickstart-kinu.md (local, uncommitted)
+  and the work to make it generic is bd aae-orc-q2ebo.
+
+  ## The current process, as measured (2026-09-19, kinu)
+
+  Two layers, both required, neither aware of the other:
+
+  1. The role: the `director` skill, installed by install.sh as symlinks
+     into ~/.claude/skills and ~/.claude/commands; `/director standing`
+     adopts it. The skill reads and writes $DIRECTOR_STATE (sessions.json,
+     roster.md, board.md) and knows nothing about the bus.
+  2. The seat on the bus: a director-mcp shim cast with DIRECTOR_AGENT_ID,
+     _TEAM, _WORKSPACE, NATS_URL and, for the global tier,
+     DIRECTOR_GLOBAL_DOMAIN, DIRECTOR_CLUSTER, DIRECTOR_GLOBAL_ROLE=director.
+     Without the global cast there is no presence.director.* on the hub and
+     R-92 refuses every global://director send before publish: an empty seat
+     is unreachable, not quiet.
+
+  The path a person walks today, each step verified with one command:
+
+  a. Check both brokers are up (pgrep). Two hand-started nats-server
+     processes, neither under launchd (aae-orc-qu88n open).
+  b. Check nobody already holds the seat address (kv ls AGENT_STATE). On the
+     first run this check finds exactly one holder and it is the session
+     running the check, because the project-scope registration
+     (claude mcp get director-mcp: DIRECTOR_AGENT_ID=michael, local tier
+     only) makes every Claude opened in aae-orc join as agent://ops/michael.
+     Identifying the holder requires mapping presence pid to shim to parent
+     claude to tty and cwd; there is no session handle in the record.
+  c. Preflight the cast (director-mcp --preflight). Passes.
+  d. Launch through probe/nats-phase-0/id-a-demo/director-session.sh with
+     --strict-mcp-config, which on origin/main (#54, 2026-09-18) takes the
+     seat id `director` with --resume and passes the global levers when set.
+     Its own header says not to set the global levers until the crossing is
+     re-cleared; the gate is stated but where the clearance is recorded is
+     not.
+  e. Inside: /director standing, set_presence, list_roster, confirm both
+     tiers from outside with kv ls GLOBAL_PRESENCE.
+  f. Close with /director harvest. Presence deregisters on orderly exit only
+     from the #54 build; earlier builds leave the row for the 90 s TTL.
+
+  ## Rough spots, measured
+
+  - The shim Claude Code launches was built 2026-09-18 09:16; origin/main
+    moved at 13:57 the same day (#54). Presence carries no build revision
+    (finding-169, cause 1), so a stale seat is indistinguishable from a
+    current one on the roster. Every restart is a chance to run old code.
+  - The seat's bus id has changed across restarts (planner, then michael,
+    now `director` per #54). Mail addressed to a retired id stays on the
+    retired subject (finding-169, cause 4). Found live: one PROPOSE from
+    arcaven-marvel-builder-g1-0 stored on agent.aae-orc.ops.michael.inbox
+    2026-09-18 19:07 UTC, unread by all seventeen mcp_michael_* durables,
+    two hours from 24 h eviction when captured to the board. The startup
+    path has no "drain the retired inboxes before the new id takes over"
+    step, and the product is custody.
+  - Seventeen durables for one id, each with the same one pending message,
+    plus a planner durable at 91 delivered: one durable per start, DeliverAll,
+    no InactiveThreshold (finding-169 section 4). Each restart replays the
+    24 h window into a new durable and leaves the old one forever.
+  - Two launch paths exist and each is wrong in the other's case:
+    director-session.sh (hand-run seat, anonymous broker) and
+    director-mcp-seat (#51, managed broker with a bus.seat block and
+    director.pass). On kinu today the second exits 1 because the 4222
+    broker is the anonymous phase-0 one. Nothing tells a user which host
+    shape they are on.
+  - The registration choice is undecided (aae-orc-ci2gy): remove the baked
+    project-scope entry, or replace it with a wrapper that derives a
+    distinct id per session. Until decided, every ordinary aae-orc session
+    is a latent collision with the seat.
+  - role://ops/director sends are a silent total loss (finding-169, cause
+    3; fix aae-orc-v0o8z). Eleven wardrobe roles report_to director. A new
+    seat holder has no way to know those never arrive.
+  - The role layer (skill) and the seat layer (shim) share no state. The
+    skill's sweep does not read the bus inbox, and the shim knows nothing
+    about board.md. A person starting the seat has to do both bootstraps by
+    hand and nothing checks that they did.
+
+  ## What a new user would meet
+
+  Nine commands across two repos and three directories before the first
+  useful turn, a precondition check that fails on themselves, two launchers
+  to choose between with the choice depending on broker mode they cannot
+  see, a gate ("until the crossing is re-cleared") with no pointer to where
+  clearance lives, and, if a predecessor existed, mail they cannot see
+  sitting on a name they were never told about.
+
+  ## Sub-questions
+
+  A. Which of steps a to f are the software's own job? Candidates: the
+     preflight (a flag today, could be implicit at cast), the singleton
+     check on the seat address, both-tier presence confirmation after start,
+     board.md bootstrap, harvest at close, retired-inbox drain at id change.
+  B. What is the one-command start, and what does it take as input: a
+     host-shape probe (anonymous vs managed broker, hub reachable or not),
+     the seat id, and nothing else?
+  C. Restart: what carries across (board.md, the durable, the resume
+     context) and what must not (a stale build, an orphaned durable)? Does
+     restart mean the same instance ULID or a new one, and who drains the
+     old durable?
+  D. Handoff: when the seat changes hands or ids, how does mail on the old
+     subject reach the new holder? finding-169 votes two-hop relay through
+     the supervisor to global.director.inbox; does that remove the problem
+     or move it one subject over?
+  E. Composition per use case: local marvel managed, local marvel not yet
+     managed, remote marvel only, no marvel. One table: who starts brokers,
+     where the credential comes from, what the registration is, what the
+     user types. The two existing launchers each cover one cell.
+  F. What does the roster need to carry so "who holds this address" is one
+     read: a session handle (tty, cwd, or harness session id) and the build
+     revision, as finding-169 already proposes for the latter.
+  G. Is the gate on the global levers ("until the crossing is re-cleared")
+     an operator ruling that should be a recorded requirement, and where
+     does a launcher find out it has been lifted?
+
+  ## Admission test
+
+  Would this still be true if director existed and worked? The two-layer
+  bootstrap, the retired-inbox mail, the stale-build blindness, and the
+  launcher-per-broker-mode split all vanish if the software owns its own
+  startup, so this is a director requirement class, not general hygiene.
+  The registration collision (ci2gy) is partly harness shape and partly
+  ours; it stays here because the seat is the thing colliding.
+edges:
+  - target: finding-169-director-bus-addressing-and-unattended-operation
+    type: derives
+  - target: finding-166-dead-bus-session-reports-running
+    type: derives
+  - target: finding-003-session-identity-collision-live-instance
+    type: derives
+  - target: finding-160-director-nats-phase-0-poll-is-the-shape
+    type: derives
+  - target: question-director-design
+    type: supports
+  - target: question-agent-identity-authority
+    type: supports
+provenance:
+  created_by: human
+  session: 2026-09-19-director-seat-quickstart
+  created_at: "2026-09-19"
+  notes: >
+    Opened while answering a live "how do I start the seat" on kinu. Every
+    measurement in the content was taken that day against the live phase-0
+    broker and the hub; the orc draft quickstart carries the commands. Work
+    items: aae-orc-q2ebo (generic quickstart and composition table),
+    aae-orc-ci2gy (registration), aae-orc-h95qv (rebuild stale seats),
+    aae-orc-v0o8z (role sends refuse loudly).
