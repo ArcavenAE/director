@@ -39,6 +39,16 @@ NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 DIRECTOR_TEAM="${DIRECTOR_TEAM:-${MARVEL_TEAM:-fleet}}"
 DIRECTOR_WORKSPACE="${DIRECTOR_WORKSPACE:-${MARVEL_WORKSPACE:-ops2}}"
 
+# Per-role backend overlay (mixed-mode fast-path). If an overlay exists for
+# this manifest role under MARVEL_OVERLAY_ROOT/by-role/, it is attached to the
+# child as --settings so its env block selects the backend. The root is fixed
+# at the launcher's own directory, computed here before the cd to TWIN_CWD
+# below, so a relative overlay path can never resolve against the post-cd cwd.
+# The default root sits beside the launcher (normally empty, so no change);
+# MARVEL_OVERLAY_ROOT names an out-of-tree overlay set.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MARVEL_OVERLAY_ROOT="${MARVEL_OVERLAY_ROOT:-$SCRIPT_DIR/overlays}"
+
 # Manifest role name -> wardrobe role id, plus the cast-time scope the
 # supervisor's cast record carries (brief 7, 2.2). One wardrobe builder role
 # serves three manifest rows; the scope is a parameter, not a role.
@@ -160,8 +170,23 @@ DIRECTOR_TEAM="$DIRECTOR_TEAM" DIRECTOR_WORKSPACE="$DIRECTOR_WORKSPACE" NATS_URL
   "$SHIM_BIN" --preflight \
   || { echo "cast-launch: bus pre-flight failed for agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL; not starting the harness (finding-166)" >&2; exit 1; }
 
+# Resolve the per-role overlay just before exec. Missing file: no change
+# (default behavior). Malformed JSON: crash non-zero, matching the bus
+# pre-flight loud-failure precedent (finding-166), so a broken backend
+# selector fails the launch rather than starting a session on the wrong
+# backend silently.
+settings_args=()
+overlay_file="$MARVEL_OVERLAY_ROOT/by-role/$MARVEL_ROLE.json"
+if [[ -f "$overlay_file" ]]; then
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$overlay_file" 2>/dev/null \
+    || { echo "cast-launch: backend overlay $overlay_file is not valid JSON; not starting the harness (finding-166)" >&2; exit 1; }
+  settings_args=(--settings "$overlay_file")
+  echo "cast-launch: attaching backend overlay $overlay_file for role $MARVEL_ROLE" >&2
+fi
+
 echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD" >&2
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$cast_line"$'\n\n'"$slice" \
+  ${settings_args[@]+"${settings_args[@]}"} \
   "$@"
