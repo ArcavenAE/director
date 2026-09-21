@@ -29,7 +29,13 @@
 # worse than one that is not run: it does not exercise the real WAN hop, the
 # real hub, or the real leaf seeds. av2v1's leg 1 already proved that transport.
 # The live attestation against real seats is the second layer of aae-orc-2vwae
-# and needs operator clearance, for the reason in the next paragraph.
+# and needs operator clearance. The reason it cannot simply be run here is a
+# PERMISSION one and not the fan-out below: in marvel's rendered
+# authorization.conf every team user's global publish allow is exactly
+# global.director.inbox, so NO session on a cluster can publish into a cluster
+# inbox at all. The attestation has to be initiated by the director seat. The
+# fan-out below is a reason to be careful; this is the reason it is not ours to
+# run. Check 11 reports it as NOT RUN so a reader of the output learns it too.
 #
 # FAN-OUT, measured on mokuzai 2026-09-21, and the reason this defaults to
 # isolated. Every supervisor session builds a per-session durable on
@@ -58,15 +64,24 @@
 #     raw JetStream API (check 4a);
 #   - the credential asymmetry (check 9).
 #
-# NOT independent, and it cannot be made so: both sides run the same
-# director-mcp binary, so envelope encode/decode, durable construction and the
-# in_reply_to to correlation_id binding are one implementation used twice. A bug
-# symmetric across encode and decode would be invisible to the shim-level
-# assertions. Check 6b is the mitigation, not a cure: it re-reads the stored
-# bytes outside the shim, so a corruption between send and store is caught even
-# though a corruption symmetric in both directions is not. The content digest
-# helps for the same reason, since the expected value is computed here in the
-# shell before the send and never by the shim.
+# NOT independent: both sides run the same director-mcp binary, so envelope
+# encode/decode and durable construction are one implementation used twice.
+#
+# The residual is ONE IDENTIFIER, not three fields, and the provenance of each
+# expected value is what decides it. The digest is a sha computed here in the
+# shell BEFORE the send, so it is harness-sourced and a symmetric encode/decode
+# bug cannot hide from it. Authorship is compared against the agent id this
+# script set in the shim's environment, so it is harness-sourced too. Only
+# in_reply_to is compared against REQ_ID, which comes from the shim's OWN send
+# acknowledgement, so a self-consistent but wrong id scheme would satisfy it.
+# That single identifier is the uncovered thing. Understating this has a cost of
+# its own: a reader who takes "the observation is not independent" literally
+# distrusts all three fields when only one is affected.
+#
+# And 6b catches a class it is not obvious it catches: because the shell parses
+# the RAW WIRE BYTES with jq, any symmetric bug in field NAMING or NESTING is
+# caught, since the shell reads the contract's spelling rather than whatever the
+# shim would have called it on the way back in.
 #
 # NEGATIVE-CONTROL COVERAGE, honestly bounded. selftest-roundtrip-receipts.sh
 # drives red runs for the receipt assertions (in_reply_to, authorship, digest,
@@ -594,12 +609,23 @@ if [[ "${FAULT:-}" == "neg_has_supervisor" && "$neg_err" != "true" ]]; then
     fi
   done
 fi
+# The comparison below is guarded on BOTH sides being non-empty, explicitly.
+# When the shim hangs, text_of yields the literal string NO RESULT, jq errors on
+# it, and jq's // default cannot fire because the alternative operator needs the
+# input to PARSE before it can supply a default. Both sides then render empty
+# and empty matches empty, which would set neg_receipt and report "a receipt
+# appeared" when nothing did. neg_id above already falls back to a sentinel, but
+# that is an incidental rescue and reads like one, so the -n guards are written
+# out here: this is the third place today the same empty-matches-empty shape has
+# appeared, after check 6 and the no_reply fault, and it should be legible
+# rather than accidental.
 neg_receipt=""
 rpc_timeout_clear
-if [[ "$neg_err" != "true" ]]; then
+if [[ "$neg_err" != "true" && -n "$neg_id" && "$neg_id" != "x" ]]; then
   for _ in 1 2 3; do
     out="$(RPC_TIMEOUT=15 d_call 8 wait_for_message '{"timeout_seconds":6}' | text_of)"
-    [[ "$(jq -r '.message.in_reply_to // ""' <<<"$out" 2>/dev/null)" == "$neg_id" ]] && { neg_receipt="$out"; break; }
+    cand="$(jq -r '.message.in_reply_to // ""' <<<"$out" 2>/dev/null || true)"
+    [[ -n "$cand" && "$cand" == "$neg_id" ]] && { neg_receipt="$out"; break; }
   done
 fi
 # Green by absence is the trap here: zero delivered and zero ATTEMPTED look
@@ -702,6 +728,15 @@ else
     bad "aae-orc-5lkxr (a) orderly exit" "the row survived the orderly exit; BEAT-C did not delete it and it is waiting on the 90s TTL"
   fi
 fi
+
+# --- 11. the leg this gate does NOT run ---------------------------------
+# The most important line in the output, and it was missing until the re-review
+# found it. Everything above runs against a hub this script builds on loopback.
+# The REAL cross-host attestation, which is what aae-orc-2vwae's title asks for,
+# is not attempted here at all, and a reader who sees "N passed, 0 failed" with
+# three unrelated NOT RUN lines would have no way to learn that. An unnamed
+# omission is worse than a named one (finding-157), so it is named first.
+nr "aae-orc-2vwae cross-host attestation against live seats"    "NOT attempted. Not merely skipped: no session on a cluster can publish into a cluster inbox (every team user's global publish allow is exactly global.director.inbox), so the live leg must be INITIATED BY THE DIRECTOR SEAT and cannot be driven from the cluster under test. What passes above is the receipt semantics against a hub this script builds, not the real WAN hop"
 
 # --- sibling checks this rig cannot honestly answer ---------------------
 nr "aae-orc-6vy9x read side" "the leak is in marvel's rendered authorization.conf; this rig writes its own leaf conf, so it cannot measure marvel's renderer. Run verify-global-grants.sh against a marvel-managed broker"
