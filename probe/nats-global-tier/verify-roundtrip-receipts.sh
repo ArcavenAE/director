@@ -28,14 +28,17 @@
 # WHAT ISOLATED MODE DOES NOT PROVE, stated because a check that overclaims is
 # worse than one that is not run: it does not exercise the real WAN hop, the
 # real hub, or the real leaf seeds. av2v1's leg 1 already proved that transport.
-# The live attestation against real seats is the second layer of aae-orc-2vwae
-# and needs operator clearance. The reason it cannot simply be run here is a
-# PERMISSION one and not the fan-out below: in marvel's rendered
+#
+# WHY THE LIVE LEG IS NOT OURS TO RUN. This stands on its own because it is a
+# PERMISSION fact, not a caution, and reading it as a caution invites someone
+# to decide the risk is acceptable and run it anyway. In marvel's rendered
 # authorization.conf every team user's global publish allow is exactly
 # global.director.inbox, so NO session on a cluster can publish into a cluster
-# inbox at all. The attestation has to be initiated by the director seat. The
-# fan-out below is a reason to be careful; this is the reason it is not ours to
-# run. Check 11 reports it as NOT RUN so a reader of the output learns it too.
+# inbox at all. The live attestation therefore has to be INITIATED BY THE
+# DIRECTOR SEAT: it is not a thing this rig is declining to do, it is a thing
+# no session here can do. It is the second layer of aae-orc-2vwae and needs
+# operator clearance. Check 11 reports it as NOT RUN so a reader of the output
+# learns it too, rather than only a reader of this header.
 #
 # FAN-OUT, measured on mokuzai 2026-09-21, and the reason this defaults to
 # isolated. Every supervisor session builds a per-session durable on
@@ -45,7 +48,9 @@
 # delivered to EVERY live supervisor on that cluster, and replayed in full to
 # every supervisor session started inside the stream's 24h max age. Publishing a
 # test REQUEST at a live cluster is therefore not a private act. That is the
-# director#38 shape, and it is why the deterministic gate builds its own hub
+# director#38 shape, and it is a reason to be careful rather than the reason
+# the live leg is unavailable, which is the permission fact above. It is why
+# the deterministic gate builds its own hub
 # instead of borrowing the fleet's.
 #
 # WHERE THE OBSERVATION PATH DIVERGES FROM THE PATH UNDER TEST, and where it
@@ -420,7 +425,11 @@ consumer_info() { # -> json, or empty
 }
 
 echo "# aae-orc-2vwae, isolated two-shim round trip"
-echo "# director $AGENT_D ($INST_D) on $CLUSTER_A; supervisor $AGENT_S ($INST_S) on $CLUSTER_B"
+# The cluster names are the production ones on purpose (the subject grammar and
+# the credential asymmetry are copied from the live hub config), but nothing
+# here runs on those hosts. Saying "on kinu" would be the same overclaim the
+# rest of this output is written to avoid, so the line says what it is.
+echo "# director $AGENT_D ($INST_D) on throwaway leaf '$CLUSTER_A'; supervisor $AGENT_S ($INST_S) on throwaway leaf '$CLUSTER_B'; both loopback on one host, no WAN hop"
 
 # --- 0. two sessions, two identities ------------------------------------
 # A collision here would collapse two sessions into one presence row and one
@@ -668,7 +677,10 @@ if [[ -n "$neg_receipt" ]]; then
 elif rpc_timed_out; then
   bad "R-08 negative self-test" "the receipt poll TIMED OUT rather than returning empty, so 'no receipt' here is a hung shim and not an absence, and it cannot be scored either way"
 elif [[ "$neg_err" == "true" ]]; then
-  ok "R-08: a send with no live supervisor is refused up front with a named reason, and no receipt is counted ($(text_of <<<"$resp" | head -c 70))"
+  # The reason is quoted rather than summarised, and quoted whole. It used to
+  # be cut at 70 characters, which ended the line mid-word ("no s") and printed
+  # a fragment where the output claims to show the named reason.
+  ok "R-08: a send with no live supervisor is refused up front with a named reason, and no receipt is counted ($(text_of <<<"$resp" | tr '\n' ' ' | head -c 200 | sed 's/  */ /g; s/ *$//'))"
 else
   nseq="$(jq -r '.sequence // ""' <<<"$neg_ack")"
   nstr="$(jq -r '.stream // ""' <<<"$neg_ack")"
@@ -772,7 +784,7 @@ else
   if [[ "$gone" == yes ]] && ! "${HUB_B[@]}" kv get GLOBAL_PRESENCE "$dkey" --raw >/dev/null 2>&1; then
     bad "aae-orc-5lkxr (a) orderly exit" "unscoreable: the supervisor's row read as absent, but the same credential cannot read the live director row either, so the bucket is unreadable rather than the row deleted"
   elif [[ "$gone" == yes && $elapsed -lt 10 ]]; then
-    ok "aae-orc-5lkxr (a): an orderly exit vacated the global presence row in ${elapsed}s, well inside the 90s TTL, and the delete crossed the leaf"
+    ok "aae-orc-5lkxr (a): an orderly exit vacated the global presence row in ${elapsed}s, well inside the 90s TTL, so the clearance is BEAT-C-shaped and not TTL-shaped; read back through the $CLUSTER_B leaf against the hub-domain bucket, with the live director row still readable on the same credential"
   elif [[ "$gone" == yes ]]; then
     bad "aae-orc-5lkxr (a) orderly exit" "the row cleared only after ${elapsed}s, which is TTL-shaped, not BEAT-C-shaped"
   else
@@ -795,5 +807,10 @@ nr "aae-orc-5lkxr (b) ungraceful exit and (c) partition read" "SIGKILL timing ag
 nr "aae-orc-8gp9f identity across a shift" "out of scope for this ticket and non-blocking for the stage, per av2v1"
 
 echo
+# Item D. The three assertions below are made but NOT negatively controlled:
+# injecting them needs a patched shim and this ticket is instrument-only. The
+# header has said so since the first draft, seven hundred lines above the line
+# a gate reader actually reads, which is the same defect as an unnamed NOT RUN.
+echo "UNCONTROLLED checks 0, 1 and 2 (instance distinctness, no-rename, catalog address) are asserted but have no red run; the selftest cannot inject them without a patched shim"
 echo "$pass passed, $fail failed, $notrun not run"
 [[ $fail -eq 0 ]]
