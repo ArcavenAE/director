@@ -69,6 +69,40 @@ liveness check, while running perfectly well. The local key
 (`presence.<team>.<agentID>.<instance>`) includes the agent id, so the local
 tier is exposed only to same-agent restarts.
 
+## 3b. Two consequences that change what it costs
+
+**An orderly exit evicts a LIVE session's row, not only the overwritten one.**
+`deletePresence` removes `presenceKey(instance)` (`global.go:363-365`), and the
+global key carries no agent id. So if A and B share an instance and B won the
+write, A exiting cleanly deletes the row B is living in, and the SURVIVING
+session goes dark. It is bounded: the 30s heartbeat rewrites the row against a
+90s TTL, so B reappears within a beat. But for up to 30 seconds a live
+supervisor is absent from the global roster and from the R-92 liveness check,
+and there is no log line on either side saying so. A sender in that window gets
+an R-92 refusal for a session that is running perfectly. The mechanism is not
+theoretical: check 10 of `verify-roundtrip-receipts.sh` exercises orderly-exit
+deletion and measures it clearing the row in under a second.
+
+**The R-49 collision detector is silenced by exactly the case it was built
+for.** `checkCollision` (`bus.go:725`) warns only when it finds a row whose
+`instance` differs from its own:
+
+    if inst, _ := rec["instance"].(string); inst != "" && inst != b.instance {
+
+Two sessions sharing both agent id and instance write ONE local presence key, so
+the loop sees a single row, its own, `inst == b.instance`, and it returns empty.
+The detector added in response to finding-003 goes quiet in precisely the
+compound case that makes finding-003 worse.
+
+That reframes the defect. It does not only remove a roster DISCRIMINATOR, which
+is passive; it disables an active runtime GUARD. Four protections keyed on one
+value fail together: the local durable collides, the global durable collides,
+both presence rows collapse, and the warning that would have reported it is
+silent.
+
+None of this widens the fix. The one line in section 5 closes all four, because
+all four depend on the same value being unique.
+
 ## 4. Honest limits
 
 I did not catch a collision on the live mokuzai cluster. The four live global

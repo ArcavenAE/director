@@ -323,10 +323,17 @@ shim_pids+=($!); S_PID=$!
 exec 3>"$work/d.in" 4<"$work/d.out" 5>"$work/s.in" 6<"$work/s.out"
 
 # Two stdio drivers, one per side, so no call can be served by the wrong shim.
+# A timed-out RPC is recorded in a FILE, not a variable: every call site runs
+# these in $( ), so a variable set here would die with the subshell and the
+# timeout would read downstream as a clean empty. That conflation is the
+# criterion-2 failure ("green by absence") arriving through the transport
+# rather than through the assertion, and it is why the marker is a file.
+rpc_timeout_clear() { rm -f "$work/rpc.timeout"; }
+rpc_timed_out()     { [[ -e "$work/rpc.timeout" ]]; }
 d_rpc() { printf '{"jsonrpc":"2.0","id":%s,"method":"%s","params":%s}\n' "$1" "$2" "$3" >&3
-          local l; read -r -t "${RPC_TIMEOUT:-30}" -u 4 l || { echo '{"error":"rpc timeout"}'; return 0; }; printf '%s\n' "$l"; }
+          local l; read -r -t "${RPC_TIMEOUT:-30}" -u 4 l || { : > "$work/rpc.timeout"; echo '{"error":"rpc timeout"}'; return 0; }; printf '%s\n' "$l"; }
 s_rpc() { printf '{"jsonrpc":"2.0","id":%s,"method":"%s","params":%s}\n' "$1" "$2" "$3" >&5
-          local l; read -r -t "${RPC_TIMEOUT:-30}" -u 6 l || { echo '{"error":"rpc timeout"}'; return 0; }; printf '%s\n' "$l"; }
+          local l; read -r -t "${RPC_TIMEOUT:-30}" -u 6 l || { : > "$work/rpc.timeout"; echo '{"error":"rpc timeout"}'; return 0; }; printf '%s\n' "$l"; }
 d_note() { printf '{"jsonrpc":"2.0","method":"%s","params":%s}\n' "$1" "$2" >&3; }
 s_note() { printf '{"jsonrpc":"2.0","method":"%s","params":%s}\n' "$1" "$2" >&5; }
 d_call() { d_rpc "$1" tools/call "$(jq -nc --arg n "$2" --argjson a "$3" '{name:$n,arguments:$a}')"; }
@@ -564,15 +571,35 @@ fi
 # supervisor still has to be refused or to produce no receipt; if this harness
 # ever reports a pass here, it is counting "accepted for delivery" as an
 # answer and every other check above is worthless.
-resp="$(d_call 7 send_message "$(jq -nc --arg t "global://$CLUSTER_A/supervisor" \
-        '{to:$t,performative:"REQUEST",text:"R-08 negative self-test, no supervisor exists on this cluster"}')")"
+# FAULT=neg_has_supervisor aims this probe at the cluster that DOES have a live
+# supervisor and drives that supervisor to answer, so a receipt appears where
+# check 7 asserts none can. Check 7 must then fail. Without it, check 7 is the
+# one part of this instrument that is asserted but never demonstrated, which is
+# the standard the other faults already meet, and it is the check that guards
+# all the others.
+neg_target="global://$CLUSTER_A/supervisor"
+[[ "${FAULT:-}" == "neg_has_supervisor" ]] && { neg_target="global://$CLUSTER_B/supervisor"; echo "FAULT neg_has_supervisor: aiming the R-08 probe at a cluster that HAS a live supervisor"; }
+resp="$(d_call 7 send_message "$(jq -nc --arg t "$neg_target" \
+        '{to:$t,performative:"REQUEST",text:"R-08 negative self-test probe"}')")"
 neg_ack="$(text_of <<<"$resp")"
 neg_err="$(iserr_of <<<"$resp")"
+neg_id="$(jq -r '.message_id // "x"' <<<"$neg_ack" 2>/dev/null || echo x)"
+if [[ "${FAULT:-}" == "neg_has_supervisor" && "$neg_err" != "true" ]]; then
+  # Drive the live supervisor to answer it, so a receipt genuinely exists.
+  for _ in 1 2 3 4; do
+    o="$(RPC_TIMEOUT=40 s_call 70 wait_for_message '{"timeout_seconds":20}' | text_of)"
+    if [[ "$(jq -r '.message.message_id // ""' <<<"$o")" == "$neg_id" ]]; then
+      s_call 71 send_message "$(jq -nc --arg r "$neg_id" '{to:"global://director",performative:"AGREE",text:"receipt sha256=deadbeef",in_reply_to:$r}')" >/dev/null
+      break
+    fi
+  done
+fi
 neg_receipt=""
+rpc_timeout_clear
 if [[ "$neg_err" != "true" ]]; then
-  for _ in 1 2; do
+  for _ in 1 2 3; do
     out="$(RPC_TIMEOUT=15 d_call 8 wait_for_message '{"timeout_seconds":6}' | text_of)"
-    [[ "$(jq -r '.message.in_reply_to // ""' <<<"$out")" == "$(jq -r '.message_id // "x"' <<<"$neg_ack")" ]] && { neg_receipt="$out"; break; }
+    [[ "$(jq -r '.message.in_reply_to // ""' <<<"$out" 2>/dev/null)" == "$neg_id" ]] && { neg_receipt="$out"; break; }
   done
 fi
 # Green by absence is the trap here: zero delivered and zero ATTEMPTED look
@@ -581,7 +608,9 @@ fi
 # accepted branch must show the attempt actually landed somewhere, by finding
 # the acknowledged sequence in the stream, before "no receipt" means anything.
 if [[ -n "$neg_receipt" ]]; then
-  bad "R-08 negative self-test" "a receipt appeared for a cluster with no supervisor; the harness is measuring something other than delivery"
+  bad "R-08 negative self-test" "a receipt appeared for this probe; the harness is measuring something other than delivery"
+elif rpc_timed_out; then
+  bad "R-08 negative self-test" "the receipt poll TIMED OUT rather than returning empty, so 'no receipt' here is a hung shim and not an absence, and it cannot be scored either way"
 elif [[ "$neg_err" == "true" ]]; then
   ok "R-08: a send with no live supervisor is refused up front with a named reason, and no receipt is counted ($(text_of <<<"$resp" | head -c 70))"
 else
@@ -634,10 +663,17 @@ fi
 # inbox. If this ever passes, the receipt in check 6 could have been read
 # rather than received, and the whole instrument degrades to verify-global-shim's
 # audit-mirror shape.
-if "${HUB_B[@]}" stream info GLOBAL_TO_DIRECTOR >/dev/null 2>&1; then
+# The positive control is the whole check. Stream info failing on a timeout, a
+# wrong js-domain, a dropped leaf or a dead hub is indistinguishable from the
+# permission denial this is trying to prove, so the denial has to be shown
+# SPECIFIC: the same credential, in the same call shape, must succeed on its own
+# cluster's stream in the same breath. Without that, "it failed" proves nothing.
+if ! "${HUB_B[@]}" stream info "GLOBAL_TO_$CLUSTER_B" >/dev/null 2>&1; then
+  bad "R-95 asymmetry" "the positive control failed: the $CLUSTER_B credential cannot read its OWN stream either, so a refusal on the director stream would prove nothing (leaf down, wrong domain or dead hub)"
+elif "${HUB_B[@]}" stream info GLOBAL_TO_DIRECTOR >/dev/null 2>&1; then
   bad "R-95 asymmetry" "the $CLUSTER_B credential can read GLOBAL_TO_DIRECTOR"
 else
-  ok "R-95 asymmetry holds: the $CLUSTER_B credential publishes to the director inbox and cannot read it"
+  ok "R-95 asymmetry holds and the refusal is specific: the $CLUSTER_B credential reads GLOBAL_TO_$CLUSTER_B and is refused GLOBAL_TO_DIRECTOR on the same credential"
 fi
 
 # --- 10. BEAT-C orderly exit (aae-orc-5lkxr case (a)) -------------------

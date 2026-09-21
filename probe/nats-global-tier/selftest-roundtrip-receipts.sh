@@ -35,7 +35,7 @@ HARNESS="$here/verify-roundtrip-receipts.sh"
 [[ -x "$HARNESS" ]] || { echo "not executable: $HARNESS"; exit 2; }
 
 # fault -> a string that must appear in the FAIL line it provokes
-faults=(no_in_reply_to sender_writes_receipt no_reply wrong_digest wrong_performative not_drained no_consumer grant_asymmetry_broken)
+faults=(no_in_reply_to sender_writes_receipt no_reply wrong_digest wrong_performative not_drained no_consumer grant_asymmetry_broken neg_has_supervisor)
 expect_no_in_reply_to="in_reply_to missing or wrong"
 expect_sender_writes_receipt="receipt authorship"
 expect_no_reply="never received a receipt"
@@ -44,6 +44,7 @@ expect_wrong_performative="answer performative"
 expect_not_drained="drain: the REQUEST was enqueued on the recipient's durable and never dequeued"
 expect_no_consumer="transport: not enqueued on the recipient's durable"
 expect_grant_asymmetry_broken="R-95 asymmetry"
+expect_neg_has_supervisor="R-08 negative self-test"
 
 caught=0; missed=0
 for f in "${faults[@]}"; do
