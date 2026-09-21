@@ -97,9 +97,10 @@ declared-name path (`aae-orc-8gp9f`), which addresses a different problem: that
 a shift SHOULD sometimes preserve identity. This finding is about two sessions
 that should never have shared one and did.
 
-Not self-ratified. I am an instrument builder on aae-orc-2vwae and filed this
-under the layer-1 rule in `task-workflow.md`; whether it earns a GitHub issue
-or a bd slot is the supervisor's call.
+Layer 2 filed as ArcavenAE/director#62 (2026-09-21), on the supervisor's
+ruling: a GitHub issue rather than a bd slot, because bd would mean committing
+to close it on a timeframe and whether the director plane takes the change is
+not this team's to commit.
 
 ## 6. Where it was found
 
