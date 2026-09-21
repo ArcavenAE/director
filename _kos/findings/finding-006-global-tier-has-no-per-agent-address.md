@@ -118,3 +118,8 @@ Separately unresolved and not explained by this: `GLOBAL_TO_mokuzai` reported
 cluster credential cannot enumerate consumers (`CONSUMER.NAMES` is outside the
 leaf's allow-list and returns "no responders", which means denied, not absent),
 so this needs someone with a hub credential. Carried as an open lead.
+
+Layer 2 filed as ArcavenAE/director#63 (2026-09-21), on the supervisor's
+ruling: a GitHub issue rather than a bd slot, for the same reason as
+[finding-005]: bd would mean committing to close it on a timeframe, and whether
+the director plane takes a change is the operator's call.
