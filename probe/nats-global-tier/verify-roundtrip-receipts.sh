@@ -42,6 +42,40 @@
 # director#38 shape, and it is why the deterministic gate builds its own hub
 # instead of borrowing the fleet's.
 #
+# WHERE THE OBSERVATION PATH DIVERGES FROM THE PATH UNDER TEST, and where it
+# cannot. If a harness and the thing it measures share a code path, one bug makes
+# both agree and the agreement reads as corroboration, so this is stated rather
+# than left for a reviewer to reconstruct.
+#
+# Independent of the shim entirely, observed with the nats CLI or the hub admin
+# nkey, which is a third principal that writes nothing:
+#   - the receipt's RAW BYTES on the hub, fetched by sequence as the admin and
+#     parsed here, so in_reply_to and the digest are read without either shim's
+#     decode in the path (check 6b);
+#   - presence on both tiers, read straight from the KV buckets rather than
+#     through the shim's own list_roster (checks 0, 1);
+#   - the enqueue, read as num_pending on the recipient's durable through the
+#     raw JetStream API (check 4a);
+#   - the credential asymmetry (check 9).
+#
+# NOT independent, and it cannot be made so: both sides run the same
+# director-mcp binary, so envelope encode/decode, durable construction and the
+# in_reply_to to correlation_id binding are one implementation used twice. A bug
+# symmetric across encode and decode would be invisible to the shim-level
+# assertions. Check 6b is the mitigation, not a cure: it re-reads the stored
+# bytes outside the shim, so a corruption between send and store is caught even
+# though a corruption symmetric in both directions is not. The content digest
+# helps for the same reason, since the expected value is computed here in the
+# shell before the send and never by the shim.
+#
+# NEGATIVE-CONTROL COVERAGE, honestly bounded. selftest-roundtrip-receipts.sh
+# drives red runs for the receipt assertions (in_reply_to, authorship, digest,
+# performative), the no-receipt case, the drain case, the transport case and the
+# credential asymmetry. It does NOT have a red run for the no-rename check, the
+# catalog check or the instance-collision check, because injecting those needs a
+# patched shim and this ticket is instrument-only. Those three are asserted but
+# not negatively controlled, and that is a real limit of this harness.
+#
 # Usage:
 #   probe/nats-global-tier/verify-roundtrip-receipts.sh
 # Knobs: CLUSTER_A (director side, default kinu), CLUSTER_B (supervisor side,
@@ -125,8 +159,8 @@ leaf_grants() { # cluster pub-extra
                                "\$JS.$DOMAIN.API.CONSUMER.CREATE.KV_GLOBAL_PRESENCE.>",
                                "\$JS.$DOMAIN.API.CONSUMER.INFO.KV_GLOBAL_PRESENCE.>",
                                "\$JS.$DOMAIN.API.CONSUMER.DELETE.KV_GLOBAL_PRESENCE.>",
-                               "\$JS.ACK.>" ] }
-          subscribe { allow: [ "global.$c.>", "_INBOX.>" ] }
+                               "\$JS.ACK.>"${EXTRA_PUB:-} ] }
+          subscribe { allow: [ "global.$c.>", "_INBOX.>"${EXTRA_SUB:-} ] }
         }
 CONF
 }
@@ -155,6 +189,18 @@ director_leaf_grants() {
         }
 CONF
 }
+
+# FAULT=grant_asymmetry_broken widens the cluster leaf so it CAN read the
+# director stream. Check 9 must fail, which is the negative control proving that
+# check is load-bearing rather than decorative: if the asymmetry ever broke for
+# real, the receipt could be read instead of received.
+EXTRA_SUB=""
+EXTRA_PUB=""
+if [[ "${FAULT:-}" == "grant_asymmetry_broken" ]]; then
+  EXTRA_SUB=', "global.director.>"'
+  EXTRA_PUB=', "$JS.'"$DOMAIN"'.API.STREAM.INFO.GLOBAL_TO_DIRECTOR"'
+  echo "FAULT grant_asymmetry_broken: the $CLUSTER_B leaf is being granted read on the director stream"
+fi
 
 mkdir -p "$work/hub/store"
 {
@@ -362,6 +408,14 @@ fi
 # If this passes and 4b fails, the bus did its job and the recipient is not
 # draining; if this fails, the message was never going to arrive. Those are
 # different defects with different owners and the sender cannot tell them apart.
+# FAULT=no_consumer removes the recipient's durable before the send, so the
+# message has nowhere to land. Check 4a must fail, which is the negative control
+# for the transport assertion itself.
+if [[ "${FAULT:-}" == "no_consumer" ]]; then
+  echo "FAULT no_consumer: deleting the recipient's durable before the send"
+  nats -s "nats://127.0.0.1:$LEAF_B_PORT" req --timeout 5s \
+    "\$JS.$DOMAIN.API.CONSUMER.DELETE.GLOBAL_TO_$CLUSTER_B.$DURABLE_S" '{}' >/dev/null 2>&1 || true
+fi
 ci="$(consumer_info)"
 pend="$(jq -r '.num_pending // -1' <<<"${ci:-{\}}" 2>/dev/null || echo -1)"
 cfilt="$(jq -r '.config.filter_subject // ""' <<<"${ci:-{\}}" 2>/dev/null || echo "")"
@@ -465,6 +519,31 @@ else
   [[ "$echoed" == "$DIGEST" ]]  && ok "the receipt echoes sha256 of the content the director sent"       || bad "content digest" "got=${echoed:-none} want=$DIGEST"
 fi
 
+# --- 6b. the receipt's RAW BYTES on the hub, read by a third principal --
+# The admin nkey is neither shim. It fetches the stored message by sequence and
+# this script parses the JSON itself, so in_reply_to, the sender and the digest
+# are confirmed without either shim's decode in the path. This is the answer to
+# "the harness and the thing it measures share a code path": it does not remove
+# the shared binary, it removes the READ side of it from this one assertion.
+rseq="$(jq -r '.sequence // ""' <<<"${rack:-{\}}")"
+if [[ -z "$rseq" ]]; then
+  nr "receipt raw bytes on the hub" "no sequence was returned for the receipt, so there is nothing to fetch"
+else
+  raw="$("${A[@]}" stream get GLOBAL_TO_DIRECTOR "$rseq" -j 2>/dev/null | jq -r '.data // .message.data // empty' | base64 -d 2>/dev/null || true)"
+  if [[ -z "$raw" ]]; then
+    bad "receipt raw bytes on the hub" "sequence $rseq could not be fetched as the admin"
+  else
+    r_irt="$(jq -r '.in_reply_to // ""' <<<"$raw")"
+    r_from="$(jq -r '.sender.agent_id // ""' <<<"$raw")"
+    r_dig="$(jq -r '.content.data // ""' <<<"$raw" | sed -n 's/.*sha256=\([0-9a-f]*\).*/\1/p')"
+    if [[ "$r_irt" == "$REQ_ID" && "$r_from" == "$AGENT_S" && "$r_dig" == "$DIGEST" ]]; then
+      ok "the stored receipt at GLOBAL_TO_DIRECTOR seq $rseq carries in_reply_to, the recipient's authorship and the right digest, read as the admin with neither shim decoding it"
+    else
+      bad "stored receipt bytes" "in_reply_to=${r_irt:-empty} sender=${r_from:-empty} digest=${r_dig:-none}"
+    fi
+  fi
+fi
+
 # --- 7. R-08 negative self-test: the ack must not be able to pass -------
 # The instrument's own failure mode. A send to a cluster with no live
 # supervisor still has to be refused or to produce no receipt; if this harness
@@ -481,12 +560,23 @@ if [[ "$neg_err" != "true" ]]; then
     [[ "$(jq -r '.message.in_reply_to // ""' <<<"$out")" == "$(jq -r '.message_id // "x"' <<<"$neg_ack")" ]] && { neg_receipt="$out"; break; }
   done
 fi
+# Green by absence is the trap here: zero delivered and zero ATTEMPTED look
+# identical. So neither branch below is allowed to pass on absence alone. The
+# refusal branch passes on a named refusal, which is positive evidence. The
+# accepted branch must show the attempt actually landed somewhere, by finding
+# the acknowledged sequence in the stream, before "no receipt" means anything.
 if [[ -n "$neg_receipt" ]]; then
   bad "R-08 negative self-test" "a receipt appeared for a cluster with no supervisor; the harness is measuring something other than delivery"
 elif [[ "$neg_err" == "true" ]]; then
-  ok "R-08: a send with no live supervisor is refused up front, and no receipt is counted ($(text_of <<<"$resp" | head -c 80))"
+  ok "R-08: a send with no live supervisor is refused up front with a named reason, and no receipt is counted ($(text_of <<<"$resp" | head -c 70))"
 else
-  ok "R-08: the send returned an acknowledgement and NO receipt followed, and the harness scores that as not-delivered"
+  nseq="$(jq -r '.sequence // ""' <<<"$neg_ack")"
+  nstr="$(jq -r '.stream // ""' <<<"$neg_ack")"
+  if [[ -n "$nseq" && -n "$nstr" ]] && "${A[@]}" stream get "$nstr" "$nseq" -j >/dev/null 2>&1; then
+    ok "R-08: the send was accepted and IS stored at $nstr seq $nseq (the attempt is evidenced, not assumed), and no receipt followed, so the harness scores it not-delivered"
+  else
+    bad "R-08 negative self-test" "the send neither refused nor produced a locatable stored message, so 'no receipt' here is absence of evidence and cannot be scored"
+  fi
 fi
 
 # --- 8. the reverse leg (aae-orc-2vwae clause d) ------------------------
