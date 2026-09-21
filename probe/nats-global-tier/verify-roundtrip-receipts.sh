@@ -286,7 +286,9 @@ CONF
   pids+=($!)
 }
 start_leaf "$CLUSTER_A" "$LEAF_A_PORT" "$work/keys/leaf-$CLUSTER_A.nk"
+LEAF_A_PID=$!
 start_leaf "$CLUSTER_B" "$LEAF_B_PORT" "$work/keys/leaf-$CLUSTER_B.nk"
+LEAF_B_PID=$!
 
 for c in "$CLUSTER_A" "$CLUSTER_B"; do
   up=no
@@ -722,6 +724,16 @@ else
   # credential must still be able to READ the bucket, proved against the
   # director's row, which is live because only the supervisor was killed.
   dkey="presence.director.$INST_D"
+  # FAULT=leaf_dead_before_beatc is this check's acceptance test: kill the leaf
+  # so every read fails, and the row reads "absent" for a reason that has
+  # nothing to do with BEAT-C. Without the positive control below this produced
+  # a PASS at the LAST assertion of an otherwise green run, which is the only
+  # way a member of this class can green the whole instrument.
+  if [[ "${FAULT:-}" == "leaf_dead_before_beatc" ]]; then
+    echo "FAULT leaf_dead_before_beatc: killing the $CLUSTER_B leaf before the BEAT-C check"
+    kill -9 "$LEAF_B_PID" 2>/dev/null || true
+    sleep 1
+  fi
   kill -TERM "$S_PID" 2>/dev/null || true
   t0=$SECONDS; gone=no
   for _ in $(seq 1 40); do
