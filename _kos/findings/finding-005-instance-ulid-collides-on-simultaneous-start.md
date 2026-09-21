@@ -29,7 +29,7 @@ the default entropy is seeded.
 ## 2. Mechanism
 
 `ulid.Make()` uses the package-level default entropy
-(`oklog/ulid/v2@v2.1.2/ulid.go:135`):
+(`oklog/ulid/v2@v2.1.2/ulid.go:135-136`):
 
     var defaultEntropy = func() io.Reader {
         rng := rand.New(rand.NewSource(time.Now().UnixNano()))

@@ -5,11 +5,34 @@
 - **Subject:** director global-tier addressing (R-86, R-94, R-95), so this belongs in director's graph
 - **Confidence:** measured for the live shape; the mechanism read directly in `global.go` and in the rendered `authorization.conf` on this host
 
+## 0. The sentence someone designing the return path needs first
+
+**The global tier is upward-open and downward-closed except through the director
+seat.** Any session on any cluster may publish to `global.director.inbox`;
+no session on any cluster may publish into a cluster inbox at all. Only a leaf's
+own hub credential can do that, and at the hub only the director's leaf is
+granted `global.*.supervisor.inbox`.
+
+Three consequences that are easy to mistake for ordinary behaviour:
+
+- Everything sent upward lands, and nothing ever goes sideways. A supervisor
+  cannot reach a supervisor, on its own cluster or any other.
+- The entire downward path is a single point. Every instruction that reaches any
+  cluster passes through the director seat, so the seat is not merely the
+  coordinator by convention, it is the only principal the topology permits to
+  address a cluster.
+- Any test, probe or tool that needs to exercise the inbound path has to be
+  driven by the director seat. It cannot be run from the cluster being tested.
+
+This is R-95's asymmetry working as designed, not a defect. It is recorded here
+because it is load-bearing for anyone designing a return path and it was not
+written down anywhere.
+
 ## 1. The property
 
 At the global tier a session is addressable only as `global://<cluster>/<role>`
 or `global://director`. There is no per-agent global address. The two legal role
-words are hard-coded (`global.go:36-38`) and an unknown one is refused before the
+words are hard-coded (`global.go:37-38`) and an unknown one is refused before the
 shim dials anything, verified on this host:
 
     DIRECTOR_GLOBAL_ROLE=harness  ->
@@ -19,7 +42,7 @@ shim dials anything, verified on this host:
 Every supervisor session on a cluster therefore holds the SAME inbound address.
 Each builds its own durable on `GLOBAL_TO_<cluster>` with the identical
 `FilterSubject global.<cluster>.supervisor.inbox` (`global.go:254`) under
-`DeliverAllPolicy` (`global.go:256`), and `fetchOne` (`global.go:315`) applies no
+`DeliverAllPolicy` (`global.go:256`), and `fetchOne` (`global.go:318`) applies no
 recipient filter: it unmarshals whatever it pulled and hands it to the model.
 
 So one message to `global://mokuzai/supervisor` is delivered to every live
