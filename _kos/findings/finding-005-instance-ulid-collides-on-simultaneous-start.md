@@ -3,7 +3,7 @@
 - **Date:** 2026-09-21
 - **Session:** migrated-marvel-builder-g1-1, mokuzai, building the aae-orc-2vwae round-trip harness
 - **Subject:** director session identity (R-49, R-50, R-06), so this belongs in director's own graph beside finding-003
-- **Confidence:** measured. 200 simultaneous process pairs against the shim's own ULID library version, plus two unforced occurrences inside the harness before I went looking
+- **Confidence:** measured. 200 simultaneous process pairs against the shim's own ULID library version, plus 160 staggered pairs as the control, plus occurrences inside the harness before I went looking
 
 ## 1. What was observed
 
@@ -140,6 +140,46 @@ not this team's to commit.
 
 The harness that surfaced it asserts the property so a regression is caught:
 check 0 of `probe/nats-global-tier/verify-roundtrip-receipts.sh` fails the run
-if the two sessions report one instance. That script staggers its two starts by
-300ms so the round-trip gate measures the round trip rather than re-measuring
-this defect on every run, and says so at the call site.
+if the two sessions report one instance.
+
+That check went on to correct this finding, which is the reason this section
+is longer than "it was found by a script."
+
+I first recorded the harness occurrences as unforced, meaning two sessions that
+were meant to start apart and collided anyway. That was wrong, and the error
+was mine rather than the generator's. The script appeared to stagger its two
+shim launches by 300ms, but a FIFO opened for reading blocks until a writer
+appears, so each backgrounded shim parked on its stdin redirect and never
+reached exec. A single later `exec` opened both write ends at once and released
+both processes in the same instant. The sleep between the launches did nothing,
+and the two "staggered" starts were simultaneous starts.
+
+So those occurrences corroborate the mechanism in section 2 rather than
+extending it: they are two more simultaneous pairs, not evidence that separated
+starts collide. The stagger now sits on the fd opens, which are the real start
+barrier, and the call site says why.
+
+A second cause sat behind the first. With the stagger corrected the collision
+still returned about one run in four, because the FIRST exec of a freshly built
+binary is cold and can take longer to reach package init than the stagger
+itself, letting the second process, now running a hot binary the first paged
+in, catch up. Paging the binary in before either real start fixes that: 0
+collisions in 10 runs with the warm-up, 1 in 4 without. I established this the
+expensive way, by deleting the warm-up on the reasoning that the corrected fd
+barrier had made it redundant and watching the collision come straight back.
+Two independent causes, both of which had to be removed.
+
+Two controls were run afterwards to pin the boundary, 80 pairs each: starts
+300ms apart with `ulid.Make()` called immediately, and starts 300ms apart with
+the `Make()` calls forced to land together. Neither collided. Separation of the
+package inits is what avoids the collision; when `Make()` is called does not
+matter. That strengthens section 2 rather than qualifying it, and it is the
+reason no change is needed to the fix in section 5 or to director#62.
+
+The wider point is the one worth keeping: for about an hour I had evidence of
+two processes with different pids, different agent ids and different brokers
+minting one ULID 300ms apart, which the library cannot do, and I was close to
+reporting the defect as worse than measured. The reading that resolved it was
+not of the library but of my own rig. A harness that contradicts a well-founded
+model is the harness's bug until proven otherwise, and once one cause is found
+that is not evidence it was the only one.
