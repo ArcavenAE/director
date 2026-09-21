@@ -713,6 +713,15 @@ skey="presence.$CLUSTER_B.supervisor.$INST_S"
 if [[ "$before_exit" != yes ]]; then
   nr "aae-orc-5lkxr (a) orderly exit" "the supervisor row was already absent before the exit, so the delete cannot be timed"
 else
+  # THE FOURTH SITE. This check reads a DELETION, so its evidence is a read
+  # that fails, and a read failing for any other reason (dead hub, dropped
+  # leaf, expired credential, timeout) is indistinguishable from the row being
+  # gone. That is the same absence-as-evidence class as checks 7 and 9, and it
+  # does NOT route through the rpc helpers, so the transport-level timeout
+  # marker does not cover it. It needs its own positive control: the same
+  # credential must still be able to READ the bucket, proved against the
+  # director's row, which is live because only the supervisor was killed.
+  dkey="presence.director.$INST_D"
   kill -TERM "$S_PID" 2>/dev/null || true
   t0=$SECONDS; gone=no
   for _ in $(seq 1 40); do
@@ -720,7 +729,9 @@ else
     sleep 0.25
   done
   elapsed=$((SECONDS - t0))
-  if [[ "$gone" == yes && $elapsed -lt 10 ]]; then
+  if [[ "$gone" == yes ]] && ! "${HUB_B[@]}" kv get GLOBAL_PRESENCE "$dkey" --raw >/dev/null 2>&1; then
+    bad "aae-orc-5lkxr (a) orderly exit" "unscoreable: the supervisor's row read as absent, but the same credential cannot read the live director row either, so the bucket is unreadable rather than the row deleted"
+  elif [[ "$gone" == yes && $elapsed -lt 10 ]]; then
     ok "aae-orc-5lkxr (a): an orderly exit vacated the global presence row in ${elapsed}s, well inside the 90s TTL, and the delete crossed the leaf"
   elif [[ "$gone" == yes ]]; then
     bad "aae-orc-5lkxr (a) orderly exit" "the row cleared only after ${elapsed}s, which is TTL-shaped, not BEAT-C-shaped"
