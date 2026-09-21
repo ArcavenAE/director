@@ -312,6 +312,16 @@ done
 # --- the two shims ------------------------------------------------------
 ( cd "$SHIM_SRC" && go build -o "$work/director-mcp" . )
 SHIM="$work/director-mcp"
+# Page the binary in before either real start, and keep this even though the
+# stagger below looks like it should be enough on its own. It is not. The FIRST
+# exec of a freshly built binary is cold and can take longer to reach package
+# init than the stagger, so the second process (now hot, because the first
+# paged the binary in) catches it and they initialise in the same tick anyway.
+# Measured here 2026-09-21 with the stagger already correct: 0 collisions in 10
+# runs with this warm-up, 1 in 4 without it. I removed it once on the reasoning
+# that the fd barrier made it redundant, and the collision came straight back.
+env DIRECTOR_AGENT_ID=warmup DIRECTOR_TEAM=t DIRECTOR_WORKSPACE=w \
+    NATS_URL=nats://127.0.0.1:9 "$SHIM" --preflight </dev/null >/dev/null 2>&1 || true
 AGENT_D="verify-director-g1-0"
 AGENT_S="verify-supervisor-g1-0"
 
@@ -321,23 +331,41 @@ env "DIRECTOR_AGENT_ID=$AGENT_D" DIRECTOR_TEAM=ops DIRECTOR_WORKSPACE=verifyws \
     "DIRECTOR_GLOBAL_DOMAIN=$DOMAIN" "DIRECTOR_CLUSTER=$CLUSTER_A" DIRECTOR_GLOBAL_ROLE=director \
     "$SHIM" <"$work/d.in" >"$work/d.out" 2>"$work/d.err" &
 shim_pids+=($!); D_PID=$!
-# The two starts are staggered on purpose. ulid.Make() seeds math/rand from
-# time.Now().UnixNano() at package init (oklog/ulid/v2 v2.1.2, ulid.go:135), so
-# two processes launched in the same instant draw the same seed in the same
-# millisecond and mint the SAME instance: measured 47 collisions in 200
-# simultaneous pairs on this host, 2026-09-21. Check 0 still asserts the
-# instances differ, so a regression is caught; the stagger only keeps THIS gate
-# measuring the round trip instead of re-measuring that defect on every run.
-# The defect itself matters beyond this harness, because the global presence key
-# is presence.<cluster>.<role>.<instance> and carries no agent id: two
-# same-cluster same-role sessions cast together can collapse into one roster row.
-sleep 0.3
+# The two starts are staggered, and the stagger is applied to the fd opens
+# below rather than to these launches, which is the whole point of this note.
+#
+# ulid.Make() seeds math/rand from time.Now().UnixNano() at package init
+# (oklog/ulid/v2 v2.1.2, ulid.go:135-137), so two processes whose init lands in
+# the same clock tick draw the same stream and, in the same millisecond, mint
+# the SAME instance. Measured on this host 2026-09-21: 47 collisions in 200
+# simultaneous pairs, 0 in 80 pairs whose starts were 300ms apart, and 0 in 80
+# more where the starts were 300ms apart but the ulid.Make() calls were forced
+# to land together. Separation of the INITS is what avoids it.
+#
+# A first draft put a sleep between the two launches below and believed that
+# separated them. It did not, and the trap is worth keeping written down: a
+# FIFO opened for reading blocks until someone opens the write end, so each
+# backgrounded shell below parks on its `<"$work/*.in"` redirect and never
+# reaches exec. Both processes were then released together by the single
+# `exec 3> ... 5> ...` that used to open both write ends at once, so they
+# initialised in the same tick and collided about one run in six. The sleep
+# between the launches was decoration. The real start barrier is the fd open,
+# so that is where the stagger has to go.
+#
+# Check 0 asserts the instances differ. It is not decoration either: it is what
+# caught this, and it is the only reason the paragraph above says what actually
+# happens instead of what I first assumed. The upstream defect it guards is
+# director#62, which matters well beyond this harness because the global
+# presence key is presence.<cluster>.<role>.<instance> and carries no agent id,
+# so two same-cluster same-role sessions that collide collapse into one row.
 env "DIRECTOR_AGENT_ID=$AGENT_S" DIRECTOR_TEAM=migrated DIRECTOR_WORKSPACE=verifyws \
     "NATS_URL=nats://127.0.0.1:$LEAF_B_PORT" \
     "DIRECTOR_GLOBAL_DOMAIN=$DOMAIN" "DIRECTOR_CLUSTER=$CLUSTER_B" DIRECTOR_GLOBAL_ROLE=supervisor \
     "$SHIM" <"$work/s.in" >"$work/s.out" 2>"$work/s.err" &
 shim_pids+=($!); S_PID=$!
-exec 3>"$work/d.in" 4<"$work/d.out" 5>"$work/s.in" 6<"$work/s.out"
+exec 3>"$work/d.in" 4<"$work/d.out"
+sleep 0.3
+exec 5>"$work/s.in" 6<"$work/s.out"
 
 # Two stdio drivers, one per side, so no call can be served by the wrong shim.
 # A timed-out RPC is recorded in a FILE, not a variable: every call site runs
@@ -401,7 +429,7 @@ echo "# director $AGENT_D ($INST_D) on $CLUSTER_A; supervisor $AGENT_S ($INST_S)
 # wrote it.
 [[ "$INST_D" != "$INST_S" ]] \
   && ok "the two sessions minted distinct instances" \
-  || bad "instance collision" "both sides report $INST_D"
+  || bad "instance collision" "both sides minted $INST_D (d.err: $(grep -o 'instance [0-9A-Z]*' "$work/d.err" | head -1); s.err: $(grep -o 'instance [0-9A-Z]*' "$work/s.err" | head -1)); see director#62"
 
 # --- 1. R-86/R-06/R-79: no rename between the tiers ---------------------
 # The address the global tier knows must be the one the launcher minted, and
