@@ -138,7 +138,22 @@ pub() { nats auth nkey show "$work/keys/$1.nk"; }
 # including the asymmetry that decides this test: a cluster leaf may PUBLISH to
 # global.director.inbox but may not read or delete GLOBAL_TO_DIRECTOR, and may
 # consume and delete only from its own GLOBAL_TO_<cluster>. The director leaf is
-# the mirror image. Granting more here would make the harness lie.
+# the mirror image.
+#
+# Do not widen these to make a check pass. A rig that grants more than
+# production grants passes in exactly the case where production fails, which is
+# the one case anybody is running this for. If a future hub config diverges from
+# these blocks, copy the new production shape here rather than relaxing them;
+# a harness whose permissions are more generous than the system under test is
+# measuring a system that does not exist.
+#
+# Check 9 exists for the same reason and is not decoration. It asserts the
+# asymmetry still holds at run time, because if a cluster credential ever COULD
+# read GLOBAL_TO_DIRECTOR, the receipt this script trusts could have been read
+# back by the sender rather than received from the recipient, and the whole
+# instrument would quietly decay into the audit-mirror shape it was written to
+# replace. selftest-roundtrip-receipts.sh drives FAULT=grant_asymmetry_broken
+# specifically so that check has its own red run and cannot rot unnoticed.
 leaf_grants() { # cluster pub-extra
   local c="$1"
   cat <<CONF
