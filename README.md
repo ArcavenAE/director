@@ -78,6 +78,17 @@ commands/director.md thin command that invokes the skill
 install.sh           symlink or copy the skill and command into ~/.claude
 docs/                operator guide, shim reference, architecture and use-case diagrams
 probe/nats-phase-0/  the transport probe: NATS broker + director-mcp shim
+  PROGRESS.md          sub-probe results (poll is the receive, finding-160)
+  director-mcp-seat    the launcher a seat registers; see Install
+probe/nats-global-tier/
+                     the global tier probe: a TLS hub and leaf-connected
+                     clusters, so separate clusters share one director tier
+  brief.md             what the tier is for and what it has to prove
+  nats-mechanics.md    the NATS behaviour the tier leans on
+  recipe-mokuzai.md    the worked setup for one leaf cluster
+  hub/                 hub config, the CA ceremony, provisioning scripts
+  leaf-remote.conf.example  the leaf side of the connection
+  verify-*.sh          checks that a tier is actually carrying traffic
   director-mcp/        the shim (Go): five tools, local and global tiers, preflight
   PROGRESS.md          sub-probe results 1 through 9 (poll is the receive, finding-160)
   authorization.conf   the credential-to-subject binding (director#4)
@@ -105,6 +116,61 @@ into the platform's knowledge graph.
 /director standing    # adopt the role for the session
 ```
 
+That installs the skill and the command and creates the state root. It is the
+whole of what `install.sh` does.
+
+### The bus seat, by hand
+
+The skill alone does not let a seat send a message. Sending runs over the
+director MCP server, and nothing in `install.sh` puts it in place, creates
+`~/.director/bin`, or mentions a broker. On this fleet that gap is closed by
+hand. It is honest to say what this is: Phase 0 probe material being run in
+anger, not a packaged install. Writing the installer is a separate job.
+
+Two files, both under `probe/nats-phase-0/`:
+
+- `director-mcp`, the MCP server. Build it and install it at
+  `~/.director/bin/director-mcp`, or point `DIRECTOR_MCP_BIN` at it. The
+  launcher refuses to start if it is missing.
+- `director-mcp-seat`, the launcher that works out who the seat is. The fleet
+  runs it from `~/.director/bin/director-mcp-seat`, a symlink back to this
+  repo.
+
+Register it once, with no identity of its own. The same registration is then
+correct both for a marvel-managed session and for a seat you start yourself:
+
+```sh
+codex mcp add director -- ~/.director/bin/director-mcp-seat
+```
+
+What the launcher needs, and where it gets it:
+
+| Needs | In a marvel session | Started by hand |
+|---|---|---|
+| identity | `MARVEL_SESSION`, `MARVEL_TEAM`, `MARVEL_WORKSPACE`, stamped by marvel | `DIRECTOR_AGENT_ID` falls back to `director-seat`; `DIRECTOR_TEAM` and `DIRECTOR_WORKSPACE` are required and it exits without them |
+| bus credentials | `DIRECTOR_NATS_USER` and `DIRECTOR_NATS_PASS`, stamped by marvel | user `director`, password read from `~/.marvel/state/nats/director.pass` |
+| broker | `NATS_URL`, default `nats://127.0.0.1:4222` | same |
+
+That password file exists only if the cluster declares a seat, so a hand-run
+seat also needs this in the cluster config, then a daemon restart:
+
+```yaml
+bus: { managed: true, seat: { workspace: <ws>, team: <team> } }
+```
+
+One extra line is required for codex, which does not pass its environment to
+an MCP server. Without it a marvel-managed codex session cannot see marvel's
+stamps and falls back to the seat identity. It belongs in the role's manifest
+beside the command registration:
+
+```
+-c 'mcp_servers.director.env_vars=["MARVEL_SESSION","MARVEL_TEAM",
+     "MARVEL_WORKSPACE","DIRECTOR_NATS_USER","DIRECTOR_NATS_PASS",
+     "NATS_URL"]'
+```
+
+Diagnostic: a marvel-managed agent that appears on the roster under the seat
+id rather than its own session name is missing that line.
 ## Run the bus
 
 ```sh
