@@ -1,8 +1,34 @@
 # finding-005: cross-host director mail fails on the consumer side, not the wire
 
+> SUPERSEDED 2026-09-22 by aae-orc-m517d (the migrated team's four-candidate
+> investigation) and by the kinu re-investigation opened this date. Do NOT
+> trust the "consumer-side, diagnosis complete" conclusion below. Two defects
+> in it, both confirmed:
+>
+> 1. The root cause was asserted on a SINGLE uncontrolled test ("the kinu
+>    director inbox drained nothing, twice") that diagnosed THROUGH the channel
+>    under test and never verified the director consumer was in a
+>    `wait_for_message` loop at send time. Given O-28 (an idle seat does not
+>    consume the bus) and finding-186 (marvel capture reads stale), "drained
+>    nothing" cannot distinguish consumer-binds-wrong-stream from
+>    nobody-was-listening. The finding carried no caveat to this effect.
+> 2. It cites "the fix is l15b5 + 7gnvo." l15b5 fixed the `agent://` R-92
+>    workspace-subject defect (director#24), a DIFFERENT path; `global://`
+>    carries no workspace token (bus.go:392), so l15b5 does not touch the
+>    return path at all.
+>
+> The live investigation treats the cause as OPEN with four candidates and a
+> stated diagnostic discipline (pin shim build per seat; diagnose via harness
+> or direct hub read, never through the channel under test; read the SENDING
+> seats' transcripts for the refusal text). See aae-orc-m517d, aae-orc-7xrdo
+> (presence-resolver silently skips the director row → false refusal),
+> aae-orc-nzh7c (the director-silence split). The text below is retained
+> verbatim as the record of a premature diagnosis, not as guidance.
+
 Date: 2026-09-21. Subject: director (cross-host inbound mail). Status:
-diagnosis complete; fix in flight (l15b5 + 7gnvo). Supersedes the working
-hypothesis that a duplicate `global://kinu/director` holder was intercepting.
+SUPERSEDED (see banner above). Originally filed as: diagnosis complete; fix in
+flight (l15b5 + 7gnvo). Supersedes the working hypothesis that a duplicate
+`global://kinu/director` holder was intercepting.
 
 ## Symptom (O-23)
 
