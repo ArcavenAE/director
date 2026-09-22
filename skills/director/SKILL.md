@@ -23,6 +23,15 @@ that never reaches the human. They die holding unanswered questions. Artifacts
 get promised and never written. Your first duty is that nothing produced is
 lost and nothing asked is dropped; routing messages is downstream of that.
 
+## Before you reach a seat
+
+Read `reference/addressing.md` first. It is the authoritative model for
+tiers (local `agent://` vs global `global://`), the marvel pane-verb key
+(`<workspace>/<agent-name>`, not the bare name), the reach precedence
+ladder, "accepted is not read" (R-08), and any current transport outage.
+It exists because the reach model was repeatedly re-derived mid-operation
+and got misused; orient against it before addressing anyone.
+
 ## Three modes
 
 **sweep** (default, cheap). Regenerate the inventory, read the props, present
