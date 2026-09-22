@@ -231,7 +231,13 @@ CONF
 # real, the receipt could be read instead of received.
 EXTRA_SUB=""
 EXTRA_PUB=""
-if [[ "${FAULT:-}" == "grant_asymmetry_broken" ]]; then
+# FAULT=grant_asymmetry_broken_leaf_dead is the MIS-PROVOCATION. It sets the
+# same grant up, then kills the leaf just before check 9 so the check fails at
+# its POSITIVE CONTROL instead of at the assertion the fault aims for. It exists
+# to be NOT caught: the red driver must report it MISSED, because a matcher that
+# still says CAUGHT here is matching the label rather than the branch. See the
+# note above the faults array in selftest-roundtrip-receipts.sh.
+if [[ "${FAULT:-}" == "grant_asymmetry_broken" || "${FAULT:-}" == "grant_asymmetry_broken_leaf_dead" ]]; then
   EXTRA_SUB=', "global.director.>"'
   EXTRA_PUB=', "$JS.'"$DOMAIN"'.API.STREAM.INFO.GLOBAL_TO_DIRECTOR"'
   echo "FAULT grant_asymmetry_broken: the $CLUSTER_B leaf is being granted read on the director stream"
@@ -736,6 +742,11 @@ fi
 # permission denial this is trying to prove, so the denial has to be shown
 # SPECIFIC: the same credential, in the same call shape, must succeed on its own
 # cluster's stream in the same breath. Without that, "it failed" proves nothing.
+if [[ "${FAULT:-}" == "grant_asymmetry_broken_leaf_dead" ]]; then
+  echo "FAULT grant_asymmetry_broken_leaf_dead: killing the $CLUSTER_B leaf so check 9 fails at its positive control, not at its assertion"
+  kill -9 "$LEAF_B_PID" 2>/dev/null || true
+  sleep 1
+fi
 if ! "${HUB_B[@]}" stream info "GLOBAL_TO_$CLUSTER_B" >/dev/null 2>&1; then
   bad "R-95 asymmetry" "the positive control failed: the $CLUSTER_B credential cannot read its OWN stream either, so a refusal on the director stream would prove nothing (leaf down, wrong domain or dead hub)"
 elif "${HUB_B[@]}" stream info GLOBAL_TO_DIRECTOR >/dev/null 2>&1; then

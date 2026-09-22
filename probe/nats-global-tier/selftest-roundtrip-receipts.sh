@@ -34,7 +34,21 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARNESS="$here/verify-roundtrip-receipts.sh"
 [[ -x "$HARNESS" ]] || { echo "not executable: $HARNESS"; exit 2; }
 
-# fault -> a string that must appear in the FAIL line it provokes
+# fault -> a string that must appear in the FAIL line it provokes.
+#
+# THE STRING MUST NAME THE BRANCH, NOT THE CHECK. bad() renders
+# "FAIL <label> -- <detail>" and the driver greps "FAIL .*$want", so an expect
+# string that is the LABEL matches EVERY failure branch under that label, and a
+# fault provoking the wrong branch still reports CAUGHT. A label discriminates
+# only for a check that can fail exactly one way. Checks 7 and 9 each grew extra
+# unscoreable branches while this PR was in review, which silently widened their
+# labels; the expect strings below quote the DETAIL of the one branch each fault
+# is supposed to provoke.
+#
+# That is the same defect as the one this harness exists to catch, one layer up:
+# adding an unscoreable branch to fix absence-as-evidence on the green side
+# widens any matcher that names that check by label on the red side. The remedy
+# has its own failure mode.
 faults=(no_in_reply_to sender_writes_receipt no_reply wrong_digest wrong_performative not_drained no_consumer grant_asymmetry_broken neg_has_supervisor leaf_dead_before_beatc)
 expect_no_in_reply_to="in_reply_to missing or wrong"
 expect_sender_writes_receipt="receipt authorship"
@@ -43,8 +57,8 @@ expect_wrong_digest="content digest"
 expect_wrong_performative="answer performative"
 expect_not_drained="drain: the REQUEST was enqueued on the recipient's durable and never dequeued"
 expect_no_consumer="transport: not enqueued on the recipient's durable"
-expect_grant_asymmetry_broken="R-95 asymmetry"
-expect_neg_has_supervisor="R-08 negative self-test"
+expect_grant_asymmetry_broken="can read GLOBAL_TO_DIRECTOR"
+expect_neg_has_supervisor="a receipt appeared for this probe"
 expect_leaf_dead_before_beatc="unscoreable: the supervisor's row read as absent"
 
 caught=0; missed=0
@@ -66,4 +80,27 @@ done
 
 echo
 echo "$caught caught, $missed missed"
-[[ $missed -eq 0 ]]
+
+# --- the mis-provocation: a fault that must NOT be caught ----------------
+# The second half of the acceptance test. The totals above only show the eight
+# that were always right still work. This shows the matcher now discriminates:
+# grant_asymmetry_broken injected WITH THE LEAF DEAD makes check 9 fail at its
+# positive control rather than at its assertion, so the expect string must NOT
+# match. If this reports CAUGHT, the matcher is keyed on the label again and the
+# fix has not landed, whatever the totals say.
+echo
+mp_out="$(FAULT=grant_asymmetry_broken_leaf_dead "$HARNESS" 2>&1)" && mp_rc=0 || mp_rc=$?
+if [[ $mp_rc -eq 0 ]]; then
+  echo "MIS-PROVOCATION INCONCLUSIVE -- the harness passed, so no FAIL line was produced to match against"
+  mp_bad=1
+elif grep -q "FAIL .*$expect_grant_asymmetry_broken" <<<"$mp_out"; then
+  echo "MIS-PROVOCATION FAILED -- the wrong branch satisfied expect_grant_asymmetry_broken, so the matcher is keyed on the label"
+  grep '^FAIL' <<<"$mp_out" | sed 's/^/        /'
+  mp_bad=1
+else
+  echo "MIS-PROVOCATION OK -- the positive-control branch did NOT satisfy expect_grant_asymmetry_broken"
+  echo "        provoked: $(grep -m1 '^FAIL' <<<"$mp_out")"
+  mp_bad=0
+fi
+
+[[ $missed -eq 0 && $mp_bad -eq 0 ]]
