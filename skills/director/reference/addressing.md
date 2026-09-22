@@ -71,11 +71,14 @@ own marvel config names that cluster "mokuzai" — same fleet, two names.
 
 ## Current condition (dated — this part decays)
 
-**2026-09-21: the mokuzai -> kinu return path is DOWN.** Replies to
-`global://director` are accepted onto GLOBAL_TO_DIRECTOR but never reach the
-director inbox, which binds the local tier, not GLOBAL_TO_DIRECTOR
-(consumer-side; O-23). While it holds: cross-host seats report status on
-GitHub (PR/issue comments), which is the authoritative channel; do not read
-a bus "accepted" as "heard." Fix in flight: l15b5 + 7gnvo. Re-run the
-round-trip test when they land, and delete this paragraph once the return
-path is confirmed up.
+**2026-09-21: the mokuzai -> kinu return path is DOWN (O-23), cause OPEN.**
+Replies to `global://director` are accepted onto GLOBAL_TO_DIRECTOR but do not
+reach the director inbox. The earlier "consumer binds the local tier"
+conclusion (finding-005) is SUPERSEDED and untrustworthy; the cause is under
+active four-candidate diagnosis (aae-orc-m517d: subject/stream mismatch;
+aae-orc-7xrdo: presence resolver silently skips the director row and refuses
+falsely; build skew; nzh7c: delivered-not-answered). While it holds:
+cross-host seats report status on GitHub (PR/issue comments), the authoritative
+channel; do not read a bus "accepted" as "heard." Do NOT ship a bus fix on a
+guess. Delete this paragraph only once a controlled round-trip (director
+provably in wait_for_message, hub read directly) confirms the path up.
