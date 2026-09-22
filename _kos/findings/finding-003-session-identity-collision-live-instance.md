@@ -35,3 +35,44 @@ The roster makes the collision hard to see. `list_roster` (`probe/nats-phase-0/d
 ## 5. Placement note (for the operator)
 
 I filed this in director's graph per the subject test, since the subject is director session identity. Its sibling, the presence-liveness half, is instance (c) on the orc graph's `finding-166`, and the wider director-identity finding cluster (finding-159, finding-160, finding-166) currently lives in the orc graph. So this finding sits apart from that cluster. If the operator wants the cluster consolidated into one graph, that is a migration decision; I did not move the existing orc findings.
+
+---
+
+## 6. Correction appended 2026-09-21 (finding-005): section 4's R-50 claim is conditional, and section 2's discriminator is not reliable
+
+Appended rather than rewritten, so the original reasoning stands as it was
+written and the change is visible.
+
+**What does not hold.** Section 4 says "R-50's per-session durable name makes
+even a misconfigured duplicate id unable to steal another session's mail." That
+was always conditional on the instance being unique, and
+[finding-005](finding-005-instance-ulid-collides-on-simultaneous-start.md)
+measures that it is not: two processes started in the same instant mint the same
+instance ULID in 47 of 200 simultaneous pairs, because `ulid.Make()` seeds
+`math/rand` from the wall clock at package init. The durable is
+`mcp_<agentID>_<instance>` (`bus.go:141`). If the agent id collides, as it does
+in this finding, AND the instance collides, the durable name collides too and
+two shims race one consumer. R-50's protection does not degrade in that case, it
+fails.
+
+**What is weakened.** Section 2 says "the only fields that differ between two
+colliding sessions are the instance ULID and the shim pid." One of those two is
+unreliable under precisely the condition that creates agents, since a launcher
+starts a team together.
+
+**This finding's own specimen is NOT exposed, and that matters.** The two
+sessions recorded here (pids 74798 and 43993) were separate `claude --resume`
+sessions started at different times, and they carry distinct instances
+(`01M2M33CE6C8S8PP7T82XJBWZW` and its counterpart). Nothing about this specimen
+is retroactively worse. The compound case needs a launcher casting both sessions
+at once, which is exactly what `marvel` does when it applies a team and what
+`marvel shift` does when it rotates a generation. So the specimen is safe and
+the class it generalises to is not.
+
+**A further consequence this finding could not have seen.** The R-49 collision
+detector added in response to it is keyed on instance INEQUALITY:
+`checkCollision` (`bus.go:725`) warns only on a row whose `instance` differs from
+its own. Two sessions sharing both agent id and instance write ONE local presence
+key, so the loop finds a single row, its own, and returns empty. In the compound
+case, the detector built to catch this finding is silent. The fix in
+finding-005 section 5 closes that too.
