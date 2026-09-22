@@ -61,6 +61,20 @@ expect_grant_asymmetry_broken="can read GLOBAL_TO_DIRECTOR"
 expect_neg_has_supervisor="a receipt appeared for this probe"
 expect_leaf_dead_before_beatc="unscoreable: the supervisor's row read as absent"
 
+# Which check each fault turns red. Declared next to the faults so the person
+# ADDING a fault updates it in the same edit. The uncovered set is derived from
+# this plus the harness's own section headers, never hand-listed here.
+targets_no_in_reply_to="6 6b"
+targets_sender_writes_receipt="5 6 6b"
+targets_no_reply="5 6 6b"
+targets_wrong_digest="6 6b"
+targets_wrong_performative="6 6b"
+targets_not_drained="4b 6"
+targets_no_consumer="4a 4b"
+targets_grant_asymmetry_broken="9"
+targets_neg_has_supervisor="7"
+targets_leaf_dead_before_beatc="10"
+
 caught=0; missed=0
 for f in "${faults[@]}"; do
   want_var="expect_$f"; want="${!want_var}"
@@ -103,4 +117,30 @@ else
   mp_bad=0
 fi
 
-[[ $missed -eq 0 && $mp_bad -eq 0 ]]
+# --- the UNCONTROLLED line must match what the faults actually cover -----
+# The green side prints a list of checks with no red run. A hand-maintained
+# list goes stale the moment someone adds a check, so it is derived here and
+# compared rather than trusted: all checks declared in the harness's section
+# headers, minus every check the faults above target. Section 11 is excluded
+# because it is a NOT RUN report, not an assertion.
+echo
+all_checks="$(grep -oE '^# --- [0-9]+[ab]?\.' "$HARNESS" | sed -E 's/^# --- ([0-9]+[ab]?)\./\1/' | grep -vx 11)"
+covered=""
+for f in "${faults[@]}"; do
+  tv="targets_$f"; covered="$covered ${!tv}"
+done
+derived=""
+for c in $all_checks; do
+  case " $covered " in *" $c "*) ;; *) derived="$derived $c" ;; esac
+done
+derived="$(echo $derived)"
+claimed="$(env -u FAULT "$HARNESS" 2>&1 | sed -n 's/^UNCONTROLLED checks \(.*\) (.*/\1/p' | sed 's/ and / /; s/,//g')"
+if [[ "$derived" == "$claimed" ]]; then
+  echo "UNCONTROLLED LINE OK -- the green side claims [$claimed] and the faults cover everything else"
+  unc_bad=0
+else
+  echo "UNCONTROLLED LINE STALE -- the green side claims [$claimed] but the faults leave [$derived] uncovered"
+  unc_bad=1
+fi
+
+[[ $missed -eq 0 && $mp_bad -eq 0 && $unc_bad -eq 0 ]]

@@ -818,10 +818,23 @@ nr "aae-orc-5lkxr (b) ungraceful exit and (c) partition read" "SIGKILL timing ag
 nr "aae-orc-8gp9f identity across a shift" "out of scope for this ticket and non-blocking for the stage, per av2v1"
 
 echo
-# Item D. The three assertions below are made but NOT negatively controlled:
-# injecting them needs a patched shim and this ticket is instrument-only. The
-# header has said so since the first draft, seven hundred lines above the line
-# a gate reader actually reads, which is the same defect as an unnamed NOT RUN.
-echo "UNCONTROLLED checks 0, 1 and 2 (instance distinctness, no-rename, catalog address) are asserted but have no red run; the selftest cannot inject them without a patched shim"
+# Item D. The checks below are asserted but NOT negatively controlled. The
+# header said so since the first draft, seven hundred lines above the line a
+# gate reader actually reads, which is the same defect as an unnamed NOT RUN.
+#
+# The RULE is printed beside the list on purpose, because the list is an
+# enumeration and an enumeration grows whenever someone adds a check without a
+# fault. That puts the obligation on every future check author and nothing
+# checks it, which is why the first version of this line said three when the
+# answer was five. With the rule stated, a reader can re-derive the set from
+# the selftest's faults array instead of trusting this string, and a wrong list
+# becomes visible rather than authoritative.
+#
+# It is also cross-checked rather than merely stated: selftest-roundtrip-
+# receipts.sh derives the same set, from this file's own section headers minus
+# the checks its faults target, and FAILS if it disagrees with this line. Add a
+# check and the red side goes red until either a fault or this string catches
+# up.
+echo "UNCONTROLLED checks 0, 1, 2, 3 and 8 (instance distinctness, no-rename, catalog address, REQUEST stored, reverse leg) are asserted but have no red run. The rule: a check with no fault aimed at it in the selftest's faults array has no red run"
 echo "$pass passed, $fail failed, $notrun not run"
 [[ $fail -eq 0 ]]
