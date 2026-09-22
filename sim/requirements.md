@@ -1059,3 +1059,118 @@ the director could not tell heard from lost. Director must surface delivered
 and read status per message, so a silent-drop condition is observable rather
 than inferred days later. Cross-refs: R-08 (accepted != delivered or read),
 O-23, finding-005.
+
+---
+
+## J. The director seat's own receive path (2026-09-22 harvest, from the return-path resolution)
+
+Filed 2026-09-22 after O-23/29/30/31 resolved. The cross-host return-path outage
+that ran most of a day was not a transport break: the director seat's own receive
+was mis-provisioned, and the failure was invisible from both ends. These five
+refine R-105 (which named the symptom and cited the now-superseded finding-005)
+with the mechanism, established by a direct hub read (`:8242/jsz`) while the seat
+was provably polling. Source classes are inline. finding-006 and finding-007 are
+the evidence; the general form of finding-188 is routed to the platform graph, not
+here (see the harvest diff at the end of this section).
+
+**R-106 (OBSERVED) · the director's own receive path maintains a durable consumer
+on its global inbox stream, never a bare core subscription.** finding-006: the
+running director held only a NATS core subscription on `global.director.inbox`,
+which receives only what is published while it is actively subscribed and never
+replays the stream backlog; `wait_for_message` subscribes for the poll duration
+only, so any reply sent between polls stranded on GLOBAL_TO_DIRECTOR (51 stranded,
+including two live test AGREEs). A durable consumer (DeliverAll, keyed to the
+seat's own instance) survives between polls and replays the backlog. This is R-50
+(a durable consumer unique per session) applied to the director seat itself, and
+it is the concrete mechanism under R-105's silent drop.
+*Earned by: hub read `http://127.0.0.1:8242/jsz` during an active director fetch,
+51 stranded messages, no `mcp_global_director` durable present; the committed shim
+code creates the durable, the running dirty build did not.*
+*Source: OBSERVED. Cross-refs R-50, R-105, finding-006.*
+
+**R-107 (OBSERVED) · a poll that returns empty distinguishes an empty stream from
+a missing consumer; a starved consumer is loud, never reported as "silence, not
+failure."** finding-007 (director#66): a seat that loses its durable (a 25h
+InactiveThreshold expiry, or a delete) receives zero, does not rebuild within the
+observed window, and returns non-error silence with the note "no message within
+the window; this is silence, not failure," while its presence row keeps
+refreshing. The failure is undetectable from inside the seat (every self-check it
+holds runs inside the thing that stopped working) and from the sender (presence
+says live, the send is accepted). The poll result must carry consumer state so
+no-consumer and no-message are different answers. Sharpens R-14 (liveness is
+end-to-end) and R-93 (attachment is asserted, not inferred) onto the receive
+path's own self-report; it is the receive-side twin of the finding-188 class
+(unknown coerced to the reassuring value).
+*Earned by: an isolated-rig reproduction (durable deleted, 8 polls over ~60s, 0
+redelivered, consumer absent, non-error silence every time), migrated's builder;
+and the director seat's own hours-long instance of exactly this.*
+*Source: OBSERVED. Cross-refs R-14, R-93, R-105, R-106, finding-007, director#66.*
+
+**R-108 (JUDGMENT, observed basis) · the director-mcp ships as a reproducible,
+version-pinned artifact, and a running seat's on-wire behavior is reconcilable
+with a committed ref.** O-31 and finding-006: the running director was
+`vcs.modified=true` (a dirty Sep-19 build at 0eade31, unreproducible from any
+commit) while kinu supervisors ran a different clean build (eb40aa3) from a
+different install path, and the mokuzai builds were unknown. A dirty, unpinned,
+multi-path, multi-machine binary with no release is a standing hazard: the next
+wire-format change splits the fleet silently, and a seat's behavior cannot be
+reconciled with the source of record. The software needs a build and release path
+(a `--version` that does not connect, pinned installs) so seats are reconcilable.
+A released reproducible director is part of "director existing and working," so
+this passes the admission test rather than being general project hygiene.
+*Earned by: the version-provenance mapping in O-31; the dirty build that was
+finding-006's compounding cause.*
+*Source: JUDGMENT on an observed basis. Cross-refs O-31, finding-006, R-06.*
+
+**R-109 (OBSERVED) · the global tier is upward-open and downward-closed except
+through the director seat, so cross-team and cross-cluster relay routes through
+the director by topology, and a denied cross-team publish fails loud, never as a
+timeout.** finding-006-global-tier (director#63): a team-scoped session's broker
+user is confined to its own team subject (migrated to `agent.aae.migrated.>`), so
+a cross-team publish returned "context deadline exceeded" three times, an
+authorization denial wearing a timeout's clothes. Only the director seat (the far
+leaf) holds publish into a cluster inbox, which makes director the mandatory relay
+hop for cross-team and cross-cluster work, and requires the authz denial surface
+as an R-09-loud named refusal. The director seat is not the coordinator by
+convention; it is the only principal the topology permits to address a cluster.
+*Earned by: three reproductions on migrated's seat (cross-team send to the
+reviewer team, and to `global://{cluster}/supervisor`), each a deadline-exceeded;
+the hub leaf allow-lists read from `nats-global/nats-server.conf`.*
+*Source: OBSERVED. Cross-refs R-09, R-32, R-92, R-104, finding-006-global-tier,
+director#63.*
+
+**R-110 (OBSERVED) · a director REQUEST carries a reply_by deadline, and its
+delivery or consumption is confirmed before the director treats it as in-flight;
+unbounded silence to an idle poll-based recipient is undelivered, not pending.**
+O-28/O-29/O-30 and this session's return-path investigation: requests sent over
+the bus to idle seats were accepted-not-consumed and would have waited forever
+(the operator caught this directly). The Sep-20 handshake (REQUEST + reply_by +
+AGREE-then-INFORM, R-08) made a dropped return leg visible at once; dropping it on
+Sep-21 made the outage read as a transport break. Director must re-institute
+reply_by plus an explicit ack, confirm delivery or consumption (or wake the
+recipient) before waiting, and bound-and-escalate rather than poll forever. This
+turns R-08, R-89, and R-105 into a director-behavior contract.
+*Earned by: the operator's "wait forever on replies that will never come"
+correction; O-28 (a bus send does not wake an idle seat); O-30 (the handshake was
+in use Sep-20 and lapsed Sep-21).*
+*Source: OBSERVED. Cross-refs R-08, R-89, R-105, O-28, O-29, O-30.*
+
+### Harvest diff (2026-09-22)
+
+- **Promoted (5):** R-106 (director durable receive), R-107 (starvation is loud,
+  not silence), R-108 (reproducible pinned build), R-109 (cross-cluster routes
+  through director; loud authz), R-110 (reply_by + confirm-before-wait).
+- **Unchanged:** R-105 stands; its symptom framing is correct and its finding-005
+  citation is left as the historical record. R-106 supplies the mechanism it
+  lacked. R-50, R-14, R-93, R-08, R-89 unchanged; the new entries cross-ref them
+  rather than restating.
+- **Rejected for the register (routed elsewhere):** the general finding-188 class
+  ("a system that cannot distinguish NOT CHECKED from CHECKED-AND-FINE renders the
+  ambiguous state as good") is general engineering discipline, so it fails the
+  admission test (director existing changes nothing about the general principle);
+  it belongs in the platform graph and is already filed as a fleet finding. Its
+  director-specific face is folded into R-107. The marvel inject hazards (H3, the
+  literal-Enter codex-menu cancel; draft-append-on-inject) are marvel/tooling
+  defects, tracked on marvel tickets and in `reference/addressing.md`, not
+  director-software requirements. The stage-2 premise-check win (l15b5/keodl
+  already fixed) is task-workflow discipline working, not a new requirement.

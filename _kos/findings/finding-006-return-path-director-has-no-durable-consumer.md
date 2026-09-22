@@ -1,5 +1,15 @@
 # finding-006: the cross-host return path fails because the director maintains no durable consumer on GLOBAL_TO_DIRECTOR
 
+> RESOLVED-VERIFIED 2026-09-22. Fix applied and proven: rebuilt director-mcp
+> clean from HEAD (b2cfa45, vcs.modified=false), reconnected the director MCP.
+> The clean binary created mcp_global_director_01M33ZQ2VKZZHQX2A1WJZWZGQH
+> (DeliverAll) on GLOBAL_TO_DIRECTOR, and a cross-host message from
+> errand-supervisor-g1-1 (mokuzai) to global://director was delivered to the
+> director inbox (tier=global). The dirty-build divergence was the cause.
+> Residual follow-ups tracked separately (GlobalWarn silent fallback, stale
+> consumer cleanup, director-mcp release/build path).
+
+
 Date: 2026-09-22. Subject: director (cross-host inbound mail, O-23). Status:
 root cause identified by direct hub read; fix is a clean rebuild + verify, not
 a code hunt. Completes and corrects finding-005-cross-host-return-path (which
