@@ -157,7 +157,7 @@ func TestGlobalDurableIsPerSession(t *testing.T) {
 }
 
 func TestNoGlobalPresenceRefusalNamesTheRule(t *testing.T) {
-	err := noGlobalPresenceErr("global://mokuzai/supervisor")
+	err := noGlobalPresenceErr("global://mokuzai/supervisor", "presence.mokuzai.supervisor.", presenceScan{})
 	if !strings.Contains(err.Error(), "R-92") || !strings.Contains(err.Error(), "no session would consume") {
 		t.Fatalf("the liveness refusal should name its cause and R-92: %v", err)
 	}
