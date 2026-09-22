@@ -956,3 +956,106 @@ the split above are its output.
 - R-07's class: instructions embedded in reviewed material.
 - What the envelope's evidence-standard and deviation-license fields should
   contain. Both were earned by O-9 and neither has a shape yet.
+
+## Harvest 2026-09-20 (director seat reach, identity, and transport)
+
+From session aae-orc-05 (the michael/ops seat operating as director with the
+global tier OFF). Seven candidates, promoted with source class. The session
+itself was the instrument: a director seat launched hobbled, and every workaround
+it reached for named a requirement. Cross-refs: observations.md candidate list,
+relay-log R-8/R-9, friction.md, and bd aae-orc-anwnh, q9mtd, hieji, ss5g9,
+vkx65, nny4g, z3wta.
+
+**R-96 (OBSERVED) · the global inbox must be store-and-forward, not
+presence-gated drop.** R-92 refuses a `global://` send when the recipient holds
+no live presence; a coordinating seat that comes and goes is then structurally
+lossy. Instances: relay-log R-8 (a notice to `global://director` refused during
+a presence gap); this session's `agent://migrated` send accepted onto the local
+tier and stranded because the recipient was cross-cluster. A queue that holds
+for an absent recipient and delivers on return removes both. Tracked bd
+aae-orc-vkx65.
+
+**R-97 (OBSERVED) · a director must be able to name ONE remote seat; role
+fan-out cannot be the only cross-host address.** relay-log R-9: two supervisors
+both register `global://mokuzai/supervisor`, so a role send lands on either; this
+session could not address a specific mokuzai supervisor from kinu at all. Unique
+per-seat global addresses are required. Tracked bd aae-orc-q9mtd, hieji, ss5g9.
+
+**R-98 (OBSERVED) · rich payloads need a real command channel, not keystroke
+injection.** Inject is a doorbell that truncates and collides: this session's
+871-byte inject collapsed into a bracketed paste ("paste again to expand") and
+needed two bare-Enter follows to submit; a 585-byte one submitted. marvel#317 is
+the head-truncation-at-spawn sibling. A director that must task remote seats
+needs a transport that carries a full envelope reliably. Tracked bd aae-orc-40fet.
+
+**R-99 (JUDGMENT) · bd (a durable store) is the sanctioned return channel;
+design for it.** With the bus reach down, every dispatched result this session
+was routed back through a bd note (mmykg, 96uyt, anwnh). It worked because it is
+durable and pollable, not because it was the fallback. The return channel should
+be a designed property, not the thing that happened to survive.
+
+**R-100 (OBSERVED) · a director seat must verify its own reach at startup and
+refuse or warn when its role lacks it, rather than run silently hobbled.** This
+seat launched with no global levers; `list_roster` showed local only and every
+`global://` send refused, with no signal that the seat was mis-provisioned. The
+OFF case is valid for a worker (workers hold no global address) but a
+director-role seat with the global tier off cannot do its job. Tracked bd
+aae-orc-anwnh.
+
+**R-101 (OBSERVED) · a director seat's identity, global role, and working
+context are assigned PER-SEAT at spawn, never drawn from a config shared by other
+agents, and the seat must run at the orchestrator root.** The shared aae-orc
+project MCP block bakes `DIRECTOR_AGENT_ID=michael` local-only and would brand
+every claude in the tree the global director if extended; the per-seat launcher
+(`--strict-mcp-config`) is the correct shape. A seat launched from the wrong cwd
+loses the orc CLAUDE.md, rules, skills, and tools. Three distinct spawn traps in
+one launch. Tracked bd aae-orc-anwnh.
+
+**R-102 (JUDGMENT) · where the director holds direct capability for a
+director-level action, do it; reserve relay for work that must run in another
+session.** Direct actions landed cleanly and instantly this session (marvel
+against a reachable cluster, bd writes, file authoring); relay through a degraded
+bus was where work stalled. This is bounded by z3wta: "director-level action"
+means scaling a role, writing bd, authoring a doc, not doing a worker's coding.
+The bias is toward director's OWN verbs, not toward absorbing the work.
+
+**R-103 (RULED) · a live, first-class fleet-state model is a director function,
+not something reassembled by hand each roll call.** The operator ruled
+(2026-09-20) that director must know, as a standing capability: the state of the
+fleet and of each agent; each seat's reachability and the reach method (which
+tier/layer actually reaches it); each seat's cwd, workspace, and cluster/host;
+and the org structure, which supervisor owns which agents and what role each
+agent holds within its team. This session assembled that picture by hand every
+stansfield pass, fusing three sources (director bus list_roster for presence and
+global role, marvel get sessions per cluster for the full managed roster, and
+ListAgents for interactive/Remote-Control Claude sessions), then deduping by
+agent-id / instance-ULID / tmux target. That fusion is the software's job:
+director should hold the merged model continuously, keep it current, and answer
+"who is where, reachable how, owned by whom, doing what role" without a manual
+sweep. FAKED IT every roll call; RULED first-class here. Cross-refs: the
+stansfield skill (its manual three-source procedure is R-103's spec, measured),
+R-97 (unique per-seat address is a reachability field of this model),
+scripts/dsi (sessions.json/roster.md is the current partial instrument). Fields
+per seat: agent-id, instance, cluster/host, workspace, team, role, gen,
+state/health, ctx%, tier visibility, global role, reach method, cwd.
+
+**R-104 (OBSERVED) · director must address one seat across hosts by a stable
+name.** The bus has no per-seat global address: `global://{cluster}/supervisor`
+fans out to every supervisor on the cluster (five on mokuzai), and an
+`agent://{team}/{id}` aimed at a remote seat is silently delivered to the
+local inbox instead. Reaching one specific remote seat this session
+(2026-09-21) forced either a five-way role fan-out with the recipient scoped
+in the message body, or a marvel pane verb keyed `<workspace>/<agent-name>
+--cluster`. Both are workarounds for a missing capability: cross-host per-seat
+addressing. Cross-refs: R-97 (unique per-seat address), R-103 (fleet-state
+model, of which reachability is a field), bd q9mtd (ambiguous global role
+address), finding-005.
+
+**R-105 (OBSERVED) · a send needs a per-message delivery/read receipt, not
+just an accept.** "Accepted for delivery" (R-08) reports only that the bus
+took the message. The cross-host return-path outage (O-23, finding-005) made
+every reply from mokuzai fail silently while sends kept reporting success, so
+the director could not tell heard from lost. Director must surface delivered
+and read status per message, so a silent-drop condition is observable rather
+than inferred days later. Cross-refs: R-08 (accepted != delivered or read),
+O-23, finding-005.
