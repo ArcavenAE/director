@@ -328,9 +328,20 @@ SHIM="$work/director-mcp"
 # exec of a freshly built binary is cold and can take longer to reach package
 # init than the stagger, so the second process (now hot, because the first
 # paged the binary in) catches it and they initialise in the same tick anyway.
-# Measured here 2026-09-21 with the stagger already correct: 0 collisions in 10
-# runs with this warm-up, 1 in 4 without it. I removed it once on the reasoning
-# that the fd barrier made it redundant, and the collision came straight back.
+# Measured here 2026-09-21 with the stagger already correct: 0 collisions in 40
+# runs with this warm-up, 4 in 20 without it. Fisher exact one-sided p = 0.0099,
+# and the rule of three puts the 95% upper bound on the warmed rate at 7.5%,
+# against 20% un-warmed.
+#
+# The first version of this note said "0 in 10 with, 1 in 4 without" and called
+# that a fix. It was not: 0/10 against 1/4 is p = 0.3, a sample entirely
+# compatible with the warm-up doing nothing, sitting in a comment whose other
+# numbers are held to a much higher standard. The reviewer caught the verb
+# rather than the mechanism. Both arms were re-run to settle it, and the weak
+# arm was the un-warmed one, so that is the arm that got the extra trials.
+#
+# I removed the warm-up once, on the reasoning that the fd barrier made it
+# redundant, and the collision came straight back.
 env DIRECTOR_AGENT_ID=warmup DIRECTOR_TEAM=t DIRECTOR_WORKSPACE=w \
     NATS_URL=nats://127.0.0.1:9 "$SHIM" --preflight </dev/null >/dev/null 2>&1 || true
 AGENT_D="verify-director-g1-0"

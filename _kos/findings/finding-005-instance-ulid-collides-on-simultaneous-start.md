@@ -3,7 +3,7 @@
 - **Date:** 2026-09-21
 - **Session:** migrated-marvel-builder-g1-1, mokuzai, building the aae-orc-2vwae round-trip harness
 - **Subject:** director session identity (R-49, R-50, R-06), so this belongs in director's own graph beside finding-003
-- **Confidence:** measured. 200 simultaneous process pairs against the shim's own ULID library version, plus 160 staggered pairs as the control, plus occurrences inside the harness before I went looking
+- **Confidence:** measured. 200 simultaneous process pairs against the shim's own ULID library version, plus 160 staggered pairs and 60 warm-up trials as controls, plus occurrences inside the harness before I went looking
 
 ## 1. What was observed
 
@@ -163,11 +163,21 @@ A second cause sat behind the first. With the stagger corrected the collision
 still returned about one run in four, because the FIRST exec of a freshly built
 binary is cold and can take longer to reach package init than the stagger
 itself, letting the second process, now running a hot binary the first paged
-in, catch up. Paging the binary in before either real start fixes that: 0
-collisions in 10 runs with the warm-up, 1 in 4 without. I established this the
-expensive way, by deleting the warm-up on the reasoning that the corrected fd
-barrier had made it redundant and watching the collision come straight back.
-Two independent causes, both of which had to be removed.
+in, catch up. Paging the binary in before either real start removes it: 0
+collisions in 40 runs with the warm-up against 4 in 20 without, Fisher exact
+one-sided p = 0.0099, with the rule of three putting the 95% upper bound on the
+warmed rate at 7.5% against 20% un-warmed. I established this the expensive
+way, by deleting the warm-up on the reasoning that the corrected fd barrier had
+made it redundant and watching the collision come straight back. Two
+independent causes, both of which had to be removed.
+
+The first version of this paragraph rested on 0 in 10 with against 1 in 4
+without and called it a fix. That is p = 0.3, a sample compatible with the
+warm-up changing nothing, stated in the same breath as three measurements that
+were solid. A weak number inherits the credibility of the strong ones around
+it, which is the reason to re-run rather than to soften the wording. The weak
+arm was the un-warmed one, four runs and a single event, so that is the arm
+that got the extra trials.
 
 Two controls were run afterwards to pin the boundary, 80 pairs each: starts
 300ms apart with `ulid.Make()` called immediately, and starts 300ms apart with
