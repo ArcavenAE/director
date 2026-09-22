@@ -1,4 +1,4 @@
-# Addressing and reach — the model to orient against BEFORE reaching a seat
+# Addressing and reach: the model to orient against BEFORE reaching a seat
 
 Read this first when you need to reach an agent. It exists because the
 reach model was learned the hard way, mid-operation, more than once: every
@@ -9,13 +9,13 @@ command and fix this file.
 
 ## Two tiers
 
-- **Local tier** — the bus on this hub. Seats on the same host as you.
+- **Local tier**: the bus on this hub. Seats on the same host as you.
   Address: `agent://{team}/{agent-id}` with the `workspace` param set.
   Bidirectional: a local seat's reply reaches your inbox.
-- **Global tier** — cross-host, via the global hub. Only two address
+- **Global tier**: cross-host, via the global hub. Only two address
   shapes exist today:
-  - `global://director` — the human's director (you).
-  - `global://{cluster}/supervisor` — the supervisors on a cluster.
+  - `global://director`: the human's director (you).
+  - `global://{cluster}/supervisor`: the supervisors on a cluster.
 
 ## The five things that bite
 
@@ -40,7 +40,7 @@ command and fix this file.
    The bare `arcaven-supervisor-g1-0` errors `resource not found` and dumps
    usage, which reads like a syntax error but is a lookup miss. Tracked as
    marvel#337 / aae-orc-bd78j; until it is fixed the workspace prefix is
-   mandatory and there is no `-o json`/`-o wide` to discover it — read the
+   mandatory and there is no `-o json`/`-o wide` to discover it: read the
    WORKSPACE column of `get sessions` and prepend it.
 
 4. **`marvel inject` submits with `-e`.** `marvel inject <key> "text" -e`
@@ -53,23 +53,56 @@ command and fix this file.
 
 ## Reach precedence (highest layer that can actually reach the seat)
 
-1. `mcp__director__send_message` — structured, presence-aware, cross-host
+1. `mcp__director__send_message`: structured, presence-aware, cross-host
    over the global tier. Preferred when the seat holds a live bus presence.
-2. `marvel capture` / `marvel inject` — pane read + keystroke doorbell,
+2. `marvel capture` / `marvel inject`: pane read + keystroke doorbell,
    executive privilege, keyed `<workspace>/<agent-name>` [+ `--cluster`].
 3. marvel native tmux ops.
 4. direct `tmux capture-pane` / `send-keys` for a local unmanaged pane.
-5. `ListAgents` + SendMessage — interactive/Remote Control Claude sessions
+5. `ListAgents` + SendMessage: interactive/Remote Control Claude sessions
    the others cannot reach; no presence guarantee.
+
+## Injecting into a seat safely
+
+`marvel inject` writes keystrokes into a pane and, with `-e`, submits. Two
+hazards make a naive inject unsafe (marvel#340, marvel finding-184):
+
+- A seat often holds an UNSUBMITTED composer draft. `inject <text> -e` appends
+  to that draft and submits both, so an unrelated, possibly unattributed
+  instruction executes welded to yours. Real drafts seen in the wild:
+  `merge PR #376`, `! marvel work <manifest>`.
+- `inject` reports "injected N bytes"; that is not proof of submission. And
+  `marvel capture` repaints only on input, so its output is not proof of the
+  current pane state either.
+
+Safe procedure, per seat, before injecting a real instruction:
+
+1. `marvel capture <key> [--cluster X]` and read the composer line.
+2. If a draft is present, clear it: `marvel inject <key> "C-u" -l=false [--cluster X]`.
+   `Escape` does NOT clear an idle Claude composer; `C-u` kills the line.
+3. Re-capture to confirm the composer is empty (a keystroke forces the repaint).
+4. Inject the text, then submit as a separate step: `marvel inject <key> "<text>" [--cluster X]`
+   then `marvel inject <key> "Enter" -l=false [--cluster X]`.
+
+Prefer the bus (`send_message`) over `inject` when the seat is polling: the bus
+never touches the composer. Reserve `inject` for waking a seat that is idle and
+not consuming its inbox (O-28).
 
 ## Cluster geography
 
 `cluster name == hostname`. kinu = this laptop; mokuzai = skippy's host
 (192.168.100.196); desk = desk.local. From kinu, reach skippy's fleet with
 `--cluster skippy`; ON skippy the same daemon is the local socket. Skippy's
-own marvel config names that cluster "mokuzai" — same fleet, two names.
+own marvel config names that cluster "mokuzai" (same fleet, two names).
 
-## Current condition (dated — this part decays)
+**After `marvel upgrade --daemon` on a leafed cluster, re-check the leaf.** The
+upgrade re-exec can silently drop the bus leaf ("bus.leaf.unenrolled ... running
+local-only until one is pushed"), leaving the cluster off the global hub with
+healthy-looking sessions and no signal (marvel#339). A dropped leaf strands all
+cross-host mail. Re-push bus/leaf and confirm `bus.leaf.up` before trusting
+cross-host delivery.
+
+## Current condition (dated: this part decays)
 
 **2026-09-21: the mokuzai -> kinu return path is DOWN (O-23), cause OPEN.**
 Replies to `global://director` are accepted onto GLOBAL_TO_DIRECTOR but do not
