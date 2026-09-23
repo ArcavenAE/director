@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	crand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,6 +122,38 @@ func preflight(ctx context.Context, url string, self Sender, gcfg *globalConfig)
 	return preflightGlobal(ctx, nc, *gcfg)
 }
 
+// instanceEntropy is the entropy behind the per-session instance id. It mirrors
+// the shape of ulid's own package default, a monotonic reader behind a mutex,
+// with one substitution that is the whole point: the source is crypto/rand
+// rather than a math/rand stream seeded from the clock.
+//
+// ulid.Make() uses that package default, which seeds math/rand from
+// time.Now().UnixNano() at package init (oklog/ulid/v2 v2.1.2, ulid.go:135-137).
+// Two processes whose init lands in the same clock tick therefore draw the SAME
+// stream and, called in the same millisecond, mint the SAME id. Measured on one
+// host 2026-09-21: 47 collisions in 200 simultaneous pairs.
+//
+// The instance is not decorative, which is why this is worth a named source.
+// The global presence key is presence.<cluster>.<role>.<instance> and carries
+// no agent id, so two same-cluster same-role sessions that collide collapse
+// into a single roster row; and the per-session durable is
+// mcp_<agentID>_<instance>, which collapses with it, so the two sessions bind
+// one durable and race each other's mail. That is the R-50 loss this naming
+// exists to prevent.
+//
+// Staggering process starts also avoids the collision, and that is a
+// workaround rather than a fix: it depends on timing nobody controls. See
+// ArcavenAE/director#62 and finding-005-instance-ulid-collides-on-simultaneous-start.
+var instanceEntropy = &ulid.LockedMonotonicReader{
+	MonotonicReader: ulid.Monotonic(crand.Reader, 0),
+}
+
+// newInstanceID mints this session's instance id. Sortable by time, like
+// ulid.Make(), without sharing a seed with any other process.
+func newInstanceID() string {
+	return ulid.MustNew(ulid.Now(), instanceEntropy).String()
+}
+
 func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (*Bus, error) {
 	nc, js, err := dial(url, self)
 	if err != nil {
@@ -131,7 +164,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		nc.Close()
 		return nil, fmt.Errorf("presence KV AGENT_STATE: %w (run the broker setup first)", err)
 	}
-	b := &Bus{nc: nc, js: js, kv: kv, self: self, instance: ulid.Make().String(), pid: os.Getpid(), state: "idle", globalCfg: gcfg}
+	b := &Bus{nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), state: "idle", globalCfg: gcfg}
 	// Durable per-SESSION consumer. The durable name includes the per-session
 	// instance, so two sessions sharing one agent id do not bind one durable
 	// and race each other's mail (R-50); each gets its own copy instead of a
