@@ -44,6 +44,7 @@ install_one() {
 
 echo "installing director ($MODE) into $TARGET"
 install_one "$SRC/skills/director" "$TARGET/skills/director"
+install_one "$SRC/skills/stansfield" "$TARGET/skills/stansfield"
 install_one "$SRC/commands/director.md" "$TARGET/commands/director.md"
 
 STATE="${DIRECTOR_STATE:-$HOME/.director/state}"
