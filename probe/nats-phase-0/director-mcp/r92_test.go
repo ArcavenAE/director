@@ -16,7 +16,8 @@ import (
 
 func TestPickWorkspaceResolvesSingleLiveWorkspace(t *testing.T) {
 	// Two live instances of one id, both in ops2: one workspace, it resolves.
-	ws, err := pickWorkspace("agent://fleet/builder", []string{"ops2", "ops2"})
+	ws, err := pickWorkspace("agent://fleet/builder", "presence.fleet.builder.",
+		presenceScan{Keys: 2, TeamMatched: 2, Matched: 2, Workspaces: []string{"ops2", "ops2"}})
 	if err != nil {
 		t.Fatalf("one live workspace should resolve, got error: %v", err)
 	}
@@ -26,7 +27,7 @@ func TestPickWorkspaceResolvesSingleLiveWorkspace(t *testing.T) {
 }
 
 func TestPickWorkspaceRefusesNoLivePresence(t *testing.T) {
-	_, err := pickWorkspace("agent://fleet/builder", nil)
+	_, err := pickWorkspace("agent://fleet/builder", "presence.fleet.builder.", presenceScan{})
 	if err == nil {
 		t.Fatal("no live presence must refuse, not resolve to a subject nobody filters")
 	}
@@ -36,7 +37,8 @@ func TestPickWorkspaceRefusesNoLivePresence(t *testing.T) {
 }
 
 func TestPickWorkspaceRefusesAmbiguous(t *testing.T) {
-	_, err := pickWorkspace("role://fleet/builder", []string{"ops2", "aae-orc"})
+	_, err := pickWorkspace("role://fleet/builder", "presence.fleet.",
+		presenceScan{Keys: 2, TeamMatched: 2, Matched: 2, Workspaces: []string{"ops2", "aae-orc"}})
 	if err == nil {
 		t.Fatal("two live workspaces must refuse as ambiguous")
 	}

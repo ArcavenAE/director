@@ -210,8 +210,27 @@ func parseGlobalAddress(addr string) (cluster, role string, err error) {
 // subject here is fully determined by the address, so the only resolution
 // question left is whether anyone is alive to consume it; zero live records
 // refuses before publish rather than storing a message no session filters.
-func noGlobalPresenceErr(addr string) error {
-	return fmt.Errorf("no live presence for %s in %s; no session would consume this send, so it is refused rather than stored on a subject nobody reads (R-92 liveness)", addr, globalPresenceBucket)
+// noGlobalPresenceErr states the refusal and nothing beyond what the scan
+// established. Every branch refuses; they differ only in what they claim.
+func noGlobalPresenceErr(addr, prefix string, scan presenceScan) error {
+	const refused = "no session would consume this send, so it is refused rather than stored on a subject nobody reads (R-92 liveness)"
+	const refusedUnestablished = "refused rather than stored on a subject nobody reads (R-92 liveness)"
+	switch {
+	case scan.Keys == 0:
+		return fmt.Errorf("no presence record exists at all in %s: the bucket is empty, so no session of any kind has registered. %s for %s", globalPresenceBucket, refused, addr)
+	case scan.TeamMatched == 0:
+		return fmt.Errorf("nothing is registered under %q in %s for %s, though %d other presence key(s) exist; the cluster name is likely wrong. %s", teamScope(prefix), globalPresenceBucket, addr, scan.Keys, refused)
+	case scan.Matched == 0:
+		return fmt.Errorf("the cluster is live (%d key(s) under %q in %s) but nothing matches %q for %s; the role is wrong, or that seat is down. %s", scan.TeamMatched, teamScope(prefix), globalPresenceBucket, prefix, addr, refused)
+	case scan.Unreadable > 0:
+		// The finding-188 case: rows were there and could not be used, which
+		// is what a dropped leaf or an expiring credential looks like from
+		// here. Not a report that the recipient is absent.
+		return fmt.Errorf("%d presence record(s) match %q in %s for %s but none could be read (%d unreadable), so whether %s is live was NOT established; this is not a report that it is absent. %s",
+			scan.Matched, prefix, globalPresenceBucket, addr, scan.Unreadable, addr, refusedUnestablished)
+	default:
+		return fmt.Errorf("no live presence for %s in %s; %s", addr, globalPresenceBucket, refused)
+	}
 }
 
 // globalTier is the attached hub context: the domain-qualified JetStream
@@ -367,29 +386,43 @@ func (g *globalTier) deletePresence(ctx context.Context, instance string) error 
 // records reads GLOBAL_PRESENCE and returns every record whose key starts with
 // prefix. An empty prefix reads the whole bucket (the roster); a principal's
 // prefix reads its live records (the liveness check).
-func (g *globalTier) records(ctx context.Context, prefix string) ([]map[string]any, error) {
+// records returns the matched presence records and, alongside them, what the
+// pass could not use. The second return is the same fix as the local tier's:
+// a row that could not be fetched or parsed used to vanish, and its absence
+// was then reported as the recipient's absence (finding-188). A caller that
+// reports absence has to look at the scan first.
+func (g *globalTier) records(ctx context.Context, prefix string) ([]map[string]any, presenceScan, error) {
 	keys, err := g.kv.Keys(ctx)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrNoKeysFound) {
-			return nil, nil
+			return nil, presenceScan{}, nil
 		}
-		return nil, err
+		return nil, presenceScan{}, err
 	}
+	team := teamScope(prefix)
+	scan := presenceScan{Keys: len(keys)}
 	var out []map[string]any
 	for _, k := range keys {
+		if prefix != "" && strings.HasPrefix(k, team) {
+			scan.TeamMatched++
+		}
 		if prefix != "" && !strings.HasPrefix(k, prefix) {
 			continue
 		}
+		scan.Matched++
 		entry, err := g.kv.Get(ctx, k)
 		if err != nil {
+			scan.Unreadable++
 			continue
 		}
 		var rec map[string]any
-		if json.Unmarshal(entry.Value(), &rec) == nil {
-			out = append(out, rec)
+		if json.Unmarshal(entry.Value(), &rec) != nil {
+			scan.Unreadable++
+			continue
 		}
+		out = append(out, rec)
 	}
-	return out, nil
+	return out, scan, nil
 }
 
 // publish sends one envelope to a global address. The liveness check runs
@@ -403,12 +436,13 @@ func (g *globalTier) publish(ctx context.Context, e *Envelope, body []byte) (*je
 	if err != nil {
 		return nil, err
 	}
-	live, err := g.records(ctx, globalPresencePrefix(cluster, role))
+	prefix := globalPresencePrefix(cluster, role)
+	live, scan, err := g.records(ctx, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w (%s)", globalPresenceBucket, err, hubHint(g.cfg))
 	}
 	if len(live) == 0 {
-		return nil, noGlobalPresenceErr(e.Recipient.Address)
+		return nil, noGlobalPresenceErr(e.Recipient.Address, prefix, scan)
 	}
 	msg := &nats.Msg{Subject: globalSubject(cluster, role), Data: body, Header: nats.Header{}}
 	msg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
