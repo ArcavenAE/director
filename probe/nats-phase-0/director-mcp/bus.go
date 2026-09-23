@@ -348,32 +348,87 @@ func (b *Bus) resolveRecipientWorkspace(ctx context.Context, prefix, addr string
 	keys, err := b.kv.Keys(ctx)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrNoKeysFound) {
-			return "", noPresenceErr(addr)
+			// An empty bucket is a real reading, not a failed one.
+			return pickWorkspace(addr, prefix, presenceScan{})
 		}
 		return "", err
 	}
-	var workspaces []string
+	return pickWorkspace(addr, prefix, b.scanPresence(ctx, keys, prefix))
+}
+
+// presenceScan is what one pass over the presence bucket actually established.
+//
+// The counts are the whole point. The resolver used to keep only the
+// workspaces it recovered, and a row it could not read left no trace at all:
+// a failed Get, an unparseable value and a record with no workspace field all
+// became the same empty slice, and the refusal then announced that the
+// recipient had no live presence. That is a claim the resolver was in no
+// position to make. It had not established absence; it had established that
+// it read nothing usable, which under a dropped leaf, an expiring credential
+// or a partial hub outage are very different things.
+//
+// So the unreadable state gets a representation and arrives by default
+// (finding-188): Unreadable and Incomplete are zero only when nothing was
+// skipped, and every caller that reports absence has to look past them first.
+type presenceScan struct {
+	// Keys is every key in the bucket, before any prefix filter.
+	Keys int
+	// TeamMatched is the keys under presence.<team>., derived from the
+	// prefix already in hand. It separates a wrong team from a wrong id.
+	TeamMatched int
+	// Matched is the keys under the recipient's full prefix.
+	Matched int
+	// Unreadable is matched keys whose value could not be fetched or parsed.
+	Unreadable int
+	// Incomplete is matched keys that parsed but carried no workspace.
+	Incomplete int
+	// Workspaces is what was actually recovered, one per usable record.
+	Workspaces []string
+}
+
+// scanPresence reads the matched rows once and records what it could not use
+// alongside what it could. It performs no read the old code did not perform.
+func (b *Bus) scanPresence(ctx context.Context, keys []string, prefix string) presenceScan {
+	team := teamScope(prefix)
+	s := presenceScan{Keys: len(keys)}
 	for _, k := range keys {
+		if strings.HasPrefix(k, team) {
+			s.TeamMatched++
+		}
 		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
+		s.Matched++
 		entry, err := b.kv.Get(ctx, k)
 		if err != nil {
+			s.Unreadable++
 			continue
 		}
 		var rec map[string]any
 		if json.Unmarshal(entry.Value(), &rec) != nil {
+			s.Unreadable++
 			continue
 		}
-		if ws, _ := rec["workspace"].(string); ws != "" {
-			workspaces = append(workspaces, ws)
+		ws, _ := rec["workspace"].(string)
+		if ws == "" {
+			s.Incomplete++
+			continue
 		}
+		s.Workspaces = append(s.Workspaces, ws)
 	}
-	return pickWorkspace(addr, workspaces)
+	return s
 }
 
-func noPresenceErr(addr string) error {
-	return fmt.Errorf("no live presence for %s; no session would consume this send, so it is refused rather than sent to a subject nobody filters (R-92)", addr)
+// teamScope narrows a presence prefix to its team segment, presence.<team>.
+// A presence key is presence.<team>.<id>.<instance>, so an agent address
+// yields presence.<team>.<id>. and a role address yields presence.<team>.
+// already. Derived from the prefix in hand; it reads nothing.
+func teamScope(prefix string) string {
+	parts := strings.SplitAfter(prefix, ".")
+	if len(parts) < 3 {
+		return prefix
+	}
+	return parts[0] + parts[1]
 }
 
 // pickWorkspace collapses the workspaces of a recipient's live presence records
@@ -381,9 +436,15 @@ func noPresenceErr(addr string) error {
 // or more is a refusal (ambiguous, and it lists them), both loud before publish
 // (R-09); exactly one resolves. Split from the KV read so it is unit-testable
 // without a broker.
-func pickWorkspace(addr string, workspaces []string) (string, error) {
+//
+// The refusal at zero is correct and stays. What changed is that it now says
+// only what the scan established, and the four zero cases no longer share one
+// sentence: an empty bucket, a team nothing matches, a team that is live
+// without this seat, and rows that were there and could not be read are four
+// different things to be told at 3am.
+func pickWorkspace(addr, prefix string, scan presenceScan) (string, error) {
 	seen := map[string]bool{}
-	for _, ws := range workspaces {
+	for _, ws := range scan.Workspaces {
 		seen[ws] = true
 	}
 	switch len(seen) {
@@ -392,7 +453,7 @@ func pickWorkspace(addr string, workspaces []string) (string, error) {
 			return ws, nil
 		}
 	case 0:
-		return "", noPresenceErr(addr)
+		return "", noPresenceErr(addr, prefix, scan)
 	}
 	list := make([]string, 0, len(seen))
 	for ws := range seen {
@@ -400,6 +461,32 @@ func pickWorkspace(addr string, workspaces []string) (string, error) {
 	}
 	sort.Strings(list)
 	return "", fmt.Errorf("recipient %s is live in more than one workspace (%s); pass an explicit workspace to disambiguate rather than guess (R-92)", addr, strings.Join(list, ", "))
+}
+
+// noPresenceErr states the refusal and nothing beyond what the scan
+// established. Every branch refuses; they differ only in what they claim.
+func noPresenceErr(addr, prefix string, scan presenceScan) error {
+	// The established cases keep the original claim, because in each of them
+	// it is true and was shown. The unreadable case does not get it: "no
+	// session would consume this send" is precisely what was not established.
+	const refused = "no session would consume this send, so it is refused rather than sent to a subject nobody filters (R-92)"
+	const refusedUnestablished = "refused rather than sent to a subject nobody filters (R-92)"
+	switch {
+	case scan.Keys == 0:
+		return fmt.Errorf("no presence record exists at all: the presence bucket is empty, so no session of any kind has registered. %s for %s", refused, addr)
+	case scan.TeamMatched == 0:
+		return fmt.Errorf("nothing is registered under %q for %s, though %d other presence key(s) exist; the team name is likely wrong. %s", teamScope(prefix), addr, scan.Keys, refused)
+	case scan.Matched == 0:
+		return fmt.Errorf("the team is live (%d key(s) under %q) but nothing matches %q for %s; the recipient id is wrong, or that seat is down. %s", scan.TeamMatched, teamScope(prefix), prefix, addr, refused)
+	case scan.Unreadable > 0 || scan.Incomplete > 0:
+		// The finding-188 case. This is NOT a statement that the recipient is
+		// absent: rows were there and could not be used, which is what a
+		// dropped leaf or an expiring credential looks like from here.
+		return fmt.Errorf("%d presence record(s) match %q for %s but none could be used (%d unreadable, %d missing a workspace), so whether %s is live was NOT established; this is not a report that it is absent. %s",
+			scan.Matched, prefix, addr, scan.Unreadable, scan.Incomplete, addr, refusedUnestablished)
+	default:
+		return fmt.Errorf("no live presence for %s; %s", addr, refused)
+	}
 }
 
 // sendResult is what a send is able to say about itself: which tier carried
@@ -802,7 +889,7 @@ func (b *Bus) rosterMerged(ctx context.Context) (rows []map[string]any, globalWa
 	if gerr != nil {
 		return rows, gerr.Error(), nil
 	}
-	global, gerr := g.records(ctx, "")
+	global, _, gerr := g.records(ctx, "")
 	if gerr != nil {
 		return rows, fmt.Sprintf("global roster read failed: %v", gerr), nil
 	}
