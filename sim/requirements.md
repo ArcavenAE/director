@@ -1155,6 +1155,63 @@ correction; O-28 (a bus send does not wake an idle seat); O-30 (the handshake wa
 in use Sep-20 and lapsed Sep-21).*
 *Source: OBSERVED. Cross-refs R-08, R-89, R-105, O-28, O-29, O-30.*
 
+**R-111 (OBSERVED) · a director dispatch carries its full brief in a durable
+store and injects only a short pointer to it, and any load-bearing pointer sits
+at the tail of the injected text.** This session a 1114-byte dispatch to the
+e98-architect delivered only its tail: the injection channel dropped the HEAD
+and kept the end, so the head, which held the framing and the ticket pointer,
+was lost and the architect asked for a resend. The recovery that worked was a
+574-byte resend with the ticket id at the very end. The truncation itself is a
+marvel/harness defect (aae-orc-oa5rp, extending finding-184), not a director
+requirement; the director requirement is the design that survives it. Director
+must not put meaning into the injected bytes it cannot guarantee arrive. The
+brief lives in a durable artifact (a bd ticket, a board entry, a bus body the
+recipient can fetch), and the injection is a short pointer whose one load-bearing
+token is placed last, because truncation eats the head. This holds whatever the
+underlying channel's fidelity, so it passes the admission test independent of the
+marvel fix.
+*Earned by: my own dispatch truncation and hand-recovery this session (O-33,
+FAKED IT); the head-drop direction confirmed against finding-184's tail-drop.*
+*Source: OBSERVED. Cross-refs O-33, R-105, finding-184, aae-orc-oa5rp, the lu01z
+composer-contract cluster (aae-orc-g88i1, aae-orc-cx909, aae-orc-fln6p).*
+
+**R-112 (JUDGMENT) · director's primary reach is a channel independent of the
+recipient's composer state; keystroke injection is reserved for wake and
+recovery, never for the load-bearing delivery of a dispatch.** This session I
+could not clear or submit three wedged composers by injection: a bare Enter
+staged as zero bytes, a literal Enter typed the five characters "Enter", and
+Ctrl-U did nothing, so seats holding stale unsubmitted drafts stayed unreachable
+by keystroke and one held a control-bypass string that a naive wake would have
+submitted (O-29, O-34). Injection is a doorbell pressed against a surface whose
+state director cannot read reliably; it cannot be the delivery path. Director's
+delivery rides a channel that does not depend on where the recipient's cursor is
+(a durable inbox the seat drains, per R-106), and injection is used only to wake
+a seat that is not draining, or to recover one that is wedged, and only after the
+composer is known-clear. This turns the composer-wedge could-not-reach into a
+reach-model contract rather than a tooling patch.
+*Earned by: O-34 (could not clear or submit wedged composers); O-29 (idle seats
+hold unsafe drafts a wake would submit); the finding-186 injection wall.*
+*Source: JUDGMENT on an observed basis. Cross-refs R-106, R-105, O-28, O-29,
+O-34, the lu01z cluster (aae-orc-d1ldq, aae-orc-g88i1).*
+
+### Harvest diff (2026-09-23)
+
+- **Promoted (2):** R-111 (durable-dispatch plus tail-pointer contract), R-112
+  (reach independent of composer state; inject for wake and recovery only).
+- **Unchanged:** R-106 through R-110 stand; R-111 and R-112 cross-ref them rather
+  than restating. R-105 (delivery/read receipts) is the parent both sharpen.
+- **Rejected for the register (routed elsewhere), per the 2026-09-22 scope rule:**
+  the inject truncation itself (drops the head, keeps the tail) is a marvel/harness
+  defect, tracked on aae-orc-oa5rp and against finding-184, not a director
+  requirement. The composer-wedge mechanism (paste-bracketing swallows the
+  terminating Enter; bare-Enter zero-byte report; literal "Enter") is a
+  harness/tooling defect, root-caused in the lu01z proposal to the harness's own
+  paste handling and tracked in that eight-ticket cluster (aae-orc-6vcr2,
+  aae-orc-4c6qg, aae-orc-dgb35, aae-orc-d1ldq, aae-orc-g88i1, aae-orc-cx909,
+  aae-orc-nxczv, aae-orc-fln6p) plus marvel#342. What enters the director register
+  is only the architecture that must hold regardless of those fixes: R-111 and
+  R-112.
+
 ### Harvest diff (2026-09-22)
 
 - **Promoted (5):** R-106 (director durable receive), R-107 (starvation is loud,
