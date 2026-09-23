@@ -74,8 +74,11 @@ skills/director/     the skill: role, modes, output contract, capture triggers
   reference/         measured capability table; the settled and open relay questions
   scripts/dsi        session inventory across all four adapters
   scripts/dsx        external state verification (the board has no expiry)
+skills/stansfield/   full fleet roll call: enumerate every session across the
+                     bus, marvel clusters and SendMessage, deduped to one
+                     identity each, then optionally relay an action
 commands/director.md thin command that invokes the skill
-install.sh           symlink or copy the skill and command into ~/.claude
+install.sh           symlink or copy the skills and command into ~/.claude
 docs/                operator guide, shim reference, architecture and use-case diagrams
 probe/nats-phase-0/  the transport probe: NATS broker + director-mcp shim
   PROGRESS.md          sub-probe results (poll is the receive, finding-160)
