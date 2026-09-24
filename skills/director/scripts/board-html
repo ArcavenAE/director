@@ -1,0 +1,487 @@
+#!/usr/bin/env python3
+"""Render the director board (board.md) as a self-contained reactive HTML page.
+
+Reads  $DIRECTOR_STATE/board.md   (default ~/.director/state/board.md)
+Writes $DIRECTOR_STATE/board.html
+
+Everything is inline: no CDN, no fetch, nothing leaves the machine. Rerun after
+the board changes. A file:// page cannot see its own rebuild, so the page offers
+an auto-refresh toggle that reloads on an interval and keeps scroll position,
+search text and open sections across the reload.
+
+Harness-neutral: plain Python 3 and file timestamps, no hooks. The board is
+authored by whichever session holds the director role, so the writer rebuilds:
+after editing board.md, run this if board.html already exists (opt-in by
+existence; a director that never made the page pays nothing).
+"""
+import datetime
+import json
+import os
+import pathlib
+
+HOME = pathlib.Path.home()
+STATE = pathlib.Path(os.environ.get("DIRECTOR_STATE", HOME / ".director" / "state"))
+SRC = STATE / "board.md"
+OUT = STATE / "board.html"
+
+TEMPLATE = r'''<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Director Board</title>
+<style>
+:root{
+  --bg:#f6f6f3; --panel:#ffffff; --panel2:#fafaf8; --ink:#1c1e20; --muted:#5d6367; --line:#e2e3df;
+  --accent:#4f5fd1; --accent-ink:#ffffff;
+  --good:#2d7a4c; --bad:#b03e38; --warn:#8f6210; --info:#3a6aa8; --relay:#7a4fb0;
+  --good-bg:#e4f3ea; --bad-bg:#f8e3e2; --warn-bg:#f6ecd6; --info-bg:#e3ecf7; --relay-bg:#efe6f8;
+  --mark:#fde98b; --mark-ink:#1c1e20; --code-bg:#f0f0ec;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e0f10; --panel:#15171a; --panel2:#1a1d20; --ink:#d5d8d6; --muted:#8e9591; --line:#272b2e;
+    --accent:#aab4f3; --accent-ink:#0e0f10;
+    --good:#a3d9b4; --bad:#f2a7a3; --warn:#ecca8c; --info:#a9c8ec; --relay:#cdb3ef;
+    --good-bg:#1b2a21; --bad-bg:#2e1c1c; --warn-bg:#2c2518; --info-bg:#1a2432; --relay-bg:#251d30;
+    --mark:#5b5222; --mark-ink:#f3eed2; --code-bg:#1d2023;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e0f10; --panel:#15171a; --panel2:#1a1d20; --ink:#d5d8d6; --muted:#8e9591; --line:#272b2e;
+  --accent:#aab4f3; --accent-ink:#0e0f10;
+  --good:#a3d9b4; --bad:#f2a7a3; --warn:#ecca8c; --info:#a9c8ec; --relay:#cdb3ef;
+  --good-bg:#1b2a21; --bad-bg:#2e1c1c; --warn-bg:#2c2518; --info-bg:#1a2432; --relay-bg:#251d30;
+  --mark:#5b5222; --mark-ink:#f3eed2; --code-bg:#1d2023;
+  color-scheme: dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink)}
+body{font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;overflow-x:hidden}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:12px 16px}
+.inner{max-width:1280px;margin:0 auto}
+.row1{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+h1{font-size:18px;margin:0;font-weight:650;text-transform:capitalize}
+.sub{color:var(--muted);font-size:12.5px}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
+input[type=search]{flex:1 1 240px;min-width:0;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit}
+input[type=search]:focus{outline:2px solid var(--accent);outline-offset:0}
+button{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;align-items:center}
+.chips .lbl{color:var(--muted);font-size:12px;margin-right:2px}
+.chip{font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.chip .n{opacity:.7;margin-left:4px;font-variant-numeric:tabular-nums}
+.count{color:var(--muted);font-size:12.5px;margin-left:auto}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);gap:20px;padding:16px;max-width:1280px;margin:0 auto}
+nav.toc{position:sticky;top:calc(var(--hdr,150px) + 12px);align-self:start;max-height:calc(100vh - var(--hdr,150px) - 28px);overflow:auto;font-size:13px;border-right:1px solid var(--line);padding-right:10px}
+nav.toc a{display:block;color:var(--muted);text-decoration:none;padding:4px 6px;border-radius:6px;line-height:1.35;overflow-wrap:anywhere}
+nav.toc a:hover{color:var(--ink);background:var(--panel)}
+nav.toc a.hidden{display:none}
+nav.toc .d{display:block;color:var(--accent);font-size:11.5px;font-variant-numeric:tabular-nums}
+@media (max-width:820px){.layout{grid-template-columns:1fr} nav.toc{display:none}}
+.preamble{color:var(--muted);font-size:13.5px;margin:0 0 14px}
+.preamble p{margin:0}
+section.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-bottom:12px;overflow:hidden;scroll-margin-top:calc(var(--hdr,150px) + 12px)}
+section.card.pin-bad{border-left:3px solid var(--bad)}
+section.card.pin-warn{border-left:3px solid var(--warn)}
+section.card.hidden{display:none}
+.card>.hd{display:flex;gap:10px;align-items:flex-start;padding:10px 14px;cursor:pointer;background:var(--panel2);user-select:none}
+.card>.hd:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.caret{transition:transform .15s;color:var(--muted);flex:none;margin-top:2px;width:12px;font-size:12px}
+.card.open .caret{transform:rotate(90deg)}
+.hd .t{font-weight:600;font-size:14.5px;flex:1;min-width:0;overflow-wrap:anywhere}
+.hd .meta{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;flex:none;max-width:48%}
+.tag{font-size:11px;padding:1px 7px;border-radius:999px;white-space:nowrap}
+.tag.blocked{background:var(--bad-bg);color:var(--bad)}
+.tag.inflight{background:var(--warn-bg);color:var(--warn)}
+.tag.done{background:var(--good-bg);color:var(--good)}
+.tag.finding,.tag.friction{background:var(--info-bg);color:var(--info)}
+.tag.custody{background:var(--warn-bg);color:var(--warn)}
+.tag.relay{background:var(--relay-bg);color:var(--relay)}
+.tag.date{background:transparent;color:var(--accent);border:1px solid var(--line);font-variant-numeric:tabular-nums}
+.bd{display:none;padding:2px 16px 14px;border-top:1px solid var(--line)}
+.card.open .bd{display:block}
+.bd p,.bd li{overflow-wrap:anywhere}
+.bd h4,.bd h5,.bd h6{margin:14px 0 6px;font-size:14px}
+.bd ul,.bd ol{padding-left:22px;margin:8px 0}
+.bd li{margin:3px 0}
+.bd pre{background:var(--code-bg);padding:10px 12px;border-radius:8px;overflow:auto;font-size:12.5px;line-height:1.45;white-space:pre}
+code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:.88em}
+:not(pre)>code{background:var(--code-bg);padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}
+.tw{overflow-x:auto;margin:8px 0}
+table{border-collapse:collapse;font-size:13px}
+th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}
+a{color:var(--accent)}
+hr{border:0;border-top:1px solid var(--line);margin:12px 0}
+mark{background:var(--mark);color:var(--mark-ink);border-radius:3px;padding:0 1px}
+.kw{font-weight:650;font-size:.86em;letter-spacing:.02em;padding:0 4px;border-radius:4px}
+.kw.bad{color:var(--bad);background:var(--bad-bg)}
+.kw.good{color:var(--good);background:var(--good-bg)}
+.kw.warn{color:var(--warn);background:var(--warn-bg)}
+.kw.info{color:var(--info);background:var(--info-bg)}
+.empty{color:var(--muted);padding:30px;text-align:center;display:none}
+footer{color:var(--muted);font-size:12px;padding:6px 16px 30px;max-width:1280px;margin:0 auto}
+</style>
+</head>
+<body>
+<header class="top" id="top">
+  <div class="inner">
+    <div class="row1">
+      <h1 id="title">director board</h1>
+      <span class="sub" id="sub"></span>
+    </div>
+    <div class="controls">
+      <input type="search" id="q" placeholder="Search the board ( / to focus, Esc to clear )" aria-label="Search the board">
+      <button id="expand" type="button">Expand all</button>
+      <button id="collapse" type="button">Collapse all</button>
+      <button id="order" type="button">Newest first</button>
+      <button id="latest" type="button">Jump to latest</button>
+      <button id="theme" type="button" aria-label="Toggle theme">Theme</button>
+      <button id="auto" type="button" aria-pressed="false" title="Reload the page on an interval to pick up a rebuilt board">Auto-refresh: off</button>
+    </div>
+    <div class="chips" id="chips"><span class="lbl">Filter:</span></div>
+  </div>
+</header>
+<div class="layout">
+  <nav class="toc" id="toc" aria-label="Board sections"></nav>
+  <main>
+    <div class="preamble" id="preamble"></div>
+    <div id="list"></div>
+    <div class="empty" id="empty">No section matches.</div>
+  </main>
+</div>
+<footer>
+  Generated __GENERATED__ from <code>__SRC__</code>. Regenerate with <code>board-html</code> (director skill <code>scripts/board-html</code>), then reload, or turn on Auto-refresh. Local file; nothing leaves this machine.
+</footer>
+<script>
+const BOARD = __BOARD_JSON__;
+
+const TAGS = [
+  ["blocked",  "Blocked",   /blocked on (you|operator)|pending on operator|actions pending|\bblocked\b|awaiting (the )?operator|operator call|operator-run|needs (your|operator)|decision pending/],
+  ["inflight", "In flight", /in flight|in-flight|dispatched|awaiting|nudged|queued|not started/],
+  ["done",     "Done",      /\bdone\b|merged|\bcomplete\b|green verified|shipped|resolved|confirmed/],
+  ["finding",  "Finding",   /\bfinding\b|root cause|investigation|nailed/],
+  ["friction", "Friction",  /friction|workaround|gotcha|swallow|trap/],
+  ["custody",  "Custody",   /custody|uncaptured|rescued|stranded|return-path|lost/],
+  ["relay",    "Relay",     /relay|inject|doorbell|send_message|\bbus\b|global:\/\//],
+];
+
+const KWCLASS = {
+  "RETURN-PATH MISS":"bad","BLOCKED":"bad","STALE":"bad","WRONG":"bad","HOBBLED":"bad","STRANDED":"bad","BROKEN":"bad","FAILURE":"bad",
+  "DONE":"good","GREEN":"good","MERGED":"good","CONFIRMED":"good","FIXED":"good","COMPLETE":"good","SHIPPED":"good","RESOLVED":"good",
+  "PENDING":"warn","IN FLIGHT":"warn","DISPATCHED":"warn","QUEUED":"warn","GATE":"warn","DECISION":"warn","DECISIONS":"warn","AWAITING":"warn","DRAFT":"warn",
+  "FINDING":"info","FRICTION":"info","ROOT CAUSE":"info","KEYSTONE":"info","CUSTODY":"info","FAKED IT":"info","CAVEAT":"info"
+};
+const KWRE = new RegExp("\\b(" + Object.keys(KWCLASS).sort((a,b)=>b.length-a.length).map(k=>k.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join("|") + ")\\b","g");
+
+const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+
+function inline(s){
+  const codes = [];
+  s = s.replace(/`([^`]+)`/g, (m,c) => { codes.push(c); return "\u0000" + (codes.length-1) + "\u0000"; });
+  s = s.replace(KWRE, m => '<span class="kw ' + KWCLASS[m] + '">' + m + "</span>");
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return s.replace(/\u0000(\d+)\u0000/g, (m,i) => "<code>" + codes[+i] + "</code>");
+}
+
+const LISTRE = /^\s*([-*]|\d+[.)])\s+/;
+const TABLERE = /^\s*\|.*\|\s*$/;
+
+function renderList(lines){
+  const items = [];
+  for (const ln of lines){
+    const m = ln.match(/^(\s*)([-*]|\d+[.)])\s+(.*)$/);
+    if (m) items.push({ind:m[1].length, ord:/\d/.test(m[2]), text:m[3]});
+    else if (items.length) items[items.length-1].text += " " + ln.trim();
+  }
+  let html = ""; const stack = [];
+  for (const it of items){
+    while (stack.length && it.ind < stack[stack.length-1].ind) html += "</li></" + stack.pop().tag + ">";
+    if (!stack.length || it.ind > stack[stack.length-1].ind){
+      const tag = it.ord ? "ol" : "ul"; stack.push({ind:it.ind, tag}); html += "<" + tag + "><li>";
+    } else html += "</li><li>";
+    html += inline(esc(it.text));
+  }
+  while (stack.length) html += "</li></" + stack.pop().tag + ">";
+  return html;
+}
+
+function renderTable(rows){
+  const cells = r => r.trim().replace(/^\|/,"").replace(/\|$/,"").split("|").map(c=>c.trim());
+  const head = cells(rows[0]); let body = rows.slice(1);
+  if (body.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(body[0])) body = body.slice(1);
+  return '<div class="tw"><table><thead><tr>' + head.map(c=>"<th>"+inline(esc(c))+"</th>").join("") +
+    "</tr></thead><tbody>" + body.map(r=>"<tr>"+cells(r).map(c=>"<td>"+inline(esc(c))+"</td>").join("")+"</tr>").join("") +
+    "</tbody></table></div>";
+}
+
+function md(src){
+  const lines = src.split("\n"); const out = []; let i = 0;
+  while (i < lines.length){
+    const l = lines[i];
+    if (/^```/.test(l)){
+      const buf = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++; out.push("<pre><code>" + esc(buf.join("\n")) + "</code></pre>"); continue;
+    }
+    if (/^---+\s*$/.test(l)) { out.push("<hr>"); i++; continue; }
+    const h = l.match(/^(#{1,6})\s+(.*)$/);
+    if (h){ const n = Math.min(h[1].length + 1, 6); out.push("<h"+n+">"+inline(esc(h[2]))+"</h"+n+">"); i++; continue; }
+    if (TABLERE.test(l)){ const rows = []; while (i < lines.length && TABLERE.test(lines[i])) { rows.push(lines[i]); i++; } out.push(renderTable(rows)); continue; }
+    if (LISTRE.test(l)){
+      const buf = [];
+      while (i < lines.length && (LISTRE.test(lines[i]) || (buf.length && /^\s{2,}\S/.test(lines[i])))) { buf.push(lines[i]); i++; }
+      out.push(renderList(buf)); continue;
+    }
+    if (/^\s*$/.test(l)) { i++; continue; }
+    const buf = [l]; i++;
+    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^(```|#{1,6}\s|---+\s*$)/.test(lines[i]) && !LISTRE.test(lines[i]) && !TABLERE.test(lines[i])) { buf.push(lines[i]); i++; }
+    out.push("<p>" + inline(esc(buf.map(s=>s.trim()).join(" "))) + "</p>");
+  }
+  return out.join("\n");
+}
+
+function parse(text){
+  const lines = text.split("\n"); let title = "director board"; const pre = []; const secs = []; let cur = null; let fence = false;
+  for (const l of lines){
+    if (/^```/.test(l)) fence = !fence;
+    if (!fence && !cur && !secs.length && /^# /.test(l)) { title = l.slice(2).trim(); continue; }
+    if (!fence && /^## /.test(l)) { cur = {title:l.slice(3).trim(), body:[]}; secs.push(cur); continue; }
+    (cur ? cur.body : pre).push(l);
+  }
+  for (const s of secs){
+    while (s.body.length && /^(\s*|---+\s*)$/.test(s.body[s.body.length-1])) s.body.pop();
+    while (s.body.length && /^\s*$/.test(s.body[0])) s.body.shift();
+    s.raw = s.body.join("\n");
+  }
+  return {title, pre: pre.join("\n"), secs};
+}
+
+const doc = parse(BOARD);
+let lastDate = "";
+doc.secs.forEach((s, i) => {
+  s.idx = i;
+  s.key = i + ":" + s.title;
+  const d = s.title.match(/\d{4}-\d{2}-\d{2}/);
+  s.date = d ? d[0] : "";
+  s.eff = s.date || lastDate; if (s.date) lastDate = s.date;
+  const t = s.title.toLowerCase();
+  s.pin = /^blocked on you/.test(t) ? "bad" : (/^uncaptured/.test(t) ? "warn" : "");
+  const hay = (s.title + "\n" + s.raw).toLowerCase();
+  s.hay = hay;
+  s.tags = TAGS.filter(([,,re]) => re.test(hay)).map(([k]) => k);
+  s.html = md(s.raw);
+});
+
+const store = {
+  get(k, d){ try { const v = localStorage.getItem("dboard." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v){ try { localStorage.setItem("dboard." + k, JSON.stringify(v)); } catch (e) {} }
+};
+
+const n = doc.secs.length;
+const defaultOpen = doc.secs.filter(s => s.pin || s.idx >= n - 3).map(s => s.key);
+let openSet = new Set(store.get("open", defaultOpen));
+let order = store.get("order", "authored");
+const activeTags = new Set();
+let terms = [];
+
+try { const th = store.get("theme", null); if (th) document.documentElement.setAttribute("data-theme", th); } catch (e) {}
+
+document.getElementById("title").textContent = doc.title;
+document.getElementById("sub").textContent = n + " sections, " + BOARD.split("\n").length + " lines";
+document.getElementById("preamble").innerHTML = md(doc.pre);
+
+const list = document.getElementById("list");
+const toc = document.getElementById("toc");
+const cards = new Map(); const tocLinks = new Map();
+
+for (const s of doc.secs){
+  const sec = document.createElement("section");
+  sec.className = "card" + (s.pin ? " pin-" + s.pin : "");
+  sec.id = "s" + s.idx;
+  const hd = document.createElement("div");
+  hd.className = "hd"; hd.tabIndex = 0; hd.setAttribute("role", "button");
+  const meta = (s.date ? '<span class="tag date">' + s.date + "</span>" : "") +
+    s.tags.map(k => '<span class="tag ' + k + '">' + TAGS.find(t => t[0] === k)[1] + "</span>").join("");
+  hd.innerHTML = '<span class="caret">&#9656;</span><span class="t"></span><span class="meta">' + meta + "</span>";
+  hd.querySelector(".t").textContent = s.title;
+  const bd = document.createElement("div"); bd.className = "bd";
+  sec.append(hd, bd);
+  const toggle = () => {
+    if (openSet.has(s.key)) openSet.delete(s.key); else openSet.add(s.key);
+    store.set("open", [...openSet]); paint();
+  };
+  hd.addEventListener("click", toggle);
+  hd.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+  cards.set(s.key, sec);
+  const a = document.createElement("a"); a.href = "#s" + s.idx;
+  a.innerHTML = (s.date ? '<span class="d">' + s.date + "</span>" : "");
+  a.append(document.createTextNode(s.title.replace(/^\d{4}-\d{2}-\d{2}\s*[-\u2014:(]*\s*/, "") || s.title));
+  a.addEventListener("click", e => { e.preventDefault(); openSet.add(s.key); store.set("open", [...openSet]); paint(); sec.scrollIntoView({behavior:"smooth", block:"start"}); });
+  tocLinks.set(s.key, a);
+}
+
+const chips = document.getElementById("chips");
+for (const [k, label] of TAGS){
+  const c = doc.secs.filter(s => s.tags.includes(k)).length;
+  if (!c) continue;
+  const b = document.createElement("button");
+  b.className = "chip"; b.type = "button"; b.setAttribute("aria-pressed", "false");
+  b.innerHTML = label + '<span class="n">' + c + "</span>";
+  b.addEventListener("click", () => {
+    if (activeTags.has(k)) activeTags.delete(k); else activeTags.add(k);
+    b.setAttribute("aria-pressed", activeTags.has(k) ? "true" : "false"); paint();
+  });
+  chips.append(b);
+}
+const countEl = document.createElement("span"); countEl.className = "count"; chips.append(countEl);
+
+function highlight(root, ts){
+  if (!ts.length) return;
+  const re = new RegExp("(" + ts.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "gi");
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes){
+    const v = node.nodeValue; re.lastIndex = 0;
+    if (!re.test(v)) continue;
+    re.lastIndex = 0;
+    const frag = document.createDocumentFragment(); let last = 0; let m;
+    while ((m = re.exec(v)) !== null){
+      frag.append(v.slice(last, m.index));
+      const mk = document.createElement("mark"); mk.textContent = m[0]; frag.append(mk);
+      last = m.index + m[0].length;
+      if (m[0].length === 0) re.lastIndex++;
+    }
+    frag.append(v.slice(last));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+function sorted(){
+  const arr = doc.secs.slice();
+  if (order === "newest"){
+    arr.sort((a, b) => {
+      if (!!b.pin !== !!a.pin) return a.pin ? -1 : 1;
+      if (a.eff !== b.eff) return a.eff < b.eff ? 1 : -1;
+      return b.idx - a.idx;
+    });
+  }
+  return arr;
+}
+
+function paint(){
+  const searching = terms.length > 0;
+  let shown = 0;
+  list.textContent = ""; toc.textContent = "";
+  for (const s of sorted()){
+    const sec = cards.get(s.key);
+    const tagOk = !activeTags.size || s.tags.some(k => activeTags.has(k));
+    const qOk = !searching || terms.every(t => s.hay.includes(t));
+    const vis = tagOk && qOk;
+    sec.classList.toggle("hidden", !vis);
+    const open = vis && (searching || openSet.has(s.key));
+    sec.classList.toggle("open", open);
+    sec.querySelector(".hd").setAttribute("aria-expanded", open ? "true" : "false");
+    const bd = sec.querySelector(".bd"); const tt = sec.querySelector(".t");
+    tt.textContent = s.title;
+    if (open){ bd.innerHTML = s.html; highlight(bd, terms); } else bd.textContent = "";
+    highlight(tt, terms);
+    list.append(sec);
+    const a = tocLinks.get(s.key); a.classList.toggle("hidden", !vis); toc.append(a);
+    if (vis) shown++;
+  }
+  countEl.textContent = shown + " of " + n + " sections";
+  document.getElementById("empty").style.display = shown ? "none" : "block";
+  document.getElementById("order").textContent = order === "newest" ? "Authored order" : "Newest first";
+}
+
+let tmr = null;
+const q = document.getElementById("q");
+q.addEventListener("input", () => {
+  clearTimeout(tmr);
+  tmr = setTimeout(() => { terms = q.value.toLowerCase().split(/\s+/).filter(Boolean); paint(); }, 120);
+});
+q.addEventListener("keydown", e => { if (e.key === "Escape") { q.value = ""; terms = []; paint(); } });
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && document.activeElement !== q) { e.preventDefault(); q.focus(); }
+});
+document.getElementById("expand").addEventListener("click", () => { openSet = new Set(doc.secs.map(s => s.key)); store.set("open", [...openSet]); paint(); });
+document.getElementById("collapse").addEventListener("click", () => { openSet = new Set(); store.set("open", []); paint(); });
+document.getElementById("order").addEventListener("click", () => { order = order === "newest" ? "authored" : "newest"; store.set("order", order); paint(); });
+document.getElementById("latest").addEventListener("click", () => {
+  const last = doc.secs[n - 1]; if (!last) return;
+  openSet.add(last.key); store.set("open", [...openSet]); paint();
+  cards.get(last.key).scrollIntoView({behavior:"smooth", block:"start"});
+});
+document.getElementById("theme").addEventListener("click", () => {
+  const root = document.documentElement;
+  const cur = root.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  root.setAttribute("data-theme", next); store.set("theme", next);
+});
+
+const setHdr = () => document.documentElement.style.setProperty("--hdr", document.getElementById("top").offsetHeight + "px");
+window.addEventListener("resize", setHdr);
+// Auto-refresh. Off by default. A file:// page cannot tell whether it was
+// rebuilt, so this reloads on an interval; view state survives the reload
+// (open sections and order via localStorage, scroll and search via sessionStorage).
+const AUTO_STEPS = [0, 10, 30, 60];
+let autoSec = store.get("auto", 0);
+if (!AUTO_STEPS.includes(autoSec)) autoSec = 0;
+let autoTmr = null;
+const autoBtn = document.getElementById("auto");
+const ses = {
+  get(k){ try { return sessionStorage.getItem("dboard." + k); } catch (e) { return null; } },
+  set(k, v){ try { sessionStorage.setItem("dboard." + k, v); } catch (e) {} }
+};
+function armAuto(){
+  clearTimeout(autoTmr);
+  autoBtn.textContent = "Auto-refresh: " + (autoSec ? autoSec + "s" : "off");
+  autoBtn.setAttribute("aria-pressed", autoSec ? "true" : "false");
+  if (autoSec) autoTmr = setTimeout(() => {
+    ses.set("scroll", String(window.scrollY));
+    ses.set("q", q.value);
+    location.reload();
+  }, autoSec * 1000);
+}
+autoBtn.addEventListener("click", () => {
+  autoSec = AUTO_STEPS[(AUTO_STEPS.indexOf(autoSec) + 1) % AUTO_STEPS.length];
+  store.set("auto", autoSec); armAuto();
+});
+// Pause while the reader is typing a search, so a reload never eats keystrokes.
+q.addEventListener("focus", () => clearTimeout(autoTmr));
+q.addEventListener("blur", armAuto);
+
+const savedQ = ses.get("q");
+if (savedQ) { q.value = savedQ; terms = savedQ.toLowerCase().split(/\s+/).filter(Boolean); }
+paint(); setHdr();
+const savedScroll = ses.get("scroll");
+if (savedScroll !== null) window.scrollTo(0, +savedScroll);
+armAuto();
+</script>
+</body>
+</html>
+'''
+
+
+def main() -> None:
+    text = SRC.read_text(encoding="utf-8")
+    # Escape every "<" so board content can never close the script element.
+    payload = json.dumps(text).replace("<", "\\u003c")
+    generated = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    src_label = str(SRC).replace(str(HOME), "~", 1)
+    html = (TEMPLATE
+            .replace("__GENERATED__", generated)
+            .replace("__SRC__", src_label)
+            .replace("__BOARD_JSON__", payload))
+    OUT.write_text(html, encoding="utf-8")
+    print(OUT)
+
+
+if __name__ == "__main__":
+    main()
