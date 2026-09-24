@@ -1,7 +1,10 @@
 # Design brief 11: one fleet address space over the leaf fabric
 
-Status: candidate design for review, 2026-09-24. Commissioned by the operator
-through the director seat the same day. Nothing here is built. The live brokers
+Status: amendments ruled 2026-09-24 (R-50, R-94, R-95, R-109 accepted on
+director#77); probe P0 to P6 run on scratch brokers the same day, results in
+`_kos/findings/finding-008-leaf-fabric-probe.md` and section 10. The subject
+root (`mail.` or `agent.<cluster>.`) is still pending. Commissioned by the
+operator through the director seat. Nothing here is built. The live brokers
 were read, not changed (section 1). Where a mechanism rests on a NATS fact this
 sitting did not execute, it is marked UNVERIFIED and the probe plan (section 9)
 names the step that settles it.
@@ -201,7 +204,10 @@ to its own team and to its supervisor, on its own cluster or another; a
 supervisor may send within its cluster, to other supervisors, and to the
 director; the director may send anywhere and reads only its own inbox. A
 refused publish returns a named permissions refusal at the shim, never a
-timeout (R-109's defect) and never "accepted" (R-09).
+timeout (R-109's defect) and never "accepted" (R-09). P3 measured that the
+server delivers the refusal asynchronously and the JetStream publish call times
+out, so the shim must catch the async permissions error and fail the send on
+it (finding-008).
 
 Mechanism, per layer:
 
@@ -279,7 +285,10 @@ are UNVERIFIED. Probe P4.
 The durable inbox is the delivery path; the notifier only wakes. Each cluster
 runs one notifier (the marvel doorbell, or a shim sidecar where no marvel runs)
 that watches its own `INBOX` for new mail and knows each seat's last poll time.
-When mail lands for a seat that has not polled within a bound, it rings the
+It cannot be a consumer on `INBOX`: a work-queue stream refuses any
+consumer whose filter overlaps a seat's (P6), so it reads stream state and
+messages by sequence instead. When mail lands for a seat that has not polled
+within a bound, it rings the
 seat's doorbell with a short pointer whose load-bearing token is last (R-111),
 through a channel independent of the composer where one exists (R-112). The
 ring is itself loud (R-89): the notifier records each attempt, and if the mail
@@ -430,3 +439,18 @@ random ports, cleanup trap. The live brokers are not touched.
 
 Each step either passes or turns its UNVERIFIED mark into a finding before the
 migration in section 5 begins.
+
+## 10. Probe results (2026-09-24, finding-008)
+
+| step | result |
+|---|---|
+| P0 | partial: kinu local and hub 2.14.6; mokuzai must be read on mokuzai |
+| P1 | pass: leaf to hub to leaf sourcing with the transform, outbox drained, raw subjects refused at the link |
+| P2 | pass: 10-minute hub outage, 500 of 500 and 20 of 20 delivered once and in order; the hub-side sources resumed about 44s after the hub restart |
+| P3 | pass on the template; the refusal reaches the publisher as a timeout plus an async named error, which the shim must turn into a named failure |
+| P4 | pass: one row per seat through five restarts, stale compare-and-set refused, delete propagated, a cut cluster aged out of the fleet view |
+| P5 | pass: full inbox refuses; two sender notices before age removal; no server advisory for the removal |
+| P6 | pass: second consumer on an address refused; rebinding keeps the count at 1 |
+
+Not yet covered: sourcing under restricted leaf users, per-seat JWT on a leaf
+in operator mode, and the subject delete marker.
