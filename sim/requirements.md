@@ -582,10 +582,19 @@ N sessions must get N distinct addresses.
 *Earned by: two live sessions collided on agent://ops/michael this session.*
 *Source: OBSERVED. Design: design/identity-at-spawn.md (ID-A).*
 
-**R-50. A session's durable consumer must be unique per session, not per
-configured id.** Two sessions sharing one address share one durable consumer
-and race for delivery, so the loser silently loses mail the sender was told was
-delivered. This is R-08 and R-09 re-entering through the identity layer.
+**R-50. A session's durable consumer is unique per address, and a second
+claimant is refused, never given its own copy.** (Amended, RULED 2026-09-24.)
+An inbox is a work-queue stream with one durable per address: a restart of the
+same seat rebinds the existing durable instead of minting a new one, and a
+second live session claiming the same address is refused by the server, which
+is R-78's loud failure. The durable outlives any one process or container; it
+is removed when the address is retired (an ephemeral seat at unapply), after
+its pending mail is drained or reported to the senders. Replaced wording:
+"unique per session, not per configured id", which turned a silent loss into
+silent duplication (R-78) and leaked one durable per shim start
+(aae-orc-iejcx).
+*Amendment: design brief 11 (`sim/design/leaf-fabric-one-address-space.md`)
+section 2.5, ruled by the operator 2026-09-24 on director#77.*
 *Earned by: JetStream durable semantics plus the michael collision this session.*
 *Source: OBSERVED. Design: design/identity-at-spawn.md (ID-B).*
 
@@ -843,20 +852,24 @@ Filed 2026-09-12 from the naming party (casting: bmad-extras/rulings/2026-09-12-
 *Source: FORWARD (cross-cutting with marvel; topology named by the operator, unbuilt on both sides).*
 
 **R-94. A cluster name is a subject token in the identity class
-(`[A-Za-z0-9_-]`) and a namespace at the global tier; exactly two role words
-exist there, `supervisor` and `director`; a worker never holds a global
-address.** The global subjects are `global.<cluster>.supervisor.inbox` and
-`global.director.inbox`, one stream per direction per cluster, with presence
-under `presence.<cluster>.<role>.<instance>`; a supervisor keeps its local
-id and is addressed globally as `global://<cluster>/supervisor`, so nothing
-is renamed across tiers (R-06, R-79). Holding a global address means being
-addressable and having a presence row; it does not restrict sending. The
-constraint is on SUBSCRIBE, where a worker's read narrows to its own inbox
-and that is what closes the read leak, not on PUBLISH, where a send upward
-stays open under R-95's asymmetry (every non-director principal publishes
-into its own subtree and to the director). marvel's `Cluster.Name` is
-unvalidated today and must take the same reject-not-rewrite check the shim
-applies (aae-orc-z37ux).
+(`[A-Za-z0-9_-]`), assigned by the operator and validated, never rewritten;
+every seat holds exactly one fleet address, qualified by its cluster, that
+resolves from any cluster; `director` is the one reserved fleet address.**
+(Amended, RULED 2026-09-24.) The address is
+`agent://<cluster>/<workspace>/<team>/<id>` (role form
+`role://<cluster>/<workspace>/<team>/<role>`), and the short forms remain
+aliases resolved through the roster (R-92), refusing when unresolvable or
+ambiguous (R-78). Holding an address means being addressable and having a
+presence row; it grants no right to send, which R-95 decides by credential.
+A worker's read stays narrowed to its own inbox. The subject root for the
+fleet grammar (`mail.` or `agent.<cluster>.`) is pending an operator ruling
+(brief 11 section 2.1). marvel's `Cluster.Name` takes the same
+reject-not-rewrite check the shim applies (aae-orc-z37ux). Replaced wording:
+"exactly two role words exist there, `supervisor` and `director`; a worker
+never holds a global address", which made "not permitted" and "no such
+address" the same failure.
+*Amendment: design brief 11 sections 2.1 and 6, ruled by the operator
+2026-09-24 on director#77. The lines below record the original basis.*
 *Earned by: design brief 8 (`sim/design/global-bus-tier.md`) sections 2 and
 4, proven on the kinu hub with two scratch leaves.*
 *Source: JUDGMENT, with the subject grammar OBSERVED on the running hub.
@@ -864,17 +877,21 @@ Ratified by the operator 2026-09-14. The address-versus-send clause was added
 2026-09-18 from skippy's #355 read (finding-179): a clarification of the
 ratified intent, not a change to it.*
 
-**R-95. Credentials bind principals to subtrees with one asymmetry at both
-tiers: the director is the only principal that publishes outward across a
-boundary (workspace locally, cluster globally), publish-only, reading nothing
-but its own inbox; every other principal publishes only into its own subtree
-and to the director.** At the hub one credential per cluster binds to that
-cluster's prefix and its own streams; at the local broker the global prefix
-binds to the supervisor role alone; a team credential never widens to
-`agent.*.<team>.>`; a session never holds the cluster credential. The grant
-table is brief 8 section 4.1. Consequence: under authorization, check 3.2d
-runs from the director seat's credential, and a refused publish surfaces as
-a failed JetStream ack, a tool error as loud as the R-92 refusal.
+**R-95. Every seat holds its own credential, and the credential, not the
+address book, decides where it may publish; a refused publish is a named
+refusal at the sender.** (Amended, RULED 2026-09-24.) The hierarchy is
+credential policy the operator sets: by default a worker publishes to its own
+team and to its supervisor, on its own cluster or another; a supervisor
+publishes within its cluster, to other supervisors, and to the director; the
+director publishes anywhere and reads only its own inbox. Per-seat
+credentials are minted by marvel at spawn (brief 9) under the cluster's
+scoped signing key; a session never holds a cluster or leaf credential. The
+leaf link carries only the sourcing, presence, and director-inbox subjects. A
+refusal never surfaces as a timeout or as "accepted" (R-09, R-109). Replaced
+wording: the one-asymmetry rule enforced by which addresses exist ("the
+director is the only principal that publishes outward across a boundary").
+*Amendment: design brief 11 section 2.4, ruled by the operator 2026-09-24 on
+director#77. The lines below record the original basis.*
 *Earned by: the hub's authorization block proven 8 of 8; the residual skippy
 raised on aae-orc#327 (a team credential confined to its workspace refuses
 the cross-workspace publish R-92 makes), reconciled in brief 8 section 4.1.*
@@ -1122,17 +1139,18 @@ this passes the admission test rather than being general project hygiene.
 finding-006's compounding cause.*
 *Source: JUDGMENT on an observed basis. Cross-refs O-31, finding-006, R-06.*
 
-**R-109 (OBSERVED) · the global tier is upward-open and downward-closed except
-through the director seat, so cross-team and cross-cluster relay routes through
-the director by topology, and a denied cross-team publish fails loud, never as a
-timeout.** finding-006-global-tier (director#63): a team-scoped session's broker
-user is confined to its own team subject (migrated to `agent.aae.migrated.>`), so
-a cross-team publish returned "context deadline exceeded" three times, an
-authorization denial wearing a timeout's clothes. Only the director seat (the far
-leaf) holds publish into a cluster inbox, which makes director the mandatory relay
-hop for cross-team and cross-cluster work, and requires the authz denial surface
-as an R-09-loud named refusal. The director seat is not the coordinator by
-convention; it is the only principal the topology permits to address a cluster.
+**R-109 (OBSERVED; amended, RULED 2026-09-24) · a denied cross-team or
+cross-cluster publish fails loud as a named permission refusal, never as a
+timeout; relay through the director is a policy choice expressed in
+credentials, not a consequence of topology.** finding-006-global-tier
+(director#63): a team-scoped session's broker user is confined to its own team
+subject (migrated to `agent.aae.migrated.>`), so a cross-team publish returned
+"context deadline exceeded" three times, an authorization denial wearing a
+timeout's clothes. That observation stands. The amendment removes the clause
+that made the director "the mandatory relay hop ... by topology" and "the only
+principal the topology permits to address a cluster": under R-95 as amended,
+any seat may address any other, and whether it may publish there is the
+credential's decision, refused by name.
 *Earned by: three reproductions on migrated's seat (cross-team send to the
 reviewer team, and to `global://{cluster}/supervisor`), each a deadline-exceeded;
 the hub leaf allow-lists read from `nats-global/nats-server.conf`.*
