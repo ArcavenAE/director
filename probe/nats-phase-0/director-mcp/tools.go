@@ -1,9 +1,10 @@
 package main
 
-// The tool catalog and dispatch. Five tools, matching the spbc ticket:
-// send_message, wait_for_message, list_roster, set_presence, broadcast.
-// Each is request/response; wait_for_message is the long-poll that answers
-// the push-vs-poll question.
+// The tool catalog and dispatch. Six tools: the five from the spbc ticket
+// (send_message, wait_for_message, list_roster, set_presence, broadcast) and
+// inbox_summary. Each is request/response; wait_for_message is the long-poll
+// that answers the push-vs-poll question, and its max argument drains a
+// backlog in one call (drain.go).
 
 import (
 	"context"
@@ -22,12 +23,14 @@ func toolCatalog(gcfg *globalConfig) []toolDef {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 	toDesc := "recipient address: agent://{team}/{id}, role://{team}/{role}, or broadcast://{workspace}[/{team}]"
 	sendDesc := "Send a director envelope to another session or role. Returns accepted-for-delivery with a message_id; this is a send acknowledgement, not a delivery or read receipt."
-	waitDesc := "Block up to timeout_seconds for the next message addressed to this session, then return it. This is a poll: the model must call it. The server cannot push a message into context on its own."
+	waitDesc := "Block up to timeout_seconds for the next message addressed to this session, then return it. This is a poll: the model must call it. The server cannot push a message into context on its own. With max greater than 1 it returns every waiting message up to max in one call, oldest first, and consumes them as the single form does; run inbox_summary first to see what is waiting without consuming it."
+	summaryDesc := "Summarize the messages waiting for this session without consuming any: counts by sender and by performative, the REQUEST, FAILURE and QUERY messages and any that set reply_by, say they hold custody, or await a reply, and the waiting sequence numbers oldest first. Acks nothing; drain in order afterwards with wait_for_message max=N."
 	rosterDesc := "List the sessions currently present, from the presence store. Absence means silence, not a negative report."
 	if gcfg != nil {
 		toDesc += ", or across hosts global://director and global://{cluster}/supervisor. A global send is refused before publish when nobody is live at that address."
 		sendDesc += " This session is " + gcfg.selfAddress() + " at the global tier: reply to a global message with global://director, and name a cluster (list_roster shows them) to reach its supervisor."
-		waitDesc += " It polls the local inbox and this session's global inbox, and the result names the tier the message came from."
+		waitDesc += " It polls the local inbox and this session's global inbox, and the result names the tier the message came from. A batch lists local messages first, then global; sequence numbers order messages within a tier only."
+		summaryDesc += " Covers both the local inbox and this session's global inbox."
 		rosterDesc += " Rows from both tiers are merged and carry a tier column; global rows carry the cluster and role that address them."
 	}
 	return []toolDef{
@@ -54,7 +57,18 @@ func toolCatalog(gcfg *globalConfig) []toolDef {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"timeout_seconds": map[string]any{"type": "integer", "description": "how long to wait (default 30, max 120)"},
+					"timeout_seconds": map[string]any{"type": "integer", "description": "how long to wait when nothing is already waiting (default 30, max 120)"},
+					"max":             map[string]any{"type": "integer", "description": "most messages to return in one call (default 1, max 50). Above 1, waiting messages return at once, oldest first."},
+				},
+			},
+		},
+		{
+			Name:        "inbox_summary",
+			Description: summaryDesc,
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"limit": map[string]any{"type": "integer", "description": "most waiting messages to read per tier (default 200, max 500); totals past it still come from consumer state"},
 				},
 			},
 		},
@@ -94,6 +108,8 @@ func dispatchTool(ctx context.Context, bus *Bus, name string, rawArgs json.RawMe
 		return toolSend(ctx, bus, rawArgs)
 	case "wait_for_message":
 		return toolWait(ctx, bus, rawArgs)
+	case "inbox_summary":
+		return toolSummary(ctx, bus, rawArgs)
 	case "list_roster":
 		return toolRoster(ctx, bus)
 	case "set_presence":
@@ -182,16 +198,34 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	return out, nil
 }
 
-func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
-	var a struct {
-		TimeoutSeconds int `json:"timeout_seconds"`
-	}
+// waitArgs are the wait_for_message arguments after defaults and caps.
+type waitArgs struct {
+	TimeoutSeconds int `json:"timeout_seconds"`
+	Max            int `json:"max"`
+}
+
+func parseWaitArgs(raw json.RawMessage) waitArgs {
+	var a waitArgs
 	_ = json.Unmarshal(raw, &a)
 	if a.TimeoutSeconds <= 0 {
 		a.TimeoutSeconds = 30
 	}
 	if a.TimeoutSeconds > 120 {
 		a.TimeoutSeconds = 120
+	}
+	if a.Max <= 0 {
+		a.Max = 1
+	}
+	if a.Max > maxDrain {
+		a.Max = maxDrain
+	}
+	return a
+}
+
+func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
+	a := parseWaitArgs(raw)
+	if a.Max > 1 {
+		return toolWaitBatch(ctx, bus, a)
 	}
 	res, err := bus.receiveTiered(ctx, time.Duration(a.TimeoutSeconds)*time.Second)
 	if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
@@ -206,6 +240,69 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	// A global-tier failure is reported beside the answer rather than instead
 	// of it: the local tier keeps working through a hub outage, so the poll
 	// does too, and the caller still hears that the hub did not answer.
+	if res.GlobalWarn != "" {
+		out["global_warning"] = res.GlobalWarn
+	}
+	return out, nil
+}
+
+// toolWaitBatch is wait_for_message with max > 1. The single form keeps its
+// result shape exactly, so existing callers see no change.
+func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
+	res, err := bus.receiveBatch(ctx, time.Duration(a.TimeoutSeconds)*time.Second, a.Max)
+	if err != nil {
+		return nil, err
+	}
+	items := res.Items
+	if items == nil {
+		items = []drained{}
+	}
+	out := map[string]any{
+		"messages": items,
+		"count":    len(items),
+		"order":    "oldest first within each tier; local before global",
+	}
+	if len(items) == 0 {
+		out["note"] = "no message within the window; this is silence, not failure"
+	} else {
+		out["remaining"] = bus.remaining(ctx)
+	}
+	if res.Discarded > 0 {
+		out["discarded"] = res.Discarded
+		out["discarded_note"] = "undecodable messages were terminated and skipped so the rest of the batch could return"
+	}
+	if res.GlobalWarn != "" {
+		out["global_warning"] = res.GlobalWarn
+	}
+	return out, nil
+}
+
+func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
+	var a struct {
+		Limit int `json:"limit"`
+	}
+	_ = json.Unmarshal(raw, &a)
+	if a.Limit <= 0 {
+		a.Limit = summaryDefault
+	}
+	if a.Limit > summaryMax {
+		a.Limit = summaryMax
+	}
+	res, err := bus.summarizeInbox(ctx, a.Limit)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"summary": res.Summary,
+		"waiting": res.Expected,
+		"read":    res.Read,
+		"note":    "nothing was acked; drain in order with wait_for_message max=N",
+	}
+	for tier, exp := range res.Expected {
+		if uint64(res.Read[tier]) < exp {
+			out["partial"] = "fewer messages were read than the consumer reports waiting (limit reached, or read raced a drain); the counts cover what was read"
+		}
+	}
 	if res.GlobalWarn != "" {
 		out["global_warning"] = res.GlobalWarn
 	}

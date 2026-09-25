@@ -576,24 +576,28 @@ func (b *Bus) auditMirror(ctx context.Context, e *Envelope, body []byte) {
 // durable consumer, waiting up to timeout, and acks it. This is the shape the
 // probe set out to measure: the agent CALLS to receive, because MCP cannot
 // push into the model's context (see PROGRESS.md sub-probe 3).
-func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, error) {
+func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, uint64, error) {
 	msgs, err := b.consumer.Fetch(1, jetstream.FetchMaxWait(timeout))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	for m := range msgs.Messages() {
 		var e Envelope
 		if err := json.Unmarshal(m.Data(), &e); err != nil {
 			_ = m.Term() // poison message: do not redeliver a thing we cannot parse
-			return nil, fmt.Errorf("undecodable message on inbox: %w", err)
+			return nil, 0, fmt.Errorf("undecodable message on inbox: %w", err)
+		}
+		var seq uint64
+		if md, err := m.Metadata(); err == nil {
+			seq = md.Sequence.Stream
 		}
 		_ = m.Ack()
-		return &e, nil
+		return &e, seq, nil
 	}
 	if err := msgs.Error(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return nil, nil // timed out, no message: a clean empty, not an error
+	return nil, 0, nil // timed out, no message: a clean empty, not an error
 }
 
 // globalReady returns the attached hub context, attaching it on first use and
@@ -632,6 +636,7 @@ const tierPollSlice = 5 * time.Second
 type pollResult struct {
 	Env        *Envelope
 	Tier       string
+	Seq        uint64 // stream sequence on the tier's stream; orders a batch
 	GlobalWarn string
 }
 
@@ -639,11 +644,11 @@ type pollResult struct {
 // spent. With the global tier off it is exactly the old single-tier poll.
 func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollResult, error) {
 	if b.globalCfg == nil {
-		e, err := b.receive(ctx, timeout)
+		e, seq, err := b.receive(ctx, timeout)
 		if err != nil {
 			return pollResult{}, err
 		}
-		return pollResult{Env: e, Tier: tierOf(e, "local")}, nil
+		return pollResult{Env: e, Tier: tierOf(e, "local"), Seq: seq}, nil
 	}
 	var res pollResult
 	deadline := time.Now().Add(timeout)
@@ -652,12 +657,12 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 		if !ok {
 			return res, nil
 		}
-		e, err := b.receive(ctx, slice)
+		e, seq, err := b.receive(ctx, slice)
 		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
 			return res, err
 		}
 		if e != nil {
-			res.Env, res.Tier = e, "local"
+			res.Env, res.Tier, res.Seq = e, "local", seq
 			return res, nil
 		}
 		slice, ok = sliceLeft(deadline)
@@ -674,7 +679,7 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 			}
 			continue
 		}
-		e, discarded, err := g.receive(ctx, slice, b.self.AgentID, b.instance)
+		e, gseq, discarded, err := g.receive(ctx, slice, b.self.AgentID, b.instance)
 		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
 			res.GlobalWarn = fmt.Sprintf("global inbox poll failed: %v", err)
 			continue
@@ -684,7 +689,7 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 			res.GlobalWarn = fmt.Sprintf("discarded %d undecodable message(s) on the global inbox; the hub stream is shared and not everything on it is a director envelope", discarded)
 		}
 		if e != nil {
-			res.Env, res.Tier = e, "global"
+			res.Env, res.Tier, res.Seq = e, "global", gseq
 			return res, nil
 		}
 	}

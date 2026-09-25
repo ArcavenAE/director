@@ -2,7 +2,7 @@
 
 The shim is a Go program in `probe/nats-phase-0/director-mcp/`. A harness
 launches one per session as an MCP stdio server; the shim connects to a NATS
-broker and exposes five tools that carry director envelopes. It is the Phase
+broker and exposes six tools that carry director envelopes. It is the Phase
 0 probe cut, kept small on purpose: it proves the transport and the receive
 shape. It is not the director software.
 
@@ -67,7 +67,7 @@ bad global levers), 1 for a failed connection or preflight.
 5. Log `connected to <url> as agent://<team>/<id> instance <ulid> in
    workspace <ws>`, then serve.
 
-## The five tools
+## The six tools
 
 Every tool is request and response. `wait_for_message` is the long poll
 that stands in for a push the transport cannot make.
@@ -105,7 +105,8 @@ address, so nothing is stored and the audit mirror stays empty.
 
 | Argument | Default | Meaning |
 |---|---|---|
-| `timeout_seconds` | 30 (max 120) | how long to block for the next message |
+| `timeout_seconds` | 30 (max 120) | how long to block when nothing is already waiting |
+| `max` | 1 (max 50) | most messages to return in one call |
 
 Result with a message:
 
@@ -125,6 +126,70 @@ session's global inbox and names the tier. A hub that does not answer adds
 tier keeps working through a hub outage. A raw line on the shared global
 stream that is not an envelope is terminated and counted, not surfaced; on
 the local inbox an undecodable message is surfaced at once.
+
+**Batch drain (`max` above 1).** Every message already waiting comes back in
+one call, up to `max`, oldest first: the local inbox in stream order, then
+the global inbox in stream order. Sequence numbers are per stream, so they
+order messages within a tier only. When nothing is waiting the call blocks
+as the single form does, then tops the batch up with anything else that
+arrived. Messages are consumed exactly as the single form consumes them,
+with the ack confirmed by the server before the batch returns, so a lost ack
+cannot redeliver a message after the caller has read past it. An
+undecodable message on either tier is terminated and counted in
+`discarded` so the rest of the batch still returns. The single form keeps
+its result shape.
+
+```json
+{
+  "messages": [ { "message": { "...": "..." }, "tier": "local", "sequence": 431 } ],
+  "count": 1,
+  "order": "oldest first within each tier; local before global",
+  "remaining": { "local": 0, "global": 0 }
+}
+```
+
+There is no peek mode on this tool. A fetch without an ack leaves the
+message pending on the session's durable, where it is redelivered after the
+ack wait and holds up the FIFO cursor. Looking without consuming is
+`inbox_summary`, which reads through a separate consumer.
+
+### `inbox_summary`
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `limit` | 200 (max 500) | most waiting messages to read per tier |
+
+Summarizes what is waiting for this session on both tiers and acks nothing.
+It reads each durable's filter and ack floor, then reads the stream from
+just past the floor through a throwaway ordered consumer (memory storage,
+no acks, deleted afterwards), so the durable's cursor does not move and a
+repeat call returns the same answer.
+
+```json
+{
+  "summary": {
+    "total": 31,
+    "by_sender": { "seat-a@aae-orc": 12, "director@aae-orc": 1 },
+    "by_performative": { "INFORM": 28, "REQUEST": 2, "QUERY": 1 },
+    "flagged": [
+      { "tier": "local", "sequence": 433, "message_id": "01M3...", "sender": "seat-b@aae-orc",
+        "performative": "INFORM", "reasons": ["awaits a reply"],
+        "excerpt": "New seat up, holding for director instructions." }
+    ],
+    "sequences": { "local": [431, 432, 433], "global": [7] }
+  },
+  "waiting": { "local": 30, "global": 1 },
+  "read": { "local": 30, "global": 1 },
+  "note": "nothing was acked; drain in order with wait_for_message max=N"
+}
+```
+
+A message is flagged when its performative is REQUEST, FAILURE or QUERY,
+when it sets `reply_by`, or when its text says it holds custody or awaits a
+reply or instructions. The text match errs toward flagging. `waiting` is the
+durable's own count; `partial` appears when fewer were read than that
+(the limit, or a drain racing the read). An undecodable message is counted
+in `undecodable` and listed in `sequences`.
 
 ### `list_roster`
 

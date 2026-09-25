@@ -309,27 +309,27 @@ func hubHint(cfg globalConfig) string {
 // A durable that has been cleaned up (globalConsumerInactive, or an operator
 // removing it) is rebuilt once and the fetch retried, so an idle session does
 // not spend the rest of its life reporting a missing consumer.
-func (g *globalTier) receive(ctx context.Context, timeout time.Duration, agentID, instance string) (env *Envelope, discarded int, err error) {
+func (g *globalTier) receive(ctx context.Context, timeout time.Duration, agentID, instance string) (env *Envelope, seq uint64, discarded int, err error) {
 	deadline := time.Now().Add(timeout)
 	rebuilt := false
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return nil, discarded, nil
+			return nil, 0, discarded, nil
 		}
-		e, poison, err := g.fetchOne(remaining)
+		e, s, poison, err := g.fetchOne(remaining)
 		switch {
 		case err != nil && errors.Is(err, jetstream.ErrConsumerNotFound) && !rebuilt:
 			rebuilt = true
 			if rerr := g.ensureConsumer(ctx, agentID, instance); rerr != nil {
-				return nil, discarded, rerr
+				return nil, 0, discarded, rerr
 			}
 		case err != nil:
-			return nil, discarded, err
+			return nil, 0, discarded, err
 		case poison:
 			discarded++
 		default:
-			return e, discarded, nil
+			return e, s, discarded, nil
 		}
 	}
 }
@@ -337,24 +337,27 @@ func (g *globalTier) receive(ctx context.Context, timeout time.Duration, agentID
 // fetchOne pulls at most one message. poison reports a message that was
 // terminated because it could not be decoded; a nil envelope with poison false
 // is the clean empty of a spent wait.
-func (g *globalTier) fetchOne(timeout time.Duration) (env *Envelope, poison bool, err error) {
+func (g *globalTier) fetchOne(timeout time.Duration) (env *Envelope, seq uint64, poison bool, err error) {
 	msgs, err := g.consumer.Fetch(1, jetstream.FetchMaxWait(timeout))
 	if err != nil {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	for m := range msgs.Messages() {
 		var e Envelope
 		if err := json.Unmarshal(m.Data(), &e); err != nil {
 			_ = m.Term() // do not redeliver a thing we cannot parse
-			return nil, true, nil
+			return nil, 0, true, nil
+		}
+		if md, err := m.Metadata(); err == nil {
+			seq = md.Sequence.Stream
 		}
 		_ = m.Ack()
-		return &e, false, nil
+		return &e, seq, false, nil
 	}
 	if err := msgs.Error(); err != nil {
-		return nil, false, err
+		return nil, 0, false, err
 	}
-	return nil, false, nil
+	return nil, 0, false, nil
 }
 
 // writePresence puts this session's record into the hub bucket. It carries the
