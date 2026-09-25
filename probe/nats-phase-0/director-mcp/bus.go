@@ -170,12 +170,18 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	// and race each other's mail (R-50); each gets its own copy instead of a
 	// silent loss. Cost, accepted for the probe: a fresh instance replays the
 	// stream under DeliverAll, so a restart re-reads history.
+	//
+	// A session that holds a role (DIRECTOR_ROLE) reads its role inbox on the
+	// same durable, so role mail arrives through the same poll, batch and
+	// summary as agent mail. Each holder's own durable filters the role
+	// subject, so every live holder gets a copy: a role send is fan-out to
+	// its holders, not a work queue (docs/shim-reference.md, "Role mail").
 	cons, err := js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", jetstream.ConsumerConfig{
-		Durable:       "mcp_" + self.AgentID + "_" + b.instance,
-		FilterSubject: b.inboxSubject(self.Workspace, self.Team, self.AgentID),
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		DeliverPolicy: jetstream.DeliverAllPolicy,
-		MaxDeliver:    -1,
+		Durable:        "mcp_" + self.AgentID + "_" + b.instance,
+		FilterSubjects: b.selfSubjects(),
+		AckPolicy:      jetstream.AckExplicitPolicy,
+		DeliverPolicy:  jetstream.DeliverAllPolicy,
+		MaxDeliver:     -1,
 	})
 	if err != nil {
 		nc.Close()
@@ -183,6 +189,16 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	}
 	b.consumer = cons
 	return b, nil
+}
+
+// selfSubjects is what this session's durable reads: its own inbox, and its
+// role inbox when it holds a role.
+func (b *Bus) selfSubjects() []string {
+	subs := []string{b.inboxSubject(b.self.Workspace, b.self.Team, b.self.AgentID)}
+	if b.self.Role != "" {
+		subs = append(subs, b.roleSubject(b.self.Workspace, b.self.Team, b.self.Role))
+	}
+	return subs
 }
 
 // validToken enforces the closed identity character class, [A-Za-z0-9_-], on
@@ -220,6 +236,14 @@ func validateIdentity(self Sender) error {
 	}
 	if err := validToken("DIRECTOR_TEAM", self.Team); err != nil {
 		return err
+	}
+	// DIRECTOR_ROLE is optional: a session without one holds no role and
+	// reads no role inbox. When set it becomes a subject token, so it is held
+	// to the same class.
+	if self.Role != "" {
+		if err := validToken("DIRECTOR_ROLE", self.Role); err != nil {
+			return err
+		}
 	}
 	return validToken("DIRECTOR_AGENT_ID", self.AgentID)
 }
@@ -290,10 +314,20 @@ func (b *Bus) resolveSubject(ctx context.Context, addr, wsHint string) (subject 
 			return "", false, err
 		}
 		// A role has no id in the presence key, so the workspace is resolved
-		// over the team's live members (presence.<team>.*): they share one
-		// workspace, or the send is ambiguous and refused.
-		ws, err := b.subjectWorkspace(ctx, wsHint, "presence."+team+".", addr)
-		if err != nil {
+		// over the team's live members that hold the role (the presence
+		// record's role field): they share one workspace, or the send is
+		// ambiguous and refused. No live holder is refused like an agent with
+		// no live presence. An explicit workspace addresses the role's mailbox
+		// verbatim, as it does a cold agent mailbox.
+		ws := wsHint
+		if ws == "" {
+			resolved, err := b.resolveRoleWorkspace(ctx, team, role, addr)
+			if err != nil {
+				return "", false, err
+			}
+			ws = resolved
+		}
+		if err := validToken("recipient workspace", ws); err != nil {
 			return "", false, err
 		}
 		return b.roleSubject(ws, team, role), true, nil
@@ -354,6 +388,52 @@ func (b *Bus) resolveRecipientWorkspace(ctx context.Context, prefix, addr string
 		return "", err
 	}
 	return pickWorkspace(addr, prefix, b.scanPresence(ctx, keys, prefix))
+}
+
+// resolveRoleWorkspace is resolveRecipientWorkspace for a role: it reads the
+// team's presence rows and keeps those whose role field names the role.
+func (b *Bus) resolveRoleWorkspace(ctx context.Context, team, role, addr string) (string, error) {
+	prefix := "presence." + team + "."
+	keys, err := b.kv.Keys(ctx)
+	if err != nil && !errors.Is(err, jetstream.ErrNoKeysFound) {
+		return "", err
+	}
+	s := presenceScan{Keys: len(keys)}
+	holders := 0
+	for _, k := range keys {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		s.TeamMatched++
+		entry, err := b.kv.Get(ctx, k)
+		if err != nil {
+			s.Unreadable++
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal(entry.Value(), &rec) != nil {
+			s.Unreadable++
+			continue
+		}
+		if r, _ := rec["role"].(string); r != role {
+			continue
+		}
+		holders++
+		s.Matched++
+		ws, _ := rec["workspace"].(string)
+		if ws == "" {
+			s.Incomplete++
+			continue
+		}
+		s.Workspaces = append(s.Workspaces, ws)
+	}
+	if holders == 0 && s.TeamMatched > 0 && s.Unreadable == 0 {
+		return "", fmt.Errorf("the team is live (%d key(s) under %q) but no live session holds role %q for %s; a role is held by a session started with DIRECTOR_ROLE. No session would consume this send, so it is refused rather than sent to a subject nobody filters (R-92)", s.TeamMatched, prefix, role, addr)
+	}
+	if holders == 0 && s.Unreadable > 0 {
+		return "", fmt.Errorf("no readable presence record under %q holds role %q for %s, and %d record(s) could not be read, so whether a holder is live was NOT established; this is not a report that none is. Refused rather than sent to a subject nobody filters (R-92)", prefix, role, addr, s.Unreadable)
+	}
+	return pickWorkspace(addr, prefix, s)
 }
 
 // presenceScan is what one pass over the presence bucket actually established.
@@ -762,6 +842,9 @@ func (b *Bus) writePresence(ctx context.Context, state string) error {
 		"pid":       b.pid,
 		"state":     state,
 		"ts":        time.Now().UTC().Format(time.RFC3339),
+	}
+	if b.self.Role != "" {
+		rec["role"] = b.self.Role
 	}
 	body, _ := json.Marshal(rec)
 	key := "presence." + b.self.Team + "." + b.self.AgentID + "." + b.instance

@@ -11,13 +11,14 @@ Values below are read from the source on `main` as of 2026-09-15
 
 ## Environment
 
-Identity, read at start. The three identity values are subject tokens and
-must match `[A-Za-z0-9_-]`; anything else is refused before a connection is
-made, never rewritten (R-76).
+Identity, read at start. The identity values are subject tokens and must
+match `[A-Za-z0-9_-]`; anything else is refused before a connection is made,
+never rewritten (R-76).
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `DIRECTOR_AGENT_ID` | required | the session's id; the `id` in `agent://team/id` |
+| `DIRECTOR_ROLE` | unset | the role this session holds, the `role` in `role://team/role`; unset holds no role and reads no role inbox. `cast-launch.sh` sets it from the manifest role |
 | `DIRECTOR_TEAM` | `default` | the team |
 | `DIRECTOR_WORKSPACE` | `default` | the workspace |
 | `NATS_URL` | `nats://127.0.0.1:4222` | the local broker |
@@ -259,7 +260,7 @@ queue for broadcasts: late joiners do not replay them. Result:
 | Address | Subject | Guarantee |
 |---|---|---|
 | `agent://{team}/{id}` | `agent.{ws}.{team}.{id}.inbox` | durable, at least once, deduplicated on `message_id` within a 2 minute window (R-13) |
-| `role://{team}/{role}` | `agent.{ws}.{team}.role.{role}.inbox` | resolved to the current holder at delivery; no holder is a NOT-UNDERSTOOD back to the sender |
+| `role://{team}/{role}` | `agent.{ws}.{team}.role.{role}.inbox` | durable, read by every live holder of the role (fan-out); refused before publish when no live session holds it |
 | `broadcast://{ws}[/{team}]` | `agent.{ws}.broadcast` or `agent.{ws}.{team}.broadcast` | fan-out, no replay |
 | `global://director` | `global.director.inbox` in stream `GLOBAL_TO_DIRECTOR` | durable at the hub; refused before publish when no director is live |
 | `global://{cluster}/supervisor` | `global.{cluster}.supervisor.inbox` in stream `GLOBAL_TO_{cluster}` | durable at the hub; refused when no supervisor of that cluster is live |
@@ -267,6 +268,31 @@ queue for broadcasts: late joiners do not replay them. Result:
 `{ws}` for a local address is the recipient's workspace, resolved from
 live presence unless the `workspace` argument names it (R-92). A global
 address carries no workspace; `recipient.team` is empty for it.
+
+### Role mail
+
+A session started with `DIRECTOR_ROLE` holds that role. Its one durable
+reads both its own inbox and its role inbox, so role mail arrives through
+the same `wait_for_message`, batch and `inbox_summary` as agent mail, and
+its presence record carries `role`.
+
+**Every live holder gets a copy.** Each holder's durable filters the role
+subject, so a role send is fan-out to the holders, not a work queue that
+hands each message to one of them. Why: every address in the shim today is
+read by per-session durables (R-50 as implemented), and a role send most
+often carries something each holder must see (a GATE for the director, a
+status ask to a team's supervisor). A work queue would need a claim step the
+envelope does not carry and would hide which holder took the message. A
+send meant for one replica addresses it by `agent://`. When ruled R-50
+(one durable per address, 2026-09-24) is implemented, a role address gets a
+single shared durable and this choice is revisited.
+
+**Refusal.** With no explicit workspace, a role send resolves over the
+team's live presence rows whose `role` names the role. None is a refusal
+before publish, as for an agent with no live presence; rows that could not
+be read are reported as not established, never as absence. An explicit
+workspace addresses the role's mailbox verbatim, as it does a cold agent
+mailbox.
 
 ## Streams and buckets
 
@@ -366,6 +392,8 @@ type.
 { "agent_id": "fleet-envoy-g1-0", "instance": "01M2GQ1KMEDB39RAPCGA8CK5HM", "pid": 92392,
   "state": "idle", "team": "fleet", "workspace": "ops2", "ts": "2026-09-15T19:50:00Z" }
 ```
+
+A session holding a role adds `role` (for example `"role": "reviewer"`).
 
 Global rows add `cluster` and `role`, and a `tier` column in the merged
 roster. The record carries the harness's own view of nothing: `state` is
