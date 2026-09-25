@@ -2,7 +2,7 @@
 
 The shim is a Go program in `probe/nats-phase-0/director-mcp/`. A harness
 launches one per session as an MCP stdio server; the shim connects to a NATS
-broker and exposes five tools that carry director envelopes. It is the Phase
+broker and exposes six tools that carry director envelopes. It is the Phase
 0 probe cut, kept small on purpose: it proves the transport and the receive
 shape. It is not the director software.
 
@@ -67,7 +67,7 @@ bad global levers), 1 for a failed connection or preflight.
 5. Log `connected to <url> as agent://<team>/<id> instance <ulid> in
    workspace <ws>`, then serve.
 
-## The five tools
+## The six tools
 
 Every tool is request and response. `wait_for_message` is the long poll
 that stands in for a push the transport cannot make.
@@ -105,7 +105,8 @@ address, so nothing is stored and the audit mirror stays empty.
 
 | Argument | Default | Meaning |
 |---|---|---|
-| `timeout_seconds` | 30 (max 120) | how long to block for the next message |
+| `timeout_seconds` | 30 (max 120) | how long to block when nothing is already waiting |
+| `max` | 1 (max 50) | most messages to return in one call |
 
 Result with a message:
 
@@ -125,6 +126,92 @@ session's global inbox and names the tier. A hub that does not answer adds
 tier keeps working through a hub outage. A raw line on the shared global
 stream that is not an envelope is terminated and counted, not surfaced; on
 the local inbox an undecodable message is surfaced at once.
+
+**Batch drain (`max` above 1).** Every message already waiting comes back in
+one call, up to `max`, oldest first: the local inbox in stream order, then
+the global inbox in stream order. Sequence numbers are per stream, so they
+order messages within a tier only. When nothing is waiting the call blocks
+as the single form does, then tops the batch up with anything else that
+arrived. Messages are consumed exactly as the single form consumes them,
+with the ack confirmed by the server before the batch returns, so a lost ack
+cannot redeliver a message after the caller has read past it. An
+undecodable message on either tier is terminated and counted in
+`discarded` so the rest of the batch still returns. The single form keeps
+its result shape.
+
+**Failures partway through a batch.** Once any message has been acked in a
+call, a later local failure (a failed fetch, a failed top-up after the
+blocking wait) no longer fails the call: the messages already in hand come
+back, and the failure is reported in `local_warning`. The call is an error
+only when nothing was consumed. A confirmed ack that itself fails, or times
+out after the server applied it, returns the message anyway marked
+`ack_unconfirmed`, and the rest of that batch is still acked. The shim
+prefers a possible duplicate to a silent loss: such a message may be
+delivered once more later.
+
+```json
+{
+  "messages": [ { "message": { "...": "..." }, "tier": "local", "sequence": 431 } ],
+  "count": 1,
+  "order": "oldest first within each tier; local before global",
+  "remaining": { "local": 0, "global": 0 }
+}
+```
+
+There is no peek mode on this tool. A fetch without an ack leaves the
+message pending on the session's durable, where it is redelivered after the
+ack wait and holds up the FIFO cursor. Looking without consuming is
+`inbox_summary`, which reads through a separate consumer.
+
+The summary is a point-in-time read. Nothing locks it against a
+`wait_for_message` running on the same session at the same moment, so a
+drain can race it; `partial` and `maybe_consumed` say when the numbers do
+not line up.
+
+### `inbox_summary`
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `limit` | 200 (max 500) | most waiting messages to read per tier |
+
+Summarizes what is waiting for this session on both tiers and acks nothing.
+It reads each durable's filter and ack floor, then reads the stream from
+just past the floor through a throwaway ephemeral pull consumer (memory
+storage, no acks, deleted afterwards), so the durable's cursor does not move
+and a repeat call returns the same answer. It reads to the end of the stream
+(up to `limit`), not to the durable's count of what is waiting: the waiting
+set is not always a prefix of the stream above the floor, and stopping at the
+count would miss the newest mail.
+
+```json
+{
+  "summary": {
+    "total": 31,
+    "by_sender": { "seat-a@aae-orc": 12, "director@aae-orc": 1 },
+    "by_performative": { "INFORM": 28, "REQUEST": 2, "QUERY": 1 },
+    "flagged": [
+      { "tier": "local", "sequence": 433, "message_id": "01M3...", "sender": "seat-b@aae-orc",
+        "performative": "INFORM", "reasons": ["awaits a reply"],
+        "excerpt": "New seat up, holding for director instructions." }
+    ],
+    "sequences": { "local": [431, 432, 433], "global": [7] }
+  },
+  "waiting": { "local": 30, "global": 1 },
+  "read": { "local": 30, "global": 1 },
+  "note": "nothing was acked; drain in order with wait_for_message max=N"
+}
+```
+
+A message is flagged when its performative is REQUEST, FAILURE or QUERY,
+when it sets `reply_by`, or when its text says it holds custody or awaits a
+reply or instructions. The text match errs toward flagging. `waiting` is the
+durable's own count; `partial` appears when fewer were read than that
+(the limit, or a drain racing the read). `maybe_consumed` appears when more
+were read than that: some messages above the ack floor were acked out of
+order (a lost fire-and-forget ack on the single form, or an unconfirmed ack
+in a batch), and the durable does not expose which, so the counts, flags and
+sequences may include them. An undecodable message is counted in
+`undecodable` and listed in `sequences`.
 
 ### `list_roster`
 
