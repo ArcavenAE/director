@@ -95,7 +95,7 @@ probe/nats-global-tier/
   hub/                 hub config, the CA ceremony, provisioning scripts
   leaf-remote.conf.example  the leaf side of the connection
   verify-*.sh          checks that a tier is actually carrying traffic
-  director-mcp/        the shim (Go): five tools, local and global tiers, preflight
+  director-mcp/        the shim (Go): six tools, local and global tiers, preflight
   PROGRESS.md          sub-probe results 1 through 9 (poll is the receive, finding-160)
   authorization.conf   the credential-to-subject binding (director#4)
   cross-harness-demo.sh  codex and headless Claude Code joining the bus

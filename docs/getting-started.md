@@ -26,7 +26,7 @@ flowchart LR
 
 Each session gets its own shim process, launched by the harness as an MCP
 stdio server. The shim holds one connection to the broker, a durable inbox
-consumer, and a presence heartbeat. The harness sees five tools.
+consumer, and a presence heartbeat. The harness sees six tools.
 
 ## Prerequisites
 
@@ -189,8 +189,8 @@ The worked script is `probe/nats-phase-0/cross-harness-demo.sh`.
 
 ## 6. Send and receive
 
-From inside a session the five tools are `send_message`, `wait_for_message`,
-`list_roster`, `set_presence`, and `broadcast`. A first exchange, as the
+From inside a session the six tools are `send_message`, `wait_for_message`,
+`inbox_summary`, `list_roster`, `set_presence`, and `broadcast`. A first exchange, as the
 model calls them:
 
 ```
@@ -215,6 +215,19 @@ wait_for_message  timeout_seconds: 60
 
 send_message  to: agent://ops/reviewer-a  performative: AGREE
               in_reply_to: 01M2...  text: "on it; reply_by 17:00"
+```
+
+With a backlog, look before reading, then drain in one call, oldest first:
+
+```
+inbox_summary
+  -> summary: {total: 31, by_sender: {...}, by_performative: {INFORM: 28, REQUEST: 3},
+               flagged: [ {sequence: 433, performative: REQUEST, reasons: [...], ...} ],
+               sequences: {local: [431, 432, 433, ...]}}
+     note: nothing was acked; drain in order with wait_for_message max=N
+
+wait_for_message  max: 50
+  -> messages: [ {message: {...}, tier: local, sequence: 431}, ... ], count: 31
 ```
 
 The sequence, with the two facts that shape every director design decision:
