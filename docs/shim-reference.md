@@ -166,7 +166,7 @@ delivered once more later.
 {
   "messages": [ { "message": { "...": "..." }, "tier": "local", "sequence": 431 } ],
   "count": 1,
-  "order": "oldest first within each tier; local before global",
+  "order": "oldest first within each tier; local before global; the budget is shared between tiers",
   "remaining": { "local": 0, "global": 0 }
 }
 ```
@@ -302,6 +302,17 @@ Global hub (domain `global`):
 A global durable is `mcp_global_<id>_<instance>` with an inactive threshold
 one hour longer than the hub streams' 72h max age, so cleanup can only ever
 discard a durable whose replay had already expired.
+
+A new global durable resumes the way the local one does: after the highest
+ack floor among the seat's other `mcp_global_<id>_` durables filtered on the
+same inbox subject, or from the start of the stream when there are none.
+Every supervisor of a cluster filters on the same role inbox, so the name
+prefix is what keeps one seat's position from moving another's; each
+session still receives every message (fan-out, not a work queue).
+
+The first `wait_for_message` result after a start (or after the global tier
+attaches) carries `resumed`: one line per tier saying where the durable
+started and how many messages were waiting. It is reported once.
 
 ## Envelope v1
 

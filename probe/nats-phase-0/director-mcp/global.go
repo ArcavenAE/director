@@ -244,6 +244,10 @@ type globalTier struct {
 	js       jetstream.JetStream
 	kv       jetstream.KeyValue
 	consumer jetstream.Consumer
+
+	// resumedFrom is the seat ack floor the durable was created after, 0 when
+	// it read from the start. Reported once by the bus.
+	resumedFrom uint64
 }
 
 // attachGlobal builds the second JetStream context over the SAME connection
@@ -270,19 +274,36 @@ func attachGlobal(ctx context.Context, nc *nats.Conn, cfg globalConfig, agentID,
 // ensureConsumer creates or rebinds this session's durable on the hub stream.
 // It is idempotent, so it doubles as the repair path when the durable has been
 // cleaned up under it (globalConsumerInactive, or an operator removing it).
+// A new durable resumes after the highest ack floor among this seat's other
+// durables on the stream, the same rule as the local inbox, so a reconnect
+// does not replay the stream; with none, it reads everything the stream holds.
+// The seat is matched by name prefix and filter subject: every supervisor of a
+// cluster filters on the same role inbox, so the prefix keeps one seat's
+// position from moving another's (fan-out stays per session).
 func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance string) error {
-	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), jetstream.ConsumerConfig{
+	cfg := jetstream.ConsumerConfig{
 		Durable:           globalDurable(agentID, instance),
 		FilterSubject:     g.cfg.inboxSubject(),
 		AckPolicy:         jetstream.AckExplicitPolicy,
 		DeliverPolicy:     jetstream.DeliverAllPolicy,
 		MaxDeliver:        -1,
 		InactiveThreshold: globalConsumerInactive,
-	})
+	}
+	if cons, err := g.js.Consumer(ctx, g.cfg.streamName(), cfg.Durable); err == nil {
+		g.consumer = cons
+		return nil
+	}
+	floor, _ := seatAckFloor(ctx, g.js, g.cfg.streamName(), "mcp_global_"+agentID+"_", g.cfg.inboxSubject())
+	if floor > 0 {
+		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+		cfg.OptStartSeq = floor + 1
+	}
+	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), cfg)
 	if err != nil {
 		return fmt.Errorf("global durable on %s: %w (%s)", g.cfg.streamName(), err, hubHint(g.cfg))
 	}
 	g.consumer = cons
+	g.resumedFrom = floor
 	return nil
 }
 

@@ -59,6 +59,11 @@ type Bus struct {
 	// flips on every call, so a backlog on one tier cannot starve the other.
 	turnMu      sync.Mutex
 	globalFirst bool
+
+	// resumed holds, per tier, where this instance's durable started and
+	// what was waiting, reported once in the next wait_for_message result.
+	resumedMu sync.Mutex
+	resumed   []string
 }
 
 // localConsumerInactive is the local durable's inactive threshold. The inbox
@@ -193,7 +198,8 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		MaxDeliver:        -1,
 		InactiveThreshold: localConsumerInactive,
 	}
-	if floor, err := seatAckFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", filter); err == nil && floor > 0 {
+	floor, _ := seatAckFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", filter)
+	if floor > 0 {
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
 		cfg.OptStartSeq = floor + 1
 	}
@@ -203,7 +209,35 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		return nil, fmt.Errorf("durable consumer: %w", err)
 	}
 	b.consumer = cons
+	b.noteResumed("local", floor, cons)
 	return b, nil
+}
+
+// noteResumed records where a new durable started and how much was waiting,
+// for the next wait_for_message result.
+func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer) {
+	var waiting uint64
+	if info := cons.CachedInfo(); info != nil {
+		waiting = info.NumPending
+	}
+	var msg string
+	if floor > 0 {
+		msg = fmt.Sprintf("%s inbox resumed after stream sequence %d, the seat's last ack, so mail already read is not replayed; %d message(s) waiting", tier, floor, waiting)
+	} else {
+		msg = fmt.Sprintf("%s inbox has no earlier durable for this seat, so it reads everything the stream still holds; %d message(s) waiting", tier, waiting)
+	}
+	b.resumedMu.Lock()
+	b.resumed = append(b.resumed, msg)
+	b.resumedMu.Unlock()
+}
+
+// takeResumed returns the pending resume notes once, then clears them.
+func (b *Bus) takeResumed() []string {
+	b.resumedMu.Lock()
+	defer b.resumedMu.Unlock()
+	r := b.resumed
+	b.resumed = nil
+	return r
 }
 
 // seatAckFloor returns the highest ack floor among the seat's existing
@@ -673,6 +707,7 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 		return nil, err
 	}
 	b.global = g
+	b.noteResumed("global", g.resumedFrom, g.consumer)
 	return g, nil
 }
 

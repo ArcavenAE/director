@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,5 +174,102 @@ func TestBrokerLocalBacklogDoesNotStarveGlobalBatch(t *testing.T) {
 	}
 	if len(res.Items) != 3 || !found {
 		t.Errorf("batch of 3 = %v; want 3 items including the global one", ids(res.Items))
+	}
+}
+
+// R-50 still holds: two live sessions of one seat each receive new mail.
+func TestBrokerConcurrentSessionsBothReceiveNewMail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	pubEnv(t, ctx, js, resumeInbox, "old1", "INFORM", "read by the first")
+	b1, err := connect(ctx, url, resumeSelf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b1.close()
+	if e, _, err := b1.receive(ctx, 2*time.Second); err != nil || e == nil {
+		t.Fatalf("first read %v %v", e, err)
+	}
+	b2, err := connect(ctx, url, resumeSelf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b2.close()
+	pubEnv(t, ctx, js, resumeInbox, "new1", "INFORM", "for both")
+	for i, b := range []*Bus{b1, b2} {
+		e, _, err := b.receive(ctx, 2*time.Second)
+		if err != nil || e == nil || e.MessageID != "new1" {
+			t.Errorf("session %d got %v, %v; want new1", i+1, e, err)
+		}
+	}
+}
+
+// The global durable resumes the same way on a reconnect.
+func TestBrokerGlobalReconnectResumesAfterTheSeatsLastAck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by the first")
+	b1, err := connect(ctx, url, resumeSelf, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err := b1.receiveTiered(ctx, 3*time.Second); err != nil || r.Env == nil || r.Env.MessageID != "g0" {
+		t.Fatalf("first read %+v %v", r, err)
+	}
+	b1.close()
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g1", "INFORM", "while reconnecting")
+	b2, err := connect(ctx, url, resumeSelf, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b2.close()
+	res, err := b2.receiveBatch(ctx, 3*time.Second, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(res.Items); len(got) != 1 || got[0] != "global:g1" {
+		t.Errorf("second instance read %v, want only [global:g1]", got)
+	}
+}
+
+// The first wait after a start says where the inbox resumed and what waits,
+// once.
+func TestBrokerResumeIsReportedOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	pubEnv(t, ctx, js, resumeInbox, "old1", "INFORM", "read")
+	b1, err := connect(ctx, url, resumeSelf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _, _ := b1.receive(ctx, 2*time.Second); e == nil {
+		t.Fatal("setup read")
+	}
+	b1.close()
+	pubEnv(t, ctx, js, resumeInbox, "new1", "INFORM", "waiting")
+	b2, err := connect(ctx, url, resumeSelf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b2.close()
+	first, err := toolWait(ctx, b2, []byte(`{"timeout_seconds":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes, _ := first.(map[string]any)["resumed"].([]string)
+	if len(notes) != 1 || !strings.Contains(notes[0], "after stream sequence 1") || !strings.Contains(notes[0], "1 message(s) waiting") {
+		t.Errorf("first wait resumed = %v", notes)
+	}
+	second, _ := toolWait(ctx, b2, []byte(`{"timeout_seconds":1}`))
+	if _, ok := second.(map[string]any)["resumed"]; ok {
+		t.Errorf("resume reported twice")
 	}
 }
