@@ -66,7 +66,7 @@ So provision before the first shim connects:
 
 ```sh
 nats stream add AGENT_INBOX --subjects 'agent.*.*.*.inbox,agent.*.*.role.*.inbox' \
-  --storage file --retention limits --max-age 24h --max-msg-size 65536 --dupe-window 2m
+  --storage file --retention limits --max-age 72h --max-msg-size 65536 --dupe-window 2m
 nats stream add AGENT_AUDIT --subjects 'agent.audit' --storage file --retention limits --max-age 720h
 nats kv add AGENT_STATE --ttl 90s --storage file
 ```
@@ -246,7 +246,7 @@ stored the bytes. Only the receiver, after processing, can say the message
 arrived (R-08); reply with `in_reply_to` set so the sender can correlate.
 
 **Store and forward.** A message sent to a session that is not connected
-waits in the stream (24 hours) and replays when that session first pulls.
+waits in the stream (72 hours) and replays when that session first pulls.
 In the probe, the sender exited before the receiver ever connected, and the
 receiver's first poll returned the message.
 

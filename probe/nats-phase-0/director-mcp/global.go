@@ -43,12 +43,15 @@ const (
 	globalDirectorStream = "GLOBAL_TO_DIRECTOR"
 	globalStreamPrefix   = "GLOBAL_TO_"
 
-	// The hub streams carry a 24h max age. A durable cleaned up after a
-	// slightly longer idle window can therefore only ever have replayed
-	// messages that have already expired, so the cleanup costs nothing while
-	// still keeping dead sessions' consumers from accumulating on a shared hub
-	// (R-50, and the orphan accumulation the local preflight comment names).
-	globalConsumerInactive = 25 * time.Hour
+	// The hub streams carry a 72h max age (raised from 24h, director#77). A
+	// durable cleaned up after a slightly longer idle window can therefore
+	// only ever have replayed messages that have already expired, so the
+	// cleanup costs nothing while still keeping dead sessions' consumers from
+	// accumulating on a shared hub (R-50, and the orphan accumulation the
+	// local preflight comment names). Keep this one hour above the hub max
+	// age: below it, the repair path in ensureConsumer recreates a cleaned-up
+	// durable under DeliverAll and replays mail the session already acked.
+	globalConsumerInactive = 73 * time.Hour
 )
 
 // globalConfig is the launcher-assigned global identity. Like the local
