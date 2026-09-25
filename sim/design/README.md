@@ -46,3 +46,11 @@ a probe before it hardens.
   rendered conf and authorization file, the R-93 spawn hold, leaf state on
   the events ring, S6's seed path, and the ordered gap list to a functional
   cross-host service. Candidate R-96.
+- `leaf-fabric-one-address-space.md` (brief 11, candidate for review
+  2026-09-24): one fleet address per seat over the leaf fabric; mail stored on
+  the recipient's cluster; per-cluster outbox sourced by the remote inbox so a
+  link outage delays and loses nothing; hierarchy by per-seat credential; no
+  silent expiry; seat-keyed presence; a notifier for idle seats; a flag-day
+  cutover on the ruled `agent.<cluster>.` root, with rollback, and a
+  two-cluster probe (finding-008). Amends R-94, R-95, R-50, and R-109 (ruled
+  2026-09-24). Candidate FAB-A to FAB-G.
