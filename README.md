@@ -74,11 +74,14 @@ skills/director/     the skill: role, modes, output contract, capture triggers
   reference/         measured capability table; the settled and open relay questions
   scripts/dsi        session inventory across all four adapters
   scripts/dsx        external state verification (the board has no expiry)
+  scripts/board-html render board.md as a self-contained local page (search,
+                     filters, collapsible sections, auto-refresh); no network
 skills/stansfield/   full fleet roll call: enumerate every session across the
                      bus, marvel clusters and SendMessage, deduped to one
                      identity each, then optionally relay an action
 commands/director.md thin command that invokes the skill
-install.sh           symlink or copy the skills and command into ~/.claude
+install.sh           symlink or copy the skills and command into ~/.claude,
+                     and harness-neutral tools into ~/.director/bin
 docs/                operator guide, shim reference, architecture and use-case diagrams
 probe/nats-phase-0/  the transport probe: NATS broker + director-mcp shim
   PROGRESS.md          sub-probe results (poll is the receive, finding-160)
@@ -119,8 +122,23 @@ into the platform's knowledge graph.
 /director standing    # adopt the role for the session
 ```
 
-That installs the skill and the command and creates the state root. It is the
-whole of what `install.sh` does.
+That installs the skill and the command, links `board-html` into
+`~/.director/bin` (override with `DIRECTOR_HOME`), and creates the state root.
+It is the whole of what `install.sh` does.
+
+### The board as a page
+
+`~/.director/bin/board-html` renders `$DIRECTOR_STATE/board.md` into
+`board.html` beside it: one self-contained file with search, tag filters,
+collapsible sections, newest-first ordering and a light/dark theme. It is plain
+Python 3 with no dependencies, so it works the same on macOS and Linux and from
+any harness. Nothing is fetched and nothing leaves the machine.
+
+The page is opt-in. Run `board-html` once to create it; from then on the
+director skill rebuilds it after each board edit, because the page exists. A
+page opened from disk cannot see its own rebuild, so it carries an
+Auto-refresh toggle (off, 10s, 30s, 60s) that reloads and keeps your scroll
+position, search and open sections.
 
 ### The bus seat, by hand
 
