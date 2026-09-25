@@ -51,6 +51,12 @@ func main() {
 		err = cmdPerm(os.Args[2:])
 	case "sweep":
 		err = cmdSweep(os.Args[2:])
+	case "unread":
+		err = cmdUnread(os.Args[2:])
+	case "migrate":
+		err = cmdMigrate(os.Args[2:])
+	case "rollback":
+		err = cmdRollback(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
@@ -222,9 +228,9 @@ func cmdMint(args []string) error {
 	scope.Key = skPub
 	scope.Role = "seat"
 	scope.Template.Pub.Allow.Add(
-		"mail.{{tag(cluster)}}.{{tag(ws)}}.{{tag(team)}}.>",
+		"agent.{{tag(cluster)}}.{{tag(ws)}}.{{tag(team)}}.>",
 		"out.*.{{tag(ws)}}.{{tag(team)}}.>",
-		"mail.{{tag(cluster)}}.{{tag(ws)}}.{{tag(supteam)}}.{{tag(sup)}}.inbox",
+		"agent.{{tag(cluster)}}.{{tag(ws)}}.{{tag(supteam)}}.{{tag(sup)}}.inbox",
 		"out.director.inbox",
 	)
 	scope.Template.Sub.Allow.Add("_INBOX.>")

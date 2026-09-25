@@ -10,9 +10,10 @@
 #   FAB_HOME=<dir> rig.sh start <n> start one server again from its conf
 #   FAB_HOME=<dir> rig.sh url <n>   print a server's client url
 #
-# Subject root: mail./out. per brief 11 section 2.1. The root choice (mail.
-# versus agent.<cluster>.) is pending an operator ruling; the probe does not
-# depend on it beyond not overlapping a live stream.
+# Subject root: agent.<cluster>. (ruled 2026-09-24). A cluster's INBOX lists
+# the two inbox forms explicitly rather than agent.<cluster>.>, so broadcast
+# subjects are never captured. out.<dest>. is the internal outbox transport
+# subject, never an address.
 set -euo pipefail
 
 : "${FAB_HOME:?set FAB_HOME to a scratch directory}"
@@ -63,8 +64,8 @@ leafnodes {
     urls: ["nats-leaf://127.0.0.1:$HUB_L"]
     # Raw mail and outbox subjects never cross the link (brief 11 2.3);
     # only the sourcing API, delivery, and flow-control traffic does.
-    deny_exports: ["mail.>", "out.>"]
-    deny_imports: ["mail.>", "out.>"]
+    deny_exports: ["agent.>", "out.>"]
+    deny_imports: ["agent.>", "out.>"]
   } ]
 }
 EOF
@@ -109,9 +110,9 @@ streams() {
   for c in pa pb; do
     local other; [[ $c == pa ]] && other=pb || other=pa
     add_stream "$c" "$(stream_json OUTBOX '["out.>"]' workqueue '{}')"
-    add_stream "$c" "$(stream_json INBOX "[\"mail.$c.>\"]" workqueue "$(jq -n --arg o "$other" --arg c "$c" '{
+    add_stream "$c" "$(stream_json INBOX "[\"agent.$c.*.*.*.inbox\",\"agent.$c.*.*.role.*.inbox\"]" workqueue "$(jq -n --arg o "$other" --arg c "$c" '{
       sources:[{name:"OUTBOX", external:{api:("$JS."+$o+".API")},
-        subject_transforms:[{src:("out."+$c+".>"), dest:("mail."+$c+".>")}]}]}')")"
+        subject_transforms:[{src:("out."+$c+".>"), dest:("agent."+$c+".>")}]}]}')")"
   done
   add_stream hub "$(stream_json DIRECTOR_INBOX '["director.inbox"]' workqueue "$(jq -n '{
     sources:[ ("pa","pb") | {name:"OUTBOX", external:{api:("$JS."+.+".API")},

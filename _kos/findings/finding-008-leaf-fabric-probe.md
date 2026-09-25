@@ -5,7 +5,7 @@
 - **Subject:** design brief 11 (`sim/design/leaf-fabric-one-address-space.md`), probe P0 to P6
 - **Confidence:** measured on nats-server 2.14.6 scratch brokers; one step (P0) is partial because one live broker's version cannot be read from here
 - **Rig:** `probe/leaf-fabric/` (`rig.sh`, `p2-linkcut.sh`, `p4-presence.sh`, `fabtool/`). A scratch hub (domain `ghub`) and two scratch leaf clusters (domains `pa`, `pb`), plus two standalone scratch servers for P3 and P5, all on random ports above 20000 with their own store dirs. The live brokers were read through their monitoring ports only; their process ids were the same before and after the run.
-- **Subject root:** built on `mail.` and `out.`. The choice between `mail.` and `agent.<cluster>.` is **pending an operator ruling**; nothing measured here depends on it beyond not overlapping a live stream.
+- **Subject root:** first run on `mail.`; the operator then ruled for `agent.<cluster>.` with a flag-day cutover, and P1 to P7 were rerun on that root (section 4). `out.` stays as the internal outbox transport subject.
 
 ## 0. The two sentences
 
@@ -66,3 +66,42 @@ survives the move to per-seat credentials.
   leaf in operator mode.
 - The subject delete marker (`SubjectDeleteMarkerTTL`) was not tried.
 - mokuzai's version (P0) must be read on mokuzai.
+
+## 4. Rerun on the ruled root, and the cutover probe (P7)
+
+The operator ruled the same day: no `mail.` root; stay on
+`agent.<cluster>.<ws>.<team>.<id>` and accept a coordinated cutover from
+`AGENT_INBOX`. Every step above was rerun on that root on fresh scratch
+brokers, and P7 was added.
+
+- **P1 to P6 on `agent.<cluster>.`:** same results as the first run. The
+  cluster `INBOX` lists `agent.<c>.*.*.*.inbox` and `agent.<c>.*.*.role.*.inbox`
+  explicitly; a role message arrives on the role form; a broadcast publish is
+  captured by no inbox. In P2 both legs resumed 40 to 44 seconds after the
+  hub restart this time (the first run saw the leaf-to-leaf leg resume in
+  seconds), so the resume delay belongs to any source whose path ran through
+  the restarted hub, not only the hub's own sources.
+- **P7 overlap, measured:** with a legacy `AGENT_INBOX` holding
+  `agent.*.*.*.inbox` and `agent.*.*.role.*.inbox`, the server refuses a new
+  stream on `agent.kc.>`, on the two explicit patterns, and on the seat pattern
+  alone (10065, subjects overlap). The role pattern alone (seven tokens) is
+  accepted. The six-token seat pattern overlapping the six-token legacy role
+  pattern is what forces the flag day.
+- **P7 cutover:** publishers stopped, legacy subjects parked to
+  `legacy.parked.agent_inbox` (messages and durables kept), `INBOX` created,
+  then `fabtool migrate` moved exactly the unread set, 10 of 17 messages, by
+  the highest-ack-floor rule (three addresses, one of them cold; the role
+  address fully read). A rerun stored nothing new (dedupe on the original
+  `Nats-Msg-Id`).
+- **P7 rollback:** after one migrated message was read and three new ones
+  arrived, parking `INBOX`, restoring the legacy subjects, and
+  `fabtool rollback` left the legacy durables' pending counts at exactly the
+  expected 4, 5, 3, 0.
+- **A tooling defect found and fixed in the run:** republishing a message read
+  back from a stream must drop the metadata headers the read adds
+  (`Nats-Subject`, `Nats-Sequence`, `Nats-Time-Stamp`, `Nats-Stream`). Copying
+  them made a later read report the old subject, which read as a wrong
+  rollback until the stream's own subject counts showed it was correct. The
+  production migration tool needs the same filter.
+
+The plan these results support is brief 11 section 5.

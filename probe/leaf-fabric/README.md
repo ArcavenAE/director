@@ -10,10 +10,12 @@ URL on every call and has no default.
 FAB_HOME=$SCRATCH/fab rig.sh up
 FAB_HOME=$SCRATCH/fab FABTOOL=$SCRATCH/fabtool p2-linkcut.sh    # 10-minute outage by default; OUTAGE=<s>
 FAB_HOME=$SCRATCH/fab p4-presence.sh
+P7_URL=<scratch server> FABTOOL=$SCRATCH/fabtool p7-cutover.sh
 FAB_HOME=$SCRATCH/fab rig.sh down
 ```
 
-P3 (`fabtool mint` plus `fabtool perm`) and P5 (`fabtool sweep`) ran on their
-own standalone scratch servers; the commands are in finding-008. Subject root
-is `mail.`/`out.`, pending the operator's ruling. Results:
+P3 (`fabtool mint` plus `fabtool perm`), P5 (`fabtool sweep`) and P7
+(`p7-cutover.sh`, using `fabtool unread`, `migrate`, `rollback`) ran on their
+own standalone scratch servers. Subject root is `agent.<cluster>.` (ruled
+2026-09-24); `out.<dest>.` is the internal outbox subject. Results:
 `_kos/findings/finding-008-leaf-fabric-probe.md`.

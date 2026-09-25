@@ -861,9 +861,10 @@ resolves from any cluster; `director` is the one reserved fleet address.**
 aliases resolved through the roster (R-92), refusing when unresolvable or
 ambiguous (R-78). Holding an address means being addressable and having a
 presence row; it grants no right to send, which R-95 decides by credential.
-A worker's read stays narrowed to its own inbox. The subject root for the
-fleet grammar (`mail.` or `agent.<cluster>.`) is pending an operator ruling
-(brief 11 section 2.1). marvel's `Cluster.Name` takes the same
+A worker's read stays narrowed to its own inbox. The subject root is
+`agent.<cluster>.` (`agent.<cluster>.<ws>.<team>.<id>.inbox`), also RULED
+2026-09-24, with a coordinated flag-day cutover from the legacy `AGENT_INBOX`
+(brief 11 section 5); `role` is reserved and cannot be a seat id. marvel's `Cluster.Name` takes the same
 reject-not-rewrite check the shim applies (aae-orc-z37ux). Replaced wording:
 "exactly two role words exist there, `supervisor` and `director`; a worker
 never holds a global address", which made "not permitted" and "no such

@@ -1,9 +1,10 @@
 # Design brief 11: one fleet address space over the leaf fabric
 
 Status: amendments ruled 2026-09-24 (R-50, R-94, R-95, R-109 accepted on
-director#77); probe P0 to P6 run on scratch brokers the same day, results in
-`_kos/findings/finding-008-leaf-fabric-probe.md` and section 10. The subject
-root (`mail.` or `agent.<cluster>.`) is still pending. Commissioned by the
+director#77); subject root ruled the same day: `agent.<cluster>.`, with a
+coordinated flag-day cutover from today's `AGENT_INBOX` (section 5). Probe P0
+to P7 run on scratch brokers on that root, results in
+`_kos/findings/finding-008-leaf-fabric-probe.md` and section 10. Commissioned by the
 operator through the director seat. Nothing here is built. The live brokers
 were read, not changed (section 1). Where a mechanism rests on a NATS fact this
 sitting did not execute, it is marked UNVERIFIED and the probe plan (section 9)
@@ -108,17 +109,28 @@ ambiguous or unresolvable alias refuses before publish (R-78).
 A role address is a queue, not a fan-out (section 2.5): one holder takes each
 message. Broadcast keeps its current fan-out semantics and is not an inbox.
 
-**One deviation from the commissioning text, flagged for a ruling.** The brief
-names the subject root `agent.<cluster>.>`. On the kinu broker that root cannot
-coexist with the live `AGENT_INBOX`, because `agent.*.*.role.*.inbox` matches
-`agent.<cluster>.<ws>.role.<x>.inbox` and the server refuses a stream whose
-subjects overlap another in the same account. Either the new inbox streams wait
-for `AGENT_INBOX` to be retired (a flag-day cutover, which section 5 exists to
-avoid), or the new root is distinct. I recommend a distinct root, `mail.`, for
-the fabric (`mail.<cluster>.<workspace>.<team>.<id>.inbox`), with the
-`agent://` address grammar unchanged for users. The rest of this brief writes
-`mail.`; if the operator prefers `agent.` and a flag day, only section 5
-changes.
+**Subject root: `agent.<cluster>.`, ruled 2026-09-24.** The operator declined a
+separate `mail.` root and accepted a coordinated flag-day cutover instead
+(section 5). The reason a flag day is needed is measured, not assumed (P7): the
+server refuses the new inbox stream while the legacy `AGENT_INBOX` holds its
+subjects, because `agent.<cluster>.*.*.*.inbox` (six tokens) overlaps the
+legacy role pattern `agent.*.*.role.*.inbox` (six tokens), and
+`agent.<cluster>.>` overlaps both legacy patterns. The new role pattern
+(seven tokens) does not overlap anything.
+
+Two rules follow from the shared root:
+
+- A cluster's `INBOX` lists the two inbox forms explicitly,
+  `agent.<cluster>.*.*.*.inbox` and `agent.<cluster>.*.*.role.*.inbox`, never
+  `agent.<cluster>.>`, so broadcast (`agent.<cluster>.<ws>[.<team>].broadcast`)
+  and `agent.audit` are never captured by an inbox. Measured in P1: a
+  broadcast publish stores nothing.
+- `role` is reserved and cannot be a seat id, because
+  `agent.<c>.<ws>.<team>.role.<r>.inbox` is the role form. `audit` and
+  `broadcast` are reserved as cluster and workspace tokens for the same reason.
+
+`out.<dest>.` is the internal outbox transport subject (section 2.3). It is
+never an address and never appears in the `agent://` grammar.
 
 ### 2.2 Mail is stored where the recipient lives
 
@@ -126,8 +138,8 @@ Each cluster runs its own JetStream domain (its cluster token) and one inbox
 stream for its own seats:
 
 ```
-INBOX       subjects mail.<self>.>        domain <self>
-OUTBOX      subjects out.>                domain <self>
+INBOX       subjects agent.<self>.*.*.*.inbox, agent.<self>.*.*.role.*.inbox    domain <self>
+OUTBOX      subjects out.>                                                   domain <self>
 ```
 
 A seat's durable consumer reads `INBOX` on its own broker. It never crosses a
@@ -141,7 +153,7 @@ direction moves it onto shared infrastructure).
 ### 2.3 Cross-cluster mail rides an outbox, and nothing is lost to an outage
 
 A publish to a recipient on the sender's own cluster goes straight to
-`mail.<self>.<workspace>.<team>.<id>.inbox` and lands in the local `INBOX`. A publish to a recipient on
+`agent.<self>.<workspace>.<team>.<id>.inbox` and lands in the local `INBOX`. A publish to a recipient on
 another cluster goes to the sender's local `OUTBOX` as
 `out.<dest>.<workspace>.<team>.<id>.inbox` (or `out.director.inbox`). The shim
 chooses, because it already derives the subject from the recipient's resolved
@@ -153,7 +165,7 @@ its own token and transformed back into its own subject space:
 ```
 INBOX (domain kinu) sources:
   - name: OUTBOX, external api $JS.mokuzai.API,
-    subject_transforms: [ { src: "out.kinu.>", dest: "mail.kinu.>" } ]
+    subject_transforms: [ { src: "out.kinu.>", dest: "agent.kinu.>" } ]
 DIRECTOR_INBOX (domain global) sources, one per cluster:
   - name: OUTBOX, external api $JS.<cluster>.API,
     subject_transforms: [ { src: "out.director.inbox", dest: "director.inbox" } ]
@@ -166,7 +178,7 @@ broker, the outbox grows, and the destination's source resumes when the link
 returns. An outage delays mail and loses none, and the outbox depth per
 destination is the queue state R-10 asks the sender to be able to see.
 
-Raw `mail.>` and `out.>` subjects never cross the link. The leaf remote carries
+Raw `agent.>` and `out.>` subjects never cross the link. The leaf remote carries
 `deny_exports` and `deny_imports` on both, so the only traffic crossing is the
 sourcing consumer's API, delivery, and flow-control subjects, presence, and the
 director inbox. This is also what keeps one message from being stored twice:
@@ -214,7 +226,7 @@ Mechanism, per layer:
 1. **Per-seat credentials.** Operator/JWT mode with scoped signing keys, so a
    user JWT carries the seat's cluster, workspace, team, id, and supervisor as
    tags, and one permission template expands per seat, for example publish
-   allow `mail.{{tag(cluster)}}.{{tag(ws)}}.{{tag(team)}}.>` and
+   allow `agent.{{tag(cluster)}}.{{tag(ws)}}.{{tag(team)}}.>` and
    `out.*.{{tag(ws)}}.{{tag(team)}}.>`. Templates exist only for scoped signing
    keys in JWT mode (nats-server v2.9.0; mechanics note, "Credentials bound to a
    subject prefix"). Static per-user NKeys, brief 8's model, would need a hub
@@ -326,32 +338,110 @@ process hosts the aging sweeper in section 2.5.
 | outbox grows without bound during a long outage | byte cap with `discard: new` on `OUTBOX`: the sender's publish refuses loudly when full, and the outbox depth is on the roster (R-10) |
 | sourcing silently stalls (a wrong export type "never catches up") | P1 proves the wiring; the sweeper reports outbox age per destination, so a stalled source shows as aging mail |
 
-## 5. Migration from the two-tier design
+## 5. Cutover from the two-tier design (flag day, ruled 2026-09-24)
 
-No flag day, no mail lost. Each numbered step is operator-gated where it touches
-a live broker.
+The operator ruled for the `agent.<cluster>.` root and a coordinated cutover.
+The server will not let the new inbox and the legacy `AGENT_INBOX` capture
+overlapping subjects on one broker (P7 measured the refusal), so on each
+cluster there is one window in which publishers stop, the legacy stream stops
+capturing, the new one starts, and unread mail is carried across. Every step
+that touches a live broker is operator-gated. The whole procedure, including
+the rollback, ran end to end on a scratch server (P7).
 
-1. **P0 to P6 pass on scratch brokers** (section 9). Nothing live moves before.
-2. **Stop the bleeding now, independent of the rest.** Raise `AGENT_INBOX` and
-   the three `GLOBAL_TO_*` streams from 24h to 14 days, and give the local
-   durable an `InactiveThreshold` in the shim. Both are small, reversible, and
-   remove `t77rr` and the growth of `iejcx` before the fabric exists.
-3. **Domains and versions.** Give the kinu broker `domain: kinu` (brief 8 step 2,
-   still outstanding); confirm or bring mokuzai to 2.14.x with its own domain.
-4. **Stand up the fabric beside the old streams.** `INBOX`, `OUTBOX`,
-   `DIRECTOR_INBOX`, the presence buckets, and the sources, on the `mail.` and
-   `out.` roots, so nothing overlaps `AGENT_INBOX` and old traffic is untouched.
-5. **Dual-read shims.** The shim polls its new durable and its old one, marks
-   each message with its origin, and publishes only on the new fabric. Old
-   short addresses resolve to new subjects. A sender still on an old shim keeps
-   writing old subjects, which the dual-read recipient still drains.
-6. **Cut over per cluster.** When every seat on a cluster runs a dual-read shim
-   and its old durables show zero pending, stop publishing to old subjects there.
-   Sweep old durables keeping only live ones (`iejcx` ask 3). Old streams stay
-   readable until their pending is zero fleet-wide, then retire.
-7. **Credentials.** Move a cluster to JWT-scoped users once P3 passes; until
-   then the fabric runs under brief 8's static NKeys and the kinu broker's
-   current open posture, which is the risk stated in brief 8 section 9.
+### 5.1 Before any window
+
+1. **Probe passes** on scratch brokers (sections 9 and 10), and P0 is read on
+   mokuzai.
+2. **Builds ready and pinned.** The new shim (cluster-qualified subjects, one
+   durable per address, the async permission error turned into a named
+   failure) and the migration tool (`fabtool unread`, `migrate`, `rollback`,
+   promoted out of the probe). The current shim binary is pinned as the
+   rollback build.
+3. **Optional, independent, and worth doing now:** raise `AGENT_INBOX` and the
+   `GLOBAL_TO_*` streams from 24h to 14 days and give the local durable an
+   `InactiveThreshold`. This stops `t77rr` and the growth of `iejcx` until the
+   window, and it does not change the cutover.
+4. **Hub first.** Create `DIRECTOR_INBOX` on `director.inbox` in the hub
+   domain. It overlaps nothing (`global.director.>` is a different root), so
+   it can exist ahead of every cluster; its sources are added as each cluster
+   gains an `OUTBOX`. The director reads the old global inbox and the new one
+   until the last cluster is cut.
+
+### 5.2 Order
+
+kinu first (the director's host, where the operator watches), then mokuzai, in
+the same session if possible. Between the two windows a cut cluster and an
+uncut one have no fabric path between their seats; the old global tier still
+carries supervisor and director traffic, so keep the gap short. The
+`GLOBAL_TO_*` streams retire after the last cluster is cut and their pending
+counts read zero.
+
+### 5.3 The window on one cluster
+
+1. **Stop publishers.** Stop every director shim on the cluster. Confirm
+   `AGENT_INBOX`'s last sequence is unchanged for 60 seconds.
+2. **Back up.** `nats stream backup AGENT_INBOX`.
+3. **Count what must move.** `unread`: per address, every message above the
+   highest ack floor of any durable filtering that address. The highest floor
+   is the right rule because the legacy shim gave every instance its own
+   durable under `DeliverAll`: a message any instance acked was read, and dead
+   instances' low floors must not resurrect it. An address with no durable
+   moves everything it holds. Messages delivered but not yet acked move too;
+   none were ack-pending in the section 1 survey.
+4. **Domain.** If the broker still has no JetStream domain, add
+   `domain: <cluster>` and restart it here (adding a domain keeps streams and
+   clients, brief 8 section 1).
+5. **Park the legacy stream.** Edit `AGENT_INBOX`'s subjects to
+   `legacy.parked.agent_inbox`. From this instant it captures nothing and
+   keeps every message and durable for rollback. **This is what prevents
+   double capture:** the new inbox does not exist until the legacy stream has
+   released the subjects, and the server refuses the reverse order anyway.
+6. **Create the fabric streams.** `INBOX` with the two explicit patterns
+   (work-queue, 28-day backstop, `discard: new`, byte cap, 20-minute dedupe
+   window), `OUTBOX` on `out.>`, this cluster's sources from the other
+   clusters' outboxes, and this cluster's source on the hub's
+   `DIRECTOR_INBOX`.
+7. **Drain by migration.** `migrate` republishes each unread message onto
+   `agent.<cluster>.<ws>.<team>.<id>.inbox` (or the role form) with its
+   original `Nats-Msg-Id` and a header naming its legacy sequence, and writes
+   the id-to-sequence map. The count must equal step 3. A rerun inside the
+   dedupe window stores nothing new (P7). On a mismatch, abort: delete
+   `INBOX`, restore the legacy subjects, restart the old shims; nothing new has
+   happened yet.
+8. **Start the new shims.** Each binds one durable per address. Check one
+   round trip per seat and a director roll call.
+9. **Confirm the legacy stream is quiet.** Its last sequence has not moved
+   since step 1.
+10. **Hold.** The parked legacy stream stays for 14 days as the rollback
+    source. Deleting it after sign-off also deletes its 185 orphaned durables,
+    which closes the `iejcx` sweep with no separate step.
+
+### 5.4 Rollback (P7, measured)
+
+Available while the legacy stream is parked:
+
+1. Stop the new shims.
+2. Park `INBOX` (edit its subjects to `legacy.parked.inbox`).
+3. Restore `AGENT_INBOX`'s two original subject patterns.
+4. `rollback` reconciles. It deletes the legacy original of every migrated
+   message that was read after cutover, so it is not delivered twice. It also
+   republishes every message that arrived after cutover and is still unread
+   onto its legacy subject. Migrated messages still unread need nothing,
+   because their legacy originals are still unread above the old durables'
+   ack floors.
+5. Start the pinned old shim build. The old durables resume from their ack
+   floors.
+
+P7 result: after a cutover, one migrated message read, three new messages, and
+a rollback, the legacy durables' pending counts were exactly the expected
+unread sets (4, 5, 3, 0). Two limits are stated rather than hidden:
+
+- **Mail waiting in `OUTBOX` for another cluster** at rollback has not left
+  the cluster. Roll back both clusters together, and treat the outbox
+  contents as undelivered mail to report to the senders.
+- **Messages read after cutover** leave no trace in the legacy stream beyond
+  the deletion. A seat that acted on one before rollback keeps its own record
+  of having done so. The legacy stream does not.
 
 ## 6. What this supersedes and what it keeps
 
@@ -416,10 +506,10 @@ random ports, cleanup trap. The live brokers are not touched.
   work-queue stream is 2.14 or later.
 - **P1 wiring.** `pb` `INBOX` sources `pa` `OUTBOX` through the hub with the
   transform in 2.3. Publish 10 on `out.pb.w.t.x.inbox` at `pa`. Pass: 10 in
-  `pb` `INBOX` on `mail.pb.w.t.x.inbox`, 0 left in `pa` `OUTBOX`.
+  `pb` `INBOX` on `agent.pb.w.t.x.inbox`, 0 left in `pa` `OUTBOX`.
 - **P2 link cut.** Kill the hub. Publish 500 at `pa` with unique
-  `Nats-Msg-Id`, including 50 repeats of earlier ids. Wait 10 minutes. Restart
-  the hub. Pass: exactly 450 distinct messages in `pb` `INBOX`, in order, none
+  `Nats-Msg-Id`, then 50 repeats of earlier ids. Wait 10 minutes. Restart
+  the hub. Pass: exactly 500 distinct messages in `pb` `INBOX`, in order, none
   duplicated, `pa` `OUTBOX` empty, and every publish at `pa` acked by `pa`
   during the outage.
 - **P3 permissions.** JWT mode with a scoped signing key and the template in
@@ -437,20 +527,32 @@ random ports, cleanup trap. The live brokers are not touched.
   is refused by the server; a shim restart rebinds the existing durable and
   the stream's consumer count does not grow.
 
+- **P7 cutover and rollback.** On a standalone scratch server holding a
+  legacy `AGENT_INBOX` configured as the live one is, with several durables per
+  address at different ack floors, a cold address, and a role address. Pass:
+  the new `INBOX` is refused while the legacy subjects are held; after
+  parking, the migration moves exactly the unread set and a rerun moves
+  nothing; after new-era reads and writes, rollback leaves the legacy
+  durables' pending counts equal to the expected unread sets.
+
 Each step either passes or turns its UNVERIFIED mark into a finding before the
-migration in section 5 begins.
+cutover in section 5 begins. All steps run on the `agent.<cluster>.` root.
 
 ## 10. Probe results (2026-09-24, finding-008)
+
+All steps rerun on the ruled `agent.<cluster>.` root; the first run on a
+`mail.` root gave the same results and is kept in finding-008.
 
 | step | result |
 |---|---|
 | P0 | partial: kinu local and hub 2.14.6; mokuzai must be read on mokuzai |
-| P1 | pass: leaf to hub to leaf sourcing with the transform, outbox drained, raw subjects refused at the link |
-| P2 | pass: 10-minute hub outage, 500 of 500 and 20 of 20 delivered once and in order; the hub-side sources resumed about 44s after the hub restart |
+| P1 | pass: leaf to hub to leaf sourcing with the transform onto `agent.<c>.`, seat and role forms, outbox drained; a raw cross-cluster publish is refused at the link; a broadcast publish is captured by no inbox |
+| P2 | pass: 10-minute hub outage, 500 of 500 and 20 of 20 delivered once and in order, 50 repeats dropped at the outbox; both legs resumed 40 to 44 seconds after the hub restart |
 | P3 | pass on the template; the refusal reaches the publisher as a timeout plus an async named error, which the shim must turn into a named failure |
 | P4 | pass: one row per seat through five restarts, stale compare-and-set refused, delete propagated, a cut cluster aged out of the fleet view |
 | P5 | pass: full inbox refuses; two sender notices before age removal; no server advisory for the removal |
-| P6 | pass: second consumer on an address refused; rebinding keeps the count at 1 |
+| P6 | pass: second consumer on an address refused, and so is a team-wide watcher; rebinding keeps the count at 1 |
+| P7 | pass: new `INBOX` refused while the legacy subjects are held (the seat pattern overlaps the legacy role pattern); park, create, migrate moved exactly the 10 unread of 17; a rerun moved nothing; rollback deleted the 1 migrated message read after cutover, republished the 3 new ones, and left the legacy durables at 4, 5, 3, 0 pending as expected |
 
 Not yet covered: sourcing under restricted leaf users, per-seat JWT on a leaf
 in operator mode, and the subject delete marker.
