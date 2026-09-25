@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install the director skill and command into a Claude Code configuration.
+# Install the director skill and command into a Claude Code configuration,
+# plus harness-neutral tools into ~/.director/bin (usable from any harness).
 #
 #   ./install.sh              symlink into ~/.claude (development default)
 #   ./install.sh --copy       copy instead, for a machine that does not have
@@ -18,7 +19,7 @@ while [ $# -gt 0 ]; do
     --copy) MODE=copy ;;
     --link) MODE=link ;;
     --target) TARGET="$2"; shift ;;
-    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -46,6 +47,12 @@ echo "installing director ($MODE) into $TARGET"
 install_one "$SRC/skills/director" "$TARGET/skills/director"
 install_one "$SRC/skills/stansfield" "$TARGET/skills/stansfield"
 install_one "$SRC/commands/director.md" "$TARGET/commands/director.md"
+
+# Harness-neutral tools. The board is written by whichever session holds the
+# director role, Claude Code or not, so these live outside any harness config.
+DIRECTOR_HOME="${DIRECTOR_HOME:-$HOME/.director}"
+mkdir -p "$DIRECTOR_HOME/bin"
+install_one "$SRC/skills/director/scripts/board-html" "$DIRECTOR_HOME/bin/board-html"
 
 STATE="${DIRECTOR_STATE:-$HOME/.director/state}"
 mkdir -p "$STATE"
