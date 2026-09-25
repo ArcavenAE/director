@@ -3,7 +3,6 @@ title: "Developing better fleet supervisors: a synthesis across doctrine, workpl
 author: Michael Pursifull
 date: 2026-09-23
 bibliography: references.bib
-csl: chicago-author-date.csl
 ---
 
 # Developing better fleet supervisors

@@ -3,7 +3,6 @@ title: "Recommended director changes for supervisor development (candidate regis
 author: Michael Pursifull
 date: 2026-09-23
 bibliography: references.bib
-csl: chicago-author-date.csl
 ---
 
 # Recommended director changes for supervisor development
@@ -72,18 +71,20 @@ tell NOT-CHECKED from CHECKED-AND-FINE.
 instance); O-14 (the board is an authored backdrop that decays).*
 *Candidate source class: OBSERVED basis; the no-bare-color rule is JUDGMENT.*
 
-**Proposed R-115 (candidate) · the first status event director requires of a
-new task is a confirm-back, not a progress report.** The subordinate restates
-what it thinks it was asked and how it will approach it, before compute is
-spent [@call1998rehearsals]. This catches a misread task cheaply and is the
+**Proposed amendment to R-110 (candidate) · the AGREE leg of a REQUEST carries
+a confirm-back: the recipient restates what it thinks it was asked and how it
+will approach it.** R-110 already requires the REQUEST + reply_by +
+AGREE-then-INFORM handshake; this sharpens its AGREE from a bare yes into a
+restatement of the ask, before compute is spent [@call1998rehearsals]. This catches a misread task cheaply and is the
 reporting analog of checking intent before acting. It bears directly on O-8
 (the supervisor resolved an ambiguous "proceed" against a policy boundary with
 no human in between): a required confirm-back would have surfaced the
 production boundary as a question before any action.
 *Would be earned by: O-8 (ambiguity resolved as authority); the workplace
 confirm-back practice.*
-*Candidate source class: OBSERVED basis (O-8); the confirm-back requirement is
-JUDGMENT.*
+*Candidate source class: OBSERVED basis (O-8, R-110); the restatement is
+JUDGMENT. An amendment, not a new entry, so it takes no R-number; R-115 is left
+unused rather than renumbering the candidates after it again.*
 
 ---
 
@@ -121,11 +122,11 @@ path and cadence, and auto-advances on an ack timeout [@pagerduty_severity].
 The went-dark case (R-89's silently denied wake, R-107's starved consumer) is
 exactly the ack-timeout case: no acknowledgement within N escalates up the
 chain. Escalate-to-human is a first-class terminal outcome (the arcaven-filer
-wedge, where a permission dialog only a human can clear was the right route),
-and before waking a wedged seat director clears its own pending decision first,
-so a wake never submits a stale or control-bypass draft (O-29 danger).
-*Would be earned by: R-89, R-107 (went-dark), the arcaven-filer wedge, O-29
-(the composer-wedge danger).*
+wedge, where a permission dialog only a human can clear was the right route).
+Waking a wedged seat follows live R-112 (injection only after the composer is
+known-clear), which this candidate cross-references rather than restates.
+*Would be earned by: R-89, R-107 (went-dark), the arcaven-filer wedge. Cross-ref
+R-112 (wake only against a known-clear composer, O-29).*
 *Candidate source class: OBSERVED basis; the pre-classification scheme is
 JUDGMENT drawn from incident practice.*
 
@@ -196,7 +197,9 @@ modes, not as R-numbers.
   expressed in credentials, not topology; a denied publish fails loud): the
   dropped refusal candidate noted in section B.
 - **R-110** (a REQUEST carries reply_by; bound-and-escalate, never poll
-  forever): R-116.
+  forever): R-116, and the proposed amendment to R-110 (confirm-back in AGREE).
+- **R-112** (injection is for wake and recovery, only against a known-clear
+  composer): R-117's wake step.
 - **R-102** (own-verbs versus relay, bounded by z3wta): the own-verbs
   candidate, moved to wardrobe#18.
 - **R-25** (partial compliance is a first-class reportable outcome): R-118.
