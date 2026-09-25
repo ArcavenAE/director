@@ -15,7 +15,7 @@ add_stream() {
   local name="$1" subj="$2"
   if "${A[@]}" stream info "$name" >/dev/null 2>&1; then echo "stream $name exists"; return; fi
   "${A[@]}" stream add "$name" --subjects "$subj" --storage file --retention limits \
-    --max-age 24h --max-msg-size 65536 --dupe-window 2m --defaults >/dev/null
+    --max-age 72h --max-msg-size 65536 --dupe-window 2m --defaults >/dev/null
   echo "stream $name created ($subj)"
 }
 add_stream GLOBAL_TO_DIRECTOR 'global.director.>'
