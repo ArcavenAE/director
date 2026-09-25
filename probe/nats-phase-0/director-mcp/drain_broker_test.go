@@ -250,3 +250,56 @@ func TestBrokerBatchBlocksForFirstMessage(t *testing.T) {
 		t.Errorf("single form must not change shape: %v", m)
 	}
 }
+
+// The review's reproduction (director#79, finding 2): with one message
+// delivered and unacked and a later one acked, the waiting set is not a prefix
+// of the stream above the ack floor. The summary must still reach the newest
+// waiting message, and must say that some listed messages may already be
+// consumed rather than presenting its list as exact.
+func TestBrokerSummaryAfterOutOfOrderAck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	self := Sender{AgentID: "michael", Workspace: "aae-orc", Team: "ops"}
+	bus, err := connect(ctx, url, self, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bus.close()
+	mine := "agent.aae-orc.ops.michael.inbox"
+	for _, id := range []string{"l1", "l2", "l3", "l4"} {
+		pubEnv(t, ctx, js, mine, id, "INFORM", "x")
+	}
+	// l1 delivered and left unacked; l2 delivered and acked.
+	b1, err := bus.consumer.Fetch(1, jetstream.FetchMaxWait(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range b1.Messages() {
+	}
+	b2, err := bus.consumer.Fetch(1, jetstream.FetchMaxWait(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for m := range b2.Messages() {
+		if err := m.DoubleAck(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := bus.summarizeInbox(ctx, summaryDefault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seqs := res.Summary.Sequences["local"]
+	if len(seqs) == 0 || seqs[len(seqs)-1] != 4 {
+		t.Errorf("sequences = %v; the newest waiting message (4) must be listed", seqs)
+	}
+	if res.Expected["local"] != 3 {
+		t.Errorf("waiting = %d, want 3 (1 ack-pending, 2 never delivered)", res.Expected["local"])
+	}
+	if res.MaybeConsumed["local"] != 1 {
+		t.Errorf("maybe_consumed = %v, want local 1 (sequence 2 was acked above the floor)", res.MaybeConsumed)
+	}
+}

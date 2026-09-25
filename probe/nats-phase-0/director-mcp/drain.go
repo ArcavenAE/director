@@ -12,7 +12,7 @@ package main
 //     form does.
 //   - inbox_summary counts what is waiting, by sender and by performative,
 //     flags what needs an answer, and lists the sequence numbers. It reads
-//     through a throwaway ordered consumer and acks nothing, so the session's
+//     through a throwaway ephemeral consumer and acks nothing, so the session's
 //     own durable and its FIFO cursor are untouched.
 //
 // Receipt without polling (a notifier or doorbell) is out of scope here: MCP
@@ -50,6 +50,10 @@ type drained struct {
 	Env  *Envelope `json:"message"`
 	Tier string    `json:"tier"`
 	Seq  uint64    `json:"sequence"`
+	// AckUnconfirmed marks a message whose confirmed ack failed. The server
+	// may or may not have applied it, so the message is returned rather than
+	// dropped, and may be delivered once more later.
+	AckUnconfirmed bool `json:"ack_unconfirmed,omitempty"`
 }
 
 // tierRank puts local before global. The two tiers share no clock the shim
@@ -82,6 +86,12 @@ func orderDrained(items []drained) {
 // caller had already read past it. An undecodable message is terminated and
 // counted rather than returned as an error: failing the batch after acking the
 // messages before it would lose them.
+//
+// A confirmed ack can itself fail, or time out after the server applied it.
+// The shim prefers a possible duplicate to a silent loss: the message is
+// returned flagged AckUnconfirmed, the rest of the batch is still acked (so it
+// does not sit ack-pending and redeliver behind newer mail), and the failure
+// comes back as an error beside the items for the caller to report.
 func pullNoWait(ctx context.Context, cons jetstream.Consumer, n int, tier string) ([]drained, int, error) {
 	if n <= 0 {
 		return nil, 0, nil
@@ -91,6 +101,7 @@ func pullNoWait(ctx context.Context, cons jetstream.Consumer, n int, tier string
 		return nil, 0, err
 	}
 	var out []drained
+	var ackErrs []error
 	discarded := 0
 	for m := range batch.Messages() {
 		var e Envelope
@@ -103,15 +114,17 @@ func pullNoWait(ctx context.Context, cons jetstream.Consumer, n int, tier string
 		if md, err := m.Metadata(); err == nil {
 			seq = md.Sequence.Stream
 		}
+		d := drained{Env: &e, Tier: tier, Seq: seq}
 		if err := m.DoubleAck(ctx); err != nil {
-			return out, discarded, fmt.Errorf("ack %s sequence %d: %w", tier, seq, err)
+			d.AckUnconfirmed = true
+			ackErrs = append(ackErrs, fmt.Errorf("ack %s sequence %d: %w", tier, seq, err))
 		}
-		out = append(out, drained{Env: &e, Tier: tier, Seq: seq})
+		out = append(out, d)
 	}
 	if err := batch.Error(); err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
-		return out, discarded, err
+		ackErrs = append(ackErrs, err)
 	}
-	return out, discarded, nil
+	return out, discarded, errors.Join(ackErrs...)
 }
 
 // drainAll pulls from one durable until it is empty or n messages are in
@@ -155,11 +168,18 @@ func (g *globalTier) drainNoWait(ctx context.Context, n int, agentID, instance s
 type batchResult struct {
 	Items      []drained
 	Discarded  int // undecodable messages terminated during the drain
+	LocalWarn  string
 	GlobalWarn string
 }
 
 // drainWaiting takes what is already waiting, up to n: the local inbox until
 // it is empty, then the global one. It never blocks.
+//
+// A local failure is an error only while nothing has been consumed. Once any
+// message is in hand (from this drain or an earlier step of the same call) it
+// has been acked, so the failure becomes LocalWarn and the items are kept:
+// failing the call would drop acked mail. The global tier already works this
+// way through GlobalWarn.
 func (b *Bus) drainWaiting(ctx context.Context, n int, res *batchResult) error {
 	items, disc, err := drainAll(func(k int) ([]drained, int, error) {
 		return pullNoWait(ctx, b.consumer, k, "local")
@@ -167,7 +187,11 @@ func (b *Bus) drainWaiting(ctx context.Context, n int, res *batchResult) error {
 	res.Items = append(res.Items, items...)
 	res.Discarded += disc
 	if err != nil {
-		return err
+		if len(res.Items) == 0 {
+			return err
+		}
+		res.LocalWarn = fmt.Sprintf("local inbox drain stopped early: %v", err)
+		return nil
 	}
 	left := n - len(items)
 	if b.globalCfg == nil || left <= 0 {
@@ -353,108 +377,134 @@ func summarize(items []summaryItem) inboxSummary {
 
 // peekWaiting reads the messages waiting on a durable without consuming them.
 // It takes the durable's filter and ack floor from its state, then reads the
-// stream from just past the floor through a throwaway ordered consumer (no
-// acks, memory storage, deleted afterwards). The durable itself is only
-// inspected, so its FIFO cursor and its ack-pending set do not move.
+// stream from just past the floor through a throwaway ephemeral pull consumer
+// (no acks, memory storage, deleted afterwards). The durable itself is only
+// inspected, so its FIFO cursor and its ack-pending set do not move. An
+// ordered consumer is not used: its no-wait fetch starts over on every call,
+// so a paging loop reads the same messages again.
 //
-// expected is the durable's own count of what is waiting (pending plus
-// delivered-but-unacked). A message acked out of order above the floor would
-// be read here and not counted there; the caller reports the difference.
-func peekWaiting(ctx context.Context, js jetstream.JetStream, cons jetstream.Consumer, tier string, limit int) (items []summaryItem, expected uint64, err error) {
+// It reads to the end of the stream (bounded by limit), not to the durable's
+// count of what is waiting. The waiting set is not always a prefix of the
+// stream above the floor: a message acked out of order above the floor is
+// consumed, and stopping at the count would list it and leave out the newest
+// waiting mail. Reading to the end lists every waiting message; any excess
+// over the count is reported as maybeConsumed, because the durable does not
+// expose which listed messages those are.
+func peekWaiting(ctx context.Context, js jetstream.JetStream, cons jetstream.Consumer, tier string, limit int) (items []summaryItem, expected uint64, maybeConsumed int, err error) {
 	info, err := cons.Info(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	expected = info.NumPending + uint64(info.NumAckPending)
 	if expected == 0 {
-		return nil, 0, nil
+		return nil, 0, 0, nil
 	}
 	filters := info.Config.FilterSubjects
 	if info.Config.FilterSubject != "" {
 		filters = []string{info.Config.FilterSubject}
 	}
-	oc, err := js.OrderedConsumer(ctx, info.Stream, jetstream.OrderedConsumerConfig{
-		FilterSubjects:    filters,
+	cfg := jetstream.ConsumerConfig{
+		Name:              "peek_" + newInstanceID(),
 		DeliverPolicy:     jetstream.DeliverByStartSequencePolicy,
 		OptStartSeq:       info.AckFloor.Stream + 1,
+		AckPolicy:         jetstream.AckNonePolicy,
+		MemoryStorage:     true,
 		InactiveThreshold: 30 * time.Second,
-	})
+	}
+	if len(filters) == 1 {
+		cfg.FilterSubject = filters[0]
+	} else {
+		cfg.FilterSubjects = filters
+	}
+	oc, err := js.CreateConsumer(ctx, info.Stream, cfg)
 	if err != nil {
-		return nil, expected, err
+		return nil, expected, 0, err
 	}
 	defer func() {
-		if ci := oc.CachedInfo(); ci != nil {
-			dctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = js.DeleteConsumer(dctx, info.Stream, ci.Name)
-			cancel()
-		}
+		dctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = js.DeleteConsumer(dctx, info.Stream, cfg.Name)
+		cancel()
 	}()
-	want := int(expected)
-	if want > limit {
-		want = limit
-	}
-	for len(items) < want {
-		batch, err := oc.Fetch(want-len(items), jetstream.FetchMaxWait(2*time.Second))
+	var last uint64
+	for len(items) < limit {
+		batch, err := oc.FetchNoWait(limit - len(items))
 		if err != nil {
-			return items, expected, err
+			return items, expected, 0, err
 		}
-		got := 0
+		added := 0
 		for m := range batch.Messages() {
-			got++
 			var seq uint64
 			if md, err := m.Metadata(); err == nil {
 				seq = md.Sequence.Stream
 			}
+			if seq != 0 && seq <= last {
+				continue // a repeat, never a new waiting message
+			}
+			last = seq
 			var e Envelope
 			it := summaryItem{Tier: tier, Seq: seq}
 			if json.Unmarshal(m.Data(), &e) == nil {
 				it.Env = &e
 			}
 			items = append(items, it)
+			added++
 		}
 		if err := batch.Error(); err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
-			return items, expected, err
+			return items, expected, 0, err
 		}
-		if got == 0 {
-			break
+		if added == 0 {
+			break // the end of the stream, or only repeats
 		}
 	}
-	return items, expected, nil
+	if uint64(len(items)) > expected {
+		maybeConsumed = len(items) - int(expected)
+	}
+	return items, expected, maybeConsumed, nil
 }
 
 // summaryResult is inbox_summary's answer before shaping into JSON.
 type summaryResult struct {
-	Summary    inboxSummary
-	Expected   map[string]uint64
-	Read       map[string]int
-	GlobalWarn string
+	Summary  inboxSummary
+	Expected map[string]uint64
+	Read     map[string]int
+	// MaybeConsumed counts, per tier, listed messages beyond the durable's
+	// own count of what is waiting: messages acked out of order above the
+	// ack floor, which the summary cannot tell apart from waiting ones.
+	MaybeConsumed map[string]int
+	GlobalWarn    string
 }
 
 // summarizeInbox reads what is waiting on both tiers and summarizes it. It
 // acks nothing.
 func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, error) {
-	res := summaryResult{Expected: map[string]uint64{}, Read: map[string]int{}}
-	items, exp, err := peekWaiting(ctx, b.js, b.consumer, "local", limit)
+	res := summaryResult{Expected: map[string]uint64{}, Read: map[string]int{}, MaybeConsumed: map[string]int{}}
+	items, exp, maybe, err := peekWaiting(ctx, b.js, b.consumer, "local", limit)
 	if err != nil {
 		return res, fmt.Errorf("local inbox summary: %w", err)
 	}
 	res.Expected["local"], res.Read["local"] = exp, len(items)
+	if maybe > 0 {
+		res.MaybeConsumed["local"] = maybe
+	}
 	all := items
 	if b.globalCfg != nil {
 		g, gerr := b.globalReady(ctx)
 		if gerr != nil {
 			res.GlobalWarn = gerr.Error()
 		} else {
-			gitems, gexp, gerr := peekWaiting(ctx, g.js, g.consumer, "global", limit)
+			gitems, gexp, gmaybe, gerr := peekWaiting(ctx, g.js, g.consumer, "global", limit)
 			if gerr != nil && errors.Is(gerr, jetstream.ErrConsumerNotFound) {
 				if rerr := g.ensureConsumer(ctx, b.self.AgentID, b.instance); rerr == nil {
-					gitems, gexp, gerr = peekWaiting(ctx, g.js, g.consumer, "global", limit)
+					gitems, gexp, gmaybe, gerr = peekWaiting(ctx, g.js, g.consumer, "global", limit)
 				}
 			}
 			if gerr != nil {
 				res.GlobalWarn = fmt.Sprintf("global inbox summary failed: %v", gerr)
 			}
 			res.Expected["global"], res.Read["global"] = gexp, len(gitems)
+			if gmaybe > 0 {
+				res.MaybeConsumed["global"] = gmaybe
+			}
 			all = append(all, gitems...)
 		}
 	}

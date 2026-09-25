@@ -139,6 +139,16 @@ undecodable message on either tier is terminated and counted in
 `discarded` so the rest of the batch still returns. The single form keeps
 its result shape.
 
+**Failures partway through a batch.** Once any message has been acked in a
+call, a later local failure (a failed fetch, a failed top-up after the
+blocking wait) no longer fails the call: the messages already in hand come
+back, and the failure is reported in `local_warning`. The call is an error
+only when nothing was consumed. A confirmed ack that itself fails, or times
+out after the server applied it, returns the message anyway marked
+`ack_unconfirmed`, and the rest of that batch is still acked. The shim
+prefers a possible duplicate to a silent loss: such a message may be
+delivered once more later.
+
 ```json
 {
   "messages": [ { "message": { "...": "..." }, "tier": "local", "sequence": 431 } ],
@@ -153,6 +163,11 @@ message pending on the session's durable, where it is redelivered after the
 ack wait and holds up the FIFO cursor. Looking without consuming is
 `inbox_summary`, which reads through a separate consumer.
 
+The summary is a point-in-time read. Nothing locks it against a
+`wait_for_message` running on the same session at the same moment, so a
+drain can race it; `partial` and `maybe_consumed` say when the numbers do
+not line up.
+
 ### `inbox_summary`
 
 | Argument | Default | Meaning |
@@ -161,9 +176,12 @@ ack wait and holds up the FIFO cursor. Looking without consuming is
 
 Summarizes what is waiting for this session on both tiers and acks nothing.
 It reads each durable's filter and ack floor, then reads the stream from
-just past the floor through a throwaway ordered consumer (memory storage,
-no acks, deleted afterwards), so the durable's cursor does not move and a
-repeat call returns the same answer.
+just past the floor through a throwaway ephemeral pull consumer (memory
+storage, no acks, deleted afterwards), so the durable's cursor does not move
+and a repeat call returns the same answer. It reads to the end of the stream
+(up to `limit`), not to the durable's count of what is waiting: the waiting
+set is not always a prefix of the stream above the floor, and stopping at the
+count would miss the newest mail.
 
 ```json
 {
@@ -188,8 +206,12 @@ A message is flagged when its performative is REQUEST, FAILURE or QUERY,
 when it sets `reply_by`, or when its text says it holds custody or awaits a
 reply or instructions. The text match errs toward flagging. `waiting` is the
 durable's own count; `partial` appears when fewer were read than that
-(the limit, or a drain racing the read). An undecodable message is counted
-in `undecodable` and listed in `sequences`.
+(the limit, or a drain racing the read). `maybe_consumed` appears when more
+were read than that: some messages above the ack floor were acked out of
+order (a lost fire-and-forget ack on the single form, or an unconfirmed ack
+in a batch), and the durable does not expose which, so the counts, flags and
+sequences may include them. An undecodable message is counted in
+`undecodable` and listed in `sequences`.
 
 ### `list_roster`
 

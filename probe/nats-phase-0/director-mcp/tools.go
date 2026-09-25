@@ -271,6 +271,15 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 		out["discarded"] = res.Discarded
 		out["discarded_note"] = "undecodable messages were terminated and skipped so the rest of the batch could return"
 	}
+	if res.LocalWarn != "" {
+		out["local_warning"] = res.LocalWarn
+	}
+	for _, it := range items {
+		if it.AckUnconfirmed {
+			out["ack_note"] = "a message marked ack_unconfirmed may be delivered once more later; it is returned rather than risk losing it"
+			break
+		}
+	}
 	if res.GlobalWarn != "" {
 		out["global_warning"] = res.GlobalWarn
 	}
@@ -302,6 +311,10 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 		if uint64(res.Read[tier]) < exp {
 			out["partial"] = "fewer messages were read than the consumer reports waiting (limit reached, or read raced a drain); the counts cover what was read"
 		}
+	}
+	if len(res.MaybeConsumed) > 0 {
+		out["maybe_consumed"] = res.MaybeConsumed
+		out["maybe_consumed_note"] = "more messages were listed than the consumer reports waiting: some above the ack floor were already consumed out of order, and the summary cannot tell which, so counts and flags may include them"
 	}
 	if res.GlobalWarn != "" {
 		out["global_warning"] = res.GlobalWarn
