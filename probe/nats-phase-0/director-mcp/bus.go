@@ -54,7 +54,19 @@ type Bus struct {
 	// it on the shim's own timer (R-56), never on a model tool call.
 	stateMu sync.Mutex
 	state   string
+
+	// globalFirst is which tier a call takes waiting mail from first. It
+	// flips on every call, so a backlog on one tier cannot starve the other.
+	turnMu      sync.Mutex
+	globalFirst bool
 }
+
+// localConsumerInactive is the local durable's inactive threshold. The inbox
+// carries a 72h max age (docs/getting-started.md), so a durable cleaned up
+// after a slightly longer idle window can only ever have replayed messages
+// that already expired. It is what keeps superseded instances' durables from
+// accumulating, the same reasoning as globalConsumerInactive.
+const localConsumerInactive = 73 * time.Hour
 
 // dial opens the NATS connection and JetStream context, presenting the R-77
 // credential the launcher supplied (if any). Shared by connect() and
@@ -168,21 +180,63 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	// Durable per-SESSION consumer. The durable name includes the per-session
 	// instance, so two sessions sharing one agent id do not bind one durable
 	// and race each other's mail (R-50); each gets its own copy instead of a
-	// silent loss. Cost, accepted for the probe: a fresh instance replays the
-	// stream under DeliverAll, so a restart re-reads history.
-	cons, err := js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", jetstream.ConsumerConfig{
-		Durable:       "mcp_" + self.AgentID + "_" + b.instance,
-		FilterSubject: b.inboxSubject(self.Workspace, self.Team, self.AgentID),
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		DeliverPolicy: jetstream.DeliverAllPolicy,
-		MaxDeliver:    -1,
-	})
+	// silent loss. A new instance resumes after the last message any earlier
+	// instance of the same seat acked, so a reconnect does not replay the
+	// whole inbox; a seat with no earlier durable reads everything the inbox
+	// still holds, so mail sent to a cold mailbox is delivered.
+	filter := b.inboxSubject(self.Workspace, self.Team, self.AgentID)
+	cfg := jetstream.ConsumerConfig{
+		Durable:           "mcp_" + self.AgentID + "_" + b.instance,
+		FilterSubject:     filter,
+		AckPolicy:         jetstream.AckExplicitPolicy,
+		DeliverPolicy:     jetstream.DeliverAllPolicy,
+		MaxDeliver:        -1,
+		InactiveThreshold: localConsumerInactive,
+	}
+	if floor, err := seatAckFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", filter); err == nil && floor > 0 {
+		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+		cfg.OptStartSeq = floor + 1
+	}
+	cons, err := js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", cfg)
 	if err != nil {
 		nc.Close()
 		return nil, fmt.Errorf("durable consumer: %w", err)
 	}
 	b.consumer = cons
 	return b, nil
+}
+
+// seatAckFloor returns the highest ack floor among the seat's existing
+// durables on a stream: those named with the seat's prefix AND filtered on the
+// seat's own subject. The subject check is what keeps "michael" from reading
+// "michael-2"'s position; the name prefix alone would not. Zero means no
+// earlier durable, or none that acked anything. Best effort: an error means
+// the caller falls back to delivering everything.
+func seatAckFloor(ctx context.Context, js jetstream.JetStream, stream, prefix, filter string) (uint64, error) {
+	st, err := js.Stream(ctx, stream)
+	if err != nil {
+		return 0, err
+	}
+	var floor uint64
+	lister := st.ListConsumers(ctx)
+	for info := range lister.Info() {
+		if !strings.HasPrefix(info.Name, prefix) || info.Config.FilterSubject != filter {
+			continue
+		}
+		if info.AckFloor.Stream > floor {
+			floor = info.AckFloor.Stream
+		}
+	}
+	return floor, lister.Err()
+}
+
+// takeTurn returns which tier this call reads first, and flips it for the next.
+func (b *Bus) takeTurn() (globalFirst bool) {
+	b.turnMu.Lock()
+	defer b.turnMu.Unlock()
+	globalFirst = b.globalFirst
+	b.globalFirst = !b.globalFirst
+	return globalFirst
 }
 
 // validToken enforces the closed identity character class, [A-Za-z0-9_-], on
@@ -651,6 +705,13 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 		return pollResult{Env: e, Tier: tierOf(e, "local"), Seq: seq}, nil
 	}
 	var res pollResult
+	// Mail already waiting is taken in alternating tier order first, so a
+	// backlog on one tier cannot starve the other (the loop below always
+	// tries local first and would return a local message every call).
+	if w := b.takeWaiting(ctx, &res); w != nil {
+		res.Env, res.Tier, res.Seq = w.Env, w.Tier, w.Seq
+		return res, nil
+	}
 	deadline := time.Now().Add(timeout)
 	for {
 		slice, ok := sliceLeft(deadline)
@@ -693,6 +754,34 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 			return res, nil
 		}
 	}
+}
+
+// takeWaiting takes one message that is already waiting, without blocking,
+// from the tier whose turn it is and then the other. A global failure is
+// recorded as a warning; the blocking poll that follows reports it again if
+// it persists.
+func (b *Bus) takeWaiting(ctx context.Context, res *pollResult) *drained {
+	order := []string{"local", "global"}
+	if b.takeTurn() {
+		order = []string{"global", "local"}
+	}
+	for _, tier := range order {
+		var items []drained
+		if tier == "local" {
+			items, _, _ = pullNoWait(ctx, b.consumer, 1, "local")
+		} else {
+			g, err := b.globalReady(ctx)
+			if err != nil {
+				res.GlobalWarn = err.Error()
+				continue
+			}
+			items, _, _ = g.drainNoWait(ctx, 1, b.self.AgentID, b.instance)
+		}
+		if len(items) > 0 {
+			return &items[0]
+		}
+	}
+	return nil
 }
 
 // sliceLeft returns the next poll slice and whether any budget remains.

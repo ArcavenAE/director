@@ -172,8 +172,12 @@ type batchResult struct {
 	GlobalWarn string
 }
 
-// drainWaiting takes what is already waiting, up to n: the local inbox until
-// it is empty, then the global one. It never blocks.
+// drainWaiting takes what is already waiting, up to n, without blocking. With
+// both tiers on, the budget is shared so a backlog on one cannot starve the
+// other: the tier whose turn it is (takeTurn) may take up to half, rounded
+// up, the other tier takes what it has up to the rest, and the first tier
+// then takes any budget left over. With the global tier off, the local inbox
+// gets all of it.
 //
 // A local failure is an error only while nothing has been consumed. Once any
 // message is in hand (from this drain or an earlier step of the same call) it
@@ -181,6 +185,57 @@ type batchResult struct {
 // failing the call would drop acked mail. The global tier already works this
 // way through GlobalWarn.
 func (b *Bus) drainWaiting(ctx context.Context, n int, res *batchResult) error {
+	if n <= 0 {
+		return nil
+	}
+	if b.globalCfg == nil {
+		return b.drainLocal(ctx, n, res)
+	}
+	var g *globalTier
+	global := func(k int) {
+		if k <= 0 {
+			return
+		}
+		if g == nil {
+			var err error
+			if g, err = b.globalReady(ctx); err != nil {
+				res.GlobalWarn = err.Error()
+				return
+			}
+		}
+		gitems, gdisc, err := g.drainNoWait(ctx, k, b.self.AgentID, b.instance)
+		res.Items = append(res.Items, gitems...)
+		res.Discarded += gdisc
+		if err != nil {
+			res.GlobalWarn = fmt.Sprintf("global inbox drain failed: %v", err)
+		}
+	}
+	local := func(k int) error {
+		if k <= 0 {
+			return nil
+		}
+		return b.drainLocal(ctx, k, res)
+	}
+	start := len(res.Items)
+	taken := func() int { return len(res.Items) - start }
+	first := (n + 1) / 2
+	if b.takeTurn() {
+		global(first)
+		if err := local(n - taken()); err != nil {
+			return err
+		}
+		global(n - taken())
+		return nil
+	}
+	if err := local(first); err != nil {
+		return err
+	}
+	global(n - taken())
+	return local(n - taken())
+}
+
+// drainLocal takes up to n waiting local messages into res.
+func (b *Bus) drainLocal(ctx context.Context, n int, res *batchResult) error {
 	items, disc, err := drainAll(func(k int) ([]drained, int, error) {
 		return pullNoWait(ctx, b.consumer, k, "local")
 	}, n)
@@ -191,22 +246,6 @@ func (b *Bus) drainWaiting(ctx context.Context, n int, res *batchResult) error {
 			return err
 		}
 		res.LocalWarn = fmt.Sprintf("local inbox drain stopped early: %v", err)
-		return nil
-	}
-	left := n - len(items)
-	if b.globalCfg == nil || left <= 0 {
-		return nil
-	}
-	g, err := b.globalReady(ctx)
-	if err != nil {
-		res.GlobalWarn = err.Error()
-		return nil
-	}
-	gitems, gdisc, err := g.drainNoWait(ctx, left, b.self.AgentID, b.instance)
-	res.Items = append(res.Items, gitems...)
-	res.Discarded += gdisc
-	if err != nil {
-		res.GlobalWarn = fmt.Sprintf("global inbox drain failed: %v", err)
 	}
 	return nil
 }
