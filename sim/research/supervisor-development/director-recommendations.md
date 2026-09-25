@@ -30,7 +30,8 @@ decision-rights support. A fourth short cluster proposes coaching patterns,
 because developing the supervisor is itself a director function (the synthesis
 Q1 finding) and the register has no home for it today.
 
-The numbering starts at R-111 because R-110 is the current tail; a candidate's
+The numbering starts at R-113 because R-112 is the current tail (R-111 and
+R-112 landed 2026-09-23, after this document was first drafted); a candidate's
 number is provisional and is assigned for real only at acceptance. Where a
 candidate refines an existing entry, it cross-references by number rather than
 restating.
@@ -39,7 +40,7 @@ restating.
 
 ## A. Status solicitation (candidates)
 
-**Proposed R-111 (candidate) · director solicits status on a fixed beat that
+**Proposed R-113 (candidate) · director solicits status on a fixed beat that
 tightens with worker readiness, and treats a missed beat as a signal, not as
 default-fine.** A supervisor should push status upward on a predictable cadence
 against the declared plan [@prince2_exception], with the cadence tightening for
@@ -55,7 +56,7 @@ and the R-89 wake denial, read from the solicitation side.*
 *Candidate source class: OBSERVED basis (R-107, R-89); the cadence rule is
 JUDGMENT drawn from workplace practice.*
 
-**Proposed R-112 (candidate) · director never accepts a bare status color; a
+**Proposed R-114 (candidate) · director never accepts a bare status color; a
 status claim is bound to a receiver-produced, provenance-stamped
 liveness-plus-progress signal.** The failure to design against is watermelon
 reporting, green outside and red inside, caused by a culture where amber draws
@@ -71,7 +72,7 @@ tell NOT-CHECKED from CHECKED-AND-FINE.
 instance); O-14 (the board is an authored backdrop that decays).*
 *Candidate source class: OBSERVED basis; the no-bare-color rule is JUDGMENT.*
 
-**Proposed R-113 (candidate) · the first status event director requires of a
+**Proposed R-115 (candidate) · the first status event director requires of a
 new task is a confirm-back, not a progress report.** The subordinate restates
 what it thinks it was asked and how it will approach it, before compute is
 spent [@call1998rehearsals]. This catches a misread task cheaply and is the
@@ -88,7 +89,7 @@ JUDGMENT.*
 
 ## B. Escalation channels (candidates)
 
-**Proposed R-114 (candidate) · every supervisor decision class carries an
+**Proposed R-116 (candidate) · every supervisor decision class carries an
 explicit tolerance band with a consult-or-inform flag; the supervisor decides
 inside the band and escalates only on a forecast breach.** Manage by exception:
 the band is the permissible deviation before escalation [@prince2_exception],
@@ -103,21 +104,16 @@ supervisor.*
 *Candidate source class: OBSERVED basis (R-110); the per-class band is JUDGMENT
 drawn from the exception model.*
 
-**Proposed R-115 (candidate) · a denied route, a denied wake, or an
-unreachable recipient fails loud as a named refusal, never as a timeout or a
-silent success.** R-109 recorded a cross-team authorization denial arriving as
-"context deadline exceeded," an authorization denial wearing a timeout's
-clothes, and R-09 recorded five sends returning success with none delivered.
-Director must surface these as loud, named refusals so the supervisor and the
-human are not fed false state. Because the global tier routes cross-team and
-cross-cluster relay through the director seat by topology (R-109), director is
-the reliable escalation path by construction, and this candidate makes that
-path's failures observable rather than inferred days later (R-105).
-*Would be earned by: R-109 (three deadline-exceeded reproductions), R-09 (the
-strongest silent-drop instance in the register), R-105.*
-*Candidate source class: OBSERVED (R-109, R-09).*
+*A candidate on loud, named refusals for a denied route or wake was drafted
+here and dropped at review (2026-09-24). It rested on the global tier routing
+cross-team relay through the director seat by topology, and the amended R-109
+strikes that clause: relay through director is now a policy choice expressed in
+credentials, and amended R-95 has every seat hold its own credential with a
+named refusal at the sender. What remained (a denied route fails loud and named,
+never as a timeout or a silent success) is already R-109 as amended, with R-09
+and R-78.*
 
-**Proposed R-116 (candidate) · trouble classes are pre-classified by impact,
+**Proposed R-117 (candidate) · trouble classes are pre-classified by impact,
 each attached to a who-to-wake and a how-often-to-report rule, with an
 acknowledgement-timeout auto-escalation that ends at the human.** Incident
 practice ties a graded severity, written down in advance, to a fixed escalation
@@ -137,37 +133,14 @@ JUDGMENT drawn from incident practice.*
 
 ## C. Decision-rights support (candidates)
 
-**Proposed R-117 (candidate) · delegated work is expressed as a mission order
-plus a decision-rights table: per decision class, the accountable owner and
-whether the worker may decide, must consult, or only informs.** Mission orders
-carry result and purpose, not procedure, and the table allocates rights per
-decision with exactly one accountable owner [@wikipedia_ram]. The table is
-machine-representable and is the same artifact as the escalation policy in R-114
-(the tolerance band and the delegation grant are two readings of one number).
-This directly answers O-8: the supervisor lacked a commander's-intent statement
-telling it where the boundary ran, so it filled the gap with its own board.
-Authority delegates; responsibility does not, and the small set of non-delegable
-decisions (production protection, the O-8 case) is named up front.
-*Would be earned by: O-8 (deciding without the right or the intent statement);
-R-70 (a delegated decision needs a bounded role to be delegated into).*
-*Candidate source class: OBSERVED basis (O-8, O-22/R-70); the table shape is
-JUDGMENT.*
+Two candidates drafted here were moved out at review (2026-09-24), because they
+describe how the supervisor role behaves and would hold with no director at
+all: the mission order plus decision-rights table, and the supervisor's
+own-verbs bias with readiness sizing. Their home is the supervisor role
+proposal in wardrobe#18 (role section 2(d) and CANNOT), which carries both.
+What stays here is the director-facing part.
 
-**Proposed R-118 (candidate) · the supervisor is biased toward its own
-role-verbs and does not absorb a worker's work; it sizes each worker's band to
-demonstrated readiness and widens it as trust accrues.** R-102 already states
-the own-verbs bias for director ("where the director holds direct capability
-for a director-level action, do it; reserve relay for work that must run in
-another session"); this candidate carries the same rule to the supervisor and
-adds the readiness sizing from situational leadership
-[@hersey1969management; @tannenbaum1958leadership]. Widening the band as a
-worker earns it is how capability is built, not only how it is contained
-[@spreitzer1995empowerment].
-*Would be earned by: R-102 (own-verbs versus relay, bounded by z3wta),
-generalized to the supervisor; the readiness axis.*
-*Candidate source class: JUDGMENT on the R-102 observed basis.*
-
-**Proposed R-119 (candidate) · partial compliance is preserved as a
+**Proposed R-118 (candidate) · partial compliance is preserved as a
 first-class reportable outcome, and every delegated decision has a reliable
 enactment path.** R-25 recorded a session that did four of five delegated
 things, refused the fifth with a reason, verified it read-only, and reported the
@@ -214,25 +187,27 @@ modes, not as R-numbers.
 ## Cross-referenced existing entries
 
 - **R-08** (acknowledgement comes from the receiver, never the send call): the
-  root of R-112's receiver-produced status and R-115's loud-delivery contract.
-- **R-89** (the out-of-band wake channel can be silently denied): R-111 and
-  R-116 (the went-dark ack-timeout case).
+  root of R-114's receiver-produced status.
+- **R-89** (the out-of-band wake channel can be silently denied): R-113 and
+  R-117 (the went-dark ack-timeout case).
 - **R-107** (a starved consumer is loud, never "silence, not failure"; the
-  written form of finding-007 / director#66): R-111, R-112.
-- **R-109** (the global tier routes cross-team relay through director; a denied
-  publish fails loud): R-115.
+  written form of finding-007 / director#66): R-113, R-114.
+- **R-109** (as amended 2026-09-24: relay through director is a policy choice
+  expressed in credentials, not topology; a denied publish fails loud): the
+  dropped refusal candidate noted in section B.
 - **R-110** (a REQUEST carries reply_by; bound-and-escalate, never poll
-  forever): R-114.
-- **R-102** (own-verbs versus relay, bounded by z3wta): R-118.
-- **R-25** (partial compliance is a first-class reportable outcome): R-119.
+  forever): R-116.
+- **R-102** (own-verbs versus relay, bounded by z3wta): the own-verbs
+  candidate, moved to wardrobe#18.
+- **R-25** (partial compliance is a first-class reportable outcome): R-118.
 
 ## Carried flags
 
 - The spot-report versus periodic-report taxonomy belongs to FM 6-99, which was
-  NOT retrieved; R-111's cadence rests on the exception model and ADP 6-0 para
+  NOT retrieved; R-113's cadence rests on the exception model and ADP 6-0 para
   1-59, not on that taxonomy.
 - The one-on-one engagement multipliers are UNCONFIRMED (secondary aggregators);
-  R-111 rests on the cadence finding, which is supported, not on the multipliers.
+  R-113 rests on the cadence finding, which is supported, not on the multipliers.
 - Two ADP chapter-2 passages the synthesis cites (the ADP 6-0 back-brief list in
   "Command Presence" and the ADP 6-22 candor sentence in "Personal Courage") are
   cited by section name only, because the paragraph numbers did not survive text

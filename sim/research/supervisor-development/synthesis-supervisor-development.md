@@ -262,7 +262,11 @@ director#63): the global tier is upward-open and downward-closed except through
 the director seat, so cross-team and cross-cluster relay routes through the
 director by topology, and a denied cross-team publish returned "context
 deadline exceeded" three times, an authorization denial wearing a timeout's
-clothes. A migrated supervisor literally cannot route cross-team without the
+clothes. (R-109 was amended 2026-09-24 on director#77: relay through the
+director is now a policy choice expressed in credentials, not a consequence of
+topology, and amended R-95 has every seat hold its own credential with a named
+refusal at the sender. The recorded instance stands; the topology clause does
+not.) A migrated supervisor literally cannot route cross-team without the
 director hop, and when the hop is degraded the denial does not announce itself.
 R-110 (Michael Pursifull): a director REQUEST carries a reply_by deadline and
 confirms delivery or consumption before treating it as in-flight; unbounded
@@ -293,9 +297,10 @@ who-to-wake and a how-often-to-report rule, with an acknowledgement-timeout
 auto-escalation for the went-dark case that ends at the human. Recognize
 escalate-to-human as a first-class outcome (the arcaven-filer wedge), and
 before waking a wedged seat, clear its own pending decision first, so a wake
-never submits a stale or control-bypass draft (O-29). Treat the director as the
-reliable escalation path the topology already forces it to be (R-109), rather
-than pretending supervisors are peers that can route around it.
+never submits a stale or control-bypass draft (O-29). Where credential policy
+routes a supervisor's cross-team work through the director (R-109 as amended),
+treat that path as the escalation path and make its refusals named at the
+sender, rather than inferred from a timeout days later.
 
 ---
 
