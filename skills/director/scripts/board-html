@@ -15,9 +15,12 @@ after editing board.md, run this if board.html already exists (opt-in by
 existence; a director that never made the page pays nothing).
 """
 import datetime
+import html as htmlmod
 import json
 import os
 import pathlib
+import sys
+import tempfile
 
 HOME = pathlib.Path.home()
 STATE = pathlib.Path(os.environ.get("DIRECTOR_STATE", HOME / ".director" / "state"))
@@ -264,9 +267,15 @@ function parse(text){
 
 const doc = parse(BOARD);
 let lastDate = "";
+// Open state is keyed by title, not position, so a section inserted above
+// others does not shift their keys and close them on the next refresh. A
+// repeated title gets its occurrence count so the keys stay unique.
+const seenTitles = new Map();
 doc.secs.forEach((s, i) => {
   s.idx = i;
-  s.key = i + ":" + s.title;
+  const nth = (seenTitles.get(s.title) || 0) + 1;
+  seenTitles.set(s.title, nth);
+  s.key = nth === 1 ? s.title : s.title + "#" + nth;
   const d = s.title.match(/\d{4}-\d{2}-\d{2}/);
   s.date = d ? d[0] : "";
   s.eff = s.date || lastDate; if (s.date) lastDate = s.date;
@@ -285,7 +294,7 @@ const store = {
 
 const n = doc.secs.length;
 const defaultOpen = doc.secs.filter(s => s.pin || s.idx >= n - 3).map(s => s.key);
-let openSet = new Set(store.get("open", defaultOpen));
+let openSet = new Set(store.get("openByTitle", defaultOpen));
 let order = store.get("order", "authored");
 const activeTags = new Set();
 let terms = [];
@@ -314,7 +323,7 @@ for (const s of doc.secs){
   sec.append(hd, bd);
   const toggle = () => {
     if (openSet.has(s.key)) openSet.delete(s.key); else openSet.add(s.key);
-    store.set("open", [...openSet]); paint();
+    store.set("openByTitle", [...openSet]); paint();
   };
   hd.addEventListener("click", toggle);
   hd.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
@@ -322,7 +331,7 @@ for (const s of doc.secs){
   const a = document.createElement("a"); a.href = "#s" + s.idx;
   a.innerHTML = (s.date ? '<span class="d">' + s.date + "</span>" : "");
   a.append(document.createTextNode(s.title.replace(/^\d{4}-\d{2}-\d{2}\s*[-\u2014:(]*\s*/, "") || s.title));
-  a.addEventListener("click", e => { e.preventDefault(); openSet.add(s.key); store.set("open", [...openSet]); paint(); sec.scrollIntoView({behavior:"smooth", block:"start"}); });
+  a.addEventListener("click", e => { e.preventDefault(); openSet.add(s.key); store.set("openByTitle", [...openSet]); paint(); sec.scrollIntoView({behavior:"smooth", block:"start"}); });
   tocLinks.set(s.key, a);
 }
 
@@ -410,12 +419,12 @@ q.addEventListener("keydown", e => { if (e.key === "Escape") { q.value = ""; ter
 document.addEventListener("keydown", e => {
   if (e.key === "/" && document.activeElement !== q) { e.preventDefault(); q.focus(); }
 });
-document.getElementById("expand").addEventListener("click", () => { openSet = new Set(doc.secs.map(s => s.key)); store.set("open", [...openSet]); paint(); });
-document.getElementById("collapse").addEventListener("click", () => { openSet = new Set(); store.set("open", []); paint(); });
+document.getElementById("expand").addEventListener("click", () => { openSet = new Set(doc.secs.map(s => s.key)); store.set("openByTitle", [...openSet]); paint(); });
+document.getElementById("collapse").addEventListener("click", () => { openSet = new Set(); store.set("openByTitle", []); paint(); });
 document.getElementById("order").addEventListener("click", () => { order = order === "newest" ? "authored" : "newest"; store.set("order", order); paint(); });
 document.getElementById("latest").addEventListener("click", () => {
   const last = doc.secs[n - 1]; if (!last) return;
-  openSet.add(last.key); store.set("open", [...openSet]); paint();
+  openSet.add(last.key); store.set("openByTitle", [...openSet]); paint();
   cards.get(last.key).scrollIntoView({behavior:"smooth", block:"start"});
 });
 document.getElementById("theme").addEventListener("click", () => {
@@ -470,16 +479,30 @@ armAuto();
 
 
 def main() -> None:
-    text = SRC.read_text(encoding="utf-8")
+    try:
+        text = SRC.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        sys.exit(f"board-html: no board at {SRC} (set DIRECTOR_STATE to point elsewhere)")
     # Escape every "<" so board content can never close the script element.
     payload = json.dumps(text).replace("<", "\\u003c")
     generated = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
     src_label = str(SRC).replace(str(HOME), "~", 1)
     html = (TEMPLATE
             .replace("__GENERATED__", generated)
-            .replace("__SRC__", src_label)
+            .replace("__SRC__", htmlmod.escape(src_label))
             .replace("__BOARD_JSON__", payload))
-    OUT.write_text(html, encoding="utf-8")
+    # Write a sibling temp file and rename it over the page. The rename is
+    # atomic on one filesystem, so a timed reload never loads a half-written
+    # page whose script would not run and would stop auto-refresh.
+    fd, tmp = tempfile.mkstemp(dir=OUT.parent, prefix=".board.", suffix=".html")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(html)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, OUT)
+    except BaseException:
+        pathlib.Path(tmp).unlink(missing_ok=True)
+        raise
     print(OUT)
 
 
