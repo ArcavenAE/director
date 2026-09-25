@@ -11,7 +11,7 @@ sitting did not execute, it is marked UNVERIFIED and the probe plan (section 9)
 names the step that settles it. The probe has since run: every UNVERIFIED mark in sections
 2.3 to 2.6 is settled by section 10 and finding-008, except the subject delete
 marker, which was not tried. The marks are left in place as the record of what
-was assumed at writing.
+was assumed at writing, each followed by the step that settled it.
 
 Built on: brief 8 (`global-bus-tier.md`), the leaf-attach direction
 (`global-nats-leaf-attach.md`), brief 9 (enrollment), brief 10 (local broker
@@ -200,16 +200,19 @@ NATS basis, with status:
   (mechanics note; https://docs.nats.io/learn/jetstream/mirrors-and-sources).
   **Leaf to hub to leaf** (kinu sourcing from mokuzai, with the hub in the
   middle) is UNVERIFIED; brief 8 proved leaf to hub only. Probe P1.
+  *Settled: P1 passed, leaf to hub to leaf (finding-008).*
 - Sourcing from a work-queue stream with a durable consumer and
   `AckFlowControl` arrived in 2.14; earlier servers use a less reliable
   ephemeral path (https://docs.nats.io/release-notes/upgrade-to-2.14, via the
   mechanics note). All three live servers are 2.14.6 (P0, verified).
 - Resume after an outage: finding-004 proved a leaf-side **mirror** resumes by
   stored sequence with no gaps or duplicates on 2.14.6. A **source** resuming
-  the same way is UNVERIFIED. Probe P2.
+  the same way is UNVERIFIED. Probe P2. *Settled: P2 passed, 500 of 500
+  in order after a 600s hub outage (finding-008).*
 - Duplicate suppression rides `Nats-Msg-Id` = envelope `message_id`, as today
   (R-13). Whether the dedupe window holds across the source hop is UNVERIFIED.
-  Probe P2.
+  Probe P2. *Settled: P2 passed, 0 duplicate ids with 50 deliberate repeats
+  (finding-008).*
 
 ### 2.4 Hierarchy by permission, not by missing address
 
@@ -235,7 +238,10 @@ Mechanism, per layer:
    subject prefix"). Static per-user NKeys, brief 8's model, would need a hub
    and broker config edit per seat; that is the scaling line the mechanics note
    already drew. Whether `tag()` expansion accepts a tag in the middle of a
-   subject with the values above is UNVERIFIED. Probe P3.
+   subject with the values above is UNVERIFIED. Probe P3. *Settled: P3
+   passed on a standalone server; the refusal reaches a JetStream publisher as
+   a 3s timeout, with the named error only on the async handler (finding-008
+   section 2 item 1).*
 2. **Leaf allow and deny lists** bound what crosses the link at all: the
    sourcing API for the other clusters' `OUTBOX`, its delivery and flow-control
    subjects, presence, and `director.inbox`. Nothing else (brief 8 section 4,
@@ -271,10 +277,12 @@ policy the operator sets; it stops being an accident of which addresses exist.
   therefore produced two notices first. NATS does not publish a per-message
   advisory when `max_age` removes a message, as far as the advisory list I have
   read shows; that absence is UNVERIFIED, and the design does not depend on
-  it either way. The 2.11 subject delete marker (`SubjectDeleteMarkerTTL`)
+  it either way. *Settled: P5 saw no advisory for the age removal
+  (finding-008).* The 2.11 subject delete marker (`SubjectDeleteMarkerTTL`)
   would leave a marker when age removes a subject's last message, which gives
   the receiver evidence that mail expired (`t77rr` ask 1); optional, and
-  UNVERIFIED on a sourced stream.
+  UNVERIFIED on a sourced stream. *Still open: not tried (finding-008
+  section 3).*
 - The poll result carries consumer state: pending, oldest pending, and whether
   the durable exists, so "no mail", "mail waiting", and "no consumer" are three
   answers (R-107).
@@ -293,7 +301,8 @@ The hub keeps `FLEET_PRESENCE`, sourced from every cluster's bucket, with a
 short TTL of its own so a cluster whose link is down ages out of the fleet view
 instead of freezing there. KV buckets are streams and accept sources; the exact
 server version for sourced KV and how delete markers propagate through a source
-are UNVERIFIED. Probe P4.
+are UNVERIFIED. Probe P4. *Settled: P4 passed on 2.14.6, including delete
+propagation through the source (finding-008).*
 
 ### 2.7 Receipt that does not depend on polling
 
@@ -360,10 +369,12 @@ the rollback, ran end to end on a scratch server (P7).
    failure) and the migration tool (`fabtool unread`, `migrate`, `rollback`,
    promoted out of the probe). The current shim binary is pinned as the
    rollback build.
-3. **Optional, independent, and worth doing now:** raise `AGENT_INBOX` and the
-   `GLOBAL_TO_*` streams from 24h to 14 days and give the local durable an
-   `InactiveThreshold`. This stops `t77rr` and the growth of `iejcx` until the
-   window, and it does not change the cutover.
+3. **Interim retention, done 2026-09-24:** the operator ruled 72h, not the
+   14 days first proposed here. `AGENT_INBOX` and the three `GLOBAL_TO_*`
+   streams were raised from 24h to 72h live, and director#78 moved the shim's
+   hub durable cleanup to 73h to match. This narrows `t77rr` until the window
+   and does not change the cutover. The local durable still has no
+   `InactiveThreshold`, so `iejcx` keeps growing until step 10.
 4. **Hub first.** Create `DIRECTOR_INBOX` on `director.inbox` in the hub
    domain. It overlaps nothing (`global.director.>` is a different root), so
    it can exist ahead of every cluster; its sources are added as each cluster
@@ -424,7 +435,12 @@ counts read zero.
 Available while the legacy stream is parked:
 
 1. Stop the new shims.
-2. Park `INBOX` (edit its subjects to `legacy.parked.inbox`).
+2. Park `INBOX`: edit its subjects to `legacy.parked.inbox` **and remove its
+   sources in the same edit**. Parking the subjects alone stops local
+   publishes, but the stream keeps storing sourced mail, so mail from a
+   cluster still cut over would land in a stream no shim reads (P7b,
+   measured on 2.14.6). With the sources removed, that mail waits in the
+   sender's `OUTBOX` instead.
 3. Restore `AGENT_INBOX`'s two original subject patterns.
 4. `rollback` reconciles. It deletes the legacy original of every migrated
    message that was read after cutover, so it is not delivered twice. It also
@@ -448,7 +464,7 @@ unread sets (4, 5, 3, 0). Two limits are stated rather than hidden:
 
 ## 6. What this supersedes and what it keeps
 
-Supersedes, on approval:
+Supersedes (ruled 2026-09-24 on director#77):
 
 - Brief 8 section 2 (two address spaces, two role words, the global subject
   grammar) and its per-direction `GLOBAL_TO_<cluster>` hub streams, replaced by
@@ -456,12 +472,13 @@ Supersedes, on approval:
 - Brief 8 section 4.1's "by topology" asymmetry and R-109's topology clause:
   the asymmetry becomes credential policy.
 - R-94's "a worker never holds a global address". Every seat holds one fleet
-  address; what a worker may send is decided by R-95 as amended here. **This is
-  an amendment to a ratified requirement and is the operator's call.**
+  address; what a worker may send is decided by R-95 as amended here. The
+  operator ruled this amendment 2026-09-24.
 - R-50's per-instance durable, replaced by one durable per address with the
   server refusing a second (which answers R-78).
-- The 24h hub retention and the `globalConsumerInactive` rationale in
-  `global.go`, which exists only because messages expire at 24h.
+- The hub retention (24h, raised to 72h as the interim step in section 5.1)
+  and the `globalConsumerInactive` rationale in `global.go`, which exists only
+  because messages expire at a fixed age.
 
 Keeps:
 

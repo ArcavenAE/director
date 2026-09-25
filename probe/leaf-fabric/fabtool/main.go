@@ -1,7 +1,9 @@
 // fabtool is the probe instrument for design brief 11 (the leaf fabric). It
-// runs only against the scratch brokers run.sh starts; it takes the server URL
-// on every call and has no default, so it cannot reach a live broker by
-// accident.
+// runs against the scratch brokers rig.sh starts; it takes the server URL on
+// every call and has no default. It refuses the live fleet ports (see
+// liveGuard) unless FABTOOL_LIVE=1 is set, the deliberate opt-in section 5.1
+// of the brief needs for the real cutover, so it cannot reach a live broker
+// by accident.
 //
 //	pub     publish N messages with Nats-Msg-Id, plus R repeats of earlier ids
 //	verify  read a stream by sequence (never through a consumer, so a
@@ -21,6 +23,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -71,9 +74,39 @@ func emit(v any) {
 	fmt.Println(string(b))
 }
 
+// livePorts are the fleet's live broker ports: client, hub client, leaf, and
+// the two monitoring ports. rig.sh refuses the same set.
+var livePorts = map[string]bool{"4222": true, "4242": true, "7442": true, "8222": true, "8242": true}
+
 func mustURL(u string) error {
 	if u == "" {
 		return errors.New("-s is required; fabtool has no default server")
+	}
+	return liveGuard(u)
+}
+
+// liveGuard refuses a server list naming any live fleet port, including a URL
+// with no port, which the client resolves to 4222. FABTOOL_LIVE=1 lifts it.
+func liveGuard(servers string) error {
+	if os.Getenv("FABTOOL_LIVE") == "1" {
+		return nil
+	}
+	for _, s := range strings.Split(servers, ",") {
+		s = strings.TrimSpace(s)
+		if !strings.Contains(s, "://") {
+			s = "nats://" + s
+		}
+		pu, err := url.Parse(s)
+		if err != nil {
+			return fmt.Errorf("server url %q: %w", s, err)
+		}
+		port := pu.Port()
+		if port == "" {
+			port = "4222"
+		}
+		if livePorts[port] {
+			return fmt.Errorf("refusing %s: port %s is a live fleet port (set FABTOOL_LIVE=1 only for the section 5.1 cutover)", pu.Host, port)
+		}
 	}
 	return nil
 }

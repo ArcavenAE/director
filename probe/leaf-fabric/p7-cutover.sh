@@ -6,6 +6,19 @@ set -euo pipefail
 U=${P7_URL:?scratch server url}; F=${FABTOOL:?fabtool}; MAP=${MAP:-$(mktemp)}
 n() { nats --server "$U" "$@"; }
 say() { echo; echo "== $*"; }
+
+# Scratch only. Refuse the live fleet ports (the set rig.sh refuses), and refuse
+# any server that already holds either stream: on a server with a matching
+# AGENT_INBOX the add below would succeed as a no-op, and this script would then
+# publish test mail, add consumers, and park that stream.
+port=${U##*:}; port=${port%%/*}; [[ "$port" =~ ^[0-9]+$ ]] || port=4222
+case " 4222 4242 7442 8222 8242 " in *" $port "*)
+  echo "p7: refusing $U, port $port is a live fleet port" >&2; exit 2 ;; esac
+for s in AGENT_INBOX INBOX; do
+  if n stream info "$s" >/dev/null 2>&1; then
+    echo "p7: refusing $U, stream $s already exists (P7 needs an empty scratch server)" >&2; exit 2
+  fi
+done
 counts() { n stream subjects "$1" --json 2>/dev/null | jq -c 'to_entries|map({(.key):.value})|add // {}'; }
 ack_n() { n consumer next AGENT_INBOX "$1" --count "$2" --ack >/dev/null 2>&1; }
 

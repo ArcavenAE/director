@@ -103,4 +103,12 @@ brokers, and P7 was added.
   rollback until the stream's own subject counts showed it was correct. The
   production migration tool needs the same filter.
 
+- **P7b, a parked stream still takes sourced mail** (review question on
+  director#77): an `INBOX` sourcing an `OUTBOX` kept storing sourced messages
+  after its own subjects were edited to `legacy.parked.inbox` (1 to 2, `OUTBOX`
+  drained to 0). With the sources also removed, the next message stayed in
+  `OUTBOX` (1) and `INBOX` held at 2. Measured on a standalone 2.14.6 server
+  with a local source and a subject transform; the cross-domain source was not
+  rerun. Rollback step 2 now removes the sources as it parks.
+
 The plan these results support is brief 11 section 5.
