@@ -8,7 +8,10 @@ to P7 run on scratch brokers on that root, results in
 operator through the director seat. Nothing here is built. The live brokers
 were read, not changed (section 1). Where a mechanism rests on a NATS fact this
 sitting did not execute, it is marked UNVERIFIED and the probe plan (section 9)
-names the step that settles it.
+names the step that settles it. The probe has since run: every UNVERIFIED mark in sections
+2.3 to 2.6 is settled by section 10 and finding-008, except the subject delete
+marker, which was not tried. The marks are left in place as the record of what
+was assumed at writing.
 
 Built on: brief 8 (`global-bus-tier.md`), the leaf-attach direction
 (`global-nats-leaf-attach.md`), brief 9 (enrollment), brief 10 (local broker
