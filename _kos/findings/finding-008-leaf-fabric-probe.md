@@ -3,7 +3,7 @@
 - **Date:** 2026-09-24
 - **Session:** arcaven-architect-g5-0, on the operator's ruling of director#77
 - **Subject:** design brief 11 (`sim/design/leaf-fabric-one-address-space.md`), probe P0 to P6
-- **Confidence:** measured on nats-server 2.14.6 scratch brokers; one step (P0) is partial because one live broker's version cannot be read from here
+- **Confidence:** measured on nats-server 2.14.6 scratch brokers; P0 verified on all three live servers (the mokuzai read was made on mokuzai and relayed, 2026-09-24)
 - **Rig:** `probe/leaf-fabric/` (`rig.sh`, `p2-linkcut.sh`, `p4-presence.sh`, `fabtool/`). A scratch hub (domain `ghub`) and two scratch leaf clusters (domains `pa`, `pb`), plus two standalone scratch servers for P3 and P5, all on random ports above 20000 with their own store dirs. The live brokers were read through their monitoring ports only; their process ids were the same before and after the run.
 - **Subject root:** first run on `mail.`; the operator then ruled for `agent.<cluster>.` with a flag-day cutover, and P1 to P7 were rerun on that root (section 4). `out.` stays as the internal outbox transport subject.
 
@@ -24,7 +24,7 @@ survives the move to per-seat credentials.
 
 | step | result | measured |
 |---|---|---|
-| P0 versions | **partial** | kinu local broker 2.14.6; hub 2.14.6; scratch servers 2.14.6. mokuzai's leaf appears at the hub under its server id and `/leafz` carries no version, so its version must be read on mokuzai. Work-queue sourcing with a durable arrived in 2.14. |
+| P0 versions | **pass** | kinu local broker 2.14.6; hub 2.14.6; scratch servers 2.14.6. mokuzai, read on mokuzai by a seat there and relayed through the director: one nats-server, 2.14.6 (go1.27.0), on-disk binary matches the running one, JetStream domain `mokuzai`, one leaf remote to the hub authenticated by NKey, local account `$G`, link up. From kinu the mokuzai leaf shows only its server id, and `/leafz` carries no version. Work-queue sourcing with a durable arrived in 2.14, so every server qualifies. |
 | P1 wiring | **pass** | 10 published at `pa` on `out.pb.w.t.x.inbox` arrived in `pb` `INBOX` as `mail.pb.w.t.x.inbox`, `Nats-Msg-Id` preserved; 3 on `out.director.inbox` arrived in the hub's `DIRECTOR_INBOX`; `pa` `OUTBOX` 0 afterwards. Sourcing **leaf to hub to leaf** works (brief 11 had this UNVERIFIED). Two sources with the same stream name on different external APIs are accepted on one stream. |
 | P1 isolation | **pass** | A raw publish at `pa` to `mail.pb.w.t.x.inbox` failed with "no response from stream" and stored nothing: the leaf deny lists keep raw mail subjects off the link. |
 | P2 link cut | **pass** | Hub killed for 600s. During the outage `pa` acked all 500 plus 20 locally and reported the 50 repeats as duplicates at publish; `pb` `INBOX` held none of them. After the hub returned: 500 distinct in `pb` `INBOX`, 0 duplicate ids, 0 out of order; 20 in `DIRECTOR_INBOX`; `pa` `OUTBOX` 0. |
@@ -65,7 +65,6 @@ survives the move to per-seat credentials.
 - Per-seat JWT permissions were measured on a standalone server, not on a
   leaf in operator mode.
 - The subject delete marker (`SubjectDeleteMarkerTTL`) was not tried.
-- mokuzai's version (P0) must be read on mokuzai.
 
 ## 4. Rerun on the ruled root, and the cutover probe (P7)
 

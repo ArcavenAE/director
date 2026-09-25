@@ -350,8 +350,8 @@ the rollback, ran end to end on a scratch server (P7).
 
 ### 5.1 Before any window
 
-1. **Probe passes** on scratch brokers (sections 9 and 10), and P0 is read on
-   mokuzai.
+1. **Probe passes** on scratch brokers (sections 9 and 10). Done 2026-09-24,
+   P0 included.
 2. **Builds ready and pinned.** The new shim (cluster-qualified subjects, one
    durable per address, the async permission error turned into a named
    failure) and the migration tool (`fabtool unread`, `migrate`, `rollback`,
@@ -545,7 +545,7 @@ All steps rerun on the ruled `agent.<cluster>.` root; the first run on a
 
 | step | result |
 |---|---|
-| P0 | partial: kinu local and hub 2.14.6; mokuzai must be read on mokuzai |
+| P0 | pass: kinu local, hub, and mokuzai all 2.14.6 (mokuzai read on mokuzai; it already runs domain `mokuzai`) |
 | P1 | pass: leaf to hub to leaf sourcing with the transform onto `agent.<c>.`, seat and role forms, outbox drained; a raw cross-cluster publish is refused at the link; a broadcast publish is captured by no inbox |
 | P2 | pass: 10-minute hub outage, 500 of 500 and 20 of 20 delivered once and in order, 50 repeats dropped at the outbox; both legs resumed 40 to 44 seconds after the hub restart |
 | P3 | pass on the template; the refusal reaches the publisher as a timeout plus an async named error, which the shim must turn into a named failure |
