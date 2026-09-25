@@ -56,7 +56,7 @@ deletion was made.
 |---|---|---|---|---|
 | kinu local (`director-phase0`, 4222) | 2.14.6 | **none set** | **none** (`$G` only, `auth_required` null) | one remote, to the hub over loopback |
 | hub (`global-hub`, 4242 / 7442) | 2.14.6 | `global` | account `FLEET`, NKey users per brief 8 | two leaves in `FLEET`: `director-phase0` and one unnamed server |
-| mokuzai local | **UNVERIFIED from kinu** | UNVERIFIED | marvel-managed; team-scoped users per R-109's evidence | linked to the hub, rtt about 3 ms |
+| mokuzai local | 2.14.6 (read on mokuzai and relayed; not visible from kinu) | `mokuzai` | local account `$G` on the leaf remote, per the relayed read | one remote to the hub, NKey-authenticated, rtt about 3 ms |
 
 The mokuzai leaf appears at the hub under its server id, not a server name,
 because its `server_name` is unset; `/leafz` does not report a peer's version.
@@ -200,7 +200,7 @@ NATS basis, with status:
 - Sourcing from a work-queue stream with a durable consumer and
   `AckFlowControl` arrived in 2.14; earlier servers use a less reliable
   ephemeral path (https://docs.nats.io/release-notes/upgrade-to-2.14, via the
-  mechanics note). The kinu brokers are 2.14.6; mokuzai is UNVERIFIED. Probe P0.
+  mechanics note). All three live servers are 2.14.6 (P0, verified).
 - Resume after an outage: finding-004 proved a leaf-side **mirror** resumes by
   stored sequence with no gaps or duplicates on 2.14.6. A **source** resuming
   the same way is UNVERIFIED. Probe P2.
