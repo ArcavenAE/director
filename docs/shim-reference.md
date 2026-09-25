@@ -187,7 +187,7 @@ Local broker:
 
 | Object | Subjects | Shape |
 |---|---|---|
-| `AGENT_INBOX` | `agent.*.*.*.inbox`, `agent.*.*.role.*.inbox` | file storage, limits retention, 24h max age, 64 KiB max message, 2m dedupe window |
+| `AGENT_INBOX` | `agent.*.*.*.inbox`, `agent.*.*.role.*.inbox` | file storage, limits retention, 72h max age, 64 KiB max message, 2m dedupe window |
 | `AGENT_AUDIT` | `agent.audit` | file, append-only, 30 days; every envelope is mirrored here |
 | `AGENT_STATE` (KV) | `presence.<team>.<id>.<instance>` | 90s TTL on the bucket; a heartbeat rewrite resets the key's age |
 
@@ -200,7 +200,7 @@ Global hub (domain `global`):
 | `GLOBAL_PRESENCE` (KV) | `presence.<cluster>.<role>.<instance>`, `presence.director.<instance>` |
 
 A global durable is `mcp_global_<id>_<instance>` with an inactive threshold
-one hour longer than the hub streams' 24h max age, so cleanup can only ever
+one hour longer than the hub streams' 72h max age, so cleanup can only ever
 discard a durable whose replay had already expired.
 
 ## Envelope v1
