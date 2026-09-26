@@ -631,6 +631,7 @@ name.** Exactly one session holds it at a time.
 *Earned by: roundtable design over the OBSERVED collision that fused identity
 and address.*
 *Source: JUDGMENT. Design: design/director-seat-lease.md (SEAT-A).*
+*Superseded in part by R-140 (RULED 2026-09-25): "exactly one session" no longer holds.*
 
 **R-55. A monotonic-epoch fencing token proves the current grant, and a
 receiver rejects a stale token.** One primitive, applied at two scopes: the
@@ -992,6 +993,7 @@ a presence gap); this session's `agent://migrated` send accepted onto the local
 tier and stranded because the recipient was cross-cluster. A queue that holds
 for an absent recipient and delivers on return removes both. Tracked bd
 aae-orc-vkx65.
+*Extended by R-141 (RULED 2026-09-25): store-and-forward stays the default; a sender may choose fail-fast per send.*
 
 **R-97 (OBSERVED) · a director must be able to name ONE remote seat; role
 fan-out cannot be the only cross-host address.** relay-log R-9: two supervisors
@@ -1212,6 +1214,326 @@ reach-model contract rather than a tooling patch.
 hold unsafe drafts a wake would submit); the finding-186 injection wall.*
 *Source: JUDGMENT on an observed basis. Cross-refs R-106, R-105, O-28, O-29,
 O-34, the lu01z cluster (aae-orc-d1ldq, aae-orc-g88i1).*
+
+**R-113 (OBSERVED) · an ask or gate sent to an intermediate hop, and not acked
+within a bound, becomes visible to director.** A dtu builder finished two PRs,
+sent its GATE line to its team supervisor, and stopped until a human ruled. The
+supervisor was idle and never relayed it; director found the gate about 1.5 hours
+later by reading the builder's pane during a sweep. A second seat never read a
+brief sent to it on the bus. The worker, supervisor, director path drops an ask
+whenever any hop is idle, and nothing notices the drop. Director must see an
+unacked ask addressed to any hop once its bound lapses, without depending on the
+middle hop being awake. Reporting through supervisors can stay the normal path;
+the bound is what keeps it from being the only one.
+*Earned by: O-2026-09-25-gate-lost-in-hop (COULD NOT DO IT, by the fleet).*
+*Source: OBSERVED. Cross-refs R-107 (starvation is loud), R-110 (reply_by),
+aae-orc-xg9yd, aae-orc-s72sl.*
+
+**R-114 (OBSERVED) · the result of a finished headless run is delivered, or at
+least indexed, to director on completion.** The dtu reviewer is a headless codex
+seat: no bus presence, an empty pane after exit, and no marvel logs verb. Its
+verdict existed only in the harness's rollout file under the codex home, and I
+found it by walking that directory and parsing the rollout by hand (about four
+turns). The team supervisor could not route to the seat at all, since it has no
+roster row. A finished headless run's output has no custody path to anyone, which
+is the custody failure this skill names as director's first duty.
+*Earned by: O-2026-09-25-headless-reviewer-output (FAKED IT).*
+*Source: OBSERVED. Cross-refs R-106 (durable receive), R-105 (receipts).*
+
+**R-115 (JUDGMENT) · director keeps a per-seat dispatch ledger (assigned, started,
+done, waiting-on) and can report queue depth and oldest wait per seat and per
+role.** The operator asked whether reviewers, architects and builders were
+bottlenecks. I could not answer with a number: no per-seat queue, no arrival or
+wait times, only 34 brief files in about two days and pane states. By hand I
+found zero standing review capacity on kinu (headless one-shot reviewers; one PR
+sat unreviewed about seven hours), two seats each holding two queued briefs
+because I kept routing to the same seat, and one builder with one active and
+three unruled items. The ledger is what turns "it feels like a bottleneck" into a
+depth and a wait, and it is also the input a routing choice needs.
+*Earned by: O-2026-09-25-bottleneck-by-feel (COULD NOT DO IT).*
+*Source: JUDGMENT on an observed basis. Cross-refs aae-orc#412, the
+workload and queue-depth idea (2026-09-25), R-116.*
+
+**R-116 (OBSERVED) · dispatch checks the target seat's cast scope against the
+paths the work touches, before sending.** I routed a launch-config edit carrying
+a permission grant to a project-scoped builder because it was idle. The
+classifier correctly denied it as self-modification and a grant; the operator
+first read it as the team supervisor misrouting, and the routing was mine. The
+operator then routed it to the general builder, whose scope covers the path, and
+it landed. Cause: I picked by idleness, with no scope table in front of me at
+dispatch. Director must match work to a seat by scope first and availability
+second, and say so when no in-scope seat is free rather than borrowing an idle
+out-of-scope one.
+*Earned by: O-2026-09-25-director-misroute (COULD NOT DO IT, by director).*
+*Source: OBSERVED. Cross-refs R-115 (availability comes from the ledger).*
+
+**R-117 (OBSERVED) · director sees each seat's unread depth and the age of its
+oldest unread message, and a seat that is idle while holding work mail gets a
+doorbell.** Receive is a poll (R-56), and an idle seat never polls. On
+2026-09-25 skippy's reviewer supervisor had read nothing past global seq 54 while
+seqs 55 to 59 (seven review requests, a branch move, a quota rule) sat for about
+two hours; every other mokuzai supervisor stopped at 50 or 51. Locally,
+e98-builder held nine unread messages for about four hours, including two routed
+builds. Every send had returned accepted-for-delivery. I found it only after the
+operator asked twice who was working the reviews, by reading hub consumer state
+by hand; one marvel inject telling each seat to drain its inbox cleared both.
+Sharpens R-18 (last delivery and last acknowledgement per session) with depth
+and age, and applies R-89 (a dispatch needs a doorbell) to bus-only dispatch.
+*Earned by: O idle-seats-never-poll, O skippy-silent-on-review-asks.*
+*Source: OBSERVED. Cross-refs R-08, R-18, R-56, R-89.*
+
+**R-118 (OBSERVED) · every address form the send side accepts has a receiver;
+a send to an address nothing consumes is refused before publish.** role:// sends
+published to `agent.<ws>.<team>.role.<role>.inbox`, and no session consumed that
+subject. Twenty dtu messages sat unread for about 21 hours, including two GATEs
+meant for director, while every send reported success. product-supervisor found
+them by reading the stream by hand. Role mail was also found unread on the e98
+and arcaven role subjects. The R-09 drop, entering through an address form rather
+than through transport.
+*Earned by: O role-mail-no-consumer; fix in flight as director#86.*
+*Source: OBSERVED. Cross-refs R-09, R-92.*
+
+**R-119 (OBSERVED) · director's global tier is on by default, and a session
+started without its tier configuration fails loud at start.** Director's MCP ran
+for a day without its global domain, cluster and role set, so it registered no
+global presence and held no global consumer. Every mokuzai seat's reply to
+director was refused, and traffic between clusters ran one way (marvel inject
+out, pane reads back). The broker was already leafed and the binary supported
+the settings; the omission was silent.
+*Earned by: O-2026-09-25-no-kinu-global-presence, O-2026-09-25-return-path-cause.*
+*Source: OBSERVED. Cross-refs R-09, R-14.*
+
+**R-120 (OBSERVED) · director can hand a file to a seat on another cluster.**
+Asked to get two skills to a seat on mokuzai, there was no SSH, no marvel copy
+verb and no bus attachment, so the only path was a git round trip through a
+repository both sides could reach. A handoff between clusters needs an
+attachment or file path that does not depend on a shared repository.
+*Earned by: O-2026-09-25-no-kinu-global-presence (the file half).*
+*Source: OBSERVED.*
+
+**R-121 (OBSERVED) · a dispatched instruction can be recalled, and after any
+interrupted dispatch director checks the target before sending the same work
+elsewhere.** The operator rejected a tool call that injected "post all six
+comments" into a seat; the inject had already executed, and the seat posted all
+six as one identity. Director then relayed "post as the bot" to another cluster,
+which posted the same six again: duplicate comments on six issues in a shared
+repository. I read "rejected" as "not sent" and did not check.
+*Earned by: O-2026-09-25-rejected-call-still-sent.*
+*Source: OBSERVED. Cross-refs R-115 (the ledger records what was dispatched).*
+
+**R-122 (OBSERVED) · a store-write failure on the hub is loud, and director
+reads hub health before judging liveness.** The hub's presence store failed on a
+transient disk-full moment and never recovered: 11,515 store errors in the log,
+presence rows frozen fleet-wide for about 24 hours, and every liveness check in
+that window judged against frozen rows while reads kept working. A hub restart
+fixed it, and the restart dropped the remote seats' consumers, which then did not
+come back until each seat reconnected.
+*Earned by: O-2026-09-25-hub-presence-store-wedged, O-2026-09-25-after-hub-restart.*
+*Source: OBSERVED. Cross-refs R-14, R-107.*
+
+**R-123 (OBSERVED) · receive is fair across tiers, and director can list its mail
+by tier without consuming it.** Director's reconnect replayed its whole local
+inbox, and because every poll read local first, fresh global mail waited behind a
+day of old local messages. To read four global messages I bypassed my own
+consumer and pulled the stream by hand under the director key, about six turns.
+My local consumer still holds 239 replayed messages. A backlog on one tier must
+not starve the other, and a peek verb must exist so reading does not require
+draining.
+*Earned by: O-2026-09-25-read-global-by-hand; director#83 and #84 (aae-orc-jyw6o).*
+*Source: OBSERVED. Cross-refs R-18 (aae-orc-9cgid), R-106, R-107.*
+
+**R-124 (JUDGMENT) · a seat learns of new mail without polling where its
+harness can act on a server-initiated notification, and falls back to poll plus
+doorbell where it cannot.** R-56 and R-89 treat receive as a poll that needs an
+out-of-band nudge; that is the workaround, not the goal. Which harnesses act on a
+notification is measured per harness and declared as a capability (R-27), never
+taken from the protocol spec.
+*Earned by: bd aae-orc-s72sl (modernize director-mcp), aae-orc-xg9yd, the phase-0
+probe's original push goal (aae-orc-spbc).*
+*Source: JUDGMENT. Cross-refs R-27, R-56, R-89, R-117.*
+
+**R-125 (OBSERVED) · receive and roster reads work in every permission mode a
+seat can be cast in; a mode that blocks them is refused at cast.** Plan-mode
+casts could not poll the bus, and the failure surfaced as a stalled seat rather
+than at launch.
+*Earned by: bd aae-orc-r675b.*
+*Source: OBSERVED. Cross-refs R-116 (scope and grant checked at dispatch).*
+
+**R-126 (OBSERVED) · an ask raised for a decision carries the context needed to
+decide it and names who decides; an ask with no identified decider is flagged, not
+relayed.** A "needs group decision" item was relayed with no context and no named
+decider.
+*Earned by: bd aae-orc-4c759.*
+*Source: OBSERVED. Cross-refs R-02, R-33.*
+
+**R-127 (JUDGMENT) · an operator ruling given through director is written to a
+durable store when it is granted, so prohibitions and grants survive handoff.** A
+handoff note is not where a ruling lives. Extends R-60 and R-61.
+*Earned by: bd aae-orc-1wg68.*
+*Source: JUDGMENT. Cross-refs R-60, R-61.*
+
+**R-128 (JUDGMENT) · a seat can subscribe through director to named event
+families and timers, and a subscription whose source is unhealthy or unregistered
+is refused loudly.**
+*Earned by: bd aae-orc-7vw44 (shim subscribe_events, set_timer).*
+*Source: JUDGMENT. Cross-refs R-09, R-122.*
+
+**R-129 (JUDGMENT) · a receive call can drain several waiting messages in order
+and reports how many remain unread.** One message per call makes a backlog cost
+one model turn per message.
+*Earned by: bd aae-orc-xg9yd.*
+*Source: JUDGMENT. Cross-refs R-117, R-123.*
+
+**R-130 (JUDGMENT) · retention never expires unread mail addressed to a live
+recipient, and a sender learns when mail it sent expired unread.** R-44 covers
+garbage collection of dead endpoints only; a 24-hour max age on the inbox stream
+can drop mail a live seat has not read yet.
+*Earned by: bd aae-orc-t77rr.*
+*Source: JUDGMENT. Cross-refs R-09, R-44, R-107.*
+
+**R-131 (OBSERVED) · director's role boundary is enforced, not only stated:
+director routes and keeps custody, and work that belongs to a seat is dispatched.**
+Director wrote code instead of coordinating; the boundary lived only as a clause
+inside R-102.
+*Earned by: bd aae-orc-z3wta.*
+*Source: OBSERVED. Cross-refs R-102.*
+
+**R-132 (JUDGMENT) · a request or workstream is a durable record that outlives
+director's own downtime, and director's rebuild cost after a restart is bounded.**
+Custody today is per ask and per session.
+*Earned by: bd aae-orc-9gfod.*
+*Source: JUDGMENT. Cross-refs R-60, R-66, R-91.*
+
+**R-133 (JUDGMENT) · director shows a cross-workstream picture: dependencies,
+blocking, stuck work, and work delivered but never used, mapped to the task
+tracker.**
+*Earned by: bd aae-orc-1nczg.*
+*Source: JUDGMENT. Cross-refs R-34, R-103, R-115.*
+
+**R-134 (JUDGMENT) · decisions queue without interrupting: each carries its
+full context in a fold and a way back into the session it came from.**
+*Earned by: bd aae-orc-252b1 (board UI).*
+*Source: JUDGMENT. Cross-refs R-34, R-35.*
+
+**R-135 (JUDGMENT) · the operator's attention is budgeted: escalation quotas,
+interrupt coalescing and wake policies are settings, not habits.**
+*Earned by: bd aae-orc-s91up (vision Gap 1, attention routing; no owner yet).*
+*Source: JUDGMENT. Cross-refs R-21, R-33, R-35.*
+
+**R-136 (JUDGMENT) · "stopped at an approval gate" is a reported state, distinct
+from idle and from dead.** From the bus today, a seat waiting at a confirm prompt
+reads the same as a dead one.
+*Earned by: bd aae-orc-ax6h5.*
+*Source: JUDGMENT. Cross-refs R-15, R-24.*
+
+**R-137 (JUDGMENT) · a verdict, refusal or board row that crosses a handoff is a
+typed record a validator can check, and it carries its evidence.**
+*Earned by: bd aae-orc-fjh89.*
+*Source: JUDGMENT. Cross-refs R-25, R-88.*
+
+**R-138 (JUDGMENT) · a seat signals low token budget before exhaustion, and the
+departing and arriving sessions can negotiate the handoff live.**
+*Earned by: bd aae-orc-nzh7c.*
+*Source: JUDGMENT. Cross-refs R-45, R-61, R-91.*
+
+**R-139 (JUDGMENT) · seat startup works in the composition without marvel.**
+The independence value (SOUL 2, ADR-005) applied to director's seat quickstart:
+what marvel supplies at cast has a documented manual equivalent.
+*Earned by: bd aae-orc-q2ebo.*
+*Source: JUDGMENT. Cross-refs R-100, R-101.*
+
+### Harvest diff (2026-09-25, third: director bd tickets)
+
+A read-only sweep compared 193 open director-related bd tickets with R-01 to
+R-123: 92 covered, 15 partial, 5 not captured, 81 not requirements (docs,
+infrastructure, tests, one-off fixes).
+
+- **Promoted (16):** R-124 to R-128 from the five uncaptured tickets (s72sl,
+  r675b, 4c759, 1wg68, 7vw44); R-129 to R-139 from eleven partial tickets
+  (xg9yd, t77rr, z3wta, 9gfod, 1nczg, 252b1, s91up, ax6h5, fjh89, nzh7c, q2ebo).
+  Source class is JUDGMENT unless the ticket records a failure that happened.
+- **Held for operator rulings:** 8hgw7, ss5g9 and 23bsp (multiple director
+  instances or principals against R-54's single seat); hieji (a pick-one role
+  mode against R-78); the 5aum0 fail-fast expectation against R-96's
+  store-and-forward.
+- **Not requirements:** moving director-mcp out of `probe/nats-phase-0` is
+  hygiene; its requirement part is R-108.
+- **Ruled the same day:** R-140 (several director instances and principals;
+  supersedes R-54's single seat, details to study) and R-141 (store-and-forward
+  default with a per-send fail-fast option; extends R-96). R-142 (role mail to
+  every live holder by default); the pick-one mode stays open for study.
+
+**R-140 (RULED) · director may run as several instances and act for several
+principals; the single-seat rule is replaced.** Operator ruling 2026-09-25,
+superseding R-54's "exactly one session holds it". The lease model for acquiring
+the seat stands. Open, and needing study before design: how instances share an
+inbox (queue group or per-instance copies), how one director attaches to several
+clusters' local buses, and how a principal is authorized per request.
+*Earned by: bd aae-orc-8hgw7 (the single-seat premise recorded as retracted),
+aae-orc-ss5g9 (director as a queue group), aae-orc-23bsp (one director, many local
+buses, multiple principals).*
+*Source: RULED. Cross-refs R-54 (superseded in part), R-86, R-95.*
+
+**R-141 (RULED) · mail for an absent seat is held and delivered on return by
+default, and a sender may choose fail-fast for a single send.** Operator ruling
+2026-09-25. Store-and-forward (R-96) is the default everywhere, including across
+a broken link between clusters; fail-fast is an explicit per-send option, and a
+fail-fast send that cannot be delivered now fails loud to the sender (R-09).
+*Earned by: the conflict between R-96 and the 5aum0 test's fail-fast expectation.*
+*Source: RULED. Cross-refs R-09, R-96, R-110.*
+
+**R-142 (RULED) · role mail goes to every live holder of the role by default.**
+Operator ruling 2026-09-25. director#86 ships this: each live holder gets its own
+copy, and a role send with no live holder is refused before publish (R-118). This
+keeps R-78's rule that director never silently picks one holder. A pick-one mode
+(bd aae-orc-hieji) is not ruled: whether to reserve it in the envelope, make it a
+per-role or per-send setting, and how claim, redelivery and ledger visibility
+would work stay open for study.
+*Earned by: the conflict between R-78 and aae-orc-hieji; director#85 and #86.*
+*Source: RULED. Cross-refs R-78, R-115, R-118, R-140.*
+
+### Harvest diff (2026-09-25, second)
+
+- **Promoted (7):** R-117 (unread depth and age per seat, doorbell for idle
+  holders), R-118 (every accepted address has a receiver), R-119 (global tier on
+  by default, loud when missing), R-120 (file handoff between clusters), R-121
+  (recall, and check after interrupted dispatch), R-122 (hub store-write failure
+  is loud), R-123 (tier-fair receive and peek by tier).
+- **Unchanged:** R-02 and R-07 cover O-2026-09-25-peer-data-read-as-ruling (peer
+  register data relayed under a heading seats read as a ruling); the evidence is
+  one more instance of authority inferred from framing. R-107 covers the lost
+  consumer after the hub restart (loud when starved); recovery is director#82.
+  R-18 now has its tracking ticket (aae-orc-9cgid) and stays as written.
+- **Rejected for the register (routed elsewhere):**
+  - O-2026-09-25-skills-repo-missed: fails the admission test. Knowing where fleet
+    artifacts are published is a platform registry concern (vision Gap 10,
+    capability registry), true with or without director. Goes to the platform
+    graph.
+  - The inject staging observations in friction.md since the last harvest (text
+    staged, Enter needed after a pause, thresholds that did not hold) are the
+    marvel paste defect, fixed in marvel#357 and pending a daemon upgrade. Not a
+    director requirement.
+
+### Harvest diff (2026-09-25)
+
+- **Promoted (4):** R-113 (unacked ask at a middle hop surfaces to director),
+  R-114 (headless-run results delivered or indexed on completion), R-115
+  (per-seat dispatch ledger with depth and wait), R-116 (scope check at
+  dispatch).
+- **Unchanged:** R-106 stands and covers inbox ordering (director#79 merged).
+  R-109 stands and covers the skippy reply path (replies route via
+  `global://kinu/supervisor`). R-112 stands and covers the director side of the
+  stacked-inject friction.
+- **Rejected for the register (routed elsewhere):**
+  - O-2026-09-25-director-layered-the-brief: fails the admission test. Relaying a
+    builder's fix without transcribing every recommended guardrail layer is relay
+    practice that stays true with or without director software. Goes to
+    `reference/relay.md` as a relay note.
+  - FR-2026-09-25-stacked-unsubmitted-injects: the mechanism (text and Enter in
+    one tmux call read as a paste, so the Enter is swallowed) is a marvel defect,
+    root-caused in marvel#355 and fixed under aae-orc-jzmvo. Not a director
+    requirement; R-112 already holds the architecture.
+  - The shift bugs seen this session are marvel defects (marvel#348, #350).
 
 ### Harvest diff (2026-09-23)
 

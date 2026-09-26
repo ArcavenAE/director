@@ -283,6 +283,50 @@ func TestBrokerGlobalReconnectResumesAfterTheSeatsLastAck(t *testing.T) {
 	}
 }
 
+// A session that resumed from the seat floor and has read nothing itself
+// still knows that floor when the hub loses its durable: the recreate resumes
+// after the seat's last ack, not from the start of the stream (director#82
+// recovery and the #84 resume rule together).
+func TestBrokerRecreatedGlobalDurableKeepsTheSeatFloor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by the first")
+	b1, err := connect(ctx, url, resumeSelf, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err := b1.receiveTiered(ctx, 8*time.Second); err != nil || r.Env == nil || r.Env.MessageID != "g0" {
+		t.Fatalf("first read %+v %v", r, err)
+	}
+	b1.close()
+	b2, err := connect(ctx, url, resumeSelf, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b2.close()
+	if _, err := b2.globalReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := gjs.DeleteConsumer(ctx, globalDirectorStream, globalDurable(resumeSelf.AgentID, b2.instance)); err != nil {
+		t.Fatal(err)
+	}
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g1", "INFORM", "after the loss")
+	res, err := b2.receiveBatch(ctx, 8*time.Second, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(res.Items); len(got) != 1 || got[0] != "global:g1" {
+		t.Errorf("recreated durable read %v, want only [global:g1] (g0 was acked by the seat)", got)
+	}
+	if !strings.Contains(res.GlobalWarn, "recreated") {
+		t.Errorf("the recreate must be reported, got warning %q", res.GlobalWarn)
+	}
+}
+
 // The first wait after a start says where the inbox resumed and what waits,
 // once.
 func TestBrokerResumeIsReportedOnce(t *testing.T) {

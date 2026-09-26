@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -53,6 +54,13 @@ const (
 	// durable under DeliverAll and replays mail the session already acked.
 	globalConsumerInactive = 73 * time.Hour
 )
+
+// durableCheckEvery bounds how often an empty global pull asks the hub whether
+// this session's durable still exists. Across a leaf link a pull on a durable
+// the hub no longer has is not answered at all, so an empty pull is the only
+// symptom; checking on every one would add a CONSUMER.INFO per poll slice. A
+// variable so the leaf tests can shorten it.
+var durableCheckEvery = 30 * time.Second
 
 // globalConfig is the launcher-assigned global identity. Like the local
 // identity levers it is validated and rejected, never rewritten (R-76).
@@ -246,8 +254,19 @@ type globalTier struct {
 	consumer jetstream.Consumer
 
 	// resumedFrom is the seat ack floor the durable was created after, 0 when
-	// it read from the start. Reported once by the bus.
+	// it read from the start or bound an existing durable. Reported once by
+	// the bus.
 	resumedFrom uint64
+
+	// mu guards the fields below. acked is the highest hub stream sequence
+	// this session has acked on its durable, or the seat floor it resumed
+	// after; a recreated durable resumes after it, so a loss does not replay
+	// mail already read. notice is a recreate the caller has not been told
+	// about yet.
+	mu      sync.Mutex
+	acked   uint64
+	notice  string
+	checked time.Time // last time the durable's existence was confirmed
 }
 
 // attachGlobal builds the second JetStream context over the SAME connection
@@ -271,16 +290,62 @@ func attachGlobal(ctx context.Context, nc *nats.Conn, cfg globalConfig, agentID,
 	return g, nil
 }
 
-// ensureConsumer creates or rebinds this session's durable on the hub stream.
-// It is idempotent, so it doubles as the repair path when the durable has been
-// cleaned up under it (globalConsumerInactive, or an operator removing it).
-// A new durable resumes after the highest ack floor among this seat's departed
-// durables on the stream (no live presence row for their instance), the same rule as the local inbox, so a reconnect
-// does not replay the stream; with none, it reads everything the stream holds.
-// The seat is matched by name prefix and filter subject: every supervisor of a
-// cluster filters on the same role inbox, so the prefix keeps one seat's
-// position from moving another's (fan-out stays per session).
+// ensureConsumer creates or rebinds this session's durable on the hub stream
+// at attach. Binding an existing durable keeps its position, and the ack floor
+// it reports seeds acked. A new durable resumes after the highest ack floor
+// among this seat's departed durables on the stream (no live presence row for
+// their instance), the same rule as the local inbox, so a reconnect does not
+// replay the stream; with none, it reads everything the stream holds. The seat
+// is matched by name prefix and filter subject: every supervisor of a cluster
+// filters on the same role inbox, so the prefix keeps one seat's position from
+// moving another's (fan-out stays per session).
 func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance string) error {
+	durable := globalDurable(agentID, instance)
+	if cons, err := g.js.Consumer(ctx, g.cfg.streamName(), durable); err == nil {
+		g.consumer = cons
+		if info := cons.CachedInfo(); info != nil {
+			g.noteAcked(info.AckFloor.Stream)
+		}
+		g.mu.Lock()
+		g.checked = time.Now()
+		g.mu.Unlock()
+		return nil
+	}
+	floor := g.seatFloor(ctx, agentID)
+	start := uint64(0)
+	if floor > 0 {
+		start = floor + 1
+	}
+	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), g.consumerConfig(agentID, instance, start))
+	if err != nil {
+		return fmt.Errorf("global durable on %s: %w (%s)", g.cfg.streamName(), err, hubHint(g.cfg))
+	}
+	g.consumer = cons
+	g.resumedFrom = floor
+	g.noteAcked(floor)
+	if info := cons.CachedInfo(); info != nil {
+		g.noteAcked(info.AckFloor.Stream)
+	}
+	g.mu.Lock()
+	g.checked = time.Now()
+	g.mu.Unlock()
+	return nil
+}
+
+// seatFloor is the highest ack floor among this seat's departed durables on
+// the hub stream, 0 when there is none or the hub cannot be asked.
+func (g *globalTier) seatFloor(ctx context.Context, agentID string) uint64 {
+	liveGlobal := func(inst string) bool {
+		_, err := g.kv.Get(ctx, g.cfg.presenceKey(inst))
+		return err == nil
+	}
+	floor, _ := seatAckFloor(ctx, g.js, g.cfg.streamName(), "mcp_global_"+agentID+"_", g.cfg.inboxSubject(), liveGlobal)
+	return floor
+}
+
+// consumerConfig is the durable's shape. start > 0 resumes at that stream
+// sequence; 0 delivers everything the stream still holds.
+func (g *globalTier) consumerConfig(agentID, instance string, start uint64) jetstream.ConsumerConfig {
 	cfg := jetstream.ConsumerConfig{
 		Durable:           globalDurable(agentID, instance),
 		FilterSubject:     g.cfg.inboxSubject(),
@@ -289,26 +354,113 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 		MaxDeliver:        -1,
 		InactiveThreshold: globalConsumerInactive,
 	}
-	if cons, err := g.js.Consumer(ctx, g.cfg.streamName(), cfg.Durable); err == nil {
-		g.consumer = cons
-		return nil
-	}
-	liveGlobal := func(inst string) bool {
-		_, err := g.kv.Get(ctx, g.cfg.presenceKey(inst))
-		return err == nil
-	}
-	floor, _ := seatAckFloor(ctx, g.js, g.cfg.streamName(), "mcp_global_"+agentID+"_", g.cfg.inboxSubject(), liveGlobal)
-	if floor > 0 {
+	if start > 0 {
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
-		cfg.OptStartSeq = floor + 1
+		cfg.OptStartSeq = start
 	}
-	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), cfg)
+	return cfg
+}
+
+// noteAcked records an acked hub stream sequence.
+func (g *globalTier) noteAcked(seq uint64) {
+	g.mu.Lock()
+	if seq > g.acked {
+		g.acked = seq
+	}
+	g.mu.Unlock()
+}
+
+// takeNotice returns a pending recreate notice once, then clears it.
+func (g *globalTier) takeNotice() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	n := g.notice
+	g.notice = ""
+	return n
+}
+
+// possiblyLost reports whether a pull error can mean the durable is gone. A
+// pull on a durable the hub no longer has does not fail with
+// ErrConsumerNotFound: the next-message request has no one to answer it, so
+// the client reports no responders, and a durable deleted mid-pull reports
+// consumer deleted. A down leaf link also reports no responders, so this only
+// says the durable is worth checking, never that it is gone.
+func possiblyLost(err error) bool {
+	return errors.Is(err, jetstream.ErrConsumerNotFound) ||
+		errors.Is(err, jetstream.ErrConsumerDeleted) ||
+		errors.Is(err, nats.ErrNoResponders)
+}
+
+// recover checks, after a pull error that possiblyLost accepts, whether the
+// hub still has this session's durable, and recreates it if not (restore). It
+// returns true when the durable was recreated and the pull is worth retrying.
+// Any other answer, including the hub being unreachable, returns false, and
+// the caller reports the original error.
+func (g *globalTier) recover(ctx context.Context, cause error, agentID, instance string) (bool, error) {
+	if !possiblyLost(cause) {
+		return false, nil
+	}
+	return g.restore(ctx, agentID, instance)
+}
+
+// recheck is recover for an empty pull. Across a leaf link a pull on a
+// durable the hub no longer has goes unanswered, which looks exactly like an
+// empty inbox (director#66). So an empty pull asks the hub about the durable,
+// at most once per durableCheckEvery.
+func (g *globalTier) recheck(ctx context.Context, agentID, instance string) (bool, error) {
+	g.mu.Lock()
+	due := time.Since(g.checked) >= durableCheckEvery
+	g.mu.Unlock()
+	if !due {
+		return false, nil
+	}
+	return g.restore(ctx, agentID, instance)
+}
+
+// restore asks the hub whether this session's durable exists. When the hub
+// answers that it does not, the durable is recreated to resume after the last
+// acked sequence and a notice is queued for the caller, so the loss is
+// reported rather than absorbed (R-107). It returns true only when it
+// recreated the durable. A hub that cannot be asked changes nothing.
+func (g *globalTier) restore(ctx context.Context, agentID, instance string) (bool, error) {
+	durable := globalDurable(agentID, instance)
+	_, err := g.js.Consumer(ctx, g.cfg.streamName(), durable)
+	if err == nil {
+		g.mu.Lock()
+		g.checked = time.Now()
+		g.mu.Unlock()
+		return false, nil
+	}
+	if !errors.Is(err, jetstream.ErrConsumerNotFound) {
+		return false, nil
+	}
+	// The recreated durable resumes after the later of this session's own
+	// acks and the seat floor from departed durables, the same floor a fresh
+	// attach would take, so a recreate never replays what the seat has read.
+	g.noteAcked(g.seatFloor(ctx, agentID))
+	g.mu.Lock()
+	start := g.acked + 1
+	resumed := g.acked > 0
+	g.mu.Unlock()
+	if !resumed {
+		start = 0
+	}
+	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), g.consumerConfig(agentID, instance, start))
 	if err != nil {
-		return fmt.Errorf("global durable on %s: %w (%s)", g.cfg.streamName(), err, hubHint(g.cfg))
+		return false, fmt.Errorf("the hub has lost this session's global durable %s and recreating it failed: %w (%s)", durable, err, hubHint(g.cfg))
 	}
 	g.consumer = cons
-	g.resumedFrom = floor
-	return nil
+	msg := fmt.Sprintf("the hub had lost this session's global durable %s; it was recreated", durable)
+	if resumed {
+		msg += fmt.Sprintf(" to resume after stream sequence %d, so mail already read does not replay and mail sent while it was missing is delivered", start-1)
+	} else {
+		msg += " from the start of the stream, because neither this session nor a departed session of this seat had acked anything on it"
+	}
+	g.mu.Lock()
+	g.notice = msg
+	g.checked = time.Now()
+	g.mu.Unlock()
+	return true, nil
 }
 
 // hubHint is the one sentence worth saying whenever a hub operation fails: a
@@ -331,9 +483,10 @@ func hubHint(cfg globalConfig) string {
 // otherwise consume a whole poll and hide the envelope behind it. The count
 // still reaches the caller, so discarding stays visible.
 //
-// A durable that has been cleaned up (globalConsumerInactive, or an operator
-// removing it) is rebuilt once and the fetch retried, so an idle session does
-// not spend the rest of its life reporting a missing consumer.
+// A durable the hub no longer has (globalConsumerInactive, an operator
+// removing it, or a loss whose cause is not visible from here) is recreated
+// once through recover and the fetch retried, so the session does not spend
+// the rest of its life reporting no responders.
 func (g *globalTier) receive(ctx context.Context, timeout time.Duration, agentID, instance string) (env *Envelope, seq uint64, discarded int, err error) {
 	deadline := time.Now().Add(timeout)
 	rebuilt := false
@@ -344,15 +497,30 @@ func (g *globalTier) receive(ctx context.Context, timeout time.Duration, agentID
 		}
 		e, s, poison, err := g.fetchOne(remaining)
 		switch {
-		case err != nil && errors.Is(err, jetstream.ErrConsumerNotFound) && !rebuilt:
+		case err != nil && !rebuilt:
 			rebuilt = true
-			if rerr := g.ensureConsumer(ctx, agentID, instance); rerr != nil {
+			ok, rerr := g.recover(ctx, err, agentID, instance)
+			if rerr != nil {
 				return nil, 0, discarded, rerr
+			}
+			if !ok {
+				return nil, 0, discarded, err
 			}
 		case err != nil:
 			return nil, 0, discarded, err
 		case poison:
 			discarded++
+		case e == nil && !rebuilt:
+			// An empty pull. Across a leaf link it is also what a lost
+			// durable looks like, so ask (rate-limited) before believing it.
+			ok, rerr := g.recheck(ctx, agentID, instance)
+			if rerr != nil {
+				return nil, 0, discarded, rerr
+			}
+			if !ok {
+				return nil, 0, discarded, nil
+			}
+			rebuilt = true
 		default:
 			return e, s, discarded, nil
 		}
@@ -377,6 +545,7 @@ func (g *globalTier) fetchOne(timeout time.Duration) (env *Envelope, seq uint64,
 			seq = md.Sequence.Stream
 		}
 		_ = m.Ack()
+		g.noteAcked(seq)
 		return &e, seq, false, nil
 	}
 	if err := msgs.Error(); err != nil {

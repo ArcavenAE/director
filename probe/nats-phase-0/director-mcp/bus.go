@@ -754,31 +754,39 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 		}
 		return pollResult{Env: e, Tier: tierOf(e, "local"), Seq: seq}, nil
 	}
+	// notices collects durable recreates across slices. GlobalWarn is reset
+	// each slice so a recovered hub stops being reported, but a recreate is
+	// reported once and must survive to the result.
 	var res pollResult
+	var notices string
+	done := func() pollResult {
+		res.GlobalWarn = joinWarn(res.GlobalWarn, notices)
+		return res
+	}
 	// Mail already waiting is taken in alternating tier order first, so a
 	// backlog on one tier cannot starve the other (the loop below always
 	// tries local first and would return a local message every call).
-	if w := b.takeWaiting(ctx, &res); w != nil {
+	if w := b.takeWaiting(ctx, &res, &notices); w != nil {
 		res.Env, res.Tier, res.Seq = w.Env, w.Tier, w.Seq
-		return res, nil
+		return done(), nil
 	}
 	deadline := time.Now().Add(timeout)
 	for {
 		slice, ok := sliceLeft(deadline)
 		if !ok {
-			return res, nil
+			return done(), nil
 		}
 		e, seq, err := b.receive(ctx, slice)
 		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
-			return res, err
+			return done(), err
 		}
 		if e != nil {
 			res.Env, res.Tier, res.Seq = e, "local", seq
-			return res, nil
+			return done(), nil
 		}
 		slice, ok = sliceLeft(deadline)
 		if !ok {
-			return res, nil
+			return done(), nil
 		}
 		g, err := b.globalReady(ctx)
 		if err != nil {
@@ -786,11 +794,12 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 			// for the rest of the budget rather than failing the whole call.
 			res.GlobalWarn = err.Error()
 			if _, ok := sliceLeft(deadline); !ok {
-				return res, nil
+				return done(), nil
 			}
 			continue
 		}
 		e, gseq, discarded, err := g.receive(ctx, slice, b.self.AgentID, b.instance)
+		notices = joinWarn(notices, g.takeNotice())
 		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
 			res.GlobalWarn = fmt.Sprintf("global inbox poll failed: %v", err)
 			continue
@@ -801,7 +810,7 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 		}
 		if e != nil {
 			res.Env, res.Tier, res.Seq = e, "global", gseq
-			return res, nil
+			return done(), nil
 		}
 	}
 }
@@ -809,8 +818,8 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 // takeWaiting takes one message that is already waiting, without blocking,
 // from the tier whose turn it is and then the other. A global failure is
 // recorded as a warning; the blocking poll that follows reports it again if
-// it persists.
-func (b *Bus) takeWaiting(ctx context.Context, res *pollResult) *drained {
+// it persists. A durable recreate goes to notices, which outlive the slice.
+func (b *Bus) takeWaiting(ctx context.Context, res *pollResult, notices *string) *drained {
 	order := []string{"local", "global"}
 	if b.takeTurn() {
 		order = []string{"global", "local"}
@@ -826,6 +835,7 @@ func (b *Bus) takeWaiting(ctx context.Context, res *pollResult) *drained {
 				continue
 			}
 			items, _, _ = g.drainNoWait(ctx, 1, b.self.AgentID, b.instance)
+			*notices = joinWarn(*notices, g.takeNotice())
 		}
 		if len(items) > 0 {
 			return &items[0]

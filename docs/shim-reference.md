@@ -319,6 +319,19 @@ The first `wait_for_message` result after a start (or after the global tier
 attaches) carries `resumed`: one line per tier saying where the durable
 started and how many messages were waiting. It is reported once.
 
+When the hub no longer has a session's global durable, a pull does not say
+"consumer not found". On a single server it fails with no responders, the
+same answer a down leaf link gives; across a leaf link, the production shape,
+it is not answered at all and looks exactly like an empty inbox
+(director#66). So the shim asks the hub whether the durable exists after a
+pull, batch or summary fails that way, and after an empty pull at most once
+every 30 seconds. If the hub answers that it does not, the shim recreates it
+to resume after the later of the last stream sequence this session acked and
+the seat floor from departed durables above (so read mail does not replay and
+mail sent meanwhile is delivered), retries, and reports
+the recreate once in `global_warning`. If the hub cannot be asked, nothing is
+recreated and the original error, if any, is the warning.
+
 ## Envelope v1
 
 The wire format is the director envelope from
