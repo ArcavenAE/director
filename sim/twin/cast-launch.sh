@@ -115,8 +115,10 @@ fi
 # The role is derived from the cast, never read from the environment: the
 # operator names the cluster, the wardrobe role decides whether this session has
 # a global address at all.
+# research-supervisors are supervisors at the global tier (R-94 as amended,
+# operator ruling 2026-09-26); the global role word stays supervisor.
 case "$WROLE" in
-  supervisor) GROLE=supervisor;;
+  supervisor|research-supervisor) GROLE=supervisor;;
   director)   GROLE=director;;
   *)          GROLE="";;
 esac
