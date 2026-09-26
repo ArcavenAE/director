@@ -362,3 +362,84 @@ func TestBrokerResumeIsReportedOnce(t *testing.T) {
 		t.Errorf("resume reported twice")
 	}
 }
+
+// A recreate must not take a sibling's floor. B ran alongside A, read further
+// than A did, then departed. When A's durable is lost, the recreate resumes
+// after A's own acks (seeded with the floor A attached from), not after B's,
+// or A would never see g1.
+func TestBrokerRecreateDoesNotSkipMailASiblingRead(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by both")
+	a, err := connect(ctx, url, resumeSelf, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.close()
+	if r, err := a.receiveTiered(ctx, 8*time.Second); err != nil || r.Env == nil || r.Env.MessageID != "g0" {
+		t.Fatalf("A first read %+v %v", r, err)
+	}
+	if warn := a.writeGlobalPresence(ctx, "idle"); warn != "" {
+		t.Fatal(warn)
+	}
+	b, err := connect(ctx, url, resumeSelf, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g1", "INFORM", "read by B only")
+	res, err := b.receiveBatch(ctx, 8*time.Second, 5)
+	if err != nil || fmt.Sprint(ids(res.Items)) != fmt.Sprint([]string{"global:g0", "global:g1"}) {
+		t.Fatalf("B read %v %v, want [global:g0 global:g1]", ids(res.Items), err)
+	}
+	b.close()
+	if err := gjs.DeleteConsumer(ctx, globalDirectorStream, globalDurable(resumeSelf.AgentID, a.instance)); err != nil {
+		t.Fatal(err)
+	}
+	res, err = a.receiveBatch(ctx, 8*time.Second, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(res.Items); fmt.Sprint(got) != fmt.Sprint([]string{"global:g1"}) {
+		t.Errorf("A after recreate read %v, want [global:g1] (warning %q)", got, res.GlobalWarn)
+	}
+}
+
+// Agent ids may contain '_', so the global seat prefix mcp_global_sup_ also
+// names sup_T1's durables. Those belong to another seat and must not set this
+// seat's floor, live or not.
+func TestBrokerGlobalFloorIgnoresASeatWhoseIDExtendsThisOne(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by sup_T1")
+	other, err := connect(ctx, url, Sender{AgentID: "sup_T1", Workspace: "aae-orc", Team: "ops"}, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.close()
+	if r, err := other.receiveTiered(ctx, 8*time.Second); err != nil || r.Env == nil || r.Env.MessageID != "g0" {
+		t.Fatalf("sup_T1 read %+v %v", r, err)
+	}
+	if warn := other.writeGlobalPresence(ctx, "idle"); warn != "" {
+		t.Fatal(warn)
+	}
+	sup, err := connect(ctx, url, Sender{AgentID: "sup", Workspace: "aae-orc", Team: "ops"}, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sup.close()
+	res, err := sup.receiveBatch(ctx, 3*time.Second, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(res.Items); fmt.Sprint(got) != fmt.Sprint([]string{"global:g0"}) {
+		t.Errorf("sup read %v, want [global:g0]: sup_T1's position is not sup's", got)
+	}
+}

@@ -312,8 +312,11 @@ ack floor among the seat's departed `mcp_global_<id>_` durables (filtered on
 the same inbox subject, no live hub presence row for the instance), or from
 the start of the stream when there are none.
 Every supervisor of a cluster filters on the same role inbox, so the name
-prefix is what keeps one seat's position from moving another's; each
-session still receives every message (fan-out, not a work queue).
+is what keeps one seat's position from moving another's. Agent ids may
+contain `_`, so the prefix `mcp_global_sup_` also matches `sup_T1`'s
+durables; a name counts for the seat only when the rest of it is an instance
+id (a ULID, which never contains `_`). Each session still receives every
+message (fan-out, not a work queue).
 
 The first `wait_for_message` result after a start (or after the global tier
 attaches) carries `resumed`: one line per tier saying where the durable
@@ -326,9 +329,11 @@ it is not answered at all and looks exactly like an empty inbox
 (director#66). So the shim asks the hub whether the durable exists after a
 pull, batch or summary fails that way, and after an empty pull at most once
 every 30 seconds. If the hub answers that it does not, the shim recreates it
-to resume after the later of the last stream sequence this session acked and
-the seat floor from departed durables above (so read mail does not replay and
-mail sent meanwhile is delivered), retries, and reports
+to resume after the last stream sequence this session acked, seeded with the
+seat floor it attached from (so read mail does not replay and mail sent
+meanwhile is delivered). It does not take the seat floor again: a sibling
+that ran alongside this session may have read further, and taking its
+position would skip mail this session never saw, retries, and reports
 the recreate once in `global_warning`. If the hub cannot be asked, nothing is
 recreated and the original error, if any, is the warning.
 

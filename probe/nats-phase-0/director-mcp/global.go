@@ -434,10 +434,11 @@ func (g *globalTier) restore(ctx context.Context, agentID, instance string) (boo
 	if !errors.Is(err, jetstream.ErrConsumerNotFound) {
 		return false, nil
 	}
-	// The recreated durable resumes after the later of this session's own
-	// acks and the seat floor from departed durables, the same floor a fresh
-	// attach would take, so a recreate never replays what the seat has read.
-	g.noteAcked(g.seatFloor(ctx, agentID))
+	// The recreate resumes after this session's own acks, seeded at attach
+	// with the seat floor it started from. It never takes the seat floor
+	// again: a sibling that ran alongside this session and has since departed
+	// may have read further, and resuming after it would skip mail this
+	// session never saw.
 	g.mu.Lock()
 	start := g.acked + 1
 	resumed := g.acked > 0
@@ -454,7 +455,7 @@ func (g *globalTier) restore(ctx context.Context, agentID, instance string) (boo
 	if resumed {
 		msg += fmt.Sprintf(" to resume after stream sequence %d, so mail already read does not replay and mail sent while it was missing is delivered", start-1)
 	} else {
-		msg += " from the start of the stream, because neither this session nor a departed session of this seat had acked anything on it"
+		msg += " from the start of the stream, because this session had acked nothing on it and attached with no seat floor"
 	}
 	g.mu.Lock()
 	g.notice = msg

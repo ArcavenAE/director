@@ -251,7 +251,11 @@ func (b *Bus) takeResumed() []string {
 // durables on a stream: those named with the seat's prefix AND filtered on the
 // seat's own subject, whose instance (the name after the prefix) has no live
 // presence row. The subject check is what keeps "michael" from reading
-// "michael-2"'s position; the name prefix alone would not. Skipping live
+// "michael-2"'s position; the name prefix alone would not. On the global tier
+// every supervisor of a cluster filters on the same subject, and agent ids may
+// contain '_', so the prefix mcp_global_sup_ also names sup_T1's durables. An
+// instance is a ULID, which never contains '_', so a remainder that does
+// belongs to another seat and is skipped. Skipping live
 // instances keeps a joining session from starting after mail only its live
 // sibling read. A crashed session's presence row lingers up to the bucket's
 // 90s TTL, so a reconnect inside that window finds no departed floor and reads
@@ -269,7 +273,11 @@ func seatAckFloor(ctx context.Context, js jetstream.JetStream, stream, prefix, f
 		if !strings.HasPrefix(info.Name, prefix) || info.Config.FilterSubject != filter {
 			continue
 		}
-		if live != nil && live(strings.TrimPrefix(info.Name, prefix)) {
+		instance := strings.TrimPrefix(info.Name, prefix)
+		if strings.Contains(instance, "_") {
+			continue
+		}
+		if live != nil && live(instance) {
 			continue
 		}
 		if info.AckFloor.Stream > floor {
