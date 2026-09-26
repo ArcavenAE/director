@@ -234,6 +234,21 @@ else
     || bad "malformed-role refusal message" "$(cat "$root/out/stderr")"
 fi
 
+# --- the claude reviewer seat is cast as wardrobe role/reviewer ---------------
+# The manifest row is claude-reviewer (a claude seat beside the codex reviewer),
+# and wardrobe has no role by that name. Without the mapping the slice lookup
+# asks wardrobe for role/claude-reviewer and the seat gets no role text.
+if cast claude-reviewer; then
+  miss=""
+  grep -qx "stub slice for reviewer" "$root/out/claude.args" || miss+=" slice"
+  grep -q "wardrobe role/reviewer for the manifest role claude-reviewer" "$root/out/claude.args" || miss+=" cast-line"
+  grep -q "Your scope" "$root/out/claude.args" && miss+=" unexpected-scope"
+  [[ -z "$miss" ]] && ok "claude-reviewer: cast as role/reviewer with the reviewer slice and no scope" \
+                   || bad "claude-reviewer mapping" "missing:$miss"
+else
+  bad "claude-reviewer cast" "$(cat "$root/out/stderr")"
+fi
+
 # --- exactly one system prompt reaches claude (aae-orc-1vq6z) -----------------
 # claude keeps only the LAST --append-system-prompt, so a second flag in "$@"
 # (marvel's one-line identity, or a wrapper's full cast) silently replaces the

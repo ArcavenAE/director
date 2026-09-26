@@ -58,6 +58,7 @@ case "$MARVEL_ROLE" in
   builder)           WROLE=builder; SCOPE="general (kos, fleet CI, stave, sidestep, bloomctl, critic, beadle, curtain, ThreeDoors, BetterDials)";;
   marvel-builder)    WROLE=builder; SCOPE="marvel";;
   sideshow-builder)  WROLE=builder; SCOPE="sideshow and sideshow-packs";;
+  claude-reviewer)   WROLE=reviewer; SCOPE="";;
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
 esac
 # Identities that compose with a role (sole_fit at proposal): director and envoy.
