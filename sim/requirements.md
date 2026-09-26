@@ -1634,6 +1634,73 @@ R-08 treats an accepted send.
 *Earned by: O 2026-09-26 codex reviewers unchanged after apply.*
 *Source: JUDGMENT. Cross-refs R-08, R-143, ADR-010.*
 
+**R-155 (OBSERVED) · a relay lands on the seat's durable channel, not only
+its pane.** Director forwarded a batch of review verdicts to a supervisor by
+pane inject while that supervisor was READY for a restart with its bus
+drained. The forwards existed only as pane text, outside the seat's durable
+inbox and its handoff, so the restart would have dropped every one. Director
+had to hold the restart and ask for a handoff refresh. Anything director
+relays is written to the recipient's durable inbox. A pane inject is a
+doorbell for that record, never the record itself. A seat declared READY
+for restart is re-checked for relays that arrived after it declared.
+*Earned by: O 2026-09-26 verdict forwards at risk across a restart.*
+*Source: OBSERVED. Cross-refs R-145, R-117.*
+
+**R-156 (OBSERVED) · the outcome of a mutating call is read back, never
+inferred from its return.** Three mutating GitHub calls in one day returned
+an i/o timeout and had in fact succeeded: two merges by director, and a
+review POST on the remote cluster. A retry on the return value alone
+double-acts, and a skip on it records a success as a failure. After any
+mutating call that errors or times out, director reads the target's state and
+acts on that.
+*Earned by: FR 2026-09-26 director#99 and midway#103 merges; the remote
+reviewer's POST retry.*
+*Source: OBSERVED. Cross-refs R-152.*
+
+**R-157 (OBSERVED) · external state is read terminal-first.** Director polled
+the merge state of two pull requests for minutes and listed them as "pending
+merge". Both had been merged hours earlier, and the forge reports an unknown
+merge state for every merged PR. A supervisor's ready-to-merge list carried
+the same stale entries. Any check on an external object reads its terminal
+state (merged, closed, deleted) before any derived or computed field, and a
+list director forwards is re-verified at forward time.
+*Earned by: O 2026-09-26 merged PRs polled as pending.*
+*Source: OBSERVED. Cross-refs R-154.*
+
+**R-158 (OBSERVED) · director carries artifacts across hosts, not only
+messages.** A 30-gap docs review written by a seat on one cluster could not
+reach the seats on the other. There was no shared path, and the bus has no
+file transfer, so the review crossed as message text in parts, and its count
+was misstated once on the way. Director moves a named artifact between
+hosts with its provenance (source host, path, sender) and a checksum, and
+tells the recipient where it landed.
+*Earned by: O 2026-09-26 docs review stranded on the remote cluster.*
+*Source: OBSERVED.*
+
+### Harvest diff (2026-09-26, third)
+
+- **Promoted (4):** R-155 (relays land on the durable channel), R-156
+  (mutating-call outcomes read back), R-157 (external state read
+  terminal-first), R-158 (artifact custody across hosts).
+- **Unchanged, new instances:**
+  - R-150: seat classifiers refused three pieces of operator-granted work (a
+    hub permission edit, an identity value in a data file, a launcher scope
+    edit), and each came back to the operator by hand.
+  - R-152: director merged one PR while its merge state read unknown.
+  - R-154: a hub permission reload did not reach an established leaf
+    connection, and a merged launcher change was not live until the host
+    checkout was fast-forwarded. Both are "applied is not running".
+  - R-117: an idle remote supervisor held an accepted batch unread for about
+    90 minutes.
+- **Rejected for the register (routed elsewhere):**
+  - The operator's assessment that the orchestrator is having many problems
+    orchestrating agents, with this span's instances (finished runs holding
+    slots, respawns with no first turn, a launcher crash loop, injects
+    staging unsent, replica churn, a spawn env leak): marvel concerns, true
+    with or without director. Tracked in the marvel graph and issues.
+  - A seat's new test files skipping a crate's feature-gate convention, hidden
+    by an all-features CI run: project practice, routed to that builder.
+
 ### Harvest diff (2026-09-26, second)
 
 - **Promoted (6):** R-149 (composer-state read), R-150 (relayed rulings carry
