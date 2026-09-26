@@ -59,10 +59,14 @@ bad global levers), 1 for a failed connection or preflight.
    `mcp_<id>_<instance>` on `AGENT_INBOX`, filtered to this session's inbox
    subject. `<instance>` is a ULID minted per process, so two shims with one
    id hold two durables and each receives its own copy (R-50). A new
-   instance starts after the highest ack floor among the seat's existing
-   durables (same name prefix and same filter subject), so a reconnect does
-   not replay the inbox; a seat with no earlier durable reads everything the
-   inbox still holds, so mail sent to a cold mailbox is delivered. The
+   instance starts after the highest ack floor among the seat's departed
+   durables (same name prefix and same filter subject, and no live presence
+   row for that instance), so a reconnect does not replay the inbox. A live
+   sibling's position is not taken: a session joining a live seat reads the
+   inbox from the start, its own copy. With no departed durable the inbox is
+   read from the start, so mail sent to a cold mailbox is delivered. A
+   crashed session's presence row can linger up to the bucket's 90s TTL; a
+   reconnect inside that window replays rather than skips. The
    durable carries a 73h inactive threshold, one hour above the inbox's 72h
    max age, so a superseded instance's durable is cleaned up rather than
    left behind.
@@ -304,8 +308,9 @@ one hour longer than the hub streams' 72h max age, so cleanup can only ever
 discard a durable whose replay had already expired.
 
 A new global durable resumes the way the local one does: after the highest
-ack floor among the seat's other `mcp_global_<id>_` durables filtered on the
-same inbox subject, or from the start of the stream when there are none.
+ack floor among the seat's departed `mcp_global_<id>_` durables (filtered on
+the same inbox subject, no live hub presence row for the instance), or from
+the start of the stream when there are none.
 Every supervisor of a cluster filters on the same role inbox, so the name
 prefix is what keeps one seat's position from moving another's; each
 session still receives every message (fan-out, not a work queue).

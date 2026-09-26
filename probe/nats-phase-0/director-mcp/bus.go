@@ -185,10 +185,13 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	// Durable per-SESSION consumer. The durable name includes the per-session
 	// instance, so two sessions sharing one agent id do not bind one durable
 	// and race each other's mail (R-50); each gets its own copy instead of a
-	// silent loss. A new instance resumes after the last message any earlier
+	// silent loss. A new instance resumes after the last message a DEPARTED
 	// instance of the same seat acked, so a reconnect does not replay the
-	// whole inbox; a seat with no earlier durable reads everything the inbox
-	// still holds, so mail sent to a cold mailbox is delivered.
+	// whole inbox. A live sibling's position is not taken: a session joining
+	// a live seat gets its own full copy (R-50 as implemented), not a start
+	// after mail only the sibling read. A seat with no departed durable reads
+	// everything the inbox still holds, so mail sent to a cold mailbox is
+	// delivered.
 	filter := b.inboxSubject(self.Workspace, self.Team, self.AgentID)
 	cfg := jetstream.ConsumerConfig{
 		Durable:           "mcp_" + self.AgentID + "_" + b.instance,
@@ -198,7 +201,11 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		MaxDeliver:        -1,
 		InactiveThreshold: localConsumerInactive,
 	}
-	floor, _ := seatAckFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", filter)
+	liveLocal := func(instance string) bool {
+		_, err := kv.Get(ctx, "presence."+self.Team+"."+self.AgentID+"."+instance)
+		return err == nil
+	}
+	floor, _ := seatAckFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", filter, liveLocal)
 	if floor > 0 {
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
 		cfg.OptStartSeq = floor + 1
@@ -240,13 +247,18 @@ func (b *Bus) takeResumed() []string {
 	return r
 }
 
-// seatAckFloor returns the highest ack floor among the seat's existing
+// seatAckFloor returns the highest ack floor among the seat's departed
 // durables on a stream: those named with the seat's prefix AND filtered on the
-// seat's own subject. The subject check is what keeps "michael" from reading
-// "michael-2"'s position; the name prefix alone would not. Zero means no
-// earlier durable, or none that acked anything. Best effort: an error means
-// the caller falls back to delivering everything.
-func seatAckFloor(ctx context.Context, js jetstream.JetStream, stream, prefix, filter string) (uint64, error) {
+// seat's own subject, whose instance (the name after the prefix) has no live
+// presence row. The subject check is what keeps "michael" from reading
+// "michael-2"'s position; the name prefix alone would not. Skipping live
+// instances keeps a joining session from starting after mail only its live
+// sibling read. A crashed session's presence row lingers up to the bucket's
+// 90s TTL, so a reconnect inside that window finds no departed floor and reads
+// the whole inbox: a replay, never a loss. Zero means no departed durable, or
+// none that acked anything. Best effort: an error means the caller falls back
+// to delivering everything.
+func seatAckFloor(ctx context.Context, js jetstream.JetStream, stream, prefix, filter string, live func(instance string) bool) (uint64, error) {
 	st, err := js.Stream(ctx, stream)
 	if err != nil {
 		return 0, err
@@ -255,6 +267,9 @@ func seatAckFloor(ctx context.Context, js jetstream.JetStream, stream, prefix, f
 	lister := st.ListConsumers(ctx)
 	for info := range lister.Info() {
 		if !strings.HasPrefix(info.Name, prefix) || info.Config.FilterSubject != filter {
+			continue
+		}
+		if live != nil && live(strings.TrimPrefix(info.Name, prefix)) {
 			continue
 		}
 		if info.AckFloor.Stream > floor {

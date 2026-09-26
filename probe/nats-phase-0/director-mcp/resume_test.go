@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -177,8 +178,11 @@ func TestBrokerLocalBacklogDoesNotStarveGlobalBatch(t *testing.T) {
 	}
 }
 
-// R-50 still holds: two live sessions of one seat each receive new mail.
-func TestBrokerConcurrentSessionsBothReceiveNewMail(t *testing.T) {
+// A session joining a LIVE seat does not take its sibling's ack floor: under
+// R-50 as implemented every live session of a seat gets its own copy, so the
+// joiner reads the history the sibling already read, and both get new mail.
+// Only a departed instance's floor is a resume point.
+func TestBrokerJoiningALiveSeatGetsItsOwnCopy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
@@ -189,6 +193,9 @@ func TestBrokerConcurrentSessionsBothReceiveNewMail(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b1.close()
+	if err := b1.writePresence(ctx, "idle"); err != nil {
+		t.Fatal(err)
+	}
 	if e, _, err := b1.receive(ctx, 2*time.Second); err != nil || e == nil {
 		t.Fatalf("first read %v %v", e, err)
 	}
@@ -198,11 +205,49 @@ func TestBrokerConcurrentSessionsBothReceiveNewMail(t *testing.T) {
 	}
 	defer b2.close()
 	pubEnv(t, ctx, js, resumeInbox, "new1", "INFORM", "for both")
-	for i, b := range []*Bus{b1, b2} {
-		e, _, err := b.receive(ctx, 2*time.Second)
-		if err != nil || e == nil || e.MessageID != "new1" {
-			t.Errorf("session %d got %v, %v; want new1", i+1, e, err)
-		}
+	res, err := b2.receiveBatch(ctx, 2*time.Second, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(res.Items); fmt.Sprint(got) != fmt.Sprint([]string{"local:old1", "local:new1"}) {
+		t.Errorf("joining session read %v, want [local:old1 local:new1]", got)
+	}
+	if e, _, err := b1.receive(ctx, 2*time.Second); err != nil || e == nil || e.MessageID != "new1" {
+		t.Errorf("live sibling got %v, %v; want new1", e, err)
+	}
+}
+
+// The same rule on the global tier: a live sibling's position is not taken.
+func TestBrokerJoiningALiveGlobalSeatGetsItsOwnCopy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by the first")
+	b1, err := connect(ctx, url, resumeSelf, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b1.close()
+	if r, err := b1.receiveTiered(ctx, 8*time.Second); err != nil || r.Env == nil || r.Env.MessageID != "g0" {
+		t.Fatalf("first read %+v %v", r, err)
+	}
+	if warn := b1.writeGlobalPresence(ctx, "idle"); warn != "" {
+		t.Fatal(warn)
+	}
+	b2, err := connect(ctx, url, resumeSelf, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b2.close()
+	res, err := b2.receiveBatch(ctx, 3*time.Second, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(res.Items); fmt.Sprint(got) != fmt.Sprint([]string{"global:g0"}) {
+		t.Errorf("joining session read %v, want [global:g0]", got)
 	}
 }
 
@@ -219,7 +264,7 @@ func TestBrokerGlobalReconnectResumesAfterTheSeatsLastAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r, err := b1.receiveTiered(ctx, 3*time.Second); err != nil || r.Env == nil || r.Env.MessageID != "g0" {
+	if r, err := b1.receiveTiered(ctx, 8*time.Second); err != nil || r.Env == nil || r.Env.MessageID != "g0" {
 		t.Fatalf("first read %+v %v", r, err)
 	}
 	b1.close()

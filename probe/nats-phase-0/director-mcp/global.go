@@ -274,8 +274,8 @@ func attachGlobal(ctx context.Context, nc *nats.Conn, cfg globalConfig, agentID,
 // ensureConsumer creates or rebinds this session's durable on the hub stream.
 // It is idempotent, so it doubles as the repair path when the durable has been
 // cleaned up under it (globalConsumerInactive, or an operator removing it).
-// A new durable resumes after the highest ack floor among this seat's other
-// durables on the stream, the same rule as the local inbox, so a reconnect
+// A new durable resumes after the highest ack floor among this seat's departed
+// durables on the stream (no live presence row for their instance), the same rule as the local inbox, so a reconnect
 // does not replay the stream; with none, it reads everything the stream holds.
 // The seat is matched by name prefix and filter subject: every supervisor of a
 // cluster filters on the same role inbox, so the prefix keeps one seat's
@@ -293,7 +293,11 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 		g.consumer = cons
 		return nil
 	}
-	floor, _ := seatAckFloor(ctx, g.js, g.cfg.streamName(), "mcp_global_"+agentID+"_", g.cfg.inboxSubject())
+	liveGlobal := func(inst string) bool {
+		_, err := g.kv.Get(ctx, g.cfg.presenceKey(inst))
+		return err == nil
+	}
+	floor, _ := seatAckFloor(ctx, g.js, g.cfg.streamName(), "mcp_global_"+agentID+"_", g.cfg.inboxSubject(), liveGlobal)
 	if floor > 0 {
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
 		cfg.OptStartSeq = floor + 1
