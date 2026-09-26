@@ -1492,6 +1492,104 @@ would work stay open for study.
 *Earned by: the conflict between R-78 and aae-orc-hieji; director#85 and #86.*
 *Source: RULED. Cross-refs R-78, R-115, R-118, R-140.*
 
+**R-143 (OBSERVED) · a spawned or respawned seat counts as reachable only after
+it confirms.** A seat launched with correct cast args is not yet a working seat.
+Six times on 2026-09-26 (four new replicas, two rollout respawns on kinu, plus
+three fresh supervisors on mokuzai) a seat sat at the harness welcome prompt with
+no first turn: it had not read its seat file or handoff and never drained its
+inbox, while marvel showed it running and healthy. Director must not route to, or
+report as live, a seat that has not confirmed its address and read its handoff,
+and must surface a seat that took no first turn within a bounded time. Making the
+first turn part of the spawn is a marvel concern; knowing the difference is
+director's.
+*Earned by: O 2026-09-26 new replicas take no first turn; O 2026-09-26 respawned
+seats take no first turn; the mokuzai errand and ops supervisors after 04:52Z.*
+*Source: OBSERVED. Cross-refs R-93 (presence is not liveness), R-117.*
+
+**R-144 (OBSERVED) · director follows a seat across generations, and a successor
+does not re-execute what its predecessor acknowledged.** At 04:50Z to 04:52Z
+mokuzai shifted all five teams in about two minutes with a process-alive gate and
+no handoff artifacts. Director learned of it only when a pane read for
+errand-supervisor-g3-0 printed usage, because the name no longer existed; nudges
+had gone to deleted seats. The new supervisors' inboxes replayed global seqs 51
+to 78, including requests already done; two supervisors avoided duplicate work by
+checking PR state by hand, not by any mechanism. Director needs a seat lineage
+(the role holder across g2 to g3), a generation-change event it receives rather
+than discovers, and an inbox floor that carries from predecessor to successor so
+acknowledged asks are not redelivered as new.
+*Earned by: O 2026-09-26 skippy rolled every team with no handoff; migrated
+harvest (global seq 158) items 5 and 6.*
+*Source: OBSERVED. Cross-refs R-106, director#84 (departed-seat floor), bd
+aae-orc-nzh7c (handoff).*
+
+**R-145 (JUDGMENT) · harvest and handoff come before a restart, not after.** A
+harvest request sent after a context-dropping restart reaches seats with nothing
+to give; the mokuzai supervisors rebuilt their harvests from GitHub, bd and old
+transcripts. The kinu director-mcp rollout wrote a handoff per seat before each
+kill and lost nothing. When director orders a restart, or learns of one in
+advance, it requests the harvest and handoff first and does not proceed until the
+handoff is written.
+*Earned by: the 2026-09-26 stansfield harvest landing after the mokuzai restart;
+the kinu rollout brief (handoff, then kill, then check).*
+*Source: JUDGMENT. Cross-refs R-144.*
+
+**R-146 (JUDGMENT) · dispatch checks the target seat's grant before sending
+work that needs it.** ops-supervisor on mokuzai was sent a harvest that needed
+writes while it held only read, search and director tools; the mismatch showed
+only when the task failed. The same shape recurred with builders whose scope
+refused another seat's branch (marvel#360, director#89/#90) and a classifier that
+refused a cross-seat launcher edit. Director should see a seat's tool grant and
+cast scope before routing, and route to a seat that can do the act.
+*Earned by: grant-mismatch-read-only-supervisor (2026-09-25); the 2026-09-26
+no-route replies from arcaven-marvel-builder and arcaven-supervisor.*
+*Source: JUDGMENT. Extends R-116.*
+
+**R-147 (RULED) · paper approvals are routed to the operator, never counted as
+merge-ready.** Operator ruling 2026-09-26. Reviews run cross-account (arcavenai on
+arcaven-authored PRs and the reverse) even when the review cannot enable a merge.
+When an approval will not count on GitHub (the reviewer's identity authored the
+PR, or the repo requires a code owner or team the reviewer is not in, as peu#174
+did), the verdict line says so ("PAPER APPROVAL: merge recommended, not
+counting") and director hands it to the operator instead of attempting a merge.
+*Earned by: peu#174 blocked REVIEW_REQUIRED under an arcavenai approval;
+director#89/#90 arcavenai-authored.*
+*Source: RULED. Cross-refs R-02 (authority is explicit).*
+
+**R-148 (RULED) · director never merges on a draft GATE, and keeps a drafts lane.**
+Operator ruling 2026-09-26, adopting the draft-first PR flow for the employer
+org's shared repos. Builders open drafts; the GATE line carries a stage (draft or
+ready); the author marks ready only after a non-author GitHub review. Director
+treats a draft GATE as not merge-ready, keeps a board lane for in-scope drafts,
+and runs a sweep that lists drafts unreviewed for 24 hours and fleet PRs merged
+with zero reviews. The sweep is diagnostic: it never promotes, merges or closes.
+*Earned by: six Vantage PRs merged unreviewed by an admin teammate (a later three
+the same way); the draft-first study (four-round party, 2026-09-26).*
+*Source: RULED. Cross-refs R-147, ADR-007 (automation boundary).*
+
+### Harvest diff (2026-09-26)
+
+- **Promoted (6):** R-143 (seat reachable only after it confirms), R-144 (seat
+  lineage across generations; no re-execution of acknowledged asks), R-145
+  (harvest and handoff before restart), R-146 (dispatch checks grant and scope),
+  R-147 (paper approvals to the operator), R-148 (no merge on a draft GATE;
+  drafts lane).
+- **Unchanged:** R-112 covers the remote nudges that sat staged unsent for hours
+  on mokuzai (every inject reported success); marvel 222478a's bracketed paste
+  (#357) now submits on kinu with one keystroke, measured byte by byte, and
+  mokuzai still runs the older build. R-115 and R-117 cover review-chokepoint:
+  bus unread counts mislead because work arrives by pane inject, so the ledger
+  in R-115 must count routed work, not bus copies. R-119 covers supervisor seats
+  that cannot reach global://director because DIRECTOR_GLOBAL_DOMAIN is unset.
+- **Rejected for the register (routed elsewhere):**
+  - Codex CTX% blank: the mechanism (codex-ctx hooks feeding the heartbeat), the
+    wrapper CODEX_HOME override that bypasses the seeded hooks, and the TUI
+    control-socket path over the macOS 104-byte limit are marvel and launcher
+    concerns (bd aae-orc-pt8k), true with or without director.
+  - MARVEL_SOCKET overriding an explicit --cluster inside a seat: a marvel defect,
+    filed by arcaven-architect.
+  - peu doctor starting the LM Studio service: a peu defect, filed as
+    1898andCo/peu#175.
+
 ### Harvest diff (2026-09-25, second)
 
 - **Promoted (7):** R-117 (unread depth and age per seat, doorbell for idle
