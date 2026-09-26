@@ -147,21 +147,45 @@ func drainAll(pull func(int) ([]drained, int, error), n int) ([]drained, int, er
 	return out, discarded, nil
 }
 
-// drainNoWait is the global tier's pull, with the same one-time durable
-// rebuild the long poll does when the hub has cleaned the durable up.
+// drainNoWait is the global tier's pull, with the same one-time recreate the
+// long poll does when the hub no longer has the durable (recover).
 func (g *globalTier) drainNoWait(ctx context.Context, n int, agentID, instance string) ([]drained, int, error) {
 	rebuilt := false
-	return drainAll(func(k int) ([]drained, int, error) {
+	out, disc, err := drainAll(func(k int) ([]drained, int, error) {
 		out, disc, err := pullNoWait(ctx, g.consumer, k, "global")
-		if err != nil && errors.Is(err, jetstream.ErrConsumerNotFound) && !rebuilt {
+		if len(out) == 0 && disc == 0 && !rebuilt {
 			rebuilt = true
-			if rerr := g.ensureConsumer(ctx, agentID, instance); rerr != nil {
+			var ok bool
+			var rerr error
+			if err != nil {
+				ok, rerr = g.recover(ctx, err, agentID, instance)
+			} else {
+				ok, rerr = g.recheck(ctx, agentID, instance)
+			}
+			if rerr != nil {
 				return nil, 0, rerr
 			}
-			return pullNoWait(ctx, g.consumer, k, "global")
+			if ok {
+				return pullNoWait(ctx, g.consumer, k, "global")
+			}
 		}
 		return out, disc, err
 	}, n)
+	for _, it := range out {
+		g.noteAcked(it.Seq)
+	}
+	return out, disc, err
+}
+
+// joinWarn appends a second warning to a first, either of which may be empty.
+func joinWarn(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + "; " + b
 }
 
 // batchResult is one wait_for_message call with max > 1.
@@ -206,8 +230,9 @@ func (b *Bus) drainWaiting(ctx context.Context, n int, res *batchResult) error {
 	res.Items = append(res.Items, gitems...)
 	res.Discarded += gdisc
 	if err != nil {
-		res.GlobalWarn = fmt.Sprintf("global inbox drain failed: %v", err)
+		res.GlobalWarn = joinWarn(res.GlobalWarn, fmt.Sprintf("global inbox drain failed: %v", err))
 	}
+	res.GlobalWarn = joinWarn(res.GlobalWarn, g.takeNotice())
 	return nil
 }
 
@@ -224,9 +249,7 @@ func (b *Bus) receiveBatch(ctx context.Context, timeout time.Duration, max int) 
 		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
 			return res, err
 		}
-		if first.GlobalWarn != "" {
-			res.GlobalWarn = first.GlobalWarn
-		}
+		res.GlobalWarn = joinWarn(res.GlobalWarn, first.GlobalWarn)
 		if first.Env == nil {
 			return res, nil
 		}
@@ -493,14 +516,18 @@ func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, err
 			res.GlobalWarn = gerr.Error()
 		} else {
 			gitems, gexp, gmaybe, gerr := peekWaiting(ctx, g.js, g.consumer, "global", limit)
-			if gerr != nil && errors.Is(gerr, jetstream.ErrConsumerNotFound) {
-				if rerr := g.ensureConsumer(ctx, b.self.AgentID, b.instance); rerr == nil {
+			if gerr != nil {
+				ok, rerr := g.recover(ctx, gerr, b.self.AgentID, b.instance)
+				if rerr != nil {
+					gerr = rerr
+				} else if ok {
 					gitems, gexp, gmaybe, gerr = peekWaiting(ctx, g.js, g.consumer, "global", limit)
 				}
 			}
 			if gerr != nil {
 				res.GlobalWarn = fmt.Sprintf("global inbox summary failed: %v", gerr)
 			}
+			res.GlobalWarn = joinWarn(res.GlobalWarn, g.takeNotice())
 			res.Expected["global"], res.Read["global"] = gexp, len(gitems)
 			if gmaybe > 0 {
 				res.MaybeConsumed["global"] = gmaybe
