@@ -650,24 +650,32 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 		}
 		return pollResult{Env: e, Tier: tierOf(e, "local"), Seq: seq}, nil
 	}
+	// notices collects durable recreates across slices. GlobalWarn is reset
+	// each slice so a recovered hub stops being reported, but a recreate is
+	// reported once and must survive to the result.
 	var res pollResult
+	var notices string
+	done := func() pollResult {
+		res.GlobalWarn = joinWarn(res.GlobalWarn, notices)
+		return res
+	}
 	deadline := time.Now().Add(timeout)
 	for {
 		slice, ok := sliceLeft(deadline)
 		if !ok {
-			return res, nil
+			return done(), nil
 		}
 		e, seq, err := b.receive(ctx, slice)
 		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
-			return res, err
+			return done(), err
 		}
 		if e != nil {
 			res.Env, res.Tier, res.Seq = e, "local", seq
-			return res, nil
+			return done(), nil
 		}
 		slice, ok = sliceLeft(deadline)
 		if !ok {
-			return res, nil
+			return done(), nil
 		}
 		g, err := b.globalReady(ctx)
 		if err != nil {
@@ -675,11 +683,12 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 			// for the rest of the budget rather than failing the whole call.
 			res.GlobalWarn = err.Error()
 			if _, ok := sliceLeft(deadline); !ok {
-				return res, nil
+				return done(), nil
 			}
 			continue
 		}
 		e, gseq, discarded, err := g.receive(ctx, slice, b.self.AgentID, b.instance)
+		notices = joinWarn(notices, g.takeNotice())
 		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
 			res.GlobalWarn = fmt.Sprintf("global inbox poll failed: %v", err)
 			continue
@@ -690,7 +699,7 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 		}
 		if e != nil {
 			res.Env, res.Tier, res.Seq = e, "global", gseq
-			return res, nil
+			return done(), nil
 		}
 	}
 }
