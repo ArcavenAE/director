@@ -250,8 +250,9 @@ else
 fi
 
 # --- a research-supervisor is a supervisor at the global tier (R-94, amended) --
-# Operator ruling 2026-09-26: research-supervisors are supervisors and hold a
-# global address. The global role word stays supervisor: the shim accepts only
+# R-94 as amended (RULED 2026-09-24, director#77); the operator reaffirmed on
+# 2026-09-26 that research-supervisors hold the supervisor global role, so they
+# hold a global address. The global role word stays supervisor: the shim accepts only
 # supervisor and director. A worker beside it still gets nothing.
 if cast research-supervisor "${GLOBAL_ON[@]}"; then
   miss=""
