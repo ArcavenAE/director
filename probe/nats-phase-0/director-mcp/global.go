@@ -253,10 +253,16 @@ type globalTier struct {
 	kv       jetstream.KeyValue
 	consumer jetstream.Consumer
 
-	// mu guards the two fields below. acked is the highest hub stream
-	// sequence this session has acked on its durable; a recreated durable
-	// resumes after it, so a loss does not replay mail already read. notice
-	// is a recreate the caller has not been told about yet.
+	// resumedFrom is the seat ack floor the durable was created after, 0 when
+	// it read from the start or bound an existing durable. Reported once by
+	// the bus.
+	resumedFrom uint64
+
+	// mu guards the fields below. acked is the highest hub stream sequence
+	// this session has acked on its durable, or the seat floor it resumed
+	// after; a recreated durable resumes after it, so a loss does not replay
+	// mail already read. notice is a recreate the caller has not been told
+	// about yet.
 	mu      sync.Mutex
 	acked   uint64
 	notice  string
@@ -285,14 +291,38 @@ func attachGlobal(ctx context.Context, nc *nats.Conn, cfg globalConfig, agentID,
 }
 
 // ensureConsumer creates or rebinds this session's durable on the hub stream
-// at attach. Binding an existing durable keeps its position; the ack floor it
-// reports seeds acked, so a later recreate knows where to resume.
+// at attach. Binding an existing durable keeps its position, and the ack floor
+// it reports seeds acked. A new durable resumes after the highest ack floor
+// among this seat's departed durables on the stream (no live presence row for
+// their instance), the same rule as the local inbox, so a reconnect does not
+// replay the stream; with none, it reads everything the stream holds. The seat
+// is matched by name prefix and filter subject: every supervisor of a cluster
+// filters on the same role inbox, so the prefix keeps one seat's position from
+// moving another's (fan-out stays per session).
 func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance string) error {
-	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), g.consumerConfig(agentID, instance, 0))
+	durable := globalDurable(agentID, instance)
+	if cons, err := g.js.Consumer(ctx, g.cfg.streamName(), durable); err == nil {
+		g.consumer = cons
+		if info := cons.CachedInfo(); info != nil {
+			g.noteAcked(info.AckFloor.Stream)
+		}
+		g.mu.Lock()
+		g.checked = time.Now()
+		g.mu.Unlock()
+		return nil
+	}
+	floor := g.seatFloor(ctx, agentID)
+	start := uint64(0)
+	if floor > 0 {
+		start = floor + 1
+	}
+	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), g.consumerConfig(agentID, instance, start))
 	if err != nil {
 		return fmt.Errorf("global durable on %s: %w (%s)", g.cfg.streamName(), err, hubHint(g.cfg))
 	}
 	g.consumer = cons
+	g.resumedFrom = floor
+	g.noteAcked(floor)
 	if info := cons.CachedInfo(); info != nil {
 		g.noteAcked(info.AckFloor.Stream)
 	}
@@ -300,6 +330,17 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 	g.checked = time.Now()
 	g.mu.Unlock()
 	return nil
+}
+
+// seatFloor is the highest ack floor among this seat's departed durables on
+// the hub stream, 0 when there is none or the hub cannot be asked.
+func (g *globalTier) seatFloor(ctx context.Context, agentID string) uint64 {
+	liveGlobal := func(inst string) bool {
+		_, err := g.kv.Get(ctx, g.cfg.presenceKey(inst))
+		return err == nil
+	}
+	floor, _ := seatAckFloor(ctx, g.js, g.cfg.streamName(), "mcp_global_"+agentID+"_", g.cfg.inboxSubject(), liveGlobal)
+	return floor
 }
 
 // consumerConfig is the durable's shape. start > 0 resumes at that stream
@@ -393,6 +434,11 @@ func (g *globalTier) restore(ctx context.Context, agentID, instance string) (boo
 	if !errors.Is(err, jetstream.ErrConsumerNotFound) {
 		return false, nil
 	}
+	// The recreate resumes after this session's own acks, seeded at attach
+	// with the seat floor it started from. It never takes the seat floor
+	// again: a sibling that ran alongside this session and has since departed
+	// may have read further, and resuming after it would skip mail this
+	// session never saw.
 	g.mu.Lock()
 	start := g.acked + 1
 	resumed := g.acked > 0
@@ -409,7 +455,7 @@ func (g *globalTier) restore(ctx context.Context, agentID, instance string) (boo
 	if resumed {
 		msg += fmt.Sprintf(" to resume after stream sequence %d, so mail already read does not replay and mail sent while it was missing is delivered", start-1)
 	} else {
-		msg += " from the start of the stream, because this session had acked nothing on it"
+		msg += " from the start of the stream, because this session had acked nothing on it and attached with no seat floor"
 	}
 	g.mu.Lock()
 	g.notice = msg

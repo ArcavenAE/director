@@ -58,7 +58,18 @@ bad global levers), 1 for a failed connection or preflight.
 2. Connect to `NATS_URL`; create or bind the durable inbox consumer
    `mcp_<id>_<instance>` on `AGENT_INBOX`, filtered to this session's inbox
    subject. `<instance>` is a ULID minted per process, so two shims with one
-   id hold two durables and each receives its own copy (R-50).
+   id hold two durables and each receives its own copy (R-50). A new
+   instance starts after the highest ack floor among the seat's departed
+   durables (same name prefix and same filter subject, and no live presence
+   row for that instance), so a reconnect does not replay the inbox. A live
+   sibling's position is not taken: a session joining a live seat reads the
+   inbox from the start, its own copy. With no departed durable the inbox is
+   read from the start, so mail sent to a cold mailbox is delivered. A
+   crashed session's presence row can linger up to the bucket's 90s TTL; a
+   reconnect inside that window replays rather than skips. The
+   durable carries a 73h inactive threshold, one hour above the inbox's 72h
+   max age, so a superseded instance's durable is cleaned up rather than
+   left behind.
 3. Write presence as `idle`; warn on stderr if another instance of the same
    id is present (R-49).
 4. Start the heartbeat: presence renewed every 30 seconds on the shim's own
@@ -120,17 +131,23 @@ Result without one:
 { "message": null, "note": "no message within the window; this is silence, not failure" }
 ```
 
-With global mode on, the poll alternates between the local inbox and this
-session's global inbox and names the tier. A hub that does not answer adds
+With global mode on, the poll first takes a message already waiting, from
+the tier whose turn it is and then the other, flipping the turn every call,
+so a backlog on one tier cannot starve the other. With nothing waiting it
+alternates between the local inbox and this session's global inbox in slices
+and names the tier. A hub that does not answer adds
 `global_warning` beside the result rather than failing the poll; the local
 tier keeps working through a hub outage. A raw line on the shared global
 stream that is not an envelope is terminated and counted, not surfaced; on
 the local inbox an undecodable message is surfaced at once.
 
 **Batch drain (`max` above 1).** Every message already waiting comes back in
-one call, up to `max`, oldest first: the local inbox in stream order, then
-the global inbox in stream order. Sequence numbers are per stream, so they
-order messages within a tier only. When nothing is waiting the call blocks
+one call, up to `max`, oldest first within each tier. With both tiers on,
+the budget is shared so a backlog on one cannot starve the other: the tier
+whose turn it is takes up to half (rounded up), the other takes up to the
+rest, and the first takes any budget left over. The result lists the local
+items in stream order, then the global ones. Sequence numbers are per
+stream, so they order messages within a tier only. When nothing is waiting the call blocks
 as the single form does, then tops the batch up with anything else that
 arrived. Messages are consumed exactly as the single form consumes them,
 with the ack confirmed by the server before the batch returns, so a lost ack
@@ -153,7 +170,7 @@ delivered once more later.
 {
   "messages": [ { "message": { "...": "..." }, "tier": "local", "sequence": 431 } ],
   "count": 1,
-  "order": "oldest first within each tier; local before global",
+  "order": "oldest first within each tier; local before global; the budget is shared between tiers",
   "remaining": { "local": 0, "global": 0 }
 }
 ```
@@ -290,6 +307,21 @@ A global durable is `mcp_global_<id>_<instance>` with an inactive threshold
 one hour longer than the hub streams' 72h max age, so cleanup can only ever
 discard a durable whose replay had already expired.
 
+A new global durable resumes the way the local one does: after the highest
+ack floor among the seat's departed `mcp_global_<id>_` durables (filtered on
+the same inbox subject, no live hub presence row for the instance), or from
+the start of the stream when there are none.
+Every supervisor of a cluster filters on the same role inbox, so the name
+is what keeps one seat's position from moving another's. Agent ids may
+contain `_`, so the prefix `mcp_global_sup_` also matches `sup_T1`'s
+durables; a name counts for the seat only when the rest of it is an instance
+id (a ULID, which never contains `_`). Each session still receives every
+message (fan-out, not a work queue).
+
+The first `wait_for_message` result after a start (or after the global tier
+attaches) carries `resumed`: one line per tier saying where the durable
+started and how many messages were waiting. It is reported once.
+
 When the hub no longer has a session's global durable, a pull does not say
 "consumer not found". On a single server it fails with no responders, the
 same answer a down leaf link gives; across a leaf link, the production shape,
@@ -297,8 +329,11 @@ it is not answered at all and looks exactly like an empty inbox
 (director#66). So the shim asks the hub whether the durable exists after a
 pull, batch or summary fails that way, and after an empty pull at most once
 every 30 seconds. If the hub answers that it does not, the shim recreates it
-to resume after the last stream sequence this session acked (so read mail
-does not replay and mail sent meanwhile is delivered), retries, and reports
+to resume after the last stream sequence this session acked, seeded with the
+seat floor it attached from (so read mail does not replay and mail sent
+meanwhile is delivered). It does not take the seat floor again: a sibling
+that ran alongside this session may have read further, and taking its
+position would skip mail this session never saw, retries, and reports
 the recreate once in `global_warning`. If the hub cannot be asked, nothing is
 recreated and the original error, if any, is the warning.
 

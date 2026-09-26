@@ -54,7 +54,24 @@ type Bus struct {
 	// it on the shim's own timer (R-56), never on a model tool call.
 	stateMu sync.Mutex
 	state   string
+
+	// globalFirst is which tier a call takes waiting mail from first. It
+	// flips on every call, so a backlog on one tier cannot starve the other.
+	turnMu      sync.Mutex
+	globalFirst bool
+
+	// resumed holds, per tier, where this instance's durable started and
+	// what was waiting, reported once in the next wait_for_message result.
+	resumedMu sync.Mutex
+	resumed   []string
 }
+
+// localConsumerInactive is the local durable's inactive threshold. The inbox
+// carries a 72h max age (docs/getting-started.md), so a durable cleaned up
+// after a slightly longer idle window can only ever have replayed messages
+// that already expired. It is what keeps superseded instances' durables from
+// accumulating, the same reasoning as globalConsumerInactive.
+const localConsumerInactive = 73 * time.Hour
 
 // dial opens the NATS connection and JetStream context, presenting the R-77
 // credential the launcher supplied (if any). Shared by connect() and
@@ -168,21 +185,115 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	// Durable per-SESSION consumer. The durable name includes the per-session
 	// instance, so two sessions sharing one agent id do not bind one durable
 	// and race each other's mail (R-50); each gets its own copy instead of a
-	// silent loss. Cost, accepted for the probe: a fresh instance replays the
-	// stream under DeliverAll, so a restart re-reads history.
-	cons, err := js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", jetstream.ConsumerConfig{
-		Durable:       "mcp_" + self.AgentID + "_" + b.instance,
-		FilterSubject: b.inboxSubject(self.Workspace, self.Team, self.AgentID),
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		DeliverPolicy: jetstream.DeliverAllPolicy,
-		MaxDeliver:    -1,
-	})
+	// silent loss. A new instance resumes after the last message a DEPARTED
+	// instance of the same seat acked, so a reconnect does not replay the
+	// whole inbox. A live sibling's position is not taken: a session joining
+	// a live seat gets its own full copy (R-50 as implemented), not a start
+	// after mail only the sibling read. A seat with no departed durable reads
+	// everything the inbox still holds, so mail sent to a cold mailbox is
+	// delivered.
+	filter := b.inboxSubject(self.Workspace, self.Team, self.AgentID)
+	cfg := jetstream.ConsumerConfig{
+		Durable:           "mcp_" + self.AgentID + "_" + b.instance,
+		FilterSubject:     filter,
+		AckPolicy:         jetstream.AckExplicitPolicy,
+		DeliverPolicy:     jetstream.DeliverAllPolicy,
+		MaxDeliver:        -1,
+		InactiveThreshold: localConsumerInactive,
+	}
+	liveLocal := func(instance string) bool {
+		_, err := kv.Get(ctx, "presence."+self.Team+"."+self.AgentID+"."+instance)
+		return err == nil
+	}
+	floor, _ := seatAckFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", filter, liveLocal)
+	if floor > 0 {
+		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+		cfg.OptStartSeq = floor + 1
+	}
+	cons, err := js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", cfg)
 	if err != nil {
 		nc.Close()
 		return nil, fmt.Errorf("durable consumer: %w", err)
 	}
 	b.consumer = cons
+	b.noteResumed("local", floor, cons)
 	return b, nil
+}
+
+// noteResumed records where a new durable started and how much was waiting,
+// for the next wait_for_message result.
+func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer) {
+	var waiting uint64
+	if info := cons.CachedInfo(); info != nil {
+		waiting = info.NumPending
+	}
+	var msg string
+	if floor > 0 {
+		msg = fmt.Sprintf("%s inbox resumed after stream sequence %d, the seat's last ack, so mail already read is not replayed; %d message(s) waiting", tier, floor, waiting)
+	} else {
+		msg = fmt.Sprintf("%s inbox has no earlier durable for this seat, so it reads everything the stream still holds; %d message(s) waiting", tier, waiting)
+	}
+	b.resumedMu.Lock()
+	b.resumed = append(b.resumed, msg)
+	b.resumedMu.Unlock()
+}
+
+// takeResumed returns the pending resume notes once, then clears them.
+func (b *Bus) takeResumed() []string {
+	b.resumedMu.Lock()
+	defer b.resumedMu.Unlock()
+	r := b.resumed
+	b.resumed = nil
+	return r
+}
+
+// seatAckFloor returns the highest ack floor among the seat's departed
+// durables on a stream: those named with the seat's prefix AND filtered on the
+// seat's own subject, whose instance (the name after the prefix) has no live
+// presence row. The subject check is what keeps "michael" from reading
+// "michael-2"'s position; the name prefix alone would not. On the global tier
+// every supervisor of a cluster filters on the same subject, and agent ids may
+// contain '_', so the prefix mcp_global_sup_ also names sup_T1's durables. An
+// instance is a ULID, which never contains '_', so a remainder that does
+// belongs to another seat and is skipped. Skipping live
+// instances keeps a joining session from starting after mail only its live
+// sibling read. A crashed session's presence row lingers up to the bucket's
+// 90s TTL, so a reconnect inside that window finds no departed floor and reads
+// the whole inbox: a replay, never a loss. Zero means no departed durable, or
+// none that acked anything. Best effort: an error means the caller falls back
+// to delivering everything.
+func seatAckFloor(ctx context.Context, js jetstream.JetStream, stream, prefix, filter string, live func(instance string) bool) (uint64, error) {
+	st, err := js.Stream(ctx, stream)
+	if err != nil {
+		return 0, err
+	}
+	var floor uint64
+	lister := st.ListConsumers(ctx)
+	for info := range lister.Info() {
+		if !strings.HasPrefix(info.Name, prefix) || info.Config.FilterSubject != filter {
+			continue
+		}
+		instance := strings.TrimPrefix(info.Name, prefix)
+		if strings.Contains(instance, "_") {
+			continue
+		}
+		if live != nil && live(instance) {
+			continue
+		}
+		if info.AckFloor.Stream > floor {
+			floor = info.AckFloor.Stream
+		}
+	}
+	return floor, lister.Err()
+}
+
+// takeTurn returns which tier this call reads first, and flips it for the next.
+func (b *Bus) takeTurn() (globalFirst bool) {
+	b.turnMu.Lock()
+	defer b.turnMu.Unlock()
+	globalFirst = b.globalFirst
+	b.globalFirst = !b.globalFirst
+	return globalFirst
 }
 
 // validToken enforces the closed identity character class, [A-Za-z0-9_-], on
@@ -619,6 +730,7 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 		return nil, err
 	}
 	b.global = g
+	b.noteResumed("global", g.resumedFrom, g.consumer)
 	return g, nil
 }
 
@@ -658,6 +770,13 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 	done := func() pollResult {
 		res.GlobalWarn = joinWarn(res.GlobalWarn, notices)
 		return res
+	}
+	// Mail already waiting is taken in alternating tier order first, so a
+	// backlog on one tier cannot starve the other (the loop below always
+	// tries local first and would return a local message every call).
+	if w := b.takeWaiting(ctx, &res, &notices); w != nil {
+		res.Env, res.Tier, res.Seq = w.Env, w.Tier, w.Seq
+		return done(), nil
 	}
 	deadline := time.Now().Add(timeout)
 	for {
@@ -702,6 +821,35 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 			return done(), nil
 		}
 	}
+}
+
+// takeWaiting takes one message that is already waiting, without blocking,
+// from the tier whose turn it is and then the other. A global failure is
+// recorded as a warning; the blocking poll that follows reports it again if
+// it persists. A durable recreate goes to notices, which outlive the slice.
+func (b *Bus) takeWaiting(ctx context.Context, res *pollResult, notices *string) *drained {
+	order := []string{"local", "global"}
+	if b.takeTurn() {
+		order = []string{"global", "local"}
+	}
+	for _, tier := range order {
+		var items []drained
+		if tier == "local" {
+			items, _, _ = pullNoWait(ctx, b.consumer, 1, "local")
+		} else {
+			g, err := b.globalReady(ctx)
+			if err != nil {
+				res.GlobalWarn = err.Error()
+				continue
+			}
+			items, _, _ = g.drainNoWait(ctx, 1, b.self.AgentID, b.instance)
+			*notices = joinWarn(*notices, g.takeNotice())
+		}
+		if len(items) > 0 {
+			return &items[0]
+		}
+	}
+	return nil
 }
 
 // sliceLeft returns the next poll slice and whether any budget remains.
