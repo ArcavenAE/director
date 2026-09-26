@@ -67,6 +67,16 @@ content: |
     plus a planner durable at 91 delivered: one durable per start, DeliverAll,
     no InactiveThreshold (finding-169 section 4). Each restart replays the
     24 h window into a new durable and leaves the old one forever.
+  - 2026-09-25: the replay hit the seat itself. A reconnect replayed the
+    local inbox (239 pending on the seat's own durable; 218 durables on
+    AGENT_INBOX, most from dead instances), and because each poll read
+    local first, fresh global mail waited behind a day of old local mail
+    (R-123). The replay is a probe shortcut, not a settled trade-off:
+    bus.go connect() marks it "Cost, accepted for the probe" (dbbf768,
+    2026-09-12). It was ticketed on 2026-09-16 as aae-orc-oxy50
+    (finding-169 ship-now item 4), then re-filed on 2026-09-25 as
+    aae-orc-jyw6o with follow-on aae-orc-9cgid (R-18). Fix in flight:
+    director#84.
   - Two launch paths exist and each is wrong in the other's case:
     director-session.sh (hand-run seat, anonymous broker) and
     director-mcp-seat (#51, managed broker with a bus.seat block and
@@ -78,12 +88,20 @@ content: |
     distinct id per session. Until decided, every ordinary aae-orc session
     is a latent collision with the seat.
   - role://ops/director sends are a silent total loss (finding-169, cause
-    3; fix aae-orc-v0o8z). Eleven wardrobe roles report_to director. A new
+    3; fix aae-orc-v0o8z; recurred 2026-09-25 with 20 dtu messages unread
+    about 21 hours, fix in flight director#86). Eleven wardrobe roles report_to director. A new
     seat holder has no way to know those never arrive.
   - The role layer (skill) and the seat layer (shim) share no state. The
     skill's sweep does not read the bus inbox, and the shim knows nothing
     about board.md. A person starting the seat has to do both bootstraps by
     hand and nothing checks that they did.
+  - 2026-09-25: the director ran about a day with no global tier. The
+    registered MCP env lacked the global levers, so global://director
+    refused every mokuzai reply and cross-cluster traffic ran one way. The
+    2026-09-22 fix (finding-006-return-path-director-has-no-durable-consumer)
+    set the levers for one start, and they did not survive a later start
+    through the registration. This bears on where the global levers live
+    and how a launcher knows they are required. R-119.
 
   ## What a new user would meet
 
@@ -153,4 +171,4 @@ provenance:
     broker and the hub; the orc draft quickstart carries the commands. Work
     items: aae-orc-q2ebo (generic quickstart and composition table),
     aae-orc-ci2gy (registration), aae-orc-h95qv (rebuild stale seats),
-    aae-orc-v0o8z (role sends refuse loudly).
+    aae-orc-v0o8z (role sends refuse loudly), aae-orc-oxy50 and aae-orc-jyw6o (restart resumes at the ack floor).

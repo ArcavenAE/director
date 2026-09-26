@@ -276,3 +276,11 @@ Related: `finding-005-instance-ulid-collides-on-simultaneous-start`,
 `finding-006-global-tier-has-no-per-agent-address`,
 `finding-006-return-path-director-has-no-durable-consumer`, ArcavenAE/director
 issues #62, #63 and #66.
+
+## Addendum (2026-09-25): the live case, and the second presumption
+
+Live: after the global hub restart on 2026-09-25, no live mokuzai supervisor held a consumer on GLOBAL_TO_mokuzai. Director mail sat undelivered while five seats kept polling silence, until each was reconnected by hand. This is the section 0 behaviour, observed on production seats.
+
+Second presumption: director#82 (open) reports, from tests written first that failed on main, that the rebuild branch keyed on ErrConsumerNotFound never fires. A pull on a missing durable fails with no responders on a single server, and across a leaf link, the production shape, it returns a clean empty. So the presumption was right in direction and more specific in form. The fix checks the hub for the durable after an error or an empty pull, then recreates it after the last acked sequence. Treat this as established once #82 merges.
+
+Not established: why the live durables went missing. #82's companion test shows a restart with its store intact keeps durables, and the hub had been write-dead on a full store for about 24 hours before the restart (orc finding-166 instance d). A link between the two is possible but untested. The first presumption (delete behaves like threshold expiry) is still untested. Refs: director#66, aae-orc-33tjs, R-107, R-122.
