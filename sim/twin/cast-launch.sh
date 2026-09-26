@@ -13,7 +13,8 @@
 #   3. decides, per role, whether this session holds a global address at all,
 #      and hands the global tier's three levers to the roles that do while
 #      clearing them for every role that does not (R-86, R-94; see below);
-#   4. execs claude with the slice as --append-system-prompt.
+#   4. execs claude with ONE --append-system-prompt: the slice, or a caller's full
+#      cast, with any other caller prompt folded in (aae-orc-1vq6z).
 # Refusals: slice.sh owns the wardrobe ones (dirty tree, writable root,
 # retirement marker, proposal without the flag, write-floor proposal); this
 # script owns the ones about the session it is about to start (the id class,
@@ -156,6 +157,45 @@ cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_RO
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
 cast_line+=" Your first act is to echo the last line of the spawn log (ruling 84)."
 
+# Exactly one system prompt (aae-orc-1vq6z). claude keeps only the LAST
+# --append-system-prompt, so any flag in "$@" would silently replace the slice.
+# Strip every pair (and the =value form) from "$@" and pass one prompt:
+#   - a caller prompt that begins with this launcher's own cast sentence is a
+#     full cast a per-workspace wrapper already rendered (with the true scope
+#     and its standing-instructions pointer), so it IS the prompt, and the
+#     slice is not repeated;
+#   - any other stripped text (marvel's one-line "You are <session> (role:
+#     ...)") is folded in after the slice rather than replacing it.
+prompt="$cast_line"$'\n\n'"$slice"
+caller_cast=""
+caller_extra=()
+passthrough=()
+take_next=0
+for a in "$@"; do
+  if ((take_next)); then
+    take_next=0
+    value="$a"
+  elif [[ "$a" == --append-system-prompt ]]; then
+    take_next=1
+    continue
+  elif [[ "$a" == --append-system-prompt=* ]]; then
+    value="${a#--append-system-prompt=}"
+  else
+    passthrough+=("$a")
+    continue
+  fi
+  if [[ "$value" == "You are cast as wardrobe role/"* ]]; then
+    caller_cast="$value"
+  else
+    caller_extra+=("$value")
+  fi
+done
+[[ -n "$caller_cast" ]] && prompt="$caller_cast"
+for x in ${caller_extra[@]+"${caller_extra[@]}"}; do
+  prompt+=$'\n\n'"$x"
+done
+set -- ${passthrough[@]+"${passthrough[@]}"}
+
 # The session's working directory must be one the harness already trusts on
 # this host: a pane inherits the tmux server's directory (marvel passes no
 # start directory today), so an untrusted daemon cwd would stop claude at the
@@ -215,6 +255,6 @@ fi
 echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD" >&2
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
-  --append-system-prompt "$cast_line"$'\n\n'"$slice" \
+  --append-system-prompt "$prompt" \
   "$@" \
   ${settings_args[@]+"${settings_args[@]}"}
