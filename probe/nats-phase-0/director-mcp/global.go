@@ -339,7 +339,7 @@ func (g *globalTier) seatFloor(ctx context.Context, agentID string) uint64 {
 		_, err := g.kv.Get(ctx, g.cfg.presenceKey(inst))
 		return err == nil
 	}
-	floor, _ := seatAckFloor(ctx, g.js, g.cfg.streamName(), "mcp_global_"+agentID+"_", g.cfg.inboxSubject(), liveGlobal)
+	floor, _ := seatAckFloor(ctx, g.js, g.cfg.streamName(), "mcp_global_"+agentID+"_", []string{g.cfg.inboxSubject()}, liveGlobal)
 	return floor
 }
 

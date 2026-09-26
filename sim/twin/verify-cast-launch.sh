@@ -214,5 +214,25 @@ else
     || bad "missing-shim refusal message" "$(cat "$root/out/stderr")"
 fi
 
+# --- the session's role reaches the shim, so it reads its role inbox ----------
+# Without it the shim holds no role, role://<team>/<role> mail is accepted and
+# never read, and the roster cannot resolve a holder.
+if cast reviewer; then
+  miss=""
+  in_mcp DIRECTOR_ROLE reviewer          || miss+=" mcp"
+  in_env DIRECTOR_ROLE reviewer claude.env || miss+=" env"
+  [[ -z "$miss" ]] && ok "reviewer: DIRECTOR_ROLE reaches mcp_json and the session environment" \
+                   || bad "role lever" "missing:$miss"
+else
+  bad "reviewer cast" "$(cat "$root/out/stderr")"
+fi
+if cast reviewer DIRECTOR_ROLE='rev.iewer'; then
+  bad "malformed role" "a role with a dot was accepted"
+else
+  grep -q "refusing role" "$root/out/stderr" \
+    && ok "a role outside [A-Za-z0-9_-] is refused before it becomes a subject" \
+    || bad "malformed-role refusal message" "$(cat "$root/out/stderr")"
+fi
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

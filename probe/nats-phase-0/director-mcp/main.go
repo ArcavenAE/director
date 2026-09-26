@@ -55,6 +55,7 @@ func main() {
 	}
 	self := Sender{
 		AgentID:   env("DIRECTOR_AGENT_ID", ""),
+		Role:      env("DIRECTOR_ROLE", ""),
 		Team:      env("DIRECTOR_TEAM", "default"),
 		Workspace: env("DIRECTOR_WORKSPACE", "default"),
 	}

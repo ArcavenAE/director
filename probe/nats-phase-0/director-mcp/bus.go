@@ -192,10 +192,17 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	// after mail only the sibling read. A seat with no departed durable reads
 	// everything the inbox still holds, so mail sent to a cold mailbox is
 	// delivered.
-	filter := b.inboxSubject(self.Workspace, self.Team, self.AgentID)
+	//
+	// A session that holds a role (DIRECTOR_ROLE) reads its role inbox on the
+	// same durable, so role mail arrives through the same poll, batch and
+	// summary as agent mail, and resumes by the same rule. Each holder's own
+	// durable filters the role subject, so every live holder gets a copy: a
+	// role send is fan-out to its holders, not a work queue
+	// (docs/shim-reference.md, "Role mail").
+	filters := b.selfSubjects()
 	cfg := jetstream.ConsumerConfig{
 		Durable:           "mcp_" + self.AgentID + "_" + b.instance,
-		FilterSubject:     filter,
+		FilterSubjects:    filters,
 		AckPolicy:         jetstream.AckExplicitPolicy,
 		DeliverPolicy:     jetstream.DeliverAllPolicy,
 		MaxDeliver:        -1,
@@ -205,7 +212,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		_, err := kv.Get(ctx, "presence."+self.Team+"."+self.AgentID+"."+instance)
 		return err == nil
 	}
-	floor, _ := seatAckFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", filter, liveLocal)
+	floor, _ := seatAckFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", filters, liveLocal)
 	if floor > 0 {
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
 		cfg.OptStartSeq = floor + 1
@@ -218,6 +225,16 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	b.consumer = cons
 	b.noteResumed("local", floor, cons)
 	return b, nil
+}
+
+// selfSubjects is what this session's durable reads: its own inbox, and its
+// role inbox when it holds a role.
+func (b *Bus) selfSubjects() []string {
+	subs := []string{b.inboxSubject(b.self.Workspace, b.self.Team, b.self.AgentID)}
+	if b.self.Role != "" {
+		subs = append(subs, b.roleSubject(b.self.Workspace, b.self.Team, b.self.Role))
+	}
+	return subs
 }
 
 // noteResumed records where a new durable started and how much was waiting,
@@ -248,8 +265,9 @@ func (b *Bus) takeResumed() []string {
 }
 
 // seatAckFloor returns the highest ack floor among the seat's departed
-// durables on a stream: those named with the seat's prefix AND filtered on the
-// seat's own subject, whose instance (the name after the prefix) has no live
+// durables on a stream: those named with the seat's prefix AND filtered on
+// exactly the seat's own subjects (its inbox, plus its role inbox when it holds
+// a role), whose instance (the name after the prefix) has no live
 // presence row. The subject check is what keeps "michael" from reading
 // "michael-2"'s position; the name prefix alone would not. On the global tier
 // every supervisor of a cluster filters on the same subject, and agent ids may
@@ -262,7 +280,7 @@ func (b *Bus) takeResumed() []string {
 // the whole inbox: a replay, never a loss. Zero means no departed durable, or
 // none that acked anything. Best effort: an error means the caller falls back
 // to delivering everything.
-func seatAckFloor(ctx context.Context, js jetstream.JetStream, stream, prefix, filter string, live func(instance string) bool) (uint64, error) {
+func seatAckFloor(ctx context.Context, js jetstream.JetStream, stream, prefix string, filters []string, live func(instance string) bool) (uint64, error) {
 	st, err := js.Stream(ctx, stream)
 	if err != nil {
 		return 0, err
@@ -270,7 +288,7 @@ func seatAckFloor(ctx context.Context, js jetstream.JetStream, stream, prefix, f
 	var floor uint64
 	lister := st.ListConsumers(ctx)
 	for info := range lister.Info() {
-		if !strings.HasPrefix(info.Name, prefix) || info.Config.FilterSubject != filter {
+		if !strings.HasPrefix(info.Name, prefix) || !sameSubjects(filterSubjects(info.Config), filters) {
 			continue
 		}
 		instance := strings.TrimPrefix(info.Name, prefix)
@@ -285,6 +303,39 @@ func seatAckFloor(ctx context.Context, js jetstream.JetStream, stream, prefix, f
 		}
 	}
 	return floor, lister.Err()
+}
+
+// filterSubjects is the subject set a consumer reads, from either form of
+// its filter.
+func filterSubjects(cfg jetstream.ConsumerConfig) []string {
+	if len(cfg.FilterSubjects) > 0 {
+		return cfg.FilterSubjects
+	}
+	if cfg.FilterSubject != "" {
+		return []string{cfg.FilterSubject}
+	}
+	return nil
+}
+
+// sameSubjects reports whether two subject sets are equal, in any order. A
+// durable whose set differs (the seat took or dropped a role) sets no floor:
+// its position says nothing about the subjects it did not read, so the new
+// durable reads from the start, a replay rather than a skip.
+func sameSubjects(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, s := range a {
+		seen[s]++
+	}
+	for _, s := range b {
+		if seen[s] == 0 {
+			return false
+		}
+		seen[s]--
+	}
+	return true
 }
 
 // takeTurn returns which tier this call reads first, and flips it for the next.
@@ -331,6 +382,14 @@ func validateIdentity(self Sender) error {
 	}
 	if err := validToken("DIRECTOR_TEAM", self.Team); err != nil {
 		return err
+	}
+	// DIRECTOR_ROLE is optional: a session without one holds no role and
+	// reads no role inbox. When set it becomes a subject token, so it is held
+	// to the same class.
+	if self.Role != "" {
+		if err := validToken("DIRECTOR_ROLE", self.Role); err != nil {
+			return err
+		}
 	}
 	return validToken("DIRECTOR_AGENT_ID", self.AgentID)
 }
@@ -401,10 +460,20 @@ func (b *Bus) resolveSubject(ctx context.Context, addr, wsHint string) (subject 
 			return "", false, err
 		}
 		// A role has no id in the presence key, so the workspace is resolved
-		// over the team's live members (presence.<team>.*): they share one
-		// workspace, or the send is ambiguous and refused.
-		ws, err := b.subjectWorkspace(ctx, wsHint, "presence."+team+".", addr)
-		if err != nil {
+		// over the team's live members that hold the role (the presence
+		// record's role field): they share one workspace, or the send is
+		// ambiguous and refused. No live holder is refused like an agent with
+		// no live presence. An explicit workspace addresses the role's mailbox
+		// verbatim, as it does a cold agent mailbox.
+		ws := wsHint
+		if ws == "" {
+			resolved, err := b.resolveRoleWorkspace(ctx, team, role, addr)
+			if err != nil {
+				return "", false, err
+			}
+			ws = resolved
+		}
+		if err := validToken("recipient workspace", ws); err != nil {
 			return "", false, err
 		}
 		return b.roleSubject(ws, team, role), true, nil
@@ -465,6 +534,52 @@ func (b *Bus) resolveRecipientWorkspace(ctx context.Context, prefix, addr string
 		return "", err
 	}
 	return pickWorkspace(addr, prefix, b.scanPresence(ctx, keys, prefix))
+}
+
+// resolveRoleWorkspace is resolveRecipientWorkspace for a role: it reads the
+// team's presence rows and keeps those whose role field names the role.
+func (b *Bus) resolveRoleWorkspace(ctx context.Context, team, role, addr string) (string, error) {
+	prefix := "presence." + team + "."
+	keys, err := b.kv.Keys(ctx)
+	if err != nil && !errors.Is(err, jetstream.ErrNoKeysFound) {
+		return "", err
+	}
+	s := presenceScan{Keys: len(keys)}
+	holders := 0
+	for _, k := range keys {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		s.TeamMatched++
+		entry, err := b.kv.Get(ctx, k)
+		if err != nil {
+			s.Unreadable++
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal(entry.Value(), &rec) != nil {
+			s.Unreadable++
+			continue
+		}
+		if r, _ := rec["role"].(string); r != role {
+			continue
+		}
+		holders++
+		s.Matched++
+		ws, _ := rec["workspace"].(string)
+		if ws == "" {
+			s.Incomplete++
+			continue
+		}
+		s.Workspaces = append(s.Workspaces, ws)
+	}
+	if holders == 0 && s.TeamMatched > 0 && s.Unreadable == 0 {
+		return "", fmt.Errorf("the team is live (%d key(s) under %q) but no live session holds role %q for %s; a role is held by a session started with DIRECTOR_ROLE. No session would consume this send, so it is refused rather than sent to a subject nobody filters (R-92)", s.TeamMatched, prefix, role, addr)
+	}
+	if holders == 0 && s.Unreadable > 0 {
+		return "", fmt.Errorf("no readable presence record under %q holds role %q for %s, and %d record(s) could not be read, so whether a holder is live was NOT established; this is not a report that none is. Refused rather than sent to a subject nobody filters (R-92)", prefix, role, addr, s.Unreadable)
+	}
+	return pickWorkspace(addr, prefix, s)
 }
 
 // presenceScan is what one pass over the presence bucket actually established.
@@ -919,6 +1034,9 @@ func (b *Bus) writePresence(ctx context.Context, state string) error {
 		"pid":       b.pid,
 		"state":     state,
 		"ts":        time.Now().UTC().Format(time.RFC3339),
+	}
+	if b.self.Role != "" {
+		rec["role"] = b.self.Role
 	}
 	body, _ := json.Marshal(rec)
 	key := "presence." + b.self.Team + "." + b.self.AgentID + "." + b.instance
