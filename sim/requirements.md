@@ -1460,8 +1460,8 @@ infrastructure, tests, one-off fixes).
   hygiene; its requirement part is R-108.
 - **Ruled the same day:** R-140 (several director instances and principals;
   supersedes R-54's single seat, details to study) and R-141 (store-and-forward
-  default with a per-send fail-fast option; extends R-96). The pick-one role mode
-  (hieji against R-78) is still open.
+  default with a per-send fail-fast option; extends R-96). R-142 (role mail to
+  every live holder by default); the pick-one mode stays open for study.
 
 **R-140 (RULED) · director may run as several instances and act for several
 principals; the single-seat rule is replaced.** Operator ruling 2026-09-25,
@@ -1481,6 +1481,16 @@ a broken link between clusters; fail-fast is an explicit per-send option, and a
 fail-fast send that cannot be delivered now fails loud to the sender (R-09).
 *Earned by: the conflict between R-96 and the 5aum0 test's fail-fast expectation.*
 *Source: RULED. Cross-refs R-09, R-96, R-110.*
+
+**R-142 (RULED) · role mail goes to every live holder of the role by default.**
+Operator ruling 2026-09-25. director#86 ships this: each live holder gets its own
+copy, and a role send with no live holder is refused before publish (R-118). This
+keeps R-78's rule that director never silently picks one holder. A pick-one mode
+(bd aae-orc-hieji) is not ruled: whether to reserve it in the envelope, make it a
+per-role or per-send setting, and how claim, redelivery and ledger visibility
+would work stay open for study.
+*Earned by: the conflict between R-78 and aae-orc-hieji; director#85 and #86.*
+*Source: RULED. Cross-refs R-78, R-115, R-118, R-140.*
 
 ### Harvest diff (2026-09-25, second)
 
