@@ -88,7 +88,11 @@ content: |
     global tier never cast, so there was no presence.director.* on the hub
     and mokuzai's sends to global://director were refused. The refusal told
     the sender "the cluster name is likely wrong", though that address has
-    no cluster, so the hint pointed away from the cause (director#88).
+    no cluster, so the hint pointed away from both causes (director#88).
+    The uncast tier was one cause. At the same time the hub's presence
+    store was wedged on a full disk, every row frozen since
+    2026-09-24T21:14Z (aae-orc#396, fault 1), so a cast seat could not have
+    registered either. Both were reported fixed in the 21:25Z update there.
     Nothing at seat start reported that the global tier was off; it was
     found by reading the hub, not by the seat.
 
