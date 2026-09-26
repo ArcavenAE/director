@@ -1566,6 +1566,92 @@ with zero reviews. The sweep is diagnostic: it never promotes, merges or closes.
 the same way); the draft-first study (four-round party, 2026-09-26).*
 *Source: RULED. Cross-refs R-147, ADR-007 (automation boundary).*
 
+**R-149 (OBSERVED) · director reads a seat's composer state before acting on
+it.** A supervisor reported four seats "stalled" with text in the input box and
+asked director to resubmit them. Two were dim harness suggestions (styled text,
+never typed), one was a real director inject left unsent for hours, and one had
+already reached the transcript. Resubmitting all four would have sent two
+messages nobody wrote. Telling them apart took a hunt for the tmux socket (the
+pane read strips styling) and a styled capture. Director needs a composer-state
+read per seat (empty, harness suggestion, staged draft, queued), and an inject
+result that says whether its submit landed.
+*Earned by: O 2026-09-26 four "stalled" dtu panes.*
+*Source: OBSERVED. Extends R-112.*
+
+**R-150 (OBSERVED) · a relayed operator ruling carries authority a seat can
+check.** The arcaven envoy held an operator request that director relayed,
+because its seat scope said to escalate to its supervisor only, and asked
+director to confirm. Its supervisor had already agreed to the same lane. The
+seat could not tell an operator ruling carried by director from a peer's
+request, so it did the safe thing and stalled. Director needs a relay form that
+names the ruling, its source and date, and that a seat can verify, so scope
+rules can admit it without a round trip.
+*Earned by: O 2026-09-26 envoy held the review-needed lane.*
+*Source: OBSERVED. Cross-refs R-02 (authority is explicit), R-146.*
+
+**R-151 (RULED) · work binds to a seat or role, never to an instance, and
+nothing waits for an instance to return.** Operator ruling 2026-09-26: an agent
+session fills a seat once and is replaced, never recycled; the gX-Y suffix only
+addresses an instance; seats were meant to carry stable names. Director had
+been queuing tickets on instance names ("g1-0's queue"). When a rollout kill
+respawned midway-builder-g1-0 as g1-2, eight tickets sat on a seat that would
+never exist again until the operator ruled they be reassigned. Director keys
+queues, custody, board lines and handoffs to the seat or role, and uses the
+instance name only to reach a live process.
+*Earned by: O 2026-09-26 g1-0 respawned as g1-2; the operator's ruling;
+identifiers party recommendation (bd aae-orc-ep8n3).*
+*Source: RULED. Extends R-144.*
+
+**R-152 (OBSERVED) · a merge guard fails closed and stops.** A GitHub timeout
+made the stacked-child check in director's merge loop return empty. The loop
+treated empty as "not zero", skipped that PR, and went on to merge the next,
+which inverted a merge order the reviewer had specified. No harm came of it
+only because the reviewer had also ruled the second PR independent. Any check
+that errors, times out, or returns nothing stops the merge run with the output;
+it never downgrades to a skip.
+*Earned by: FR 2026-09-26 midway merge order inverted.*
+*Source: OBSERVED. Cross-refs R-148.*
+
+**R-153 (RULED) · operator merge exclusions are enforced before any merge.**
+Operator ruling 2026-09-26, stated as "very clear": no pull request in the
+employer org's infrastructure repo that carries a component-updater (acu.*)
+label is merged, by director or by any seat, whatever its review or CI state.
+Director holds operator-declared exclusions (by repo and label) as data,
+checks them before every merge, and restates them in any brief that could lead
+a seat to merge there.
+*Earned by: the operator's ruling; relayed to every supervisor on both
+clusters and acknowledged.*
+*Source: RULED. Cross-refs R-147, R-148.*
+
+**R-154 (JUDGMENT) · a rollout is verified by observing the new spec running,
+not by the apply result.** After the operator applied two manifests, the apply
+printed "ready" for both workspaces and neither codex reviewer changed: each
+still held its finished headless run, which keeps its slot. Director noticed
+only by reading sessions, then had to kill both and answer a harness trust
+prompt by hand before either took a turn. Director treats an apply as a
+request and confirms each changed role is running the new spec, the same way
+R-08 treats an accepted send.
+*Earned by: O 2026-09-26 codex reviewers unchanged after apply.*
+*Source: JUDGMENT. Cross-refs R-08, R-143, ADR-010.*
+
+### Harvest diff (2026-09-26, second)
+
+- **Promoted (6):** R-149 (composer-state read), R-150 (relayed rulings carry
+  checkable authority), R-151 (work binds to seat or role, never an instance),
+  R-152 (merge guard fails closed), R-153 (operator merge exclusions), R-154
+  (rollout verified by the running spec).
+- **Unchanged:** R-119 covers kinu worker seats with no global address (the
+  envoy's review lane routed through director by hand); the gap now spans
+  worker seats, not only supervisors.
+- **Rejected for the register (routed elsewhere):**
+  - marvel does not reuse a replica index on respawn, and a finished headless
+    run holding its slot hides a spec change: marvel concerns (marvel#363,
+    #364, ADR-010), true with or without director.
+  - The codex folder-access and command-approval prompts that block unattended
+    seats: launcher and harness configuration, routed to the builder.
+  - `marvel scale --replicas -1` crashing the daemon: a marvel defect, filed as
+    marvel#365.
+
 ### Harvest diff (2026-09-26)
 
 - **Promoted (6):** R-143 (seat reachable only after it confirms), R-144 (seat
