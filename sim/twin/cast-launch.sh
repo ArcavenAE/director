@@ -85,6 +85,13 @@ export DIRECTOR_AGENT_ID="${DIRECTOR_AGENT_ID:-$MARVEL_SESSION}"
 if [[ ! "$DIRECTOR_AGENT_ID" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ ]]; then
   echo "cast-launch: refusing id '$DIRECTOR_AGENT_ID'; it must match the closed class (R-76), never rewritten" >&2; exit 1
 fi
+# The session's role, so the shim reads its role inbox and the roster can
+# resolve role://<team>/<role> to a live holder. The manifest role is the name
+# senders address; marvel wins if it already set DIRECTOR_ROLE.
+export DIRECTOR_ROLE="${DIRECTOR_ROLE:-$MARVEL_ROLE}"
+if [[ ! "$DIRECTOR_ROLE" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  echo "cast-launch: refusing role '$DIRECTOR_ROLE'; the class is [A-Za-z0-9_-] (R-76), never rewritten" >&2; exit 1
+fi
 # The global tier (R-86, R-94; design brief 8, sim/design/global-bus-tier.md).
 # Off unless the operator sets DIRECTOR_GLOBAL_DOMAIN and DIRECTOR_CLUSTER on
 # the marvel daemon. That is a per-DAEMON switch, and the tier is a per-ROLE
@@ -142,8 +149,8 @@ else
   GLOBAL_ADDR=""
 fi
 
-mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"%s}}}}' \
-  "$SHIM_BIN" "$DIRECTOR_AGENT_ID" "$DIRECTOR_TEAM" "$DIRECTOR_WORKSPACE" "$NATS_URL" "$global_env")"
+mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_ROLE":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"%s}}}}' \
+  "$SHIM_BIN" "$DIRECTOR_AGENT_ID" "$DIRECTOR_ROLE" "$DIRECTOR_TEAM" "$DIRECTOR_WORKSPACE" "$NATS_URL" "$global_env")"
 
 cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_ROLE in team $DIRECTOR_TEAM, address agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID."
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
