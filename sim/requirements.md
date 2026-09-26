@@ -1653,7 +1653,7 @@ review POST on the remote cluster. A retry on the return value alone
 double-acts, and a skip on it records a success as a failure. After any
 mutating call that errors or times out, director reads the target's state and
 acts on that.
-*Earned by: FR 2026-09-26 director#99 and midway#103 merges; the remote
+*Earned by: FR 2026-09-26 director#99 and a second merge; the remote
 reviewer's POST retry.*
 *Source: OBSERVED. Cross-refs R-152.*
 
