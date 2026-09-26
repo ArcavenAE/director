@@ -1340,6 +1340,123 @@ draining.
 *Earned by: O-2026-09-25-read-global-by-hand; director#83 and #84 (aae-orc-jyw6o).*
 *Source: OBSERVED. Cross-refs R-18 (aae-orc-9cgid), R-106, R-107.*
 
+**R-124 (JUDGMENT) · a seat learns of new mail without polling where its
+harness can act on a server-initiated notification, and falls back to poll plus
+doorbell where it cannot.** R-56 and R-89 treat receive as a poll that needs an
+out-of-band nudge; that is the workaround, not the goal. Which harnesses act on a
+notification is measured per harness and declared as a capability (R-27), never
+taken from the protocol spec.
+*Earned by: bd aae-orc-s72sl (modernize director-mcp), aae-orc-xg9yd, the phase-0
+probe's original push goal (aae-orc-spbc).*
+*Source: JUDGMENT. Cross-refs R-27, R-56, R-89, R-117.*
+
+**R-125 (OBSERVED) · receive and roster reads work in every permission mode a
+seat can be cast in; a mode that blocks them is refused at cast.** Plan-mode
+casts could not poll the bus, and the failure surfaced as a stalled seat rather
+than at launch.
+*Earned by: bd aae-orc-r675b.*
+*Source: OBSERVED. Cross-refs R-116 (scope and grant checked at dispatch).*
+
+**R-126 (OBSERVED) · an ask raised for a decision carries the context needed to
+decide it and names who decides; an ask with no identified decider is flagged, not
+relayed.** A "needs group decision" item was relayed with no context and no named
+decider.
+*Earned by: bd aae-orc-4c759.*
+*Source: OBSERVED. Cross-refs R-02, R-33.*
+
+**R-127 (JUDGMENT) · an operator ruling given through director is written to a
+durable store when it is granted, so prohibitions and grants survive handoff.** A
+handoff note is not where a ruling lives. Extends R-60 and R-61.
+*Earned by: bd aae-orc-1wg68.*
+*Source: JUDGMENT. Cross-refs R-60, R-61.*
+
+**R-128 (JUDGMENT) · a seat can subscribe through director to named event
+families and timers, and a subscription whose source is unhealthy or unregistered
+is refused loudly.**
+*Earned by: bd aae-orc-7vw44 (shim subscribe_events, set_timer).*
+*Source: JUDGMENT. Cross-refs R-09, R-122.*
+
+**R-129 (JUDGMENT) · a receive call can drain several waiting messages in order
+and reports how many remain unread.** One message per call makes a backlog cost
+one model turn per message.
+*Earned by: bd aae-orc-xg9yd.*
+*Source: JUDGMENT. Cross-refs R-117, R-123.*
+
+**R-130 (JUDGMENT) · retention never expires unread mail addressed to a live
+recipient, and a sender learns when mail it sent expired unread.** R-44 covers
+garbage collection of dead endpoints only; a 24-hour max age on the inbox stream
+can drop mail a live seat has not read yet.
+*Earned by: bd aae-orc-t77rr.*
+*Source: JUDGMENT. Cross-refs R-09, R-44, R-107.*
+
+**R-131 (OBSERVED) · director's role boundary is enforced, not only stated:
+director routes and keeps custody, and work that belongs to a seat is dispatched.**
+Director wrote code instead of coordinating; the boundary lived only as a clause
+inside R-102.
+*Earned by: bd aae-orc-z3wta.*
+*Source: OBSERVED. Cross-refs R-102.*
+
+**R-132 (JUDGMENT) · a request or workstream is a durable record that outlives
+director's own downtime, and director's rebuild cost after a restart is bounded.**
+Custody today is per ask and per session.
+*Earned by: bd aae-orc-9gfod.*
+*Source: JUDGMENT. Cross-refs R-60, R-66, R-91.*
+
+**R-133 (JUDGMENT) · director shows a cross-workstream picture: dependencies,
+blocking, stuck work, and work delivered but never used, mapped to the task
+tracker.**
+*Earned by: bd aae-orc-1nczg.*
+*Source: JUDGMENT. Cross-refs R-34, R-103, R-115.*
+
+**R-134 (JUDGMENT) · decisions queue without interrupting: each carries its
+full context in a fold and a way back into the session it came from.**
+*Earned by: bd aae-orc-252b1 (board UI).*
+*Source: JUDGMENT. Cross-refs R-34, R-35.*
+
+**R-135 (JUDGMENT) · the operator's attention is budgeted: escalation quotas,
+interrupt coalescing and wake policies are settings, not habits.**
+*Earned by: bd aae-orc-s91up (vision Gap 1, attention routing; no owner yet).*
+*Source: JUDGMENT. Cross-refs R-21, R-33, R-35.*
+
+**R-136 (JUDGMENT) · "stopped at an approval gate" is a reported state, distinct
+from idle and from dead.** From the bus today, a seat waiting at a confirm prompt
+reads the same as a dead one.
+*Earned by: bd aae-orc-ax6h5.*
+*Source: JUDGMENT. Cross-refs R-15, R-24.*
+
+**R-137 (JUDGMENT) · a verdict, refusal or board row that crosses a handoff is a
+typed record a validator can check, and it carries its evidence.**
+*Earned by: bd aae-orc-fjh89.*
+*Source: JUDGMENT. Cross-refs R-25, R-88.*
+
+**R-138 (JUDGMENT) · a seat signals low token budget before exhaustion, and the
+departing and arriving sessions can negotiate the handoff live.**
+*Earned by: bd aae-orc-nzh7c.*
+*Source: JUDGMENT. Cross-refs R-45, R-61, R-91.*
+
+**R-139 (JUDGMENT) · seat startup works in the composition without marvel.**
+The independence value (SOUL 2, ADR-005) applied to director's seat quickstart:
+what marvel supplies at cast has a documented manual equivalent.
+*Earned by: bd aae-orc-q2ebo.*
+*Source: JUDGMENT. Cross-refs R-100, R-101.*
+
+### Harvest diff (2026-09-25, third: director bd tickets)
+
+A read-only sweep compared 193 open director-related bd tickets with R-01 to
+R-123: 92 covered, 15 partial, 5 not captured, 81 not requirements (docs,
+infrastructure, tests, one-off fixes).
+
+- **Promoted (16):** R-124 to R-128 from the five uncaptured tickets (s72sl,
+  r675b, 4c759, 1wg68, 7vw44); R-129 to R-139 from eleven partial tickets
+  (xg9yd, t77rr, z3wta, 9gfod, 1nczg, 252b1, s91up, ax6h5, fjh89, nzh7c, q2ebo).
+  Source class is JUDGMENT unless the ticket records a failure that happened.
+- **Held for operator rulings:** 8hgw7, ss5g9 and 23bsp (multiple director
+  instances or principals against R-54's single seat); hieji (a pick-one role
+  mode against R-78); the 5aum0 fail-fast expectation against R-96's
+  store-and-forward.
+- **Not requirements:** moving director-mcp out of `probe/nats-phase-0` is
+  hygiene; its requirement part is R-108.
+
 ### Harvest diff (2026-09-25, second)
 
 - **Promoted (7):** R-117 (unread depth and age per seat, doorbell for idle
