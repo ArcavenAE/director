@@ -249,6 +249,32 @@ else
   bad "claude-reviewer cast" "$(cat "$root/out/stderr")"
 fi
 
+# --- a research-supervisor is a supervisor at the global tier (R-94, amended) --
+# Operator ruling 2026-09-26: research-supervisors are supervisors and hold a
+# global address. The global role word stays supervisor: the shim accepts only
+# supervisor and director. A worker beside it still gets nothing.
+if cast research-supervisor "${GLOBAL_ON[@]}"; then
+  miss=""
+  in_mcp DIRECTOR_GLOBAL_ROLE supervisor               || miss+=" mcp:role"
+  in_mcp DIRECTOR_CLUSTER mokuzai                      || miss+=" mcp:cluster"
+  in_env DIRECTOR_GLOBAL_ROLE supervisor claude.env    || miss+=" env:role"
+  in_env DIRECTOR_GLOBAL_ROLE supervisor preflight.env || miss+=" preflight:role"
+  grep -q "global://mokuzai/supervisor" "$root/out/stderr" || miss+=" address"
+  [[ -z "$miss" ]] && ok "research-supervisor: global role supervisor on mcp_json, the session and the pre-flight, address global://mokuzai/supervisor" \
+                   || bad "research-supervisor global tier" "missing:$miss"
+else
+  bad "research-supervisor cast" "$(cat "$root/out/stderr")"
+fi
+if cast builder "${GLOBAL_ON[@]}"; then
+  if has_mcp DIRECTOR_GLOBAL_ROLE || has_env DIRECTOR_GLOBAL_ROLE claude.env; then
+    bad "builder beside research-supervisor" "a worker received a global role"
+  else
+    ok "builder beside research-supervisor: still no global role"
+  fi
+else
+  bad "builder cast" "$(cat "$root/out/stderr")"
+fi
+
 # --- exactly one system prompt reaches claude (aae-orc-1vq6z) -----------------
 # claude keeps only the LAST --append-system-prompt, so a second flag in "$@"
 # (marvel's one-line identity, or a wrapper's full cast) silently replaces the
