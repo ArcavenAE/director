@@ -9,6 +9,18 @@
 > Residual follow-ups tracked separately (GlobalWarn silent fallback, stale
 > consumer cleanup, director-mcp release/build path).
 
+> RECURRED 2026-09-25 WITH A DIFFERENT CAUSE. The banner above verifies one
+> start, not the path. On 2026-09-25 every mokuzai seat's reply to
+> global://director was refused ("nothing is registered under presence.
+> director."), because the director's registered MCP env carried only the
+> agent id, team, workspace and broker URL. DIRECTOR_GLOBAL_DOMAIN,
+> DIRECTOR_CLUSTER and DIRECTOR_GLOBAL_ROLE were unset, so there was no
+> global presence and no GLOBAL_TO_DIRECTOR consumer. The broker was
+> leafed and the binary supported the settings. So the symptom has at least
+> two causes: this finding's dirty build (silent accept) and a missing
+> configuration (loud refusal at the sender, silence at the director).
+> Director register: R-119.
+
 
 Date: 2026-09-22. Subject: director (cross-host inbound mail, O-23). Status:
 root cause identified by direct hub read; fix is a clean rebuild + verify, not
