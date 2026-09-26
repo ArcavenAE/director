@@ -631,6 +631,7 @@ name.** Exactly one session holds it at a time.
 *Earned by: roundtable design over the OBSERVED collision that fused identity
 and address.*
 *Source: JUDGMENT. Design: design/director-seat-lease.md (SEAT-A).*
+*Superseded in part by R-140 (RULED 2026-09-25): "exactly one session" no longer holds.*
 
 **R-55. A monotonic-epoch fencing token proves the current grant, and a
 receiver rejects a stale token.** One primitive, applied at two scopes: the
@@ -992,6 +993,7 @@ a presence gap); this session's `agent://migrated` send accepted onto the local
 tier and stranded because the recipient was cross-cluster. A queue that holds
 for an absent recipient and delivers on return removes both. Tracked bd
 aae-orc-vkx65.
+*Extended by R-141 (RULED 2026-09-25): store-and-forward stays the default; a sender may choose fail-fast per send.*
 
 **R-97 (OBSERVED) · a director must be able to name ONE remote seat; role
 fan-out cannot be the only cross-host address.** relay-log R-9: two supervisors
@@ -1456,6 +1458,29 @@ infrastructure, tests, one-off fixes).
   store-and-forward.
 - **Not requirements:** moving director-mcp out of `probe/nats-phase-0` is
   hygiene; its requirement part is R-108.
+- **Ruled the same day:** R-140 (several director instances and principals;
+  supersedes R-54's single seat, details to study) and R-141 (store-and-forward
+  default with a per-send fail-fast option; extends R-96). The pick-one role mode
+  (hieji against R-78) is still open.
+
+**R-140 (RULED) · director may run as several instances and act for several
+principals; the single-seat rule is replaced.** Operator ruling 2026-09-25,
+superseding R-54's "exactly one session holds it". The lease model for acquiring
+the seat stands. Open, and needing study before design: how instances share an
+inbox (queue group or per-instance copies), how one director attaches to several
+clusters' local buses, and how a principal is authorized per request.
+*Earned by: bd aae-orc-8hgw7 (the single-seat premise recorded as retracted),
+aae-orc-ss5g9 (director as a queue group), aae-orc-23bsp (one director, many local
+buses, multiple principals).*
+*Source: RULED. Cross-refs R-54 (superseded in part), R-86, R-95.*
+
+**R-141 (RULED) · mail for an absent seat is held and delivered on return by
+default, and a sender may choose fail-fast for a single send.** Operator ruling
+2026-09-25. Store-and-forward (R-96) is the default everywhere, including across
+a broken link between clusters; fail-fast is an explicit per-send option, and a
+fail-fast send that cannot be delivered now fails loud to the sender (R-09).
+*Earned by: the conflict between R-96 and the 5aum0 test's fail-fast expectation.*
+*Source: RULED. Cross-refs R-09, R-96, R-110.*
 
 ### Harvest diff (2026-09-25, second)
 
