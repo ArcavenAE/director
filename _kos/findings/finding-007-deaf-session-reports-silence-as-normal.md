@@ -276,3 +276,84 @@ Related: `finding-005-instance-ulid-collides-on-simultaneous-start`,
 `finding-006-global-tier-has-no-per-agent-address`,
 `finding-006-return-path-director-has-no-durable-consumer`, ArcavenAE/director
 issues #62, #63 and #66.
+
+## Addendum 2026-09-25: a live specimen after a real hub restart
+
+Section 5 left the live question open because the discriminator (one arrival on
+the global tier) never came. This is a separate seat on the same cluster where
+the discriminator did arrive, and the timeline around it is the evidence.
+
+- **Seat:** errand-supervisor-g3-0 on mokuzai, `global://mokuzai/supervisor`,
+  instance `01M38DS8N1TKW5N630NNSVMHDN`, marvel
+  `0.1.0-alpha.20260923.235925.97698a3`. Its director-mcp shim was started
+  before the hub restart and was not restarted with it.
+- **Before the restart:** sends to `global://kinu/supervisor` and
+  `global://director` were refused by R-92 ("nothing is registered under
+  presence.kinu." / "presence.director."), and a send to `agent://ops/michael`
+  in workspace aae-orc failed with `context deadline exceeded`. Recorded
+  verbatim on ArcavenAE/aae-orc#396.
+- **Restart:** the operator restarted the hub at about 21:17Z after its
+  presence store wedged.
+- **Downward message:** director sent REQUEST `01M3D6XHX3YSM34QES5CWQDT6A` to
+  `global://mokuzai/supervisor` with `sent_at` 21:18:08Z (reported by the
+  operator as `GLOBAL_TO_mokuzai` seq 51).
+- **Three polls, all silent:** `wait_for_message` for 60s, 120s and 120s, from
+  about 21:22Z to 21:30Z. Every one returned `message: null` with
+  "no message within the window; this is silence, not failure".
+- **The roster said the seat was fine:** one `list_roster` call, made between
+  the second and third polls, showed the seat's global presence row live with
+  ts 21:21:23Z. This is the trap section 5 names: presence refreshed while
+  nothing came down. Source: read live in the seat's session and not kept
+  anywhere else; it is one reading, not a continuous record.
+- **Upward worked:** a FAILURE reporting the silence went up and was accepted
+  on `GLOBAL_TO_DIRECTOR` seq 114.
+- **Recovery:** the operator ran `/mcp` to reconnect the shim. The first poll
+  after the reconnect returned message `01M3D6XHX3YSM34QES5CWQDT6A`, the one
+  published before the three silent polls. The reply went up as seq 115. Director
+  reported seeing it at the hub in message `01M3D8RSM07VZFY51KX8Q0ARVK`
+  (`sent_at` 21:50:29Z): "your reply is on GLOBAL_TO_DIRECTOR as seq 115,
+  visible at the hub", adding that its own consumer had not pulled it yet
+  because a local-inbox replay was ahead of it (director#83). That is
+  director's report, not something this seat could check.
+
+What this establishes: a live global-tier seat returned the non-error silence
+note on three consecutive polls while a message addressed to it had already
+been sent, the one roster reading in that window showed it present, and a client-side
+reconnect alone made that message arrive. That is the section 0 observable,
+live rather than in the rig.
+
+**Sources.** Every observation above was read live in the seat's own session
+through `wait_for_message`, `send_message` and `list_roster`, and none of those
+outputs is kept outside that session. The message ids and `sent_at` values are
+quoted from the envelopes as returned; the poll times are the seat's estimate,
+not a clock reading. The refusals and the round trip are also recorded on
+ArcavenAE/aae-orc#396.
+
+What it does not establish is the mechanism. With no hub credential this seat
+could not read the consumer, so it cannot say whether the restart removed its
+durable or whether the shim held a consumer handle the restarted hub no longer
+honoured. The null polls rule out the local-backlog starvation of director#83
+on this seat, since a backlog would have returned local messages rather than
+null. That leaves the #66 shape as the likely one, and PR #82 (recreate a lost
+global durable) as the change it bears on. The evidence that the message was
+waiting before the polls rests on the envelope's `sent_at` and the operator's
+seq, not on a pending count read at the time.
+
+A second, unrelated delay followed in the same session and should not be
+confused with this one. After the reconnect, director queued ten more
+messages over about two hours, with `sent_at` from 21:50:29Z to 00:00:47Z:
+`01M3D8RSM07VZFY51KX8Q0ARVK`, `01M3D98ZWPGZMJZBBQ23NTFWDR`,
+`01M3D9WDT5JA5VS12523WCQGBG`, `01M3DB99ZXCZVKPFF2Q55EW1NE`,
+`01M3DBBHNJ1646S8F0TRKDTQG0`, `01M3DBKVA1ZWKHB55MDSATVRKE`,
+`01M3DEDC417MWT3PT5WKFJ4Y5G`, `01M3DFM9444T5N1SYBF0SQS5NT`,
+`01M3DG50PCNSVZ365CB2086PSM` and `01M3DG7CVV4F2S0EDDECPD6VT7`. All ten
+arrived in one drain at about 00:02Z, only after the operator prompted the seat
+to poll, because an idle seat does not poll. The first version of this
+addendum said eight; the ids above are the count. That is
+the second family member in section 1, a recipient that is alive and not
+polling, and a reconnect would not have helped it.
+
+The operational rule this suggests, not yet tested beyond this one case: after
+any hub restart, reconnect every shim that was running before it, and treat
+silence from a pre-restart shim as unconfirmed until one message has arrived
+after the restart.

@@ -116,3 +116,95 @@ func TestRoleLeverIsValidated(t *testing.T) {
 		t.Errorf("role with a dot accepted")
 	}
 }
+
+// A reconnect of a role holder resumes after the seat's last ack on its role
+// inbox too, so role mail already read is not replayed (the #84 rule applied
+// to the two-subject durable). The departed holder wrote no presence row, as a
+// session that has exited; the sends name the workspace, as to a cold mailbox.
+func TestBrokerRoleMailIsNotReplayedAfterReconnect(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	provision(t, ctx, url)
+	sender := roleBus(t, ctx, url, "sender", "")
+	self := Sender{AgentID: "rev-1", Role: "reviewer", Workspace: "aae-orc", Team: "ops"}
+
+	h1, err := connect(ctx, url, self, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sendRole(ctx, sender, "role://ops/reviewer", "r1", "aae-orc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sendRole(ctx, sender, "agent://ops/rev-1", "a1", "aae-orc"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"r1", "a1"} {
+		if e, _, err := h1.receive(ctx, 3*time.Second); err != nil || e == nil || e.MessageID != want {
+			t.Fatalf("first holder got %v, %v; want %s", e, err, want)
+		}
+	}
+	h1.close()
+	if err := sendRole(ctx, sender, "role://ops/reviewer", "r2", "aae-orc"); err != nil {
+		t.Fatal(err)
+	}
+
+	h2, err := connect(ctx, url, self, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h2.close()
+	e, _, err := h2.receive(ctx, 3*time.Second)
+	if err != nil || e == nil || e.MessageID != "r2" {
+		t.Fatalf("reconnected holder got %v, %v; want r2 with no replay of r1 or a1", e, err)
+	}
+	if e, _, _ := h2.receive(ctx, time.Second); e != nil {
+		t.Errorf("reconnected holder got a further message %s", e.MessageID)
+	}
+}
+
+// A seat that takes a role it did not hold before reads from the start: the
+// departed durable read only the agent inbox, so its position says nothing
+// about the role inbox. A replay, never a skip.
+func TestBrokerTakingARoleDoesNotInheritTheAgentOnlyFloor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	provision(t, ctx, url)
+	sender := roleBus(t, ctx, url, "sender", "")
+	plain := Sender{AgentID: "rev-1", Workspace: "aae-orc", Team: "ops"}
+
+	h1, err := connect(ctx, url, plain, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sendRole(ctx, sender, "role://ops/reviewer", "r1", "aae-orc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sendRole(ctx, sender, "agent://ops/rev-1", "a1", "aae-orc"); err != nil {
+		t.Fatal(err)
+	}
+	if e, _, err := h1.receive(ctx, 3*time.Second); err != nil || e == nil || e.MessageID != "a1" {
+		t.Fatalf("agent-only session got %v, %v; want a1", e, err)
+	}
+	h1.close()
+
+	withRole := plain
+	withRole.Role = "reviewer"
+	h2, err := connect(ctx, url, withRole, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h2.close()
+	var got []string
+	for {
+		e, _, _ := h2.receive(ctx, time.Second)
+		if e == nil {
+			break
+		}
+		got = append(got, e.MessageID)
+	}
+	if strings.Join(got, ",") != "r1,a1" {
+		t.Errorf("session that took the role read %v, want [r1 a1] (r1 was never read by this seat)", got)
+	}
+}

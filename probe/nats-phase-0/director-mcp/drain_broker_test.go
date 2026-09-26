@@ -166,28 +166,34 @@ func TestBrokerSummaryThenBatchDrainBothTiers(t *testing.T) {
 		t.Fatalf("summary moved the durable: floor %d ack-pending %d pending %d", info.AckFloor.Stream, info.NumAckPending, info.NumPending)
 	}
 
-	// First batch: the oldest local messages, in order, the poison skipped.
+	// First batch of 4: the budget is shared between the tiers so a local
+	// backlog cannot starve global. This call is local's turn: local takes
+	// half (the oldest two, which end before the poison line), global takes
+	// its two, each tier oldest first.
 	b1, err := bus.receiveBatch(ctx, 2*time.Second, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := ids(b1.Items), []string{"local:l1", "local:l2", "local:l3", "local:l4"}; fmt.Sprint(got) != fmt.Sprint(want) {
+	if got, want := ids(b1.Items), []string{"local:l1", "local:l2", "global:g1", "global:g2"}; fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("batch 1 = %v, want %v", got, want)
 	}
-	if b1.Discarded != 1 {
-		t.Errorf("batch 1 discarded %d, want 1", b1.Discarded)
+	if b1.Discarded != 0 {
+		t.Errorf("batch 1 discarded %d, want 0", b1.Discarded)
 	}
-	if rem := bus.remaining(ctx); rem["local"] != 2 || rem["global"] != 2 {
-		t.Errorf("remaining after batch 1 = %v, want local 2 global 2", rem)
+	if rem := bus.remaining(ctx); rem["local"] != 5 || rem["global"] != 0 {
+		t.Errorf("remaining after batch 1 = %v, want local 5 (the poison line included) global 0", rem)
 	}
 
-	// Second batch: the rest of local, then global, each oldest first.
+	// Second batch: the rest of local, oldest first, the poison skipped.
 	b2, err := bus.receiveBatch(ctx, 2*time.Second, maxDrain)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := ids(b2.Items), []string{"local:l5", "local:l6", "global:g1", "global:g2"}; fmt.Sprint(got) != fmt.Sprint(want) {
+	if got, want := ids(b2.Items), []string{"local:l3", "local:l4", "local:l5", "local:l6"}; fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("batch 2 = %v, want %v", got, want)
+	}
+	if b2.Discarded != 1 {
+		t.Errorf("batch 2 discarded %d, want 1", b2.Discarded)
 	}
 
 	// Drained: the summary is empty and a batch waits, then returns nothing.

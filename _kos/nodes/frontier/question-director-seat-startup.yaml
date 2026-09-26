@@ -84,6 +84,17 @@ content: |
     skill's sweep does not read the bus inbox, and the shim knows nothing
     about board.md. A person starting the seat has to do both bootstraps by
     hand and nothing checks that they did.
+  - Measured 2026-09-25 (aae-orc#396): the seat on kinu ran with its
+    global tier never cast, so there was no presence.director.* on the hub
+    and mokuzai's sends to global://director were refused. The refusal told
+    the sender "the cluster name is likely wrong", though that address has
+    no cluster, so the hint pointed away from both causes (director#88).
+    The uncast tier was one cause. At the same time the hub's presence
+    store was wedged on a full disk, every row frozen since
+    2026-09-24T21:14Z (aae-orc#396, fault 1), so a cast seat could not have
+    registered either. Both were reported fixed in the 21:25Z update there.
+    Nothing at seat start reported that the global tier was off; it was
+    found by reading the hub, not by the seat.
 
   ## What a new user would meet
 
