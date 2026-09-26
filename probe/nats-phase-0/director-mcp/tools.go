@@ -243,6 +243,9 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if res.GlobalWarn != "" {
 		out["global_warning"] = res.GlobalWarn
 	}
+	if r := bus.takeResumed(); len(r) > 0 {
+		out["resumed"] = r
+	}
 	return out, nil
 }
 
@@ -260,7 +263,7 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 	out := map[string]any{
 		"messages": items,
 		"count":    len(items),
-		"order":    "oldest first within each tier; local before global",
+		"order":    "oldest first within each tier; local before global; the budget is shared between tiers",
 	}
 	if len(items) == 0 {
 		out["note"] = "no message within the window; this is silence, not failure"
@@ -282,6 +285,9 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 	}
 	if res.GlobalWarn != "" {
 		out["global_warning"] = res.GlobalWarn
+	}
+	if r := bus.takeResumed(); len(r) > 0 {
+		out["resumed"] = r
 	}
 	return out, nil
 }
