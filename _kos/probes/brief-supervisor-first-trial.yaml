@@ -1,0 +1,92 @@
+id: brief-supervisor-first-trial
+type: brief
+confidence: frontier
+title: "Supervisor-first operating trial: director steps back"
+content: |
+  Operator ruling 2026-09-26: trial it, and learn with kos. The director
+  seat is the subject under trial, so this brief's review gate routes to a
+  team supervisor, not to director.
+
+  ## Question
+
+  Does the fleet run with fewer hand interventions and no loss when team
+  supervisors own the review loop and report status up on a beat, with
+  director stepping back from relaying and merging? And where it does not,
+  what does a supervisor lack: rights, reach, or protocol?
+
+  Prior in this graph: finding-005-workforce-organization-model (staffing,
+  span of control, and the director boundary this trial tests in practice),
+  finding-006-global-tier-has-no-per-agent-address and
+  finding-006-return-path-director-has-no-durable-consumer (the reach and
+  return-path gaps a supervisor is likely to hit first),
+  finding-007-deaf-session-reports-silence-as-normal (an idle seat that
+  never polls looks healthy, which bears on the status beat).
+
+  ## Approach
+
+  Run on the current fleet: the kinu clusters and their team supervisors,
+  with skippy's reviewers as the review pool.
+
+  1. Review loop. Supervisors route their own GATEs to skippy's reviewer
+     supervisor and route verdicts back to their builders. Director does
+     not relay. A supervisor without global reach reports that as its first
+     finding (one command to check) and uses the documented fallback,
+     director, which is then logged as an intervention.
+  2. Merge rights, ArcavenAE repositories only for this trial. A supervisor
+     merges under the standing rules: approved at the current head, CI
+     green, no stacked child PR, fail closed on any failed check.
+     Repositories of an outside org keep today's path, and component-updater
+     bot PRs on that org's infrastructure repository are never merged by a
+     supervisor.
+  3. Status. Each supervisor sends director one line per beat (finished,
+     in flight, blocked), plus exceptions at once: blocked on the operator,
+     a failure, or a forecast breach. Director reports to the operator from
+     those lines.
+  4. Intervention log. Director records every intervention (a relay, a
+     merge, a wake, a decision made for a supervisor) in its operational
+     notes, tagged TRIAL-INTERVENTION, so the count is read from a record
+     rather than from memory.
+
+  Measures:
+  - interventions per hour, before (the existing relay log) and during;
+  - GATE-to-verdict latency;
+  - items lost or duplicated;
+  - supervisor escalations, and whether each was warranted.
+
+  Design constraint, which binds the eventual design and not only this
+  trial: nothing may assume which teams or agents run in a cluster, their
+  harness or backend, or their status. The fleet is a platform of
+  composable parts: user-defined manifests and teams, sideshow-installed
+  content packs (wardrobe among them, versioned), and workflows that may
+  ship with roles inside packs. The trial learns from this fleet; the
+  design it informs must work for any fleet.
+
+  ## Excluded scope
+
+  - Merging on any repository outside ArcavenAE, and any component-updater
+    bot PR on an outside org's infrastructure repository.
+  - Changing role text, manifests, or bus software during the trial. Gaps
+    found are recorded, not fixed mid-run, so the measures compare like
+    with like.
+  - Judging individual supervisors. The unit is the operating model.
+
+  ## Harvest
+
+  At the timebox: a finding in this graph with the four measures and the
+  gaps named by class (rights, reach, protocol), then node updates per kos.
+  Author of record for the brief and the finding: the author seat of the
+  arcaven team.
+
+  predicted_confidence is the author's prior at filing, recorded before the
+  trial starts so the finding can be scored against it.
+edges: []
+provenance:
+  created_by: agent
+  session: arcaven-author-g5-0, 2026-09-26, operator ruling relayed via director
+  created_at: "2026-09-26"
+brief:
+  hypothesis: "If supervisors own the review loop and report status up on a beat, director's hand interventions fall sharply and nothing is lost, and the failures that remain name what supervisors need (rights, reach, protocol)."
+  excluded_scope: "Merges outside ArcavenAE repositories; component-updater bot PRs on an outside org's infrastructure repository; mid-trial changes to roles, manifests or bus software; judging individual supervisors."
+  success_signal: "Interventions per hour during the trial fall well below the pre-trial relay-log rate, with zero items lost or duplicated, and every remaining intervention or escalation is attributable to a named gap in rights, reach or protocol."
+  timebox: "Through Monday 2026-09-28."
+  predicted_confidence: 0.6
