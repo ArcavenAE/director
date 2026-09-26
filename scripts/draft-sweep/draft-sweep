@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# List fleet draft PRs that need a reviewer's attention, and fleet PRs that
+# merged with no review, as director board lines (draft-first PR flow, adopted
+# 2026-09-26; brief ~/.director/state/briefs/2026-09-26-draft-first-rollout.md).
+#
+# Read-only. It runs gh searches and gh pr view, and prints. It never promotes,
+# merges, closes, or comments on anything.
+#
+# A diagnostic, not a gate (diagnostic-not-gate.md): it exits 0 whether it
+# finds nothing or a lot. A search it could not run is printed as a GAP line,
+# so an empty board is never confused with a sweep that did not look.
+#
+# Two sections:
+#   stale drafts   open drafts by the fleet authors, older than the age floor,
+#                  with no verdict review (APPROVED or CHANGES_REQUESTED). A
+#                  comment-only review is not a verdict under the flow, so a
+#                  draft holding only comments is still listed. A draft whose base branch is the
+#                  head of another open draft is skipped (a stack waits on its
+#                  base; stacked-pr-merge-order.md).
+#   zero-review    PRs by the fleet authors merged on or after the rollout date
+#                  with no review at all (the brief's two-week detective check).
+#
+# Both sections are limited to the rollout's in-scope repos. Older drafts in
+# other 1898andCo repos predate the flow and would otherwise sit on the board
+# forever. Set DRAFT_SWEEP_REPOS=all to sweep every repo in the owner.
+#
+# Usage: scripts/draft-sweep/draft-sweep
+# Environment (all optional):
+#   DRAFT_SWEEP_OWNER          default 1898andCo
+#   DRAFT_SWEEP_AUTHORS        default "arcaven arcavenai"
+#   DRAFT_SWEEP_REPOS          space-separated repo names, or "all"
+#   DRAFT_SWEEP_SINCE          merged-on-or-after date, default 2026-09-26
+#   DRAFT_SWEEP_MIN_AGE_HOURS  draft age floor, default 24
+#   DRAFT_SWEEP_NOW            epoch seconds to measure age from (tests)
+set -euo pipefail
+
+owner="${DRAFT_SWEEP_OWNER:-1898andCo}"
+read -r -a authors <<<"${DRAFT_SWEEP_AUTHORS:-arcaven arcavenai}"
+repos="${DRAFT_SWEEP_REPOS:-Vantage i-orc infra midway mss-status peproto peu clip-connector clip-signal poller-coaster}"
+since="${DRAFT_SWEEP_SINCE:-2026-09-26}"
+min_age_h="${DRAFT_SWEEP_MIN_AGE_HOURS:-24}"
+now="${DRAFT_SWEEP_NOW:-$(date +%s)}"
+
+for tool in gh jq; do
+  command -v "$tool" >/dev/null || {
+    echo "- GAP draft-sweep: $tool not found; nothing was swept"
+    exit 0
+  }
+done
+
+gaps=0
+gap() {
+  echo "- GAP draft-sweep: $1"
+  gaps=$((gaps + 1))
+}
+
+in_scope() {
+  [[ "$repos" == all ]] && return 0
+  local r
+  for r in $repos; do
+    [[ "$1" == "$owner/$r" ]] && return 0
+  done
+  return 1
+}
+
+stale=0
+merged=0
+lines=()
+
+# --- stale drafts --------------------------------------------------------------
+for a in "${authors[@]}"; do
+  if ! found="$(gh search prs --owner "$owner" --author "$a" --draft --state open \
+    --limit 1000 --json repository,number,createdAt,url 2>&1)"; then
+    gap "draft search for author $a failed: ${found//$'\n'/ }"
+    continue
+  fi
+  while IFS=$'\t' read -r repo num created url; do
+    [[ -n "$repo" ]] || continue
+    in_scope "$repo" || continue
+    age_h=$(((now - created) / 3600))
+    ((age_h >= min_age_h)) || continue
+    if ! pr="$(gh pr view "$num" -R "$repo" --json reviews,baseRefName 2>&1)"; then
+      gap "could not read $repo#$num: ${pr//$'\n'/ }"
+      continue
+    fi
+    [[ "$(jq '[.reviews[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")] | length' <<<"$pr")" == 0 ]] || continue
+    base="$(jq -r '.baseRefName' <<<"$pr")"
+    if ! stack="$(gh pr list -R "$repo" --state open --head "$base" --json isDraft 2>&1)"; then
+      gap "could not check the base of $repo#$num: ${stack//$'\n'/ }"
+      continue
+    fi
+    [[ "$(jq '[.[] | select(.isDraft)] | length' <<<"$stack")" == 0 ]] || continue
+    lines+=("- DRAFT $repo#$num by $a, ${age_h}h old, no verdict review: $url")
+    stale=$((stale + 1))
+  done < <(jq -r '.[] | [.repository.nameWithOwner, .number, (.createdAt | fromdateiso8601), .url] | @tsv' <<<"$found")
+done
+
+# --- zero-review merges --------------------------------------------------------
+for a in "${authors[@]}"; do
+  if ! found="$(gh search prs --owner "$owner" --author "$a" --merged-at ">=$since" \
+    --limit 1000 --json repository,number,url 2>&1)"; then
+    gap "merged search for author $a failed: ${found//$'\n'/ }"
+    continue
+  fi
+  while IFS=$'\t' read -r repo num url; do
+    [[ -n "$repo" ]] || continue
+    in_scope "$repo" || continue
+    if ! pr="$(gh pr view "$num" -R "$repo" --json reviews,mergedAt 2>&1)"; then
+      gap "could not read $repo#$num: ${pr//$'\n'/ }"
+      continue
+    fi
+    [[ "$(jq '.reviews | length' <<<"$pr")" == 0 ]] || continue
+    lines+=("- MERGED-NO-REVIEW $repo#$num by $a, merged $(jq -r '.mergedAt' <<<"$pr"): $url")
+    merged=$((merged + 1))
+  done < <(jq -r '.[] | [.repository.nameWithOwner, .number, .url] | @tsv' <<<"$found")
+done
+
+scope="$repos"
+[[ "$scope" == all ]] || scope="$(wc -w <<<"$repos" | tr -d ' ') repos"
+echo "- draft-sweep $(date -u +%Y-%m-%dT%H:%M:%SZ): $stale stale draft(s) over ${min_age_h}h, $merged merged with no review since $since, $gaps gap(s); owner $owner, scope $scope, authors ${authors[*]}"
+if ((${#lines[@]})); then
+  printf '%s\n' "${lines[@]}"
+fi
+exit 0
