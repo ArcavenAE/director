@@ -49,16 +49,33 @@ working tree involved:
    - how many commits on `origin/main` touching `sim/twin/` the installed sha
      is behind (this count is the one that matters; total commits behind is
      noise);
-   - a WARN for any wrapper under `~/.marvel/manifests` that still names a
-     checkout path.
+   - a WARN for any wrapper or manifest under `~/.marvel/manifests` that
+     still names a checkout path;
+   - a WARN for any entry in `~/.director/bin` that resolves, after following
+     symlinks, to a file inside a git working tree. This is the check that
+     catches mokuzai's `director-mcp-seat` (item 5). The manifest check alone
+     would not fire there, because the manifests name `~/.director/bin` and
+     the working tree sits behind the symlink.
 
    It always exits 0 (SOUL §8, `diagnostic-not-gate.md`). `aq hygiene` can
    call it when present, but director does not depend on aq. The one
    pass/fail step in this whole design is the verify run before the switch,
    and that is a structural check on the artifact being installed.
-5. **mokuzai.**
-   - Now (optional, harmless): bootstrap the same mirror and install the
-     launcher and the pinned wardrobe clone.
+5. **mokuzai.** mokuzai does not run cast-launch. Its seats start the shim
+   through `~/.director/bin/director-mcp-seat`, a symlink into a pre-rewrite
+   director clone at da0dcea (`probe/nats-phase-0/director-mcp-seat`). The
+   mokuzai team manifest names it six times
+   (`aae-orc/docs/examples/marvel-manifest-mokuzai-aae-teams.yaml` lines 34,
+   49, 64, 82, 97 and 113), with more in its other manifests. So on mokuzai
+   the component that matters is the seat wrapper, not the launcher.
+   - Now: install `director-mcp` and `director-mcp-seat` as
+     `director-install` components (aae-orc-x07y8, widened from "the shim,
+     later" to both, now), and repoint `~/.director/bin/director-mcp-seat` at
+     the installed copy BEFORE that clone is retired or re-cloned after the
+     rewrite. Until then, retiring the clone breaks the shim for every seat
+     that names it.
+   - Optional: the launcher and the pinned wardrobe clone, which nothing on
+     mokuzai runs yet.
    - Later: moving skippy's manifests from inline role text to cast-launch is
      launch-parity phase 2's decision (aae-orc#421 names phase 2 as owner of
      that fix), so it waits for that ruling. The install makes the move a
@@ -79,7 +96,7 @@ working tree involved:
 | verify can test an installed copy | `verify-cast-launch.sh:20` | **false as written**: `LAUNCH="$here/cast-launch.sh"` is fixed; it needs a `CAST_LAUNCH` override |
 | overwriting a running script is safe | scratch test: rewrite a sleeping bash script in place | **false**: the running process executed the NEW text. An in-place `cp` during a spawn can run a mix of two versions, and the atomic symlink switch avoids that |
 | upgrades are frequent enough to need one command | `git rev-list --count HEAD -- sim/twin/cast-launch.sh` | 9 commits, 3 of them 2026-09-25 to 26 |
-| mokuzai uses no cast-launch | `ssh mokuzai ...` | **unverified**: connection refused. Taken from the brief and aae-orc#421 |
+| mokuzai uses no cast-launch | `ssh mokuzai ...` refused; then `grep -n director-mcp-seat` on the mokuzai team manifest in aae-orc | **holds, and it is worse**: the manifest launches `director-mcp-seat` six times, a symlink into a pre-rewrite clone (reported by mokuzai's supervisor, 2026-09-27). Item 5 |
 | a doctor surface exists | `git ls-files \| grep doctor` in director | none; `tools/aq-hygiene.py` exists in the orc |
 
 ## Changes for the builder
@@ -112,11 +129,10 @@ working tree involved:
 
 ## Follow-ons, not in scope
 
-- **`director-mcp` (the shim).** It has the same problem, and it is
-  hand-installed today with `.prev-<date>-<sha>` backups in
-  `~/.director/bin`. Those backups are an informal version of item 1. Fold
-  the shim into the same installer as a second component once the launcher
-  path is proven.
+- **`director-mcp` and `director-mcp-seat`: moved in scope** (item 5). The
+  shim is hand-installed today on kinu with `.prev-<date>-<sha>` backups in
+  `~/.director/bin`, which are an informal version of item 1. The seat
+  wrapper is symlinked into a working tree on mokuzai.
 - **Auto-install on merge** (a post-merge hook or a timer). Not recommended
   now: a bad merge would reach every host with nobody deciding it (ADR-007).
   With `--status` showing the lag, a person runs the one command.
@@ -126,7 +142,8 @@ working tree involved:
 - **L1:** the design is approved as stated.
 - **L2:** a seat applies the wrapper edit on kinu.
 - **L3:** bootstrap mokuzai now; move its manifests after launch-parity
-  phase 2.
+  phase 2. (Review, 2026-09-27: on mokuzai the bootstrap is the shim and
+  seat wrapper, item 5.)
 
 ## Tickets (flat, with edges)
 
@@ -134,6 +151,9 @@ working tree involved:
    Blocked by `aae-orc-6dkwn`, since the verify step needs the override.
 2. `aae-orc-6dkwn`: the cast-launch overlay default plus the verify override.
 3. `aae-orc-e9zo5`: the kinu wrapper exec change. Blocked by `aae-orc-v0mu6`.
-4. `aae-orc-yu5bv`: the mokuzai bootstrap. Blocked by `aae-orc-v0mu6`.
-5. `aae-orc-x07y8`: the shim as a second installer component. Blocked by
-   `aae-orc-v0mu6`; later.
+4. `aae-orc-yu5bv`: the mokuzai bootstrap. Blocked by `aae-orc-v0mu6` and
+   `aae-orc-x07y8`.
+5. `aae-orc-x07y8`: `director-mcp` and `director-mcp-seat` as installer
+   components, with the `~/.director/bin` symlink WARN. Blocked by
+   `aae-orc-v0mu6`. Widened, and no longer "later", because mokuzai depends
+   on it.
