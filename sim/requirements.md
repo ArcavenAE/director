@@ -1615,8 +1615,8 @@ it never downgrades to a skip.
 
 **R-153 (RULED) · operator merge exclusions are enforced before any merge.**
 Operator ruling 2026-09-26, stated as "very clear": no pull request in the
-employer org's infrastructure repo that carries a component-updater (acu.*)
-label is merged, by director or by any seat, whatever its review or CI state.
+employer org's infrastructure repo that carries a component-updater label
+is merged, by director or by any seat, whatever its review or CI state.
 Director holds operator-declared exclusions (by repo and label) as data,
 checks them before every merge, and restates them in any brief that could lead
 a seat to merge there.
@@ -1741,7 +1741,7 @@ tells the recipient where it landed.
     concerns (bd aae-orc-pt8k), true with or without director.
   - MARVEL_SOCKET overriding an explicit --cluster inside a seat: a marvel defect,
     filed by arcaven-architect.
-  - A local-tiers doctor command starting the LM Studio service: a defect in
+  - A local-tiers doctor command starting a local model server: a defect in
     the employer's local-tiers tool, filed as the employer's local-tiers issue.
 
 ### Harvest diff (2026-09-25, second)
