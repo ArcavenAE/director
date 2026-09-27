@@ -1678,6 +1678,110 @@ tells the recipient where it landed.
 *Earned by: O 2026-09-26 docs review stranded on the remote cluster.*
 *Source: OBSERVED.*
 
+**R-159 (RULED) · director is not the relay between supervisors.** Operator
+ruling 2026-09-27: "director should NOT be a bottleneck, supervisors can
+coordinate, talk with each other, cross-cluster and otherwise." The night
+before, 14 review requests queued on one cluster sat 6 to 16 hours while the
+other cluster's reviewers were idle, because every cross-cluster relay needed
+a director turn and none was running. Supervisors address peer supervisors
+directly on both tiers, and director is copied, not interposed. The ruling
+takes effect only where the transport lets it: the same day no supervisor on
+one cluster held a global address until restart, so director hand-forwarded
+every item it was meant to stop carrying. Director checks that the reach a
+ruling assumes exists, and reports the gap when it does not.
+*Earned by: the overnight stall; the operator's ruling; O 2026-09-27a.*
+*Source: RULED. Cross-refs R-92, R-119.*
+
+**R-160 (OBSERVED) · a reply to an unreachable seat is held and surfaced,
+never discarded.** A review verdict addressed to a seat with no global
+address was lost, not queued, and was found 19 hours later only because the
+seat swept the forge itself. On the other cluster two worker replies were
+accepted in their panes and never reached their supervisor after an auth
+refresh. A message whose recipient cannot be reached stays in custody with its
+age, and the sender and director both see it as undelivered.
+*Earned by: O 2026-09-27b; the loss dossier specimens S1, S2, S5, S12.*
+*Source: OBSERVED. Cross-refs R-08, R-155.*
+
+**R-161 (OBSERVED) · a broadcast reports who received it.** A freeze notice
+sent as a team broadcast returned "broadcast sent" while all five of that
+team's workers drained empty and learned of it only from a pane inject. A
+broadcast returns the count of inboxes it reached, or refuses and names why;
+a broadcast that reached no inbox is a failure, not a success.
+*Earned by: the loss dossier S3; ranked first by the loss-reduction panel
+(7 of 7 seats).*
+*Source: OBSERVED. Cross-refs R-08.*
+
+**R-162 (OBSERVED) · director's own outbound queue is aged and surfaces
+unprompted.** A supervisor's request to forward three review asks sat in
+director's queue for about 90 minutes, and the operator saw the stalled pull
+request before director did. Earlier, a lane's catch-up waited two hours on a
+director turn. Every item director owes someone (a forward, a relay, an
+answer) carries an age, and anything older than a set interval surfaces
+without anyone asking.
+*Earned by: O 2026-09-27e; O 2026-09-26 cold-mailbox catch-up.*
+*Source: OBSERVED. Cross-refs R-115, R-117.*
+
+**R-163 (RULED) · capture happens at the source, automatically.** Work moved
+to workers, and harvest stayed a pull: director asks supervisors, supervisors
+ask workers, and the answers ride the bus that lost verdicts the same day.
+Three workers answered a harvest a day late, and error texts died with
+compacted context. Each seat writes a small capture record at the moment of
+the struggle, into a durable per-seat store that the launcher provisions, and
+harvest becomes a read. The operator approved the design and its first slice
+(supervisors and architect) on 2026-09-27.
+*Earned by: O 2026-09-27c; the 2026-09-27 fleet harvest (31 seat files).*
+*Source: RULED. Cross-refs R-155.*
+
+**R-164 (OBSERVED) · director's transport configuration is declared, not
+hand-edited.** Director hand-edited the global hub's permissions to add a
+cluster's publish grant and reloaded it. The change exists on one host,
+outside git, with a backup file beside it, and cannot be repeated on another
+machine. Hub and leaf grants live in a versioned config and are applied by an
+installer, with the applied version readable back.
+*Earned by: O 2026-09-27d.*
+*Source: OBSERVED. Cross-refs R-154, R-156.*
+
+**R-165 (JUDGMENT) · an operator grant covers the change it names.** Director
+re-asked whether a grant naming one launcher file also covered the companion
+wrapper edits of the same change, and stopped at a verification read the
+operator had in effect ordered. The operator's correction was blunt. A grant
+covers the change it names, including the edits that change cannot work
+without; director asks again only when the scope would widen beyond that
+change or touch a new resource.
+*Earned by: the operator's correction 2026-09-26.*
+*Source: JUDGMENT. Cross-refs R-150.*
+
+### Harvest diff (2026-09-27)
+
+- **Promoted (7):** R-159 (director is not the relay), R-160 (unreachable
+  replies are held), R-161 (a broadcast reports who received it), R-162
+  (director's outbound queue is aged), R-163 (capture at the source), R-164
+  (transport config declared), R-165 (a grant covers the change it names).
+- **Unchanged, new instances:**
+  - R-117 and R-93: a remote supervisor sat at an expired login and swallowed
+    six messages while every send returned accepted; the panel's pane-text
+    deaf-seat detection is the proposed mechanism.
+  - R-156: an inject with a wrong key failed with "resource not found",
+    hidden by a tail pipe, and was read as delivered; three more merge calls
+    timed out and had succeeded.
+  - R-155: the loss-reduction panel's dissent, that verdicts, rulings and
+    promises belong in durable artifacts with a pointer on the bus.
+  - R-154: a hub reload did not reach an established leaf; a merged launcher
+    change was not live until the host checkout moved.
+- **Rejected for the register (routed elsewhere):**
+  - A history rewrite stripped commit signatures, and a signed-commit ruleset
+    applied later blocked a pull request built on rewritten commits. General
+    repository practice, true with or without director: routed to the
+    platform graph as a tooling finding.
+  - The operator's reproducibility concern (accumulated local state versus
+    declared state): its subject is the composition, filed in the platform
+    graph as question-declared-vs-accumulated-state. R-164 keeps only
+    director's own share.
+  - Same-cluster supervisors timing out when publishing to each other: cause
+    unverified; kept as friction until diagnosed.
+  - Moving security work down two notches: a prioritization ruling, not a
+    director requirement.
+
 ### Harvest diff (2026-09-26, third)
 
 - **Promoted (4):** R-155 (relays land on the durable channel), R-156
