@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# Install director components from a commit, not from a working tree, so a merge
+# becomes live on a host with one command and no checkout.
+#
+#   director-install cast-launch [--ref REF]   install the launcher at REF
+#                                              (default origin/main)
+#   director-install cast-launch --rollback    switch back to the previous install
+#   director-install --status                  what is installed and how far behind
+#   director-install -h | --help
+#
+# How an install works (design: the launcher distribution recommendation of
+# 2026-09-27, ruling L1):
+#   1. fetch into a bare mirror at $DIRECTOR_HOME/src/director.git;
+#   2. write `git archive REF sim/twin` into $DIRECTOR_HOME/lib/cast-launch/<sha>/
+#      with a STAMP recording sha, ref, source URL and install time;
+#   3. run that directory's verify-cast-launch.sh against that directory's
+#      launcher;
+#   4. only if the verify passes, switch $DIRECTOR_HOME/bin/cast-launch to it:
+#      a new symlink under a temporary name, then a rename over the old one, so
+#      a spawn never runs a mix of two versions.
+# The previous version directory stays, and --rollback switches back to it.
+# git archive reads the commit, so a dirty working tree cannot leak in.
+#
+# --status is a diagnostic, not a gate (diagnostic-not-gate.md): it always exits
+# 0. The one pass/fail step is the verify before the switch, which is a
+# structural check on the artifact being installed.
+#
+# Environment:
+#   DIRECTOR_HOME           default ~/.director
+#   DIRECTOR_SRC_URL        default https://github.com/ArcavenAE/director.git
+#                           (used only to create the mirror)
+#   DIRECTOR_MANIFESTS_DIR  default ~/.marvel/manifests (--status wrapper check)
+set -euo pipefail
+
+DIRECTOR_HOME="${DIRECTOR_HOME:-$HOME/.director}"
+SRC_URL="${DIRECTOR_SRC_URL:-https://github.com/ArcavenAE/director.git}"
+MANIFESTS="${DIRECTOR_MANIFESTS_DIR:-$HOME/.marvel/manifests}"
+MIRROR="$DIRECTOR_HOME/src/director.git"
+LIB="$DIRECTOR_HOME/lib/cast-launch"
+BIN="$DIRECTOR_HOME/bin"
+LINK="$BIN/cast-launch"
+
+die() { echo "director-install: $*" >&2; exit 1; }
+usage() { sed -n '5,9p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# Create the mirror on first use; fetch it otherwise.
+sync_mirror() {
+  if [[ -d "$MIRROR" ]]; then
+    git -C "$MIRROR" fetch -q --prune origin
+  else
+    mkdir -p "$(dirname "$MIRROR")"
+    git clone -q --mirror "$SRC_URL" "$MIRROR"
+  fi
+}
+
+# REF as the operator says it (origin/main, a branch, a tag, a sha) -> a commit
+# in the mirror. A mirror has no remote-tracking refs, so origin/X is refs/heads/X.
+resolve() {
+  local ref="$1" try="$1"
+  [[ "$ref" == origin/* ]] && try="refs/heads/${ref#origin/}"
+  git -C "$MIRROR" rev-parse -q --verify "$try^{commit}" 2>/dev/null \
+    || git -C "$MIRROR" rev-parse -q --verify "refs/heads/$ref^{commit}" 2>/dev/null \
+    || die "cannot resolve ref $ref in $MIRROR"
+}
+
+# The sha the link points at now, or empty.
+current_sha() {
+  local t
+  t="$(readlink "$LINK" 2>/dev/null)" || return 0
+  basename "$(dirname "$t")"
+}
+
+# Point $LINK at a version directory atomically, and remember the one it left.
+switch_to() {
+  local sha="$1" prev tmp
+  prev="$(current_sha)"
+  mkdir -p "$BIN"
+  tmp="$BIN/.cast-launch.new.$$"
+  ln -sfn "$LIB/$sha/cast-launch.sh" "$tmp"
+  mv -f "$tmp" "$LINK"
+  if [[ -n "$prev" && "$prev" != "$sha" ]]; then
+    printf '%s\n' "$prev" > "$LIB/.previous.new.$$"
+    mv -f "$LIB/.previous.new.$$" "$LIB/.previous"
+  fi
+}
+
+install_cast_launch() {
+  local ref="$1" sha stage log
+  sync_mirror
+  sha="$(resolve "$ref")"
+  mkdir -p "$LIB"
+  if [[ ! -d "$LIB/$sha" ]]; then
+    stage="$(mktemp -d "$LIB/.stage.XXXXXX")"
+    trap 'rm -rf "$stage"' EXIT
+    git -C "$MIRROR" archive "$sha" sim/twin | tar -x -C "$stage" --strip-components 2
+    [[ -x "$stage/cast-launch.sh" ]] || die "$ref ($sha) has no executable sim/twin/cast-launch.sh"
+    [[ -f "$stage/verify-cast-launch.sh" ]] || die "$ref ($sha) has no sim/twin/verify-cast-launch.sh; refusing an unverified install"
+    {
+      echo "sha=$sha"
+      echo "ref=$ref"
+      echo "source=$(git -C "$MIRROR" config --get remote.origin.url)"
+      echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$stage/STAMP"
+    log="$stage/verify.log"
+    if ! CAST_LAUNCH="$stage/cast-launch.sh" bash "$stage/verify-cast-launch.sh" >"$log" 2>&1; then
+      echo "director-install: verify-cast-launch failed for $ref ($sha); nothing was switched. Last lines:" >&2
+      tail -5 "$log" >&2
+      exit 1
+    fi
+    mv "$stage" "$LIB/$sha"
+    trap - EXIT
+    echo "director-install: verified $sha ($(tail -1 "$LIB/$sha/verify.log"))"
+  else
+    echo "director-install: $sha is already installed and verified"
+  fi
+  switch_to "$sha"
+  echo "director-install: cast-launch -> $sha ($ref)"
+}
+
+rollback_cast_launch() {
+  local prev
+  prev="$(cat "$LIB/.previous" 2>/dev/null || true)"
+  [[ -n "$prev" && -d "$LIB/$prev" ]] || die "no previous install to roll back to"
+  switch_to "$prev"
+  echo "director-install: cast-launch rolled back -> $prev"
+}
+
+# --- status: a diagnostic; every path below exits 0 --------------------------
+status() {
+  set +e  # a diagnostic reports what it cannot read; it never stops on it
+  local sha stamp installed ref behind fetched=yes
+  if [[ -d "$MIRROR" ]]; then
+    git -C "$MIRROR" fetch -q --prune origin 2>/dev/null || fetched=no
+  fi
+  sha="$(current_sha)"
+  if [[ -z "$sha" ]]; then
+    echo "cast-launch: not installed (install: director-install cast-launch --ref origin/main)"
+  else
+    stamp="$LIB/$sha/STAMP"
+    installed="$(sed -n 's/^installed_at=//p' "$stamp" 2>/dev/null)"
+    ref="$(sed -n 's/^ref=//p' "$stamp" 2>/dev/null)"
+    if [[ -d "$MIRROR" ]] && behind="$(git -C "$MIRROR" rev-list --count "$sha..refs/heads/main" -- sim/twin/ 2>/dev/null)"; then
+      echo "cast-launch: ${sha:0:12} (ref ${ref:-?}) installed ${installed:-?}; $behind sim/twin/ commits behind main"
+    else
+      echo "cast-launch: ${sha:0:12} (ref ${ref:-?}) installed ${installed:-?}; lag unknown (no mirror, or main not in it)"
+    fi
+    [[ "$fetched" == no ]] && echo "WARN: fetch failed; the count is against the mirror as last fetched"
+  fi
+  # Wrappers that still exec a checkout are how staleness hides.
+  if [[ -d "$MANIFESTS" ]]; then
+    local f
+    while IFS= read -r f; do
+      echo "WARN: $f execs a checkout path (sim/twin/cast-launch.sh), not $LINK"
+    done < <(grep -l 'sim/twin/cast-launch\.sh' "$MANIFESTS"/*.sh 2>/dev/null || true)
+  fi
+  return 0
+}
+
+case "${1:-}" in
+  cast-launch)
+    shift
+    ref="origin/main" action=install
+    while (($#)); do
+      case "$1" in
+        --ref) [[ $# -ge 2 ]] || die "--ref needs a value"; ref="$2"; shift ;;
+        --rollback) action=rollback ;;
+        *) die "unknown argument: $1" ;;
+      esac
+      shift
+    done
+    if [[ "$action" == rollback ]]; then rollback_cast_launch; else install_cast_launch "$ref"; fi
+    ;;
+  --status) status || true; exit 0 ;;
+  -h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
