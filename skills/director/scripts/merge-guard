@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# merge-guard - the fail-closed read before any merge (R-152).
+#
+#   merge-guard <owner/repo> <number>
+#
+# Prints one line and exits:
+#   PROCEED <repo>#<n> @<head sha>: ...   exit 0. Merge with
+#                                         gh pr merge <n> -R <repo> --match-head-commit <sha>
+#   STOP <repo>#<n>: <reason>              exit 1. Stop the merge run and report it.
+#                                         Never downgrade a STOP to a skip.
+#   usage error                            exit 2.
+#
+# It proceeds only when every read succeeds and says yes: the PR is OPEN (read
+# first, since a merged PR reports an UNKNOWN merge state, R-157), not a draft
+# (R-148), its merge state is CLEAN, every reported check passed, and no open PR
+# is based on its head branch (stacked-pr-merge-order). A read that errors,
+# times out, comes back empty or unparseable, or lacks a field stops, with its
+# output. UNKNOWN is GitHub still computing mergeability, so it is re-read
+# MERGE_GUARD_RETRIES times (default 3), MERGE_GUARD_DELAY seconds apart
+# (default 5), and stops if it never resolves.
+#
+# An empty check list after a successful read is an answer, not a failed read:
+# the repo reports no checks, and CLEAN already covers any required ones.
+#
+# Read-only: it runs gh pr view and gh pr list, and never merges anything.
+# Operator merge exclusions (R-153) are not checked here.
+set -uo pipefail
+
+[[ $# -eq 2 ]] || { sed -n '4,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+repo="$1" num="$2"
+retries="${MERGE_GUARD_RETRIES:-3}"
+delay="${MERGE_GUARD_DELAY:-5}"
+
+stop() { echo "STOP $repo#$num: $*"; exit 1; }
+command -v jq >/dev/null || stop "jq not found; cannot read gh output"
+command -v gh >/dev/null || stop "gh not found"
+
+err="$(mktemp)"; trap 'rm -f "$err"' EXIT
+
+# read_json LABEL ARGS...: run gh, leave parseable output in $json, or STOP.
+json=""
+read_json() {
+  local label="$1"; shift
+  if ! json="$(gh "$@" 2>"$err")"; then
+    stop "$label failed: $(tr '\n' ' ' <"$err")"
+  fi
+  [[ -n "${json//[[:space:]]/}" ]] || stop "$label returned nothing: $(tr '\n' ' ' <"$err")"
+  jq -e . >/dev/null 2>&1 <<<"$json" || stop "$label returned something that is not JSON: $(head -c 160 <<<"$json" | tr '\n' ' ')"
+}
+field() { jq -r --arg f "$1" 'if has($f) then .[$f] | tostring else "__missing__" end' <<<"$json"; }
+
+view() {
+  read_json "gh pr view" pr view "$num" -R "$repo" \
+    --json state,isDraft,mergeStateStatus,headRefName,headRefOid,statusCheckRollup
+}
+
+view
+state="$(field state)"
+[[ "$state" == OPEN ]] || stop "state is $state, not OPEN; nothing to merge (terminal state read first, R-157)"
+
+draft="$(field isDraft)"
+case "$draft" in
+  false) ;;
+  true) stop "it is a draft; a draft GATE is not merge-ready (R-148)" ;;
+  *) stop "the view has no isDraft field; cannot tell a draft from a ready PR" ;;
+esac
+
+ms="$(field mergeStateStatus)"
+tries=0
+while [[ "$ms" == UNKNOWN && $tries -lt $retries ]]; do
+  tries=$((tries + 1))
+  sleep "$delay"
+  view
+  ms="$(field mergeStateStatus)"
+done
+case "$ms" in
+  CLEAN) ;;
+  UNKNOWN) stop "merge state is still UNKNOWN after $tries re-read(s); fail closed (R-152)" ;;
+  ''|__missing__|null) stop "merge state is empty or missing; fail closed (R-152)" ;;
+  *) stop "merge state is $ms, not CLEAN" ;;
+esac
+
+head_ref="$(field headRefName)"
+head_sha="$(field headRefOid)"
+[[ -n "$head_ref" && "$head_ref" != __missing__ && -n "$head_sha" && "$head_sha" != __missing__ ]] \
+  || stop "the view has no head branch or head sha"
+
+# Checks: a CheckRun passes on SUCCESS, NEUTRAL or SKIPPED; a StatusContext on
+# SUCCESS. Anything else, including a run still going, stops.
+jq -e '.statusCheckRollup | type == "array"' >/dev/null <<<"$json" \
+  || stop "the check rollup is not a list; cannot read the checks"
+not_passing="$(jq -r '.statusCheckRollup[]
+  | if .__typename == "StatusContext" then
+      select(.state != "SUCCESS") | "\(.context) \(.state)"
+    else
+      select((.conclusion // "") as $c | ["SUCCESS","NEUTRAL","SKIPPED"] | index($c) | not)
+      | "\(.name) \(.conclusion // .status)"
+    end' <<<"$json")"
+[[ -z "$not_passing" ]] || stop "checks not passing: $(tr '\n' ';' <<<"$not_passing" | sed 's/;$//')"
+nchecks="$(jq '.statusCheckRollup | length' <<<"$json")"
+
+# Stacked children: an open PR based on this head would be closed by merging
+# with --delete-branch. An error or an empty read is not "no children".
+read_json "gh pr list (stacked children)" pr list -R "$repo" --base "$head_ref" --state open --json number
+jq -e 'type == "array"' >/dev/null <<<"$json" || stop "the stacked-child read is not a list"
+children="$(jq -r '.[].number | "#\(.)"' <<<"$json" | tr '\n' ' ')"
+[[ -z "$children" ]] || stop "open PR(s) based on $head_ref: ${children% }; merge the base without --delete-branch first (stacked-pr-merge-order)"
+
+echo "PROCEED $repo#$num @$head_sha: OPEN, not draft, CLEAN, $nchecks check(s) passing, no stacked child"
