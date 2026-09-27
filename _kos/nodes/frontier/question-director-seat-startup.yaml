@@ -75,8 +75,8 @@ content: |
     bus.go connect() marks it "Cost, accepted for the probe" (dbbf768,
     2026-09-12). It was ticketed on 2026-09-16 as aae-orc-oxy50
     (finding-169 ship-now item 4), then re-filed on 2026-09-25 as
-    aae-orc-jyw6o with follow-on aae-orc-9cgid (R-18). Fix in flight:
-    director#84.
+    aae-orc-jyw6o with follow-on aae-orc-9cgid (R-18). Fixed by
+    director#84 (merged, 4cd8dac).
   - Two launch paths exist and each is wrong in the other's case:
     director-session.sh (hand-run seat, anonymous broker) and
     director-mcp-seat (#51, managed broker with a bus.seat block and
@@ -89,7 +89,7 @@ content: |
     is a latent collision with the seat.
   - role://ops/director sends are a silent total loss (finding-169, cause
     3; fix aae-orc-v0o8z; recurred 2026-09-25 with 20 dtu messages unread
-    about 21 hours, fix in flight director#86). Eleven wardrobe roles report_to director. A new
+    about 21 hours, fixed by director#86, merged as f590165). Eleven wardrobe roles report_to director. A new
     seat holder has no way to know those never arrive.
   - The role layer (skill) and the seat layer (shim) share no state. The
     skill's sweep does not read the bus inbox, and the shim knows nothing
