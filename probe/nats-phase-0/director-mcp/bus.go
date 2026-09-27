@@ -645,6 +645,79 @@ func (b *Bus) scanPresence(ctx context.Context, keys []string, prefix string) pr
 	return s
 }
 
+// broadcastTarget is one seat a broadcast reaches: its team and id, which with
+// the broadcast's workspace name its durable inbox.
+type broadcastTarget struct {
+	Team, ID string
+}
+
+// broadcastRecipients resolves a broadcast's scope from live presence: every
+// seat whose record names workspace ws (and team, when team is set), except
+// the sender, deduped by team and id so a seat with two live sessions gets one
+// send (each session's own durable still copies it, R-50). The scan keeps
+// scanPresence's accounting, so a zero can say whether rows were there and
+// unreadable rather than claim absence it did not establish (finding-188).
+func (b *Bus) broadcastRecipients(ctx context.Context, ws, team string) ([]broadcastTarget, presenceScan, error) {
+	prefix := "presence."
+	if team != "" {
+		prefix = "presence." + team + "."
+	}
+	keys, err := b.kv.Keys(ctx)
+	if err != nil && !errors.Is(err, jetstream.ErrNoKeysFound) {
+		return nil, presenceScan{}, err
+	}
+	s := presenceScan{Keys: len(keys)}
+	seen := map[broadcastTarget]bool{}
+	var out []broadcastTarget
+	for _, k := range keys {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		s.TeamMatched++
+		entry, err := b.kv.Get(ctx, k)
+		if err != nil {
+			s.Unreadable++
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal(entry.Value(), &rec) != nil {
+			s.Unreadable++
+			continue
+		}
+		rws, _ := rec["workspace"].(string)
+		rteam, _ := rec["team"].(string)
+		id, _ := rec["agent_id"].(string)
+		if rws == "" || rteam == "" || id == "" {
+			s.Incomplete++
+			continue
+		}
+		if rws != ws {
+			continue
+		}
+		s.Matched++
+		s.Workspaces = append(s.Workspaces, rws)
+		if rteam == b.self.Team && id == b.self.AgentID {
+			continue
+		}
+		if validToken("agent team", rteam) != nil || validToken("agent id", id) != nil {
+			s.Incomplete++
+			continue
+		}
+		t := broadcastTarget{Team: rteam, ID: id}
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Team != out[j].Team {
+			return out[i].Team < out[j].Team
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, s, nil
+}
+
 // teamScope narrows a presence prefix to its team segment, presence.<team>.
 // A presence key is presence.<team>.<id>.<instance>, so an agent address
 // yields presence.<team>.<id>. and a role address yields presence.<team>.
