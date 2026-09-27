@@ -189,7 +189,7 @@ working tree involved:
    `aae-orc-x07y8`.
 5. `aae-orc-x07y8`: `director-mcp` as an installer component, the
    `director-mcp-seat` compatibility alias, and the `~/.director/bin`
-   symlink WARN. Blocked by `aae-orc-v0mu6`, and the alias by ticket 6.
+   symlink WARN. Blocked by `aae-orc-v0mu6` and `aae-orc-crukm`.
    Widened, and no longer "later", because mokuzai depends on it.
-6. The resolution chain moves into `director-mcp` (item 6), with table
+6. `aae-orc-crukm`: the resolution chain moves into `director-mcp` (item 6), with table
    tests for the managed, hand-run-with-seat and missing-team cases.
