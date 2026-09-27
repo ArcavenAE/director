@@ -178,15 +178,24 @@ director#38 measured, on a real supervisor inbox.
 Consequences. (a) At the global tier the subjects carry no workspace token
 (`global.<cluster>.<role>.inbox`), so the local confinement never meets
 R-92's workspace resolution there; R-92 at this tier is the liveness half
-only. Supervisors publish to `global.*.supervisor.inbox` on both leaves, so
-cross-cluster traffic between supervisors goes direct, not through the
-director (operator ruling 2026-09-27, relayed by director: "director should
-NOT be a bottleneck, supervisors can coordinate, talk with each other,
-cross-cluster and otherwise"). The hub grant is live: `leaf-kinu` gained
-consumer and stream-info on `GLOBAL_TO_kinu` and subscribe `global.kinu.>` on
-2026-09-26, and `leaf-mokuzai` gained publish `global.*.supervisor.inbox` on
-2026-09-27. This supersedes the earlier text here, which recorded no
-supervisor-to-supervisor grant and director-mediated cross-cluster traffic.
+only. Supervisor-to-supervisor traffic across clusters is in three
+different states, kept apart here because they are easy to conflate:
+- **Ruled.** Supervisors publish to each other's inbox directly, not through
+  the director (operator ruling 2026-09-27, relayed by director: "director
+  should NOT be a bottleneck, supervisors can coordinate, talk with each
+  other, cross-cluster and otherwise"). This supersedes the earlier text
+  here, which recorded no supervisor-to-supervisor grant and
+  director-mediated cross-cluster traffic.
+- **Configured.** The hub config grants it. `leaf-kinu` gained consumer and
+  stream-info on `GLOBAL_TO_kinu` and subscribe `global.kinu.>` on
+  2026-09-26, and `leaf-mokuzai` gained publish `global.*.supervisor.inbox`
+  on 2026-09-27 (read from the hub config; the director seat edited it).
+- **Not yet working.** Measured from mokuzai by its supervisor seat,
+  2026-09-27: a send to `global://kinu/supervisor` is refused under R-92
+  because no kinu supervisor presence is registered; and a publish to
+  `global.mokuzai.supervisor.inbox` fails with "context deadline exceeded"
+  while the leaf is up and authorized. Neither is explained yet. Section
+  8.2 holds the expected results, not yet run.
 (b) Within one cluster, a second workspace on the same
 broker is the S0 twin shortcut, not the target shape; in the target shape a
 second workspace is a second cluster with its own broker and reaches the
@@ -257,9 +266,9 @@ principle as R-92 and the workdir default (marvel#255).
    `global.mokuzai.supervisor.inbox` stored in `GLOBAL_TO_mokuzai` and pulled
    by a durable created from the mokuzai leaf through the domain.
 4. The reverse on `global.director.inbox` into `GLOBAL_TO_DIRECTOR`.
-5. A mokuzai publish to `global.kinu.supervisor.inbox` stored in
-   `GLOBAL_TO_kinu`, pulled by a kinu durable (flipped from "refused" by the
-   operator ruling of 2026-09-27; see section 4.1, consequence (a)).
+5. A mokuzai publish to `global.kinu.supervisor.inbox` refused, nothing stored.
+   (Historical result, correct under the grants of 2026-09-14. The
+   2026-09-27 peer ruling reverses the expectation; see 8.2.)
 6. A mokuzai consumer on `GLOBAL_TO_DIRECTOR` refused.
 7. A mokuzai publish to a subject outside its allow refused.
 8. A local `agent.>` publish adds nothing at the hub.
@@ -306,6 +315,22 @@ shim is not its only publisher. A raw line from an operator or a verify script
 is not an envelope, so the global poll terminates what it cannot decode,
 carries on inside the same budget, and reports the count rather than spending a
 whole poll on it.
+
+### 8.2 Expected under the 2026-09-27 peer ruling (NOT YET RUN)
+
+These replace section 8's item 5 as the expectation. They have not been run.
+The two failures recorded in 4.1(a) must be explained first.
+
+1. A mokuzai supervisor publish to `global.kinu.supervisor.inbox` is stored
+   in `GLOBAL_TO_kinu` and pulled by a kinu durable.
+2. The reverse: a kinu supervisor publish to
+   `global.mokuzai.supervisor.inbox` is stored in `GLOBAL_TO_mokuzai` and
+   pulled by a mokuzai durable.
+3. A send to `global://<cluster>/supervisor` with no live presence for that
+   cluster is still refused under R-92 (unchanged; this is a precondition of
+   1 and 2, not a defect).
+4. Section 8's items 6 and 7 still hold: a consumer on another principal's
+   stream, and a publish outside the allow, are refused.
 
 ## 9. What the interim LAN posture leaves unprotected (ratified by the operator 2026-09-14)
 
