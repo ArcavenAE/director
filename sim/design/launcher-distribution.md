@@ -99,7 +99,7 @@ working tree involved:
    change: the `director-seat` fallback becomes a refusal that names the
    hand-run launcher, because a shared fallback name is finding-003's
    collision class (director#114, `sim/design/identity-default.md` rule 3).
-   With that change, so every
+   With that change, every
    host and harness registers the one command,
    `~/.director/bin/director-mcp`. An explicit environment still wins, so
    kinu's cast-launch seats behave exactly as today. The refusal messages
