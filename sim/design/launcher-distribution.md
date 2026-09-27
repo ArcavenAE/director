@@ -87,7 +87,7 @@ working tree involved:
    da0dcea (`git diff da0dcea origin/main -- probe/nats-phase-0/director-mcp-seat`
    is empty), the wrapper adds only an environment resolution chain:
    - identity: `DIRECTOR_AGENT_ID`, else `MARVEL_SESSION`, else
-     `director-seat`;
+     `director-seat` (a shared literal: see below);
    - team and workspace: `DIRECTOR_TEAM` / `DIRECTOR_WORKSPACE`, else
      `MARVEL_TEAM` / `MARVEL_WORKSPACE`, else refuse;
    - bus credentials: `DIRECTOR_NATS_USER` and `_PASS` from the environment,
@@ -95,7 +95,11 @@ working tree involved:
      `${MARVEL_BUS_STATE:-~/.marvel/state/nats}/director.pass`, else refuse;
    - `NATS_URL` defaulted (director-mcp already does this).
 
-   The single shape moves that chain into `director-mcp` itself, so every
+   The single shape moves that chain into `director-mcp` itself, with one
+   change: the `director-seat` fallback becomes a refusal that names the
+   hand-run launcher, because a shared fallback name is finding-003's
+   collision class (director#114, `sim/design/identity-default.md` rule 3).
+   With that change, so every
    host and harness registers the one command,
    `~/.director/bin/director-mcp`. An explicit environment still wins, so
    kinu's cast-launch seats behave exactly as today. The refusal messages
