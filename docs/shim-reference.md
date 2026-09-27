@@ -268,9 +268,28 @@ regardless.
 | `team` | no | a team; omit for the whole workspace |
 | `workspace` | no | a target workspace; omit for your own |
 
-Sends an INFORM to `broadcast://{workspace}[/{team}]`. There is no durable
-queue for broadcasts: late joiners do not replay them. Result:
-`{ "status": "broadcast sent", "message_id": "..." }`.
+Fans an INFORM out as one durable `agent://{team}/{id}` send per seat live
+in scope: every presence record naming the workspace (and the team, when
+given), excluding the sender, deduplicated by team and id. Each send has its
+own `message_id` and audit record; all share one `conversation_id`. A seat
+that joins after the call is not included, since the scope is read once.
+
+When no seat other than the sender is live in scope, the broadcast is refused
+before any publish (R-92), and the refusal says whether presence rows were
+there but unreadable rather than claim absence it did not establish.
+Result:
+
+```json
+{ "status": "accepted for delivery", "recipients": 2,
+  "conversation_id": "cid-...", "sent": ["...", "..."], "failed": [],
+  "skipped_unreadable": 0,
+  "note": "accepted is not delivered or read; each recipient reports those (R-08)" }
+```
+
+`failed` lists `{ "to", "error" }` for any per-recipient publish that failed;
+the others still went. Before director#121 a broadcast published core NATS to
+a subject no stream captured and no session subscribed, and reported
+`"broadcast sent"` for a message that reached no one.
 
 ## Addresses and subjects
 
@@ -278,7 +297,7 @@ queue for broadcasts: late joiners do not replay them. Result:
 |---|---|---|
 | `agent://{team}/{id}` | `agent.{ws}.{team}.{id}.inbox` | durable, at least once, deduplicated on `message_id` within a 2 minute window (R-13) |
 | `role://{team}/{role}` | `agent.{ws}.{team}.role.{role}.inbox` | durable, read by every live holder of the role (fan-out); refused before publish when no live session holds it |
-| `broadcast://{ws}[/{team}]` | `agent.{ws}.broadcast` or `agent.{ws}.{team}.broadcast` | fan-out, no replay |
+| `broadcast://{ws}[/{team}]` | the `agent://` inbox subject of each seat live in scope | fan-out to live presence as durable directed sends; refused when no one is live |
 | `global://director` | `global.director.inbox` in stream `GLOBAL_TO_DIRECTOR` | durable at the hub; refused before publish when no director is live |
 | `global://{cluster}/supervisor` | `global.{cluster}.supervisor.inbox` in stream `GLOBAL_TO_{cluster}` | durable at the hub; refused when no supervisor of that cluster is live |
 
