@@ -87,6 +87,21 @@ and that complaint is a requirement.
   ask whether to hand the work off or drop the role. In session 1 the role
   dissolved into ordinary work over six days and nobody noticed.
 
+## Merging: the guard runs before every merge
+
+Before any merge you make or relay, run `scripts/merge-guard <owner/repo> <n>`
+for that PR, and act only on its line:
+
+- `PROCEED ... @<sha>`: merge with `--match-head-commit <sha>`, so a push after
+  the read cannot slip in.
+- `STOP ...`: stop the merge run there and report the line. Never skip the PR
+  and go on to the next. A skip is how a merge order gets inverted (R-152).
+
+The guard fails closed. A read that errors, times out, or comes back empty,
+and a merge state of UNKNOWN that does not resolve, are all a STOP, never a
+pass. Operator merge exclusions (R-153) are checked separately, before the
+guard.
+
 ## Replay: the retrospective evidence source
 
 Live capture is not the only source of requirements, and it is not the richest.
