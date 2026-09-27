@@ -42,13 +42,13 @@ DIRECTOR_WORKSPACE="${DIRECTOR_WORKSPACE:-${MARVEL_WORKSPACE:-ops2}}"
 
 # Per-role backend overlay (mixed-mode fast-path). If an overlay exists for
 # this manifest role under MARVEL_OVERLAY_ROOT/by-role/, it is attached to the
-# child as --settings so its env block selects the backend. The root is fixed
-# at the launcher's own directory, computed here before the cd to TWIN_CWD
-# below, so a relative overlay path can never resolve against the post-cd cwd.
-# The default root sits beside the launcher (normally empty, so no change);
-# MARVEL_OVERLAY_ROOT names an out-of-tree overlay set.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MARVEL_OVERLAY_ROOT="${MARVEL_OVERLAY_ROOT:-$SCRIPT_DIR/overlays}"
+# child as --settings so its env block selects the backend. Overlays are state,
+# not code, so the default root is under the director home, never beside the
+# launcher: an installed launcher is a versioned directory behind a symlink
+# (director-install), and an overlay kept beside it would vanish at the next
+# install. The root is absolute, so it cannot resolve against the cd to
+# TWIN_CWD below. MARVEL_OVERLAY_ROOT names an out-of-tree overlay set.
+MARVEL_OVERLAY_ROOT="${MARVEL_OVERLAY_ROOT:-${DIRECTOR_HOME:-$HOME/.director}/overlays}"
 
 # Manifest role name -> wardrobe role id, plus the cast-time scope the
 # supervisor's cast record carries (brief 7, 2.2). One wardrobe builder role

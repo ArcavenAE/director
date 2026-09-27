@@ -26,7 +26,29 @@ validation against criteria 3.1 to 3.6.
   global tier without a broker and without casting anything. claude, the
   shim, the wardrobe root and slice.sh are stubs; each case checks both the
   mcp-config claude is handed and the environment claude and the pre-flight
-  actually run with. 17 checks.
+  actually run with. It also covers the one-prompt rule and where overlays
+  are read from. 31 checks. `CAST_LAUNCH=<path>` tests a launcher other than
+  the one beside it, such as an installed copy.
+
+## Installing the launcher on a host
+
+Seats should exec an installed launcher, not this checkout:
+
+```sh
+./install.sh                                        # once: puts director-install in ~/.director/bin
+~/.director/bin/director-install cast-launch --ref origin/main
+~/.director/bin/director-install --status            # installed sha, sim/twin/ lag; always exits 0
+~/.director/bin/director-install cast-launch --rollback
+```
+
+`director-install` archives `sim/twin` at the ref from a bare mirror into
+`~/.director/lib/cast-launch/<sha>/`, runs that copy's verify against that
+copy's launcher, and only then switches `~/.director/bin/cast-launch` to it
+by an atomic rename. The previous version stays for `--rollback`. Running
+seats need no restart: the launcher runs only at spawn, then execs the
+harness. Backend overlays are state, not code, and live under
+`${DIRECTOR_HOME:-~/.director}/overlays/by-role/`. Proof:
+`scripts/director-install/verify-director-install.sh`.
 
 ## What is real today, and what is FORWARD
 
