@@ -10,9 +10,9 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-var resumeSelf = Sender{AgentID: "michael", Workspace: "aae-orc", Team: "ops"}
+var resumeSelf = Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
 
-const resumeInbox = "agent.aae-orc.ops.michael.inbox"
+const resumeInbox = "agent.aae-orc.ops.operator.inbox"
 
 // A reconnect (a new instance of the same seat) resumes after the last message
 // the seat acked, instead of replaying the whole inbox under DeliverAll.
@@ -73,8 +73,8 @@ func TestBrokerResumeIgnoresOtherSeats(t *testing.T) {
 	defer cancel()
 	url := startScratchServer(t)
 	_, js := provision(t, ctx, url)
-	other := Sender{AgentID: "michael-2", Workspace: "aae-orc", Team: "ops"}
-	pubEnv(t, ctx, js, "agent.aae-orc.ops.michael-2.inbox", "o1", "INFORM", "for the other seat")
+	other := Sender{AgentID: "operator-2", Workspace: "aae-orc", Team: "ops"}
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.operator-2.inbox", "o1", "INFORM", "for the other seat")
 	pubEnv(t, ctx, js, resumeInbox, "m1", "INFORM", "mine, unread")
 	ob, err := connect(ctx, url, other, nil)
 	if err != nil {

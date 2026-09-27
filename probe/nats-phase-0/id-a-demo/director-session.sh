@@ -17,7 +17,7 @@
 #
 # The director SEAT: pass a stable id and resume to keep context. The id is the
 # durable handle (R-06), so use the same one every launch; it replaces the
-# static DIRECTOR_AGENT_ID=michael baked into the project-scope config:
+# static DIRECTOR_AGENT_ID=operator baked into the project-scope config:
 #   ./director-session.sh director --resume director
 #
 # Global tier (the crossing, Path B): when DIRECTOR_GLOBAL_DOMAIN is set in the
@@ -29,7 +29,7 @@
 #     ./director-session.sh director --resume director
 #
 # --strict-mcp-config makes Claude Code load ONLY the server below, so the
-# project-scoped director-mcp (baked DIRECTOR_AGENT_ID=michael) does NOT also
+# project-scoped director-mcp (baked DIRECTOR_AGENT_ID=operator) does NOT also
 # load and re-introduce the collision.
 set -euo pipefail
 
@@ -80,7 +80,7 @@ fi
 
 # Pass the config as a JSON STRING (the confirmed --mcp-config form); no temp
 # file, nothing to clean up. --strict-mcp-config loads ONLY this server, so the
-# project-scoped director-mcp (baked DIRECTOR_AGENT_ID=michael) is bypassed.
+# project-scoped director-mcp (baked DIRECTOR_AGENT_ID=operator) is bypassed.
 # Caveat: if an enterprise managed-mcp.json is deployed on this host,
 # --strict-mcp-config makes claude exit at startup by design; that is not
 # present on a personal machine.

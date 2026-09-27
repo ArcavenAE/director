@@ -564,7 +564,7 @@ evidence R-22 is needed, and a specific warning not to copy gen-1's GC.
 
 Filed 2026-09-12 from the identity roundtable, after a live incident: several
 Claude Code sessions on one host loaded the same local-scope MCP config and all
-registered as `agent://ops/michael` (the OS user), so two real sessions
+registered as `agent://ops/operator` (the OS user), so two real sessions
 collided on one address and one presence key. The OBSERVED entries below are
 grounded in that collision and in a same-session cross-harness demo. The
 JUDGMENT entries are design conclusions from the roundtable; each carries a
@@ -579,7 +579,7 @@ ownership (R-55).
 **R-49. Session identity is assigned at spawn by the launcher, never
 self-asserted by the session and never derived from the OS user.** On one host,
 N sessions must get N distinct addresses.
-*Earned by: two live sessions collided on agent://ops/michael this session.*
+*Earned by: two live sessions collided on agent://ops/operator this session.*
 *Source: OBSERVED. Design: design/identity-at-spawn.md (ID-A).*
 
 **R-50. A session's durable consumer is unique per address, and a second
@@ -595,7 +595,7 @@ silent duplication (R-78) and leaked one durable per shim start
 (aae-orc-iejcx).
 *Amendment: design brief 11 (`sim/design/leaf-fabric-one-address-space.md`)
 section 2.5, ruled by the operator 2026-09-24 on director#77.*
-*Earned by: JetStream durable semantics plus the michael collision this session.*
+*Earned by: JetStream durable semantics plus the operator collision this session.*
 *Source: OBSERVED. Design: design/identity-at-spawn.md (ID-B).*
 
 **R-51. Distinct identities route correctly across harnesses; the bus supports
@@ -800,7 +800,7 @@ Filed 2026-09-12 from the naming party (casting: bmad-extras/rulings/2026-09-12-
 *Earned by: the drift measured this sitting; `claude --help` 2.1.270.*
 *Source: OBSERVED (the drift); the one-source rule is the design fix.*
 
-**R-74. Director owns lookup, not assignment, and does not mint a second name registry beside the one the harness already runs.** No director-owned allocator sits in the spawn path: an allocated name is unavailable under partition and a derived one is not, so an allocator puts a lease and a fencing problem (R-55's shape) in front of every spawn. 2.1.270 already carries a name-settle path (outcomes pre-decided, own-name, held, kept, superseded), generation-ordinal de-collision (`name (2)`), a formerNames history, and five nameSource values (user, auto, derived, collision, peer); a second assignment authority on one host is the michael collision in a new coat, so the open question is whether director's table matches that path, not whether director invents one. The lookup is a read-only join, writing nothing, keyed on the session key once R-73 puts it on both sides; the presence value today carries agent_id, instance, pid, state, team, ts, and workspace and no sessionId, so that join is not computable on the current build. The interim probe is the shim-pid to harness-pid join (86491 under 86456, 90079 under 90044, 5281 under 5241 this minute), which is a bootstrap measurement and not the binding: ppid dies with the process, breaks under reparenting, and says nothing off-host. The join reads names and cannot read provenance, since nameSource is not on the supported surface and is not inferred from the string. If a durable binding record is ever wanted, it records a fact observed at spawn and inherits gen-1's stomp (`--force` in persistent-agent-ops.md:43, because a name that outlives its process leaves a cached binding). Falsifier: run the join for two weeks; if the operator is still hand-renaming sessions with it in daily use, reopen the allocator question on that evidence.
+**R-74. Director owns lookup, not assignment, and does not mint a second name registry beside the one the harness already runs.** No director-owned allocator sits in the spawn path: an allocated name is unavailable under partition and a derived one is not, so an allocator puts a lease and a fencing problem (R-55's shape) in front of every spawn. 2.1.270 already carries a name-settle path (outcomes pre-decided, own-name, held, kept, superseded), generation-ordinal de-collision (`name (2)`), a formerNames history, and five nameSource values (user, auto, derived, collision, peer); a second assignment authority on one host is the operator collision in a new coat, so the open question is whether director's table matches that path, not whether director invents one. The lookup is a read-only join, writing nothing, keyed on the session key once R-73 puts it on both sides; the presence value today carries agent_id, instance, pid, state, team, ts, and workspace and no sessionId, so that join is not computable on the current build. The interim probe is the shim-pid to harness-pid join (86491 under 86456, 90079 under 90044, 5281 under 5241 this minute), which is a bootstrap measurement and not the binding: ppid dies with the process, breaks under reparenting, and says nothing off-host. The join reads names and cannot read provenance, since nameSource is not on the supported surface and is not inferred from the string. If a durable binding record is ever wanted, it records a fact observed at spawn and inherits gen-1's stomp (`--force` in persistent-agent-ops.md:43, because a name that outlives its process leaves a cached binding). Falsifier: run the join for two weeks; if the operator is still hand-renaming sessions with it in daily use, reopen the allocator question on that evidence.
 *Earned by: the measured settle machinery in the 2.1.270 binary; the presence value shape; the pid pairs this sitting.*
 *Source: JUDGMENT, on a measured basis.*
 
@@ -978,7 +978,7 @@ the split above are its output.
 
 ## Harvest 2026-09-20 (director seat reach, identity, and transport)
 
-From session aae-orc-05 (the michael/ops seat operating as director with the
+From session aae-orc-05 (the operator/ops seat operating as director with the
 global tier OFF). Seven candidates, promoted with source class. The session
 itself was the instrument: a director seat launched hobbled, and every workaround
 it reached for named a requirement. Cross-refs: observations.md candidate list,
@@ -1025,7 +1025,7 @@ aae-orc-anwnh.
 **R-101 (OBSERVED) · a director seat's identity, global role, and working
 context are assigned PER-SEAT at spawn, never drawn from a config shared by other
 agents, and the seat must run at the orchestrator root.** The shared aae-orc
-project MCP block bakes `DIRECTOR_AGENT_ID=michael` local-only and would brand
+project MCP block bakes `DIRECTOR_AGENT_ID=operator` local-only and would brand
 every claude in the tree the global director if extended; the per-seat launcher
 (`--strict-mcp-config`) is the correct shape. A seat launched from the wrong cwd
 loses the orc CLAUDE.md, rules, skills, and tools. Three distinct spawn traps in

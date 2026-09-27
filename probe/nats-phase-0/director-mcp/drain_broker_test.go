@@ -86,7 +86,7 @@ func provision(t *testing.T, ctx context.Context, url string) (*nats.Conn, jetst
 func pubEnv(t *testing.T, ctx context.Context, js jetstream.JetStream, subject, id, perf, text string) {
 	t.Helper()
 	e := testEnv(id, "sender-"+id, perf, text)
-	e.Recipient.Address = "agent://ops/michael"
+	e.Recipient.Address = "agent://ops/operator"
 	b, _ := json.Marshal(e)
 	if _, err := js.Publish(ctx, subject, b); err != nil {
 		t.Fatal(err)
@@ -108,14 +108,14 @@ func TestBrokerSummaryThenBatchDrainBothTiers(t *testing.T) {
 	nc, js := provision(t, ctx, url)
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
 
-	self := Sender{AgentID: "michael", Workspace: "aae-orc", Team: "ops"}
+	self := Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
 	bus, err := connect(ctx, url, self, &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer bus.close()
 
-	mine := "agent.aae-orc.ops.michael.inbox"
+	mine := "agent.aae-orc.ops.operator.inbox"
 	pubEnv(t, ctx, js, mine, "l1", "INFORM", "roll call: here")
 	pubEnv(t, ctx, js, mine, "l2", "REQUEST", "please review")
 	if _, err := js.Publish(ctx, mine, []byte("not an envelope")); err != nil {
@@ -219,7 +219,7 @@ func TestBrokerBatchBlocksForFirstMessage(t *testing.T) {
 	defer cancel()
 	url := startScratchServer(t)
 	_, js := provision(t, ctx, url)
-	self := Sender{AgentID: "michael", Workspace: "aae-orc", Team: "ops"}
+	self := Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
 	bus, err := connect(ctx, url, self, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -228,7 +228,7 @@ func TestBrokerBatchBlocksForFirstMessage(t *testing.T) {
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		pubEnv(t, ctx, js, "agent.aae-orc.ops.michael.inbox", "late", "INFORM", "arrived while waiting")
+		pubEnv(t, ctx, js, "agent.aae-orc.ops.operator.inbox", "late", "INFORM", "arrived while waiting")
 	}()
 	start := time.Now()
 	res, err := bus.receiveBatch(ctx, 10*time.Second, 10)
@@ -243,7 +243,7 @@ func TestBrokerBatchBlocksForFirstMessage(t *testing.T) {
 	}
 
 	// The single-message form keeps its old shape.
-	pubEnv(t, ctx, js, "agent.aae-orc.ops.michael.inbox", "one", "INFORM", "single")
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.operator.inbox", "one", "INFORM", "single")
 	out, err := toolWait(ctx, bus, json.RawMessage(`{"timeout_seconds":2}`))
 	if err != nil {
 		t.Fatal(err)
@@ -267,13 +267,13 @@ func TestBrokerSummaryAfterOutOfOrderAck(t *testing.T) {
 	defer cancel()
 	url := startScratchServer(t)
 	_, js := provision(t, ctx, url)
-	self := Sender{AgentID: "michael", Workspace: "aae-orc", Team: "ops"}
+	self := Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
 	bus, err := connect(ctx, url, self, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer bus.close()
-	mine := "agent.aae-orc.ops.michael.inbox"
+	mine := "agent.aae-orc.ops.operator.inbox"
 	for _, id := range []string{"l1", "l2", "l3", "l4"} {
 		pubEnv(t, ctx, js, mine, id, "INFORM", "x")
 	}
