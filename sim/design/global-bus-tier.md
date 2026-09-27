@@ -178,9 +178,16 @@ director#38 measured, on a real supervisor inbox.
 Consequences. (a) At the global tier the subjects carry no workspace token
 (`global.<cluster>.<role>.inbox`), so the local confinement never meets
 R-92's workspace resolution there; R-92 at this tier is the liveness half
-only, and the as-built hub already has the asymmetry (no
-supervisor-to-supervisor grant exists; cross-cluster traffic is
-director-mediated). (b) Within one cluster, a second workspace on the same
+only. Supervisors publish to `global.*.supervisor.inbox` on both leaves, so
+cross-cluster traffic between supervisors goes direct, not through the
+director (operator ruling 2026-09-27, relayed by director: "director should
+NOT be a bottleneck, supervisors can coordinate, talk with each other,
+cross-cluster and otherwise"). The hub grant is live: `leaf-kinu` gained
+consumer and stream-info on `GLOBAL_TO_kinu` and subscribe `global.kinu.>` on
+2026-09-26, and `leaf-mokuzai` gained publish `global.*.supervisor.inbox` on
+2026-09-27. This supersedes the earlier text here, which recorded no
+supervisor-to-supervisor grant and director-mediated cross-cluster traffic.
+(b) Within one cluster, a second workspace on the same
 broker is the S0 twin shortcut, not the target shape; in the target shape a
 second workspace is a second cluster with its own broker and reaches the
 director over the hub. On the shared broker the director seat's credential
@@ -250,7 +257,9 @@ principle as R-92 and the workdir default (marvel#255).
    `global.mokuzai.supervisor.inbox` stored in `GLOBAL_TO_mokuzai` and pulled
    by a durable created from the mokuzai leaf through the domain.
 4. The reverse on `global.director.inbox` into `GLOBAL_TO_DIRECTOR`.
-5. A mokuzai publish to `global.kinu.supervisor.inbox` refused, nothing stored.
+5. A mokuzai publish to `global.kinu.supervisor.inbox` stored in
+   `GLOBAL_TO_kinu`, pulled by a kinu durable (flipped from "refused" by the
+   operator ruling of 2026-09-27; see section 4.1, consequence (a)).
 6. A mokuzai consumer on `GLOBAL_TO_DIRECTOR` refused.
 7. A mokuzai publish to a subject outside its allow refused.
 8. A local `agent.>` publish adds nothing at the hub.
