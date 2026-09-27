@@ -11,13 +11,14 @@ Values below are read from the source on `main` as of 2026-09-15
 
 ## Environment
 
-Identity, read at start. The three identity values are subject tokens and
-must match `[A-Za-z0-9_-]`; anything else is refused before a connection is
-made, never rewritten (R-76).
+Identity, read at start. The identity values are subject tokens and must
+match `[A-Za-z0-9_-]`; anything else is refused before a connection is made,
+never rewritten (R-76).
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `DIRECTOR_AGENT_ID` | required | the session's id; the `id` in `agent://team/id` |
+| `DIRECTOR_ROLE` | unset | the role this session holds, the `role` in `role://team/role`; unset holds no role and reads no role inbox. `cast-launch.sh` sets it from the manifest role |
 | `DIRECTOR_TEAM` | `default` | the team |
 | `DIRECTOR_WORKSPACE` | `default` | the workspace |
 | `NATS_URL` | `nats://127.0.0.1:4222` | the local broker |
@@ -58,7 +59,18 @@ bad global levers), 1 for a failed connection or preflight.
 2. Connect to `NATS_URL`; create or bind the durable inbox consumer
    `mcp_<id>_<instance>` on `AGENT_INBOX`, filtered to this session's inbox
    subject. `<instance>` is a ULID minted per process, so two shims with one
-   id hold two durables and each receives its own copy (R-50).
+   id hold two durables and each receives its own copy (R-50). A new
+   instance starts after the highest ack floor among the seat's departed
+   durables (same name prefix and same filter subjects, and no live presence
+   row for that instance), so a reconnect does not replay the inbox. A live
+   sibling's position is not taken: a session joining a live seat reads the
+   inbox from the start, its own copy. With no departed durable the inbox is
+   read from the start, so mail sent to a cold mailbox is delivered. A
+   crashed session's presence row can linger up to the bucket's 90s TTL; a
+   reconnect inside that window replays rather than skips. The
+   durable carries a 73h inactive threshold, one hour above the inbox's 72h
+   max age, so a superseded instance's durable is cleaned up rather than
+   left behind.
 3. Write presence as `idle`; warn on stderr if another instance of the same
    id is present (R-49).
 4. Start the heartbeat: presence renewed every 30 seconds on the shim's own
@@ -120,17 +132,23 @@ Result without one:
 { "message": null, "note": "no message within the window; this is silence, not failure" }
 ```
 
-With global mode on, the poll alternates between the local inbox and this
-session's global inbox and names the tier. A hub that does not answer adds
+With global mode on, the poll first takes a message already waiting, from
+the tier whose turn it is and then the other, flipping the turn every call,
+so a backlog on one tier cannot starve the other. With nothing waiting it
+alternates between the local inbox and this session's global inbox in slices
+and names the tier. A hub that does not answer adds
 `global_warning` beside the result rather than failing the poll; the local
 tier keeps working through a hub outage. A raw line on the shared global
 stream that is not an envelope is terminated and counted, not surfaced; on
 the local inbox an undecodable message is surfaced at once.
 
 **Batch drain (`max` above 1).** Every message already waiting comes back in
-one call, up to `max`, oldest first: the local inbox in stream order, then
-the global inbox in stream order. Sequence numbers are per stream, so they
-order messages within a tier only. When nothing is waiting the call blocks
+one call, up to `max`, oldest first within each tier. With both tiers on,
+the budget is shared so a backlog on one cannot starve the other: the tier
+whose turn it is takes up to half (rounded up), the other takes up to the
+rest, and the first takes any budget left over. The result lists the local
+items in stream order, then the global ones. Sequence numbers are per
+stream, so they order messages within a tier only. When nothing is waiting the call blocks
 as the single form does, then tops the batch up with anything else that
 arrived. Messages are consumed exactly as the single form consumes them,
 with the ack confirmed by the server before the batch returns, so a lost ack
@@ -153,7 +171,7 @@ delivered once more later.
 {
   "messages": [ { "message": { "...": "..." }, "tier": "local", "sequence": 431 } ],
   "count": 1,
-  "order": "oldest first within each tier; local before global",
+  "order": "oldest first within each tier; local before global; the budget is shared between tiers",
   "remaining": { "local": 0, "global": 0 }
 }
 ```
@@ -259,7 +277,7 @@ queue for broadcasts: late joiners do not replay them. Result:
 | Address | Subject | Guarantee |
 |---|---|---|
 | `agent://{team}/{id}` | `agent.{ws}.{team}.{id}.inbox` | durable, at least once, deduplicated on `message_id` within a 2 minute window (R-13) |
-| `role://{team}/{role}` | `agent.{ws}.{team}.role.{role}.inbox` | resolved to the current holder at delivery; no holder is a NOT-UNDERSTOOD back to the sender |
+| `role://{team}/{role}` | `agent.{ws}.{team}.role.{role}.inbox` | durable, read by every live holder of the role (fan-out); refused before publish when no live session holds it |
 | `broadcast://{ws}[/{team}]` | `agent.{ws}.broadcast` or `agent.{ws}.{team}.broadcast` | fan-out, no replay |
 | `global://director` | `global.director.inbox` in stream `GLOBAL_TO_DIRECTOR` | durable at the hub; refused before publish when no director is live |
 | `global://{cluster}/supervisor` | `global.{cluster}.supervisor.inbox` in stream `GLOBAL_TO_{cluster}` | durable at the hub; refused when no supervisor of that cluster is live |
@@ -267,6 +285,38 @@ queue for broadcasts: late joiners do not replay them. Result:
 `{ws}` for a local address is the recipient's workspace, resolved from
 live presence unless the `workspace` argument names it (R-92). A global
 address carries no workspace; `recipient.team` is empty for it.
+
+### Role mail
+
+A session started with `DIRECTOR_ROLE` holds that role. Its one durable
+reads both its own inbox and its role inbox, so role mail arrives through
+the same `wait_for_message`, batch and `inbox_summary` as agent mail, and
+its presence record carries `role`.
+
+**Resume.** Role mail resumes by the inbox rule above: a reconnect starts
+after the departed durables' ack floor, so role mail already read is not
+replayed. A departed durable counts only when it read exactly the same
+subjects. A seat that took or dropped a role since reads from the start
+instead, because the old position says nothing about the subjects it did
+not read: a replay, never a skip.
+
+**Every live holder gets a copy.** Each holder's durable filters the role
+subject, so a role send is fan-out to the holders, not a work queue that
+hands each message to one of them. Why: every address in the shim today is
+read by per-session durables (R-50 as implemented), and a role send most
+often carries something each holder must see (a GATE for the director, a
+status ask to a team's supervisor). A work queue would need a claim step the
+envelope does not carry and would hide which holder took the message. A
+send meant for one replica addresses it by `agent://`. When ruled R-50
+(one durable per address, 2026-09-24) is implemented, a role address gets a
+single shared durable and this choice is revisited.
+
+**Refusal.** With no explicit workspace, a role send resolves over the
+team's live presence rows whose `role` names the role. None is a refusal
+before publish, as for an agent with no live presence; rows that could not
+be read are reported as not established, never as absence. An explicit
+workspace addresses the role's mailbox verbatim, as it does a cold agent
+mailbox.
 
 ## Streams and buckets
 
@@ -290,6 +340,21 @@ A global durable is `mcp_global_<id>_<instance>` with an inactive threshold
 one hour longer than the hub streams' 72h max age, so cleanup can only ever
 discard a durable whose replay had already expired.
 
+A new global durable resumes the way the local one does: after the highest
+ack floor among the seat's departed `mcp_global_<id>_` durables (filtered on
+the same inbox subject, no live hub presence row for the instance), or from
+the start of the stream when there are none.
+Every supervisor of a cluster filters on the same role inbox, so the name
+is what keeps one seat's position from moving another's. Agent ids may
+contain `_`, so the prefix `mcp_global_sup_` also matches `sup_T1`'s
+durables; a name counts for the seat only when the rest of it is an instance
+id (a ULID, which never contains `_`). Each session still receives every
+message (fan-out, not a work queue).
+
+The first `wait_for_message` result after a start (or after the global tier
+attaches) carries `resumed`: one line per tier saying where the durable
+started and how many messages were waiting. It is reported once.
+
 When the hub no longer has a session's global durable, a pull does not say
 "consumer not found". On a single server it fails with no responders, the
 same answer a down leaf link gives; across a leaf link, the production shape,
@@ -297,8 +362,11 @@ it is not answered at all and looks exactly like an empty inbox
 (director#66). So the shim asks the hub whether the durable exists after a
 pull, batch or summary fails that way, and after an empty pull at most once
 every 30 seconds. If the hub answers that it does not, the shim recreates it
-to resume after the last stream sequence this session acked (so read mail
-does not replay and mail sent meanwhile is delivered), retries, and reports
+to resume after the last stream sequence this session acked, seeded with the
+seat floor it attached from (so read mail does not replay and mail sent
+meanwhile is delivered). It does not take the seat floor again: a sibling
+that ran alongside this session may have read further, and taking its
+position would skip mail this session never saw, retries, and reports
 the recreate once in `global_warning`. If the hub cannot be asked, nothing is
 recreated and the original error, if any, is the warning.
 
@@ -378,6 +446,8 @@ type.
 { "agent_id": "fleet-envoy-g1-0", "instance": "01M2GQ1KMEDB39RAPCGA8CK5HM", "pid": 92392,
   "state": "idle", "team": "fleet", "workspace": "ops2", "ts": "2026-09-15T19:50:00Z" }
 ```
+
+A session holding a role adds `role` (for example `"role": "reviewer"`).
 
 Global rows add `cluster` and `role`, and a `tier` column in the merged
 roster. The record carries the harness's own view of nothing: `state` is

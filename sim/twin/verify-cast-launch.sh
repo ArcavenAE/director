@@ -214,5 +214,95 @@ else
     || bad "missing-shim refusal message" "$(cat "$root/out/stderr")"
 fi
 
+# --- the session's role reaches the shim, so it reads its role inbox ----------
+# Without it the shim holds no role, role://<team>/<role> mail is accepted and
+# never read, and the roster cannot resolve a holder.
+if cast reviewer; then
+  miss=""
+  in_mcp DIRECTOR_ROLE reviewer          || miss+=" mcp"
+  in_env DIRECTOR_ROLE reviewer claude.env || miss+=" env"
+  [[ -z "$miss" ]] && ok "reviewer: DIRECTOR_ROLE reaches mcp_json and the session environment" \
+                   || bad "role lever" "missing:$miss"
+else
+  bad "reviewer cast" "$(cat "$root/out/stderr")"
+fi
+if cast reviewer DIRECTOR_ROLE='rev.iewer'; then
+  bad "malformed role" "a role with a dot was accepted"
+else
+  grep -q "refusing role" "$root/out/stderr" \
+    && ok "a role outside [A-Za-z0-9_-] is refused before it becomes a subject" \
+    || bad "malformed-role refusal message" "$(cat "$root/out/stderr")"
+fi
+
+# --- the claude reviewer seat is cast as wardrobe role/reviewer ---------------
+# The manifest row is claude-reviewer (a claude seat beside the codex reviewer),
+# and wardrobe has no role by that name. Without the mapping the slice lookup
+# asks wardrobe for role/claude-reviewer and the seat gets no role text.
+if cast claude-reviewer; then
+  miss=""
+  grep -qx "stub slice for reviewer" "$root/out/claude.args" || miss+=" slice"
+  grep -q "wardrobe role/reviewer for the manifest role claude-reviewer" "$root/out/claude.args" || miss+=" cast-line"
+  grep -q "Your scope" "$root/out/claude.args" && miss+=" unexpected-scope"
+  [[ -z "$miss" ]] && ok "claude-reviewer: cast as role/reviewer with the reviewer slice and no scope" \
+                   || bad "claude-reviewer mapping" "missing:$miss"
+else
+  bad "claude-reviewer cast" "$(cat "$root/out/stderr")"
+fi
+
+# --- exactly one system prompt reaches claude (aae-orc-1vq6z) -----------------
+# claude keeps only the LAST --append-system-prompt, so a second flag in "$@"
+# (marvel's one-line identity, or a wrapper's full cast) silently replaces the
+# launcher's slice. The launcher strips every pair from "$@" and passes one.
+cast_with() { # role, then args for the launcher (marvel's trailing args)
+  local role="$1"; shift
+  rm -f "$root/out/claude.env" "$root/out/claude.args" "$root/out/preflight.env"
+  env -i \
+    PATH="$root/bin:/usr/bin:/bin" HOME="$root" \
+    MARVEL_ROLE="$role" MARVEL_SESSION="verify-$role-0" \
+    WARDROBE_ROOT="$root/wardrobe/contents" \
+    DIRECTOR_SHIM_BIN="$root/bin/director-mcp" \
+    TWIN_CWD="$root" \
+    DIRECTOR_TEAM=fleet DIRECTOR_WORKSPACE=verifyws \
+    "$LAUNCH" "$@" >"$root/out/stdout" 2>"$root/out/stderr"
+}
+# claude.args holds one argument per line; a prompt spans lines, a flag never.
+flags() { grep -cx -- '--append-system-prompt' "$root/out/claude.args"; }
+args_has() { grep -qF -- "$1" "$root/out/claude.args"; }
+one_prompt() { # name, then args; then checks as has:TEXT or not:TEXT
+  local name="$1"; shift
+  local -a launch=() checks=()
+  while (($#)) && [[ "$1" != --checks ]]; do launch+=("$1"); shift; done
+  shift
+  checks=("$@")
+  if ! cast_with builder ${launch[@]+"${launch[@]}"}; then bad "$name" "$(cat "$root/out/stderr")"; return; fi
+  local miss="" c
+  [[ "$(flags)" == 1 ]] || miss+=" flags=$(flags)"
+  for c in "${checks[@]}"; do
+    case "$c" in
+      has:*) args_has "${c#has:}" || miss+=" missing[${c#has:}]";;
+      not:*) args_has "${c#not:}" && miss+=" unexpected[${c#not:}]";;
+    esac
+  done
+  [[ -z "$miss" ]] && ok "$name" || bad "$name" "$miss"
+}
+wrapper_prompt="You are cast as wardrobe role/builder for the manifest role builder in team fleet. WRAPPER-SCOPE-MARK"$'\n\n'"wrapper-rendered slice"
+one_prompt "no caller flag: one prompt, the launcher's slice" \
+  --checks has:"stub slice for builder"
+one_prompt "marvel's one-liner is folded in after the slice, one flag" \
+  --append-system-prompt "You are verify-builder-0 (role: builder)" \
+  --checks has:"stub slice for builder" has:"You are verify-builder-0 (role: builder)"
+one_prompt "a wrapper's full cast is used as the one prompt, not duplicated" \
+  --append-system-prompt "$wrapper_prompt" \
+  --checks has:WRAPPER-SCOPE-MARK not:"stub slice for builder"
+one_prompt "wrapper cast plus marvel's one-liner: still one flag, both texts" \
+  --append-system-prompt "$wrapper_prompt" --append-system-prompt "You are verify-builder-0 (role: builder)" \
+  --checks has:WRAPPER-SCOPE-MARK has:"You are verify-builder-0 (role: builder)"
+one_prompt "the --append-system-prompt=value form is stripped too" \
+  "--append-system-prompt=You are verify-builder-0 (role: builder)" \
+  --checks has:"stub slice for builder" has:"You are verify-builder-0 (role: builder)" not:"--append-system-prompt="
+one_prompt "other caller args pass through untouched" \
+  --settings /tmp/policy.json --append-system-prompt "x" --session-id abc \
+  --checks has:"--settings" has:"/tmp/policy.json" has:"--session-id" has:abc
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
