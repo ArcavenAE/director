@@ -18,7 +18,7 @@ func TestLeafLostGlobalDurableIsRecreated(t *testing.T) {
 	defer func() { durableCheckEvery = was }()
 	rig := startLeafRig(t)
 	_, gjs := rig.provision(ctx)
-	self := Sender{AgentID: "michael", Workspace: "aae-orc", Team: "ops"}
+	self := Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
 	bus, err := connect(ctx, rig.leafURL, self, &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector})
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +29,7 @@ func TestLeafLostGlobalDurableIsRecreated(t *testing.T) {
 	if err != nil || first.Env == nil {
 		t.Fatalf("setup read: %+v %v", first, err)
 	}
-	if err := gjs.DeleteConsumer(ctx, globalDirectorStream, globalDurable("michael", bus.instance)); err != nil {
+	if err := gjs.DeleteConsumer(ctx, globalDirectorStream, globalDurable("operator", bus.instance)); err != nil {
 		t.Fatal(err)
 	}
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g1", "INFORM", "after the loss")
@@ -50,7 +50,7 @@ func TestLeafHubRestartKeepsReceiving(t *testing.T) {
 	defer cancel()
 	rig := startLeafRig(t)
 	_, gjs := rig.provision(ctx)
-	self := Sender{AgentID: "michael", Workspace: "aae-orc", Team: "ops"}
+	self := Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
 	bus, err := connect(ctx, rig.leafURL, self, &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector})
 	if err != nil {
 		t.Fatal(err)

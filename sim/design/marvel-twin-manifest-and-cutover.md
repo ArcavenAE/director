@@ -234,7 +234,7 @@ Check: `marvel get sessions` for the twin team, the bus roster
 agent role with replicas N, N roster entries under `agent://fleet/<name>`,
 each with a distinct `instance`, each session record's `name` equal to the
 bus id, and each `MARVEL_SESSION` key projecting to that same name; zero
-entries under any OS-user-derived address (`agent://fleet/michael` is a fail).
+entries under any OS-user-derived address (`agent://fleet/operator` is a fail).
 Repeat after `marvel shift ops2/fleet --role envoy`: the new generation has a
 new pid, socket, pane, and marvel index, and the same bus id and session key
 (R-06); if the bus id followed marvel's computed name it would change here,

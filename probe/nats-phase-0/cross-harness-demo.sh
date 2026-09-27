@@ -13,7 +13,7 @@
 #
 # The point of the demo is the RECIPE as much as the result: it is the worked
 # example of assigning identity at the launcher (distinct ids per session),
-# which is the fix for the michael collision (see PROGRESS.md and requirements
+# which is the fix for the operator collision (see PROGRESS.md and requirements
 # R-49). Do not give two sessions the same id here; that is the collision.
 set -uo pipefail
 

@@ -90,8 +90,8 @@ not merely confusing.
 
 This is the same R-01 the session-identity doc's thread 4 names, applied to a
 verdict: identity is a launcher-minted, ideally signed principal (ID-A now,
-ID-C/DID later), never an OS-user label. A verdict from `agent://ops/michael`
-means nothing if every session in the project dir is michael (finding-003).
+ID-C/DID later), never an OS-user label. A verdict from `agent://ops/operator`
+means nothing if every session in the project dir is operator (finding-003).
 
 ## Nonrepudiation (R-05)
 

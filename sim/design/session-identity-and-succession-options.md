@@ -21,7 +21,7 @@ channel.
 
 The two instances are one class seen twice. Identity is under-specified: it is
 self-asserted and the address equals the OS user, so any session in the project
-dir is `agent://ops/michael`. Liveness is under-specified: there is no
+dir is `agent://ops/operator`. Liveness is under-specified: there is no
 deregister on exit and no read-time cutoff, so a dead seat lingers. The cheapest
 fixes close each half now; the durable answer is a minting authority plus a
 signed principal plus receipt-based liveness plus a generation-bound handoff.
@@ -99,7 +99,7 @@ cannot be designed apart from Thread 5.
 ## Thread 4: malicious false-takeover and nonrepudiation
 
 The threat is Instance 1 done on purpose: a session sets
-`DIRECTOR_AGENT_ID=michael` and speaks as the director. Today nothing stops it,
+`DIRECTOR_AGENT_ID=operator` and speaks as the director. Today nothing stops it,
 because identity is a self-asserted label.
 
 - **Option A: a minting authority.** Only the launcher or marvel mints
