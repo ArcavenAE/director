@@ -16,8 +16,9 @@ content: |
   A. Should the launcher (cast-launch.sh, or marvel's adapter) capture the
      pane for a short window after start and keep it beside the spawn log?
   B. What does it do with a match: record it, refuse to report the start as
-     healthy, or both? Blocking notices (finding-013) differ from cosmetic
-     ones.
+     healthy, or both? Blocking notices (the claude trust dialog, whose
+     default answer exits the seat; marvel finding-045) differ from
+     cosmetic ones.
   C. Where do the patterns live? The signature catalog is being built
      elsewhere (a separate patterns database); this node asks only about
      capture at start, not about the catalog.
@@ -27,8 +28,6 @@ content: |
   Capture is cheap; deciding which notices mean "this start failed" is not,
   and the text changes with each harness release.
 edges:
-  - target: finding-013-trust-dialog-defaults-to-exit-and-the-launch-guard-does-not-check-trust
-    type: derives
   - target: question-director-seat-startup
     type: supports
 provenance:
