@@ -824,7 +824,7 @@ Filed 2026-09-12 from the naming party (casting: bmad-extras/rulings/2026-09-12-
 *Earned by: INC-001; multiclaude daemon.go:1600-1612 via INC-002; quota-monitoring.md:45.*
 *Source: OBSERVED.*
 
-**R-80. Uniqueness is per namespace with a binding between namespaces, never asserted fleet-wide; uniqueness on one axis is not evidence of safety on any other, and a collision on an axis nothing resolves against is a legibility cost, priced in one human keystroke, that earns no machinery.** Three axes and four harnesses, two of which mint session rows we do not control. INC-003: four uniquely named workers, one epic number, PR #419 closed at 1,043 lines. Petname pools collide at population: the opencode store on this machine holds 216 sessions with 19 colliding slugs (9.3 percent) on a 29 by 31 adjective-noun pool, eight of them across projects. The cheaper failure arrives first: gen-1's `gentle-tiger` and `silly-tiger` were live concurrently and `witty-owl` and `witty-hawk` a day apart, two-token names sharing one token, and a human scanning a pane matches one token. Nothing on this machine has ever been billed for a collision (`orc-1d` beside `orc-ae`, `builder` beside `marvel-builder`), because nothing routes or acts on those strings; the harm in INC-001 and INC-003 came from fusion and from a second namespace, not from a rate.
+**R-80. Uniqueness is per namespace with a binding between namespaces, never asserted fleet-wide; uniqueness on one axis is not evidence of safety on any other, and a collision on an axis nothing resolves against is a legibility cost, priced in one human keystroke, that earns no machinery.** Three axes and four harnesses, two of which mint session rows we do not control. INC-003: four uniquely named workers, one epic number, PR #419 closed at 1,043 lines. Petname pools collide at population: the opencode store on this machine holds 216 sessions with 19 colliding slugs (9.3 percent) on a 29 by 31 adjective-noun pool, eight of them across projects. The cheaper failure arrives first: gen-1's `gentle-tiger` and `silly-tiger` were live concurrently and `witty-owl` and `witty-hawk` a day apart, two-token names sharing one token, and a human scanning a pane matches one token. Nothing on this machine has ever been billed for a collision (two ticket ids in another orchestrator's tracker that differ only in their last two characters, `builder` beside `marvel-builder`), because nothing routes or acts on those strings; the harm in INC-001 and INC-003 came from fusion and from a second namespace, not from a rate.
 *Earned by: INC-003; INC-001 and INC-002:38; the opencode store measured this sitting (immutable read); the live roster.*
 *Source: OBSERVED.*
 
@@ -1548,10 +1548,11 @@ no-route replies from arcaven-marvel-builder and arcaven-supervisor.*
 merge-ready.** Operator ruling 2026-09-26. Reviews run cross-account (arcavenai on
 arcaven-authored PRs and the reverse) even when the review cannot enable a merge.
 When an approval will not count on GitHub (the reviewer's identity authored the
-PR, or the repo requires a code owner or team the reviewer is not in, as an employer PR
-did), the verdict line says so ("PAPER APPROVAL: merge recommended, not
+PR, or the repo requires a code owner or team the reviewer is not in, as a pull
+request in one of the employer org's repos did), the verdict line says so ("PAPER APPROVAL: merge recommended, not
 counting") and director hands it to the operator instead of attempting a merge.
-*Earned by: an employer PR blocked REVIEW_REQUIRED under an arcavenai approval;
+*Earned by: an employer-repo pull request blocked REVIEW_REQUIRED under an
+arcavenai approval;
 director#89/#90 arcavenai-authored.*
 *Source: RULED. Cross-refs R-02 (authority is explicit).*
 
@@ -1562,7 +1563,7 @@ ready); the author marks ready only after a non-author GitHub review. Director
 treats a draft GATE as not merge-ready, keeps a board lane for in-scope drafts,
 and runs a sweep that lists drafts unreviewed for 24 hours and fleet PRs merged
 with zero reviews. The sweep is diagnostic: it never promotes, merges or closes.
-*Earned by: six employer-repo PRs merged unreviewed by an admin teammate (a later three
+*Earned by: six PRs on the product merged unreviewed by an admin teammate (a later three
 the same way); the draft-first study (four-round party, 2026-09-26).*
 *Source: RULED. Cross-refs R-147, ADR-007 (automation boundary).*
 
@@ -1594,7 +1595,7 @@ nothing waits for an instance to return.** Operator ruling 2026-09-26: an agent
 session fills a seat once and is replaced, never recycled; the gX-Y suffix only
 addresses an instance; seats were meant to carry stable names. Director had
 been queuing tickets on instance names ("g1-0's queue"). When a rollout kill
-respawned a builder seat as g1-2, eight tickets sat on a seat that would
+respawned a builder seat's g1-0 instance as g1-2, eight tickets sat on a seat that would
 never exist again until the operator ruled they be reassigned. Director keys
 queues, custody, board lines and handoffs to the seat or role, and uses the
 instance name only to reach a live process.
@@ -1609,13 +1610,13 @@ which inverted a merge order the reviewer had specified. No harm came of it
 only because the reviewer had also ruled the second PR independent. Any check
 that errors, times out, or returns nothing stops the merge run with the output;
 it never downgrades to a skip.
-*Earned by: FR 2026-09-26 employer-repo merge order inverted.*
+*Earned by: FR 2026-09-26 merge order inverted in the service-clone repo.*
 *Source: OBSERVED. Cross-refs R-148.*
 
 **R-153 (RULED) · operator merge exclusions are enforced before any merge.**
 Operator ruling 2026-09-26, stated as "very clear": no pull request in the
-employer org's infrastructure repo that carries a component-updater
-label is merged, by director or by any seat, whatever its review or CI state.
+employer org's infrastructure repo that carries a component-updater label
+is merged, by director or by any seat, whatever its review or CI state.
 Director holds operator-declared exclusions (by repo and label) as data,
 checks them before every merge, and restates them in any brief that could lead
 a seat to merge there.
@@ -1633,6 +1634,73 @@ request and confirms each changed role is running the new spec, the same way
 R-08 treats an accepted send.
 *Earned by: O 2026-09-26 codex reviewers unchanged after apply.*
 *Source: JUDGMENT. Cross-refs R-08, R-143, ADR-010.*
+
+**R-155 (OBSERVED) · a relay lands on the seat's durable channel, not only
+its pane.** Director forwarded a batch of review verdicts to a supervisor by
+pane inject while that supervisor was READY for a restart with its bus
+drained. The forwards existed only as pane text, outside the seat's durable
+inbox and its handoff, so the restart would have dropped every one. Director
+had to hold the restart and ask for a handoff refresh. Anything director
+relays is written to the recipient's durable inbox. A pane inject is a
+doorbell for that record, never the record itself. A seat declared READY
+for restart is re-checked for relays that arrived after it declared.
+*Earned by: O 2026-09-26 verdict forwards at risk across a restart.*
+*Source: OBSERVED. Cross-refs R-145, R-117.*
+
+**R-156 (OBSERVED) · the outcome of a mutating call is read back, never
+inferred from its return.** Three mutating GitHub calls in one day returned
+an i/o timeout and had in fact succeeded: two merges by director, and a
+review POST on the remote cluster. A retry on the return value alone
+double-acts, and a skip on it records a success as a failure. After any
+mutating call that errors or times out, director reads the target's state and
+acts on that.
+*Earned by: FR 2026-09-26 director#99 and a second merge; the remote
+reviewer's POST retry.*
+*Source: OBSERVED. Cross-refs R-152.*
+
+**R-157 (OBSERVED) · external state is read terminal-first.** Director polled
+the merge state of two pull requests for minutes and listed them as "pending
+merge". Both had been merged hours earlier, and the forge reports an unknown
+merge state for every merged PR. A supervisor's ready-to-merge list carried
+the same stale entries. Any check on an external object reads its terminal
+state (merged, closed, deleted) before any derived or computed field, and a
+list director forwards is re-verified at forward time.
+*Earned by: O 2026-09-26 merged PRs polled as pending.*
+*Source: OBSERVED. Cross-refs R-154.*
+
+**R-158 (OBSERVED) · director carries artifacts across hosts, not only
+messages.** A 30-gap docs review written by a seat on one cluster could not
+reach the seats on the other. There was no shared path, and the bus has no
+file transfer, so the review crossed as message text in parts, and its count
+was misstated once on the way. Director moves a named artifact between
+hosts with its provenance (source host, path, sender) and a checksum, and
+tells the recipient where it landed.
+*Earned by: O 2026-09-26 docs review stranded on the remote cluster.*
+*Source: OBSERVED.*
+
+### Harvest diff (2026-09-26, third)
+
+- **Promoted (4):** R-155 (relays land on the durable channel), R-156
+  (mutating-call outcomes read back), R-157 (external state read
+  terminal-first), R-158 (artifact custody across hosts).
+- **Unchanged, new instances:**
+  - R-150: seat classifiers refused three pieces of operator-granted work (a
+    hub permission edit, an identity value in a data file, a launcher scope
+    edit), and each came back to the operator by hand.
+  - R-152: director merged one PR while its merge state read unknown.
+  - R-154: a hub permission reload did not reach an established leaf
+    connection, and a merged launcher change was not live until the host
+    checkout was fast-forwarded. Both are "applied is not running".
+  - R-117: an idle remote supervisor held an accepted batch unread for about
+    90 minutes.
+- **Rejected for the register (routed elsewhere):**
+  - The operator's assessment that the orchestrator is having many problems
+    orchestrating agents, with this span's instances (finished runs holding
+    slots, respawns with no first turn, a launcher crash loop, injects
+    staging unsent, replica churn, a spawn env leak): marvel concerns, true
+    with or without director. Tracked in the marvel graph and issues.
+  - A seat's new test files skipping a crate's feature-gate convention, hidden
+    by an all-features CI run: project practice, routed to that builder.
 
 ### Harvest diff (2026-09-26, second)
 
@@ -1673,8 +1741,8 @@ R-08 treats an accepted send.
     concerns (bd aae-orc-pt8k), true with or without director.
   - MARVEL_SOCKET overriding an explicit --cluster inside a seat: a marvel defect,
     filed by arcaven-architect.
-  - an employer tool's doctor starting the local model server: an employer-repo defect, filed as
-    an employer repo issue.
+  - A local-tiers doctor command starting a local model server: a defect in
+    the employer's local-tiers tool, filed as the employer's local-tiers issue.
 
 ### Harvest diff (2026-09-25, second)
 

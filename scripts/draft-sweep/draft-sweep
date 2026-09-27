@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# List fleet draft PRs that need a reviewer's attention, and fleet PRs that
+# merged with no review, as director board lines (draft-first PR flow, adopted
+# 2026-09-26; brief ~/.director/state/briefs/2026-09-26-draft-first-rollout.md).
+#
+# Read-only. It runs gh searches and gh pr view, and prints. It never promotes,
+# merges, closes, or comments on anything.
+#
+# A diagnostic, not a gate (diagnostic-not-gate.md): it exits 0 whether it
+# finds nothing or a lot. Anything it could not read is printed as a GAP line
+# and counted: a failed gh call, a payload that is not JSON, a payload missing
+# a field the sweep depends on, a missing setting, a search that hit its result
+# cap. An empty board therefore always reads differently from a sweep that
+# did not look.
+#
+# Two sections:
+#   stale drafts   open drafts by the fleet authors, older than the age floor,
+#                  with no verdict review (APPROVED or CHANGES_REQUESTED). A
+#                  comment-only review is not a verdict under the flow, so a
+#                  draft holding only comments is still listed. A draft whose
+#                  base branch is the head of another open draft is skipped (a
+#                  stack waits on its base; stacked-pr-merge-order.md).
+#   zero-review    PRs by the fleet authors merged on or after the rollout date
+#                  with no review at all (the brief's two-week detective check).
+#
+# The owner and the in-scope repos are not checked in. They come from the
+# environment or from an untracked config file of key=value lines (read, never
+# sourced), environment first:
+#
+#   owner=<org>                     DRAFT_SWEEP_OWNER
+#   repos=<repo> <repo> ... | all   DRAFT_SWEEP_REPOS
+#   authors=<login> <login> ...     DRAFT_SWEEP_AUTHORS   default "arcaven arcavenai"
+#   since=<YYYY-MM-DD>              DRAFT_SWEEP_SINCE     default 2026-09-26
+#   min_age_hours=<n>               DRAFT_SWEEP_MIN_AGE_HOURS  default 24
+#   limit=<n>                       DRAFT_SWEEP_LIMIT     default 1000 (gh's max)
+#
+# Config file: DRAFT_SWEEP_CONFIG, default ~/.director/state/draft-sweep.conf.
+# DRAFT_SWEEP_NOW (epoch seconds) fixes the clock for tests.
+#
+# Usage: scripts/draft-sweep/draft-sweep
+set -euo pipefail
+
+gaps=0
+gap() {
+  echo "- GAP draft-sweep: $1"
+  gaps=$((gaps + 1))
+}
+
+conf="${DRAFT_SWEEP_CONFIG:-$HOME/.director/state/draft-sweep.conf}"
+cfg_owner="" cfg_repos="" cfg_authors="" cfg_since="" cfg_age="" cfg_limit=""
+if [[ -r "$conf" ]]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+    owner) cfg_owner="$value" ;;
+    repos) cfg_repos="$value" ;;
+    authors) cfg_authors="$value" ;;
+    since) cfg_since="$value" ;;
+    min_age_hours) cfg_age="$value" ;;
+    limit) cfg_limit="$value" ;;
+    esac
+  done < <(grep -E '^[a-z_]+=' "$conf" || true)
+fi
+
+owner="${DRAFT_SWEEP_OWNER:-$cfg_owner}"
+repos="${DRAFT_SWEEP_REPOS:-$cfg_repos}"
+read -r -a authors <<<"${DRAFT_SWEEP_AUTHORS:-${cfg_authors:-arcaven arcavenai}}"
+since="${DRAFT_SWEEP_SINCE:-${cfg_since:-2026-09-26}}"
+min_age_h="${DRAFT_SWEEP_MIN_AGE_HOURS:-${cfg_age:-24}}"
+limit="${DRAFT_SWEEP_LIMIT:-${cfg_limit:-1000}}"
+now="${DRAFT_SWEEP_NOW:-$(date +%s)}"
+
+# Nothing to sweep: say so on the board, and exit 0 like any other result.
+unswept() {
+  gap "$1; nothing was swept"
+  echo "- draft-sweep $(date -u +%Y-%m-%dT%H:%M:%SZ): not run, $gaps gap(s)"
+  exit 0
+}
+for tool in gh jq; do
+  command -v "$tool" >/dev/null || unswept "$tool not found"
+done
+[[ -n "$owner" ]] || unswept "no owner set (DRAFT_SWEEP_OWNER, or owner= in $conf)"
+[[ -n "$repos" ]] || unswept "no repo scope set (DRAFT_SWEEP_REPOS, or repos= in $conf; repos=all sweeps every repo)"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+# gh_json LABEL ARGS...: run gh, keep stderr apart from the payload, and leave
+# the payload in $json only if it parses. Otherwise print a GAP and return 1.
+json=""
+gh_json() {
+  local label="$1"
+  shift
+  if ! json="$(gh "$@" 2>"$tmp/err")"; then
+    gap "$label failed: $(tr '\n' ' ' <"$tmp/err")"
+    return 1
+  fi
+  if ! jq -e . >/dev/null 2>&1 <<<"$json"; then
+    gap "$label returned a payload that is not JSON: $(head -c 120 <<<"$json" | tr '\n' ' ')"
+    return 1
+  fi
+}
+
+# jq_out LABEL FILTER: apply FILTER to $json into $out, or GAP and return 1.
+# Filters use error() on a missing field, so a wrong shape is a GAP, never 0.
+out=""
+jq_out() {
+  if ! out="$(jq -r "$2" <<<"$json" 2>"$tmp/err")"; then
+    gap "$1: unexpected payload shape: $(tr '\n' ' ' <"$tmp/err")"
+    return 1
+  fi
+}
+
+in_scope() {
+  [[ "$repos" == all ]] && return 0
+  local r
+  for r in $repos; do
+    [[ "$1" == "$owner/$r" ]] && return 0
+  done
+  return 1
+}
+
+# search LABEL ARGS...: run a search, check it is an array under the cap.
+search() {
+  local label="$1"
+  shift
+  gh_json "$label" search prs "$@" --limit "$limit" || return 1
+  jq_out "$label" 'if type == "array" then length else error("not an array") end' || return 1
+  ((out < limit)) || gap "$label hit the $limit result cap; results may be missing"
+}
+
+rows_array='.[] | [(.repository.nameWithOwner // error("no repository")), (.number // error("no number"))'
+stale=0
+merged=0
+lines=()
+
+# --- stale drafts --------------------------------------------------------------
+for a in "${authors[@]}"; do
+  search "draft search for author $a" --owner "$owner" --author "$a" --draft --state open \
+    --json repository,number,createdAt,url || continue
+  jq_out "draft search for author $a" "$rows_array"', (.createdAt // error("no createdAt") | fromdateiso8601), .url] | @tsv' || continue
+  rows="$out"
+  while IFS=$'\t' read -r repo num created url; do
+    [[ -n "$repo" ]] || continue
+    in_scope "$repo" || continue
+    age_h=$(((now - created) / 3600))
+    ((age_h >= min_age_h)) || continue
+    gh_json "read $repo#$num" pr view "$num" -R "$repo" --json reviews,baseRefName || continue
+    jq_out "read $repo#$num" '[(.reviews // error("no reviews"))[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")] | length' || continue
+    [[ "$out" == 0 ]] || continue
+    jq_out "read $repo#$num" '.baseRefName // error("no baseRefName")' || continue
+    base="$out"
+    gh_json "base check for $repo#$num" pr list -R "$repo" --state open --head "$base" --json isDraft || continue
+    jq_out "base check for $repo#$num" '[if type == "array" then .[] else error("not an array") end | select(.isDraft)] | length' || continue
+    [[ "$out" == 0 ]] || continue
+    lines+=("- DRAFT $repo#$num by $a, ${age_h}h old, no verdict review: $url")
+    stale=$((stale + 1))
+  done <<<"$rows"
+done
+
+# --- zero-review merges --------------------------------------------------------
+for a in "${authors[@]}"; do
+  search "merged search for author $a" --owner "$owner" --author "$a" --merged-at ">=$since" \
+    --json repository,number,url || continue
+  jq_out "merged search for author $a" "$rows_array"', .url] | @tsv' || continue
+  rows="$out"
+  while IFS=$'\t' read -r repo num url; do
+    [[ -n "$repo" ]] || continue
+    in_scope "$repo" || continue
+    gh_json "read $repo#$num" pr view "$num" -R "$repo" --json reviews,mergedAt || continue
+    jq_out "read $repo#$num" '(.reviews // error("no reviews")) | length' || continue
+    [[ "$out" == 0 ]] || continue
+    jq_out "read $repo#$num" '.mergedAt // error("no mergedAt")' || continue
+    lines+=("- MERGED-NO-REVIEW $repo#$num by $a, merged $out: $url")
+    merged=$((merged + 1))
+  done <<<"$rows"
+done
+
+scope="$repos"
+[[ "$scope" == all ]] || scope="$(wc -w <<<"$repos" | tr -d ' ') repos"
+echo "- draft-sweep $(date -u +%Y-%m-%dT%H:%M:%SZ): $stale stale draft(s) over ${min_age_h}h, $merged merged with no review since $since, $gaps gap(s); owner $owner, scope $scope, authors ${authors[*]}"
+if ((${#lines[@]})); then
+  printf '%s\n' "${lines[@]}"
+fi
+exit 0
