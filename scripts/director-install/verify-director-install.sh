@@ -109,6 +109,22 @@ else
   bad "--rollback" "$(cat "$out/stderr")"
 fi
 
+# --- 6b. a re-install after the rollback returns to B ---------------------------
+if di cast-launch --ref origin/main; then
+  [[ "$(link_target)" == "$(want_link "$B")" ]] \
+    && ok "a re-install after --rollback returns the symlink to B" \
+    || bad "re-install after rollback: symlink" "$(link_target)"
+else
+  bad "re-install after rollback" "$(cat "$out/stderr")"
+fi
+if di cast-launch --rollback && [[ "$(link_target)" == "$(want_link "$A")" ]] \
+   && di cast-launch --rollback && [[ "$(link_target)" == "$(want_link "$B")" ]]; then
+  ok "--rollback twice toggles between the last two installs"
+else
+  bad "--rollback twice" "$(link_target)"
+fi
+di cast-launch --ref "$A" >/dev/null 2>&1 || true  # leave A installed for case 7
+
 # --- 7. a ref whose verify fails changes nothing -------------------------------
 before="$(link_target)"
 if di cast-launch --ref bad; then
@@ -147,6 +163,9 @@ if di --status; then
   grep -q "cast-launch.* 0 sim/twin/ commits behind main" "$out/stdout" \
     && ok "--status at the tip reports 0 behind" \
     || bad "--status at tip" "$(cat "$out/stdout")"
+  grep -q "^cast-launch: ${B:0:12} " "$out/stdout" \
+    && ok "--status names the installed sha" \
+    || bad "--status sha" "$(cat "$out/stdout")"
 else
   bad "--status exited nonzero at the tip"
 fi
