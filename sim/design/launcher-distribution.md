@@ -68,19 +68,53 @@ working tree involved:
    (`aae-orc/docs/examples/marvel-manifest-mokuzai-aae-teams.yaml` lines 34,
    49, 64, 82, 97 and 113), with more in its other manifests. So on mokuzai
    the component that matters is the seat wrapper, not the launcher.
-   - Now: install `director-mcp` and `director-mcp-seat` as
-     `director-install` components (aae-orc-x07y8, widened from "the shim,
-     later" to both, now), and repoint `~/.director/bin/director-mcp-seat` at
-     the installed copy BEFORE that clone is retired or re-cloned after the
-     rewrite. Until then, retiring the clone breaks the shim for every seat
-     that names it.
+   - Now: install `director-mcp` as a `director-install` component
+     (aae-orc-x07y8) and give both hosts the single shape in item 6. Repoint
+     `~/.director/bin/director-mcp-seat` at the installed copy BEFORE that
+     clone is retired or re-cloned after the rewrite; until then, retiring
+     the clone breaks the shim for every seat that names it.
    - Optional: the launcher and the pinned wardrobe clone, which nothing on
      mokuzai runs yet.
    - Later: moving skippy's manifests from inline role text to cast-launch is
      launch-parity phase 2's decision (aae-orc#421 names phase 2 as owner of
      that fix), so it waits for that ruling. The install makes the move a
      manifest edit when it comes.
-6. **Packaging.** install.sh is enough while there are two hosts, both run by
+6. **One seat shape on both hosts (operator ruling 2026-09-27: "it should
+   have the same shape on both computers, this -seat bit was invented").**
+   Today kinu registers `~/.director/bin/director-mcp`, with cast-launch
+   setting its environment, while mokuzai registers `director-mcp-seat`, a
+   bash wrapper. Read at main, which is byte-identical to mokuzai's copy at
+   da0dcea (`git diff da0dcea origin/main -- probe/nats-phase-0/director-mcp-seat`
+   is empty), the wrapper adds only an environment resolution chain:
+   - identity: `DIRECTOR_AGENT_ID`, else `MARVEL_SESSION`, else
+     `director-seat`;
+   - team and workspace: `DIRECTOR_TEAM` / `DIRECTOR_WORKSPACE`, else
+     `MARVEL_TEAM` / `MARVEL_WORKSPACE`, else refuse;
+   - bus credentials: `DIRECTOR_NATS_USER` and `_PASS` from the environment,
+     else user `director` with the seat password from
+     `${MARVEL_BUS_STATE:-~/.marvel/state/nats}/director.pass`, else refuse;
+   - `NATS_URL` defaulted (director-mcp already does this).
+
+   The single shape moves that chain into `director-mcp` itself, so every
+   host and harness registers the one command,
+   `~/.director/bin/director-mcp`. An explicit environment still wins, so
+   kinu's cast-launch seats behave exactly as today. The refusal messages
+   carry over. What stays in each manifest is harness configuration, not
+   shape: codex passes no environment to an MCP server, so a codex role
+   still declares `mcp_servers.director.env_vars` (documented in the wrapper
+   today).
+
+   Migration, with no manifest edit needed on the day:
+   - the installer places `director-mcp-seat` as a symlink to the installed
+     `director-mcp`, a compatibility alias;
+   - `--status` lists every manifest reference to the alias as a WARN;
+   - manifests move to `director-mcp` on their next edit;
+   - the alias is removed once `--status` shows none.
+
+   Skippy's report on what `-seat` does was requested by director. It is a
+   cross-check on this reading, and the doc is amended if it finds behavior
+   the source does not show.
+7. **Packaging.** install.sh is enough while there are two hosts, both run by
    the operator. Revisit at the first-user milestone, or when a third host or
    a non-operator user appears:
    - a brew formula for the code (launcher, shim, board);
@@ -153,7 +187,9 @@ working tree involved:
 3. `aae-orc-e9zo5`: the kinu wrapper exec change. Blocked by `aae-orc-v0mu6`.
 4. `aae-orc-yu5bv`: the mokuzai bootstrap. Blocked by `aae-orc-v0mu6` and
    `aae-orc-x07y8`.
-5. `aae-orc-x07y8`: `director-mcp` and `director-mcp-seat` as installer
-   components, with the `~/.director/bin` symlink WARN. Blocked by
-   `aae-orc-v0mu6`. Widened, and no longer "later", because mokuzai depends
-   on it.
+5. `aae-orc-x07y8`: `director-mcp` as an installer component, the
+   `director-mcp-seat` compatibility alias, and the `~/.director/bin`
+   symlink WARN. Blocked by `aae-orc-v0mu6`, and the alias by ticket 6.
+   Widened, and no longer "later", because mokuzai depends on it.
+6. The resolution chain moves into `director-mcp` (item 6), with table
+   tests for the managed, hand-run-with-seat and missing-team cases.
