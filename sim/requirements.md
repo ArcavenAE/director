@@ -1751,13 +1751,32 @@ change or touch a new resource.
 *Earned by: the operator's correction 2026-09-26.*
 *Source: JUDGMENT. Cross-refs R-150.*
 
+**R-166 (RULED) · a harvest routes every item to the graph that owns it.**
+Asked to harvest, director promoted only its own register from a fleet
+harvest of 31 seat files whose content mostly belonged elsewhere (the fleet
+controller, the knowledge graph, the role library, the pack tooling, project
+repos). The operator asked why the harvest was limited to director, and said
+twice that harvests "should not be limited to director." Director requests
+harvest material from every team, workers included, routes each item to the
+repo or graph that owns its subject, keeps a ledger of where each item landed,
+and takes the items with no home to the operator.
+*Earned by: O 2026-09-27g; the operator's rulings 2026-09-27 and 2026-09-28.*
+*Source: RULED. Cross-refs R-163.*
+
 ### Harvest diff (2026-09-27)
 
-- **Promoted (7):** R-159 (director is not the relay), R-160 (unreachable
+- **Promoted (8):** R-159 (director is not the relay), R-160 (unreachable
   replies are held), R-161 (a broadcast reports who received it), R-162
   (director's outbound queue is aged), R-163 (capture at the source), R-164
-  (transport config declared), R-165 (a grant covers the change it names).
+  (transport config declared), R-165 (a grant covers the change it names),
+  R-166 (a harvest routes every item to its owning graph).
 - **Unchanged, new instances:**
+  - R-162: the forward stall recurred the same evening (four batches, up to
+    90 minutes), after it had been logged once. Logging did not change the
+    behaviour; only an age alarm would.
+  - R-117: director sent two remote batches (about 36 reviews) without the
+    pane doorbell; the remote review team sat idle about five hours with
+    three reviewers free. Capacity was not the constraint; the wake was.
   - R-117 and R-93: a remote supervisor sat at an expired login and swallowed
     six messages while every send returned accepted; the panel's pane-text
     deaf-seat detection is the proposed mechanism.
@@ -1769,8 +1788,10 @@ change or touch a new resource.
   - R-154: a hub reload did not reach an established leaf; a merged launcher
     change was not live until the host checkout moved.
 - **Rejected for the register (routed elsewhere):**
-  - A history rewrite stripped commit signatures, and a signed-commit ruleset
-    applied later blocked a pull request built on rewritten commits. General
+  - A history rewrite stripped commit signatures (every commit before the
+    rewrite point now reads unsigned, every merge after it reads signed, so
+    the source is the rewrite itself, not any seat), and a signed-commit
+    ruleset applied later blocked a pull request built on rewritten commits. General
     repository practice, true with or without director: routed to the
     platform graph as a tooling finding.
   - The operator's reproducibility concern (accumulated local state versus
