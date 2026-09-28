@@ -14,10 +14,13 @@
 # actually run with.
 #
 # Usage: sim/twin/verify-cast-launch.sh     Exit nonzero on any miss.
+#        CAST_LAUNCH=<path> sim/twin/verify-cast-launch.sh
+#   CAST_LAUNCH names the launcher to test instead of the one beside this file,
+#   so an installed copy (~/.director/bin/cast-launch) is tested as installed.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LAUNCH="$here/cast-launch.sh"
+LAUNCH="${CAST_LAUNCH:-$here/cast-launch.sh}"
 [[ -x "$LAUNCH" ]] || { echo "cast-launch.sh not executable at $LAUNCH"; exit 2; }
 
 pass=0; fail=0
@@ -330,6 +333,57 @@ one_prompt "the --append-system-prompt=value form is stripped too" \
 one_prompt "other caller args pass through untouched" \
   --settings /tmp/policy.json --append-system-prompt "x" --session-id abc \
   --checks has:"--settings" has:"/tmp/policy.json" has:"--session-id" has:abc
+
+# --- overlays are state, not code: they live under the director home ---------
+# The default overlay root is ${DIRECTOR_HOME:-$HOME/.director}/overlays, never
+# the launcher's own directory. An installed launcher is a versioned directory
+# behind a symlink; an overlay beside it would vanish at the next install, and
+# a launcher run through a symlink would look for it in ~/.director/bin.
+# The launcher needs jq to attach an overlay; env -i narrows PATH, so link it in.
+if jqbin="$(command -v jq)"; then ln -sf "$jqbin" "$root/bin/jq"; fi
+printf '{"env":{"OVERLAY_MARK":"%s"}}\n' home > "$root/overlay-home.json"
+printf '{"env":{"OVERLAY_MARK":"%s"}}\n' dirhome > "$root/overlay-dirhome.json"
+printf '{"env":{"OVERLAY_MARK":"%s"}}\n' explicit > "$root/overlay-explicit.json"
+printf '{"env":{"OVERLAY_MARK":"%s"}}\n' beside > "$root/overlay-beside.json"
+merged_mark() { # the OVERLAY_MARK in the --settings file claude was handed, or none
+  local f
+  f="$(grep -A1 -x -- '--settings' "$root/out/claude.args" | tail -1)"
+  [[ -n "$f" && -f "$f" ]] && jq -r '.env.OVERLAY_MARK // "none"' "$f" || echo none
+}
+overlay_case() { # name, expected mark, then extra KEY=VALUE pairs for cast
+  local name="$1" want="$2"; shift 2
+  if cast builder "$@"; then
+    local got; got="$(merged_mark)"
+    [[ "$got" == "$want" ]] && ok "$name" || bad "$name" "overlay mark $got, want $want"
+  else
+    bad "$name" "$(cat "$root/out/stderr")"
+  fi
+}
+# A launcher copy with an overlays/ directory beside it, as an install tree or a
+# checkout would have. Its overlay must NOT be picked up.
+mkdir -p "$root/inst/overlays/by-role" "$root/.director/overlays/by-role" \
+         "$root/dhome/overlays/by-role" "$root/explicit/by-role"
+cp "$LAUNCH" "$root/inst/cast-launch.sh"
+cp "$root/overlay-beside.json" "$root/inst/overlays/by-role/builder.json"
+LAUNCH_SAVED="$LAUNCH"; LAUNCH="$root/inst/cast-launch.sh"
+
+overlay_case "no overlay anywhere but beside the launcher: none is attached" none
+cp "$root/overlay-home.json" "$root/.director/overlays/by-role/builder.json"
+overlay_case "the default overlay root is \$HOME/.director/overlays" home
+cp "$root/overlay-dirhome.json" "$root/dhome/overlays/by-role/builder.json"
+overlay_case "DIRECTOR_HOME moves the default overlay root" dirhome DIRECTOR_HOME="$root/dhome"
+cp "$root/overlay-explicit.json" "$root/explicit/by-role/builder.json"
+overlay_case "MARVEL_OVERLAY_ROOT still wins over the default" explicit \
+  DIRECTOR_HOME="$root/dhome" MARVEL_OVERLAY_ROOT="$root/explicit"
+
+# The same launcher run through a symlink, the way ~/.director/bin/cast-launch
+# is: it still resolves the home overlay and nothing beside the link.
+mkdir -p "$root/linkbin"
+ln -s "$root/inst/cast-launch.sh" "$root/linkbin/cast-launch"
+cp "$root/overlay-beside.json" "$root/linkbin/builder.json"
+LAUNCH="$root/linkbin/cast-launch"
+overlay_case "a launcher run through a symlink uses the home overlay" home
+LAUNCH="$LAUNCH_SAVED"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
