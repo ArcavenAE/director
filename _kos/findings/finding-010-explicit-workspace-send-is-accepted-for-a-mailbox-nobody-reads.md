@@ -3,7 +3,7 @@
 - **Date:** 2026-09-27
 - **Session:** arcaven-builder-g5-0, placing the 2026-09-27 harvest of another team's seats
 - **Subject:** director-mcp send resolution (R-92), the explicit `workspace` argument
-- **Confidence:** two live instances from seat harvests; the mechanism read in `probe/nats-phase-0/director-mcp/bus.go` at 02a3188
+- **Confidence:** two live instances from seat harvests; the mechanism read in `probe/nats-phase-0/director-mcp/bus.go` at 02a3188, re-signed as b9017e7; map in tag resign-2026-09-27
 
 ## 0. The sentence
 
