@@ -289,7 +289,7 @@ the discriminator did arrive, and the timeline around it is the evidence.
   before the hub restart and was not restarted with it.
 - **Before the restart:** sends to `global://kinu/supervisor` and
   `global://director` were refused by R-92 ("nothing is registered under
-  presence.kinu." / "presence.director."), and a send to `agent://ops/michael`
+  presence.kinu." / "presence.director."), and a send to `agent://ops/operator`
   in workspace aae-orc failed with `context deadline exceeded`. Recorded
   verbatim on ArcavenAE/aae-orc#396.
 - **Restart:** the operator restarted the hub at about 21:17Z after its

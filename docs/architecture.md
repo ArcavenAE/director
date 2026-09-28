@@ -127,10 +127,10 @@ sequenceDiagram
   participant Snd as reviewer-a (sender)
   participant Bus as NATS inbox (durable)
   participant Sh as director-mcp shim
-  participant M as michael (model session)
+  participant M as operator (model session)
 
-  Snd->>Bus: send_message to agent://ops/michael
-  Note over Bus: envelope stored, michael offline
+  Snd->>Bus: send_message to agent://ops/operator
+  Note over Bus: envelope stored, operator offline
   Snd-->>Snd: "accepted for delivery" + message_id (R-08: not delivered, not read)
   M->>Sh: wait_for_message (the poll)
   Sh->>Bus: fetch(1), long wait

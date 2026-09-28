@@ -44,7 +44,7 @@ type Bus struct {
 	globalWarn string
 
 	// instance is a per-session id minted at startup. Two sessions launched
-	// with the same DIRECTOR_AGENT_ID (the michael collision, R-49) still get
+	// with the same DIRECTOR_AGENT_ID (the operator collision, R-49) still get
 	// distinct instances, so their durable consumers and presence keys do not
 	// collapse into one (R-50). pid is recorded for the roster.
 	instance string
@@ -268,8 +268,8 @@ func (b *Bus) takeResumed() []string {
 // durables on a stream: those named with the seat's prefix AND filtered on
 // exactly the seat's own subjects (its inbox, plus its role inbox when it holds
 // a role), whose instance (the name after the prefix) has no live
-// presence row. The subject check is what keeps "michael" from reading
-// "michael-2"'s position; the name prefix alone would not. On the global tier
+// presence row. The subject check is what keeps "operator" from reading
+// "operator-2"'s position; the name prefix alone would not. On the global tier
 // every supervisor of a cluster filters on the same subject, and agent ids may
 // contain '_', so the prefix mcp_global_sup_ also names sup_T1's durables. An
 // instance is a ULID, which never contains '_', so a remainder that does

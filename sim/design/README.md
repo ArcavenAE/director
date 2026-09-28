@@ -2,7 +2,7 @@
 
 These four briefs came out of the 2026-09-12 identity roundtable, after a live
 incident: several Claude Code sessions on one host loaded the same local-scope
-MCP config and all registered as `agent://ops/michael` (the OS user), so two
+MCP config and all registered as `agent://ops/operator` (the OS user), so two
 real sessions collided on one address and one presence key.
 
 They are candidate designs for further development and probes, not firm specs.

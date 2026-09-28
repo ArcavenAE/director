@@ -263,7 +263,7 @@ No arguments. Result:
 {
   "count": 2,
   "present": [
-    { "agent_id": "michael", "instance": "01M2JJ8R...", "pid": 42657,
+    { "agent_id": "operator", "instance": "01M2JJ8R...", "pid": 42657,
       "state": "busy", "team": "ops", "workspace": "aae-orc", "ts": "2026-09-15T19:50:00Z" }
   ]
 }
@@ -430,7 +430,7 @@ the same contract (`schema.arcaven.com`).
   "in_reply_to": null,
   "sender": { "agent_id": "reviewer-a", "role": "reviewer", "workspace": "aae-orc",
               "session": "uuid-abc", "principal": null },
-  "recipient": { "address": "agent://ops/michael", "team": "ops" },
+  "recipient": { "address": "agent://ops/operator", "team": "ops" },
   "performative": "REQUEST",
   "content": { "type": "text", "data": "please review PR #12", "refs": ["bd:aae-orc-spbc"] },
   "reply_by": null,
