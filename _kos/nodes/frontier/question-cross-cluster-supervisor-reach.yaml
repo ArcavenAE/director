@@ -1,0 +1,81 @@
+id: question-cross-cluster-supervisor-reach
+type: question
+confidence: frontier
+title: "Can a supervisor on a non-hub cluster reach the hub cluster's supervisors over the global tier, and what keeps that reach after a grant change?"
+tags: [director, global-tier, leafnode, supervisor]
+content: |
+  Opened 2026-09-28 from an operator request. On 2026-09-28 a mokuzai
+  supervisor sent to global://kinu/supervisor twice (13:18Z and 13:20Z).
+  Both failed with "global publish to global://kinu/supervisor
+  (global.kinu.supervisor.inbox) failed: context deadline exceeded (... a
+  down link and a credential that does not grant this cluster's stream both
+  surface as no responders)". The reverse direction worked the same hour,
+  and global://director from mokuzai kept working, so every mokuzai to kinu
+  supervisor reply went through director by hand.
+
+  ## What the mokuzai side shows (read-only, 2026-09-28)
+
+  The proximate cause is on the sending side. Mokuzai's own nats-server
+  logs a Publish Violation on global.kinu.supervisor.inbox for the sending
+  users: twice at 13:18:36Z and 13:20:02Z (the two failed sends) and once
+  at 14:32:30Z (a PROBE publish). Mokuzai's authorization gives its leaf
+  users two global publish grants, global.director.inbox and
+  $JS.global.API.>, so none of them may publish to any
+  global.<cluster>.supervisor.inbox. The leaf is up, and a control send to
+  global://director from the same seat worked.
+
+  The mokuzai-side grant change is marvel#403 (merged as b1f4953, released
+  in alpha-20260928-201034-b1f4953). It gives a team holding a role named
+  exactly "supervisor" publish on global.*.supervisor.inbox once a daemon
+  running that build re-renders its broker authorization. Whether mokuzai
+  runs that build and has re-rendered is not recorded here; the probe
+  checks it.
+
+  ## What the kinu side shows (read-only, 2026-09-28 ~14:35Z)
+
+  - The leaf link is up: the mokuzai leaf (JetStream domain "mokuzai")
+    connected 2026-09-26 06:08Z and carries traffic in both directions.
+  - The consumer side exists: stream GLOBAL_TO_kinu (global.kinu.>) has four
+    consumers filtered on global.kinu.supervisor.inbox, one per kinu
+    supervisor that holds a global presence (4 of 6). Nothing from mokuzai
+    has ever landed in it.
+  - A possible second layer: the hub's grant for the mokuzai leaf to
+    publish global.kinu.supervisor.inbox first appears in the config
+    reloaded at 2026-09-27 16:22Z, after that leaf connected. finding-009
+    records that such a grant does not reach an open leaf. The mokuzai-side
+    refusal explains the failure without it, so it is untested here, not
+    ruled out.
+
+  ## The question
+
+  A. After mokuzai grants global.kinu.supervisor.inbox (marvel#403), is
+     reach restored
+     with no leaf reconnect, or only after the mokuzai leaf reconnects? (The
+     first confirms the hub grant is live; the second is a second instance
+     of finding-009.)
+  B. Follow-on: what should a grant change do so that it cannot silently
+     leave an open leaf on stale permissions: end the runbook with a leaf
+     reconnect and a named check (finding-009 question B), have the hub
+     refuse or flag the change until affected leaves reconnect, or have the
+     sender's error name the stale-grant case apart from a down link?
+  C. Follow-on: is reach symmetric by construction? Today each direction
+     depends on publish grants set separately on each cluster and at the
+     hub, so reach is granted pair by pair and layer by layer. What keeps a
+     new cluster from starting half-reachable?
+
+  Prior in this graph: finding-009 (reloaded grant misses an open leaf;
+  here a possible second layer), finding-008 (a refusal seen as a
+  timeout), finding-006 (global tier has no per-agent address). Orc finding-178 (marvel leaf controls are reload-only).
+edges:
+  - target: finding-009-hub-grant-reload-misses-existing-leaf
+    type: derives
+provenance:
+  created_by: agent
+  session: 2026-09-28 cross-cluster supervisor reach, kinu arm (arcaven-research-supervisor-g5-0)
+  created_at: "2026-09-28"
+  notes: >
+    Operator request routed by director to arcaven-supervisor. The far-side
+    arm runs on mokuzai (ops-supervisor-g5-0). Related: director#119 (the
+    kinu local broker has no authorization block); R-86, R-94, R-95 in
+    sim/requirements.md. Tracked as director#155 (the defect report) and
+    bd aae-orc-8u04y.
