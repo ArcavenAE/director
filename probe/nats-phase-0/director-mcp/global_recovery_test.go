@@ -36,7 +36,7 @@ func globalLossFixture(t *testing.T, ctx context.Context) (*Bus, jetstream.JetSt
 	url := startScratchServer(t)
 	nc, _ := provision(t, ctx, url)
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
-	self := Sender{AgentID: "michael", Workspace: "aae-orc", Team: "ops"}
+	self := Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
 	bus, err := connect(ctx, url, self, &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func globalLossFixture(t *testing.T, ctx context.Context) (*Bus, jetstream.JetSt
 	if err != nil || first.Env == nil || first.Env.MessageID != "g0" {
 		t.Fatalf("setup read: %+v %v", first, err)
 	}
-	if err := gjs.DeleteConsumer(ctx, globalDirectorStream, globalDurable("michael", bus.instance)); err != nil {
+	if err := gjs.DeleteConsumer(ctx, globalDirectorStream, globalDurable("operator", bus.instance)); err != nil {
 		t.Fatal(err)
 	}
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g1", "INFORM", "after the loss")
@@ -69,7 +69,7 @@ func TestBrokerLostGlobalDurableIsRecreatedForThePoll(t *testing.T) {
 	if !strings.Contains(res.GlobalWarn, "recreated") {
 		t.Errorf("the recreate must be reported, got warning %q", res.GlobalWarn)
 	}
-	if _, err := gjs.Consumer(ctx, globalDirectorStream, globalDurable("michael", bus.instance)); err != nil {
+	if _, err := gjs.Consumer(ctx, globalDirectorStream, globalDurable("operator", bus.instance)); err != nil {
 		t.Errorf("durable not back on the hub: %v", err)
 	}
 	// The notice is reported once, not on every later poll.

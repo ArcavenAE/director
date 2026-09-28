@@ -33,8 +33,8 @@ content: |
   b. Check nobody already holds the seat address (kv ls AGENT_STATE). On the
      first run this check finds exactly one holder and it is the session
      running the check, because the project-scope registration
-     (claude mcp get director-mcp: DIRECTOR_AGENT_ID=michael, local tier
-     only) makes every Claude opened in aae-orc join as agent://ops/michael.
+     (claude mcp get director-mcp: DIRECTOR_AGENT_ID=operator, local tier
+     only) makes every Claude opened in aae-orc join as agent://ops/operator.
      Identifying the holder requires mapping presence pid to shim to parent
      claude to tty and cwd; there is no session handle in the record.
   c. Preflight the cast (director-mcp --preflight). Passes.
@@ -55,11 +55,11 @@ content: |
     moved at 13:57 the same day (#54). Presence carries no build revision
     (finding-169, cause 1), so a stale seat is indistinguishable from a
     current one on the roster. Every restart is a chance to run old code.
-  - The seat's bus id has changed across restarts (planner, then michael,
+  - The seat's bus id has changed across restarts (planner, then operator,
     now `director` per #54). Mail addressed to a retired id stays on the
     retired subject (finding-169, cause 4). Found live: one PROPOSE from
-    arcaven-marvel-builder-g1-0 stored on agent.aae-orc.ops.michael.inbox
-    2026-09-18 19:07 UTC, unread by all seventeen mcp_michael_* durables,
+    arcaven-marvel-builder-g1-0 stored on agent.aae-orc.ops.operator.inbox
+    2026-09-18 19:07 UTC, unread by all seventeen mcp_operator_* durables,
     two hours from 24 h eviction when captured to the board. The startup
     path has no "drain the retired inboxes before the new id takes over"
     step, and the product is custody.

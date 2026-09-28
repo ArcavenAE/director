@@ -66,7 +66,7 @@ Two distinct identities, and the whole point is not to fuse them:
 So the crossing enable is two things kept separate: name the cluster label (the cluster-
 identity party settled this), AND resume the director seat as a lease acquisition in global
 mode with a spawn-assigned id, not an address grab. The crossing front-ran this design because
-"resume the seat in global mode" was an address grab on the colliding `agent://ops/michael`
+"resume the seat in global mode" was an address grab on the colliding `agent://ops/operator`
 identity; with the lease, resuming the seat is a create-only acquisition that is single-holder
 and fenced, which is exactly the design the crossing was missing.
 
@@ -148,5 +148,5 @@ ship in the physical-access phase (ID-A, SEAT-A/B/D/E/F/G, BEAT-C, BEAT-G) and w
 named deferred axis (ID-B, the crypto completion of SEAT-C, R-88, the R-05 nonrepudiation log),
 and it ties the scheme to the crossing so the crossing re-clears with a design. The address,
 the seat, and the durable conversation identity stay three separate concepts (ID-D); the
-michael collision fused address with the OS user and left the seat undefined, and keeping them
+operator collision fused address with the OS user and left the seat undefined, and keeping them
 apart is the design.

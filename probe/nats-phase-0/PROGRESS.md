@@ -22,8 +22,8 @@ env-driven now, so a bare `nats-server -c nats-server.conf` needs the variable
 exported first).
 
 ## Sub-probe 2: envelope-v1 on the wire. PASS.
-Published envelope-v1 (REQUEST, agent://ops/michael) to
-agent.aae-orc.ops.michael.inbox with Nats-Msg-Id = message_id. Delivered to a
+Published envelope-v1 (REQUEST, agent://ops/operator) to
+agent.aae-orc.ops.operator.inbox with Nats-Msg-Id = message_id. Delivered to a
 durable per-agent consumer, validated intact (schema_version 1, performative
 REQUEST, sender.principal null as the schema requires). Also landed on
 agent.audit. DEDUPE VERIFIED: two publishes with the same Nats-Msg-Id left
@@ -40,8 +40,8 @@ stderr, JSON-RPC on stdout.
 
 End-to-end through the real MCP stdio path, two independent shim processes:
 - reviewer-a: initialize, tools/list (5 tools), send_message to
-  agent://ops/michael -> accepted for delivery with a ULID message_id.
-- michael: wait_for_message -> RECEIVED the envelope intact (REQUEST, correct
+  agent://ops/operator -> accepted for delivery with a ULID message_id.
+- operator: wait_for_message -> RECEIVED the envelope intact (REQUEST, correct
   sender and recipient, sender.principal null), list_roster -> both agents
   present from the KV.
 
@@ -55,7 +55,7 @@ sentence holds at the transport: the harness owns push and keeps it internal.
 
 ## Sub-probe 4: offline queueing. PASS (fell out of sub-probe 3).
 
-reviewer-a sent and its process EXITED before michael ever connected. michael
+reviewer-a sent and its process EXITED before operator ever connected. operator
 then connected and its first wait_for_message returned the message. JetStream
 limits retention plus a durable per-agent consumer with DeliverAll is
 store-and-forward: a message sent to an absent session waits in the stream and
@@ -63,7 +63,7 @@ replays when that session first pulls. No loss, delivered in order.
 
 ## Sub-probe 5: human participation + latency. PASS (live two-party exchange through the operator's Claude Code, 2026-09-12).
 The shim must be wired into an actual Claude Code session (claude mcp add) so
-the operator's own session joins as agent://ops/michael and a live two-way
+the operator's own session joins as agent://ops/operator and a live two-way
 exchange can be timed. This is the harness-integration boundary and a config
 change to the user's Claude Code, held for operator go-ahead. The bus-level
 latency is sub-millisecond locally; the meaningful number is how long until
@@ -83,13 +83,13 @@ measure. That half stays held for operator go-ahead (claude mcp add).
 
 LIVE HARNESS BOUNDARY VERIFIED 2026-09-11. Registered the shim with the
 operator's Claude Code at local scope (claude mcp add --scope local
-director-mcp, env DIRECTOR_AGENT_ID=michael/TEAM=ops/WORKSPACE=aae-orc).
+director-mcp, env DIRECTOR_AGENT_ID=operator/TEAM=ops/WORKSPACE=aae-orc).
 `claude mcp list` reports director-mcp Connected: Claude Code's own MCP
 client launched the binary, connected to NATS, and completed
 initialize + tools/list. The connect fired the presence heartbeat, and
-presence.ops.michael landed in the KV (state idle, workspace aae-orc) as
+presence.ops.operator landed in the KV (state idle, workspace aae-orc) as
 read back live. So a genuine Claude Code session joins the bus as
-agent://ops/michael, not a synthetic shim. That is the harness-integration
+agent://ops/operator, not a synthetic shim. That is the harness-integration
 boundary of sub-probe 5, done against a live harness.
 
 WHAT REMAINS, AND WHY: the tools (send_message, wait_for_message, ...) load
@@ -104,11 +104,11 @@ session's context; the poll is the receive.
 To remove the wiring: claude mcp remove director-mcp --scope local.
 
 LIVE TWO-PARTY EXCHANGE 2026-09-12. After a session restart the tools
-loaded, so this Claude Code session held director-mcp as agent://ops/michael
+loaded, so this Claude Code session held director-mcp as agent://ops/operator
 and drove the full loop from inside the model:
-- set_presence(busy) + list_roster returned michael present (ops, aae-orc):
+- set_presence(busy) + list_roster returned operator present (ops, aae-orc):
   presence is live transport state read back by the real harness client.
-- An independent reviewer-a shim sent a REQUEST to agent://ops/michael and
+- An independent reviewer-a shim sent a REQUEST to agent://ops/operator and
   exited. The live session then called wait_for_message and the envelope
   surfaced intact (REQUEST, sender reviewer-a, principal null, refs kept,
   conversation_id set). This is the receive-is-a-poll shape confirmed in the
@@ -185,7 +185,7 @@ ls AGENT_STATE` and `kv get AGENT_STATE presence.<team>.<id> --raw`.
 
 Two operational cautions learned here:
 - Assign a DISTINCT id per session at the launcher. Two sessions launched with
-  the same id is the michael collision (R-49): shared durable, raced or
+  the same id is the operator collision (R-49): shared durable, raced or
   duplicated mail, one presence key.
 - Do NOT `pkill -f 'director-mcp'` to clean up shims. The harness-spawned
   server for THIS session is also a director-mcp process, so the broad match

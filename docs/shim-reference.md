@@ -49,9 +49,33 @@ daemon; a launcher supplies the rest.
 |---|---|
 | `director-mcp` | serve MCP on stdin and stdout, log to stderr |
 | `director-mcp --preflight` | connect, verify the broker is provisioned (and the hub through the domain when global mode is on), print `preflight: ok`, exit. Creates no consumer, writes no presence. |
+| `director-mcp unread [--json]` | read-only report of unread mail per seat durable on `AGENT_INBOX` (see below). Needs only `NATS_URL`; no identity. Creates no consumer, acks nothing, writes no presence. Always exits 0. |
+
+Any other argument is refused with exit 2, rather than ignored and a live
+shim started (director#75).
 
 Exit codes: 2 for a configuration refusal (missing or malformed identity,
-bad global levers), 1 for a failed connection or preflight.
+bad global levers, unknown arguments), 1 for a failed connection or
+preflight.
+
+### `unread`
+
+For every durable named `mcp_<agent>_<instance>` on `AGENT_INBOX`, one line,
+oldest unread first:
+
+- `pending`: messages not yet acked (`NumPending` plus `NumAckPending`),
+  with the ack floor;
+- the oldest unread message: the first stored message on any of the
+  durable's filter subjects after its ack floor (and never before a resumed
+  durable's start), with its sequence, stored time and age;
+- the live session's presence `state`, `ts` and `rev`, or `no presence`
+  when no row matches. A durable with no presence is mail waiting for a
+  session that is not live.
+
+`--json` prints the same as `{stream, read_at, durables: [...],
+warnings}`. A presence bucket or consumer listing it could not read is a
+warning, and the presence it did not read is not reported as absent. The
+global tier's durables are not covered yet (LR-3 slice M).
 
 ## Startup behaviour
 
@@ -244,7 +268,7 @@ No arguments. Result:
 {
   "count": 2,
   "present": [
-    { "agent_id": "michael", "instance": "01M2JJ8R...", "pid": 42657,
+    { "agent_id": "operator", "instance": "01M2JJ8R...", "pid": 42657,
       "state": "busy", "team": "ops", "workspace": "aae-orc", "ts": "2026-09-15T19:50:00Z" }
   ]
 }
@@ -411,7 +435,7 @@ the same contract (`schema.arcaven.com`).
   "in_reply_to": null,
   "sender": { "agent_id": "reviewer-a", "role": "reviewer", "workspace": "aae-orc",
               "session": "uuid-abc", "principal": null },
-  "recipient": { "address": "agent://ops/michael", "team": "ops" },
+  "recipient": { "address": "agent://ops/operator", "team": "ops" },
   "performative": "REQUEST",
   "content": { "type": "text", "data": "please review PR #12", "refs": ["bd:aae-orc-spbc"] },
   "reply_by": null,
@@ -468,10 +492,16 @@ type.
 
 ```json
 { "agent_id": "fleet-envoy-g1-0", "instance": "01M2GQ1KMEDB39RAPCGA8CK5HM", "pid": 92392,
-  "state": "idle", "team": "fleet", "workspace": "ops2", "ts": "2026-09-15T19:50:00Z" }
+  "state": "idle", "team": "fleet", "workspace": "ops2", "ts": "2026-09-15T19:50:00Z",
+  "rev": "5c5faa3...+dirty" }
 ```
 
 A session holding a role adds `role` (for example `"role": "reviewer"`).
+
+`rev` is the shim revision, read from the binary's own build info:
+`vcs.revision`, with `+dirty` when `vcs.modified` is true, and `"unknown"`
+for a binary built without VCS stamping (`-buildvcs=false`, or outside a
+repository). A row with no `rev` comes from a shim older than LR-3.
 
 Global rows add `cluster` and `role`, and a `tier` column in the merged
 roster. The record carries the harness's own view of nothing: `state` is

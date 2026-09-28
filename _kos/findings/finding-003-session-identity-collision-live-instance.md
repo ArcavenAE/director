@@ -8,16 +8,16 @@
 
 ## 1. What was observed
 
-Two director-mcp roster entries both registered as `agent://ops/michael` (team `ops`, workspace `aae-orc`), colliding on one address. Process ancestry separated them:
+Two director-mcp roster entries both registered as `agent://ops/operator` (team `ops`, workspace `aae-orc`), colliding on one address. Process ancestry separated them:
 
 - pid 74798 (ttys025), parent `claude --resume director`: the genuine director seat, instance `01M2M33CE6C8S8PP7T82XJBWZW`.
-- pid 43993 (ttys047), parent `claude --resume architect` (pid 86260): a different-purpose session, not a second director. Its shim loaded the same project-scope MCP config, took `DIRECTOR_AGENT_ID=michael`, and heartbeat to the same address by accident.
+- pid 43993 (ttys047), parent `claude --resume architect` (pid 86260): a different-purpose session, not a second director. Its shim loaded the same project-scope MCP config, took `DIRECTOR_AGENT_ID=operator`, and heartbeat to the same address by accident.
 
-The sharper fact this run adds over the 2026-09-12 incident in `identity-at-spawn.md` (two sessions that were both director-flavored) is that the colliding sessions had different purposes. An architect session silently occupied the human's director address. The failure is not "two directors ran," it is "every session in the project dir is michael, and one of them happens to be the director."
+The sharper fact this run adds over the 2026-09-12 incident in `identity-at-spawn.md` (two sessions that were both director-flavored) is that the colliding sessions had different purposes. An architect session silently occupied the human's director address. The failure is not "two directors ran," it is "every session in the project dir is operator, and one of them happens to be the director."
 
 ## 2. Mechanism
 
-Identity is sourced from static configuration and defaults to the OS user. `probe/nats-phase-0/director-mcp/main.go:54-61` requires `DIRECTOR_AGENT_ID` and exits if it is empty, so the code does not itself derive from the OS user. The OS-user default enters from outside the repo: an earlier `claude mcp add --scope local` wrote one project-scope MCP server config with `DIRECTOR_AGENT_ID=michael` baked in, and every Claude Code session launched in the project dir loads that same env (`sim/design/identity-at-spawn.md:9-14`). So N sessions in one project dir claim one address.
+Identity is sourced from static configuration and defaults to the OS user. `probe/nats-phase-0/director-mcp/main.go:54-61` requires `DIRECTOR_AGENT_ID` and exits if it is empty, so the code does not itself derive from the OS user. The OS-user default enters from outside the repo: an earlier `claude mcp add --scope local` wrote one project-scope MCP server config with `DIRECTOR_AGENT_ID=operator` baked in, and every Claude Code session launched in the project dir loads that same env (`sim/design/identity-at-spawn.md:9-14`). So N sessions in one project dir claim one address.
 
 The roster makes the collision hard to see. `list_roster` (`probe/nats-phase-0/director-mcp/tools.go`, then `bus.go` `roster`) returns every presence key, and the only fields that differ between two colliding sessions are the instance ULID and the shim pid. The addressable `agent_id` is identical, so nothing a sender addresses distinguishes them, and two shims that share one durable name race one consumer (the original silent-drop defect re-entering through the identity layer, documented in `identity-at-spawn.md`).
 

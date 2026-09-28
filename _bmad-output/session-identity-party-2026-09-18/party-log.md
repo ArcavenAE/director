@@ -4,7 +4,7 @@ Subject: DECIDE the director-session-identity scheme the crossing enable needs. 
 was deferred because "resume the director seat in global mode" front-runs this design: today
 the seat is grabbed by address, and the address collides. Decide four things the operator
 named: a distinct stable identity at spawn (today every session on this host is
-`agent://ops/michael`), the human-director seat's authority, shiftchange custody without
+`agent://ops/operator`), the human-director seat's authority, shiftchange custody without
 losing the seat, and what stops a session falsely taking the seat. Ground in R-01, R-05,
 R-06, and "there are no peers." Redaction held: no origin organization, its short environment
 tokens, its infrastructure repository, or the deployed hub hostname.
@@ -15,8 +15,8 @@ This is a decision over well-developed design, not a greenfield search, so I rea
 before casting rather than after.
 
 - `sim/design/identity-at-spawn.md`: the collision root cause (identity from the OS user via
-  a project-scope MCP config, so every session is `agent://ops/michael`; two shims bind the
-  same `mcp_michael` durable on one filter subject and RACE for delivery, so the loser
+  a project-scope MCP config, so every session is `agent://ops/operator`; two shims bind the
+  same `mcp_operator` durable on one filter subject and RACE for delivery, so the loser
   silently loses mail, the original silent-drop defect re-entering through identity); the
   three fused concepts (address, seat, durable conversation identity); options ID-A
   (launcher-assigned name), ID-B (self-minted DID + JWS card), ID-C (hybrid); the
@@ -53,7 +53,7 @@ Five seats, each a distinct discipline.
 
 **Ida:** Start from the fused concepts, because the collision is one bug wearing three hats.
 Address is where you reach a session. Seat is whether a session is the human's director.
-Durable conversation identity is the handle R-06 says survives a restart. The michael bug
+Durable conversation identity is the handle R-06 says survives a restart. The operator bug
 fused address with the OS user and left the seat undefined. My position: ID-A ships now, a
 launcher-assigned distinct name with `--strict-mcp-config` so the baked config cannot override
 it, plus the durable-consumer fix so a name is unique per session and a duplicate id can never
@@ -149,7 +149,7 @@ mechanism, but that is an open question, not a decision for tonight.
 
 **Ida:** Then the crossing enable is two clean actions: name the cluster label, and resume the
 seat as a lease acquisition with a spawn-assigned id. The reason the crossing front-ran the
-design is that "resume the seat" meant grabbing the michael address, which is neither of those.
+design is that "resume the seat" meant grabbing the operator address, which is neither of those.
 With the lease it is a create-only acquisition, single-holder and fenced. That is the design
 the crossing was missing, stated in one sentence.
 

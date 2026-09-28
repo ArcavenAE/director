@@ -108,7 +108,7 @@ seat authority:
 
 This satisfies R-01 (who-speaks-with-what-authority is a field, not prose) and
 R-02 (authority strength is stated, never inferred). It keeps three things
-apart that the michael collision had fused: `sender.agent_id` (the routing
+apart that the operator collision had fused: `sender.agent_id` (the routing
 address), `sender.principal` (identity, RESERVED), and `authority.seat` (the
 grant). The envelope doc's `role://{team}/{role}` address resolves to whoever
 currently holds the matching seat key, so the seat lease can BE the
@@ -185,7 +185,7 @@ rides on an address that a restart invalidates.
 
 - **SEAT-A.** The human-director seat is a capability held as a lease, not an
   identity and not an address; a successor ACQUIRES it, it is never inherited by
-  name. Source: JUDGMENT (design conclusion), grounded in the OBSERVED michael
+  name. Source: JUDGMENT (design conclusion), grounded in the OBSERVED operator
   collision that fused identity and address.
 - **SEAT-B.** Seat holding is proven by a monotonic fencing token issued at
   acquisition; a receiver validates a seat-authority message by comparing its

@@ -8,21 +8,21 @@ assigned at harvest.
 ## The problem, stated precisely
 
 `claude mcp add --scope local` wrote one MCP server config with
-`DIRECTOR_AGENT_ID=michael` (the OS user) baked in. Every Claude Code session
+`DIRECTOR_AGENT_ID=operator` (the OS user) baked in. Every Claude Code session
 launched in the project loads that same env, so every session's shim connected
-to the bus as `agent://ops/michael`. Two real sessions ran at once and both
-were michael.
+to the bus as `agent://ops/operator`. Two real sessions ran at once and both
+were operator.
 
 The failure is worse than an ambiguous label. Both shims create the same
-durable consumer, `mcp_michael`, on the same filter subject
-`agent.aae-orc.ops.michael.inbox`. In JetStream two clients binding one durable
+durable consumer, `mcp_operator`, on the same filter subject
+`agent.aae-orc.ops.operator.inbox`. In JetStream two clients binding one durable
 name share it: each message is delivered to exactly one of them, whichever
-calls `wait_for_message` first. So a message addressed to michael is not
+calls `wait_for_message` first. So a message addressed to operator is not
 duplicated to both sessions, it is raced, and the session that loses the race
 never sees mail that the sender was told was delivered. That is the original
 silent-drop defect (the incident that started the project, R-08 and R-09)
 re-entering through the identity layer. Presence collides too: both write
-`presence.ops.michael`, last writer wins, so the roster shows one michael where
+`presence.ops.operator`, last writer wins, so the roster shows one operator where
 two sessions exist.
 
 Root cause: identity is sourced from static configuration and defaults to the
@@ -42,12 +42,12 @@ identities route cleanly. This is OBSERVED, this session.
 
 ## A second live instance (2026-09-17)
 
-A later run sharpened the incident with OS-level process ancestry. Two shims again registered as `agent://ops/michael`, but this time they were different-purpose sessions, not two director-flavored ones:
+A later run sharpened the incident with OS-level process ancestry. Two shims again registered as `agent://ops/operator`, but this time they were different-purpose sessions, not two director-flavored ones:
 
 - pid 74798 (ttys025), parent `claude --resume director`: the genuine director seat, instance `01M2M33CE6C8S8PP7T82XJBWZW`.
 - pid 43993 (ttys047), parent `claude --resume architect` (pid 86260): an architect session whose shim loaded the same project-scope config and claimed the director address by accident.
 
-The only roster fields that differed were the instance ULID and the shim pid; the addressable `agent_id` was identical. So the failure is not "two directors ran," it is "every session in the project dir is michael, and one of them is the director." This is the same root cause (identity from the OS user via a project-scope MCP config) with a worse symptom: an unrelated role silently occupying the human's director address. R-49 and R-50 remain the fixes; ID-A closes it now. Recorded as finding-003 in director's graph; the presence-liveness half of the same run is finding-166 instance (c) in the orc graph.
+The only roster fields that differed were the instance ULID and the shim pid; the addressable `agent_id` was identical. So the failure is not "two directors ran," it is "every session in the project dir is operator, and one of them is the director." This is the same root cause (identity from the OS user via a project-scope MCP config) with a worse symptom: an unrelated role silently occupying the human's director address. R-49 and R-50 remain the fixes; ID-A closes it now. Recorded as finding-003 in director's graph; the presence-liveness half of the same run is finding-166 instance (c) in the orc graph.
 
 ## Three concepts the collision had fused
 
@@ -56,7 +56,7 @@ The only roster fields that differed were the instance ULID and the shim pid; th
 - **Durable conversation identity**: the stable handle R-06 says to key on,
   which survives a restart even as pid, socket, and roster name change.
 
-These are three different things. The michael collision fused address with the
+These are three different things. The operator collision fused address with the
 OS user and left the seat undefined. Keeping them separate is the design.
 
 ## Options
@@ -109,11 +109,11 @@ misconfigured duplicate id cannot silently steal another session's mail.
 - **ID-A (OBSERVED)**: Session identity is assigned at spawn by the launcher,
   never self-asserted by the session and never derived from the OS user. On one
   host, N sessions get N distinct addresses. Earned by: two live sessions
-  collided on `agent://ops/michael` this session.
+  collided on `agent://ops/operator` this session.
 - **ID-B (OBSERVED)**: Two sessions sharing one address share one durable
   consumer and race for delivery, so the loser silently loses mail; a session's
   durable consumer must be unique per session. Earned by: the JetStream durable
-  semantics plus the michael collision this session.
+  semantics plus the operator collision this session.
 - **ID-C (OBSERVED)**: Distinct identities route correctly across harnesses; the
   bus supports multiple sessions once identity is distinct. Earned by: the
   cc-planner and codex-a REQUEST/AGREE handshake this session.
