@@ -321,8 +321,11 @@ Result:
   "note": "accepted is not delivered or read; each recipient reports those (R-08)" }
 ```
 
-`failed` lists `{ "to", "error" }` for any per-recipient publish that failed;
-the others still went. Before director#121 a broadcast published core NATS to
+`failed` lists `{ "to", "error", "audit" }` for any per-recipient publish
+that failed, each audited as its own refused send; the others still went.
+When every per-recipient publish fails, nothing was accepted, so the
+broadcast is refused with an error naming each seat, its error and its audit
+record, rather than reported as accepted with an empty `sent`. Before director#121 a broadcast published core NATS to
 a subject no stream captured and no session subscribed, and reported
 `"broadcast sent"` for a message that reached no one.
 
