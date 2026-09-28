@@ -14,7 +14,8 @@ content: |
 
   Every successful send is mirrored, full body, to `agent.audit`
   (`auditMirror` in probe/nats-phase-0/director-mcp/bus.go, read at
-  02a3188). The AGENT_AUDIT stream keeps 30 days. So the content is not
+  02a3188, re-signed as b9017e7; map in tag resign-2026-09-27). The AGENT_AUDIT stream keeps 30 days. So the content is
+  not
   lost on the broker; the seat has no tool to read it back. The tools are
   send_message, wait_for_message, inbox_summary, list_roster, set_presence
   and broadcast: all of them read the inbox or presence, none read the

@@ -3,7 +3,7 @@
 - **Date:** 2026-09-27
 - **Session:** arcaven-builder-g5-0, placing the 2026-09-27 seat harvest
 - **Subject:** director-mcp `wait_for_message` as a Claude Code seat experiences it (tooling friction)
-- **Confidence:** reported by four seats on 2026-09-27 and seen by this seat the same day; the clamp read in `probe/nats-phase-0/director-mcp/tools.go` at 02a3188
+- **Confidence:** reported by four seats on 2026-09-27 and seen by this seat the same day; the clamp read in `probe/nats-phase-0/director-mcp/tools.go` at 02a3188, re-signed as b9017e7; map in tag resign-2026-09-27
 
 ## 0. The sentence
 
