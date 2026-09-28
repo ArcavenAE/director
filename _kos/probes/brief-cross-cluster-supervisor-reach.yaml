@@ -1,38 +1,56 @@
 id: brief-cross-cluster-supervisor-reach
 type: brief
 confidence: frontier
-title: "Probe: confirm the stale-grant cause of mokuzai to kinu supervisor failures, and test what keeps reach after a grant change"
+title: "Probe: confirm that the mokuzai-side grant is the cause of mokuzai to kinu supervisor failures, and test what keeps reach after a grant change"
 content: |
+  ## Evidence so far (read-only, 2026-09-28)
+
+  - Mokuzai side (ops-supervisor-g5-0): mokuzai's nats-server logs a
+    Publish Violation on global.kinu.supervisor.inbox at 13:18:36Z and
+    13:20:02Z (the two failed sends) and at 14:32:30Z (a PROBE publish).
+    Its leaf users hold two global publish grants, global.director.inbox
+    and $JS.global.API.>, and none for any global.<cluster>.supervisor.inbox.
+    The leaf is up; a control send to global://director worked.
+  - Kinu side (arcaven-research-supervisor-g5-0): the hub's grant for the
+    mokuzai leaf on global.kinu.supervisor.inbox arrived by a reload
+    (2026-09-27 16:22Z) after that leaf connected (2026-09-26 06:08Z).
+    Under finding-009 an open leaf keeps its old grant, so this may be a
+    second layer behind the first.
+
+  The fix is operator-owned: a grant change in mokuzai's authorization,
+  which marvel renders. It is not approved, and nothing has been changed.
+
   ## Approach
 
-  1. Far side, read-only (mokuzai arm, ops-supervisor-g5-0): the leaf
-     connection state and start time; the leaf credential's publish grants by
-     name only; one PROBE publish (body says ignore) to
-     global.kinu.supervisor.inbox and one to global.mokuzai.supervisor.inbox
-     as the control. Verbatim results.
-  2. Confirmation, interventional and operator-approved only: reconnect the
-     mokuzai leaf (marvel bus leaf disconnect then connect on mokuzai, or the
-     owner's equivalent), then repeat the one PROBE publish to
-     global.kinu.supervisor.inbox and check GLOBAL_TO_kinu's message count on
-     the hub (monitoring jsz, read-only).
-  3. Scratch hub (finding-009 question A): on a throwaway hub and leaf, add a
-     publish grant by reload and test an existing leaf and a new one.
-     Confirm which nats-server behavior this is and whether any reload option
-     refreshes an open leaf's permissions.
+  1. Done, read-only: both arms above. Grants reported by subject name
+     only.
+  2. After the operator makes the mokuzai grant change: one PROBE publish
+     (body says ignore) from mokuzai to global.kinu.supervisor.inbox, with
+     a control to global.mokuzai.supervisor.inbox, and a read-only check
+     of GLOBAL_TO_kinu's message count on the hub (monitoring jsz).
+  3. Only if step 2 still fails, and only with operator approval: reconnect
+     the mokuzai leaf (marvel bus leaf disconnect then connect on mokuzai,
+     or the owner's equivalent), then repeat the PROBE. A pass here
+     confirms the kinu reload timing as a second layer (finding-009).
+  4. Scratch hub (finding-009 question A): on a throwaway hub and leaf, add
+     a publish grant by reload and test an existing leaf and a new one.
+     Confirm which nats-server behavior this is and whether any reload
+     option refreshes an open leaf's permissions.
 
   ## Excluded scope
 
   No edit, restart or credential change on the running hub or any leaf
-  without operator approval. No values, seeds or tokens printed; grants are
-  reported by subject name or as booleans. leaf-kinu.conf is not read.
+  without operator approval. No configuration values, seeds or tokens
+  quoted; grants are reported by subject name or as booleans.
+  leaf-kinu.conf is not read.
 
   ## Harvest
 
-  If step 2 restores reach: an addendum to finding-009 (second instance,
-  mokuzai leaf, 2026-09-27 reload), and question A closes. Steps 3 and B
-  feed a runbook or code change on the director side. If step 2 does not
-  restore reach: a new finding naming the actual cause, and this question
-  stays open on A.
+  If step 2 passes: a new finding naming the mokuzai-side grant as the
+  cause, and question A closes. If only step 3 passes: that finding plus an
+  addendum to finding-009 (second instance, mokuzai leaf, 2026-09-27
+  reload). Step 4 and question B feed a runbook or code change. If neither
+  passes: a new finding naming what remains, and question A stays open.
 edges:
   - target: question-cross-cluster-supervisor-reach
     type: supports
@@ -42,10 +60,11 @@ provenance:
   created_at: "2026-09-28"
   notes: >
     Tracked as director#155 and bd aae-orc-8u04y. The finding-009 addendum
-    text is held until step 2 confirms the cause.
+    text is held until step 3 shows the kinu reload timing is a real
+    second layer.
 brief:
-  hypothesis: "The mokuzai to kinu supervisor failure is finding-009 again: the mokuzai leaf's publish grant for global.kinu.supervisor.inbox was added by the 2026-09-27 16:22Z reload after the leaf connected on 2026-09-26, so the open leaf still runs the old grant. A leaf reconnect restores reach with no config change."
-  excluded_scope: "Edits, restarts or credential changes on the running hub or leaves without operator approval; printing any credential value; reading leaf-kinu.conf."
-  success_signal: "After an approved reconnect of the mokuzai leaf, one PROBE publish from mokuzai to global.kinu.supervisor.inbox is acked and GLOBAL_TO_kinu's message count rises by one; before it, the same publish fails with no responders while the control to global.mokuzai.supervisor.inbox succeeds."
-  timebox: "Steps 1 and 2 within 2026-09-28 once the operator approves the reconnect; step 3 within one working session."
-  predicted_confidence: 0.85
+  hypothesis: "The proximate cause of the mokuzai to kinu supervisor failure is mokuzai's own authorization: its leaf users hold no publish grant for global.kinu.supervisor.inbox, and mokuzai's server logs a Publish Violation on each send. Adding that grant on mokuzai restores reach. The hub's grant for the mokuzai leaf arrived by a reload after the leaf connected (finding-009), so a leaf reconnect may also be needed; that second layer is untested."
+  excluded_scope: "Edits, restarts or credential changes on the running hub or leaves without operator approval; quoting any configuration value or credential; reading leaf-kinu.conf."
+  success_signal: "After the operator's grant change on mokuzai, one PROBE publish from mokuzai to global.kinu.supervisor.inbox is acked, GLOBAL_TO_kinu's message count rises by one, and mokuzai logs no Publish Violation for it; the control to global.mokuzai.supervisor.inbox succeeds."
+  timebox: "Step 2 within one working session of the operator's grant change; step 3 only if step 2 fails; step 4 within one working session."
+  predicted_confidence: 0.6
