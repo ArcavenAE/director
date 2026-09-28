@@ -168,7 +168,9 @@ func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, err
 		e.CorrelationID = a.InReplyTo
 	}
 	if err := e.validate(); err != nil {
-		return nil, "", err
+		// The envelope is returned with its refusal so the caller can audit it
+		// as built (LR-6).
+		return e, "", atStage("validate", err)
 	}
 	return e, a.Workspace, nil
 }
@@ -176,11 +178,14 @@ func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, err
 func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	e, wsHint, err := buildSendEnvelope(bus.self, raw)
 	if err != nil {
-		return nil, err
+		if e == nil {
+			return nil, bus.refuseArgs(ctx, raw, err)
+		}
+		return nil, bus.refuseEnvelope(ctx, e, "validate", err)
 	}
 	res, err := bus.publish(ctx, e, wsHint)
 	if err != nil {
-		return nil, err
+		return nil, bus.refuseEnvelope(ctx, e, "publish", err)
 	}
 	out := map[string]any{
 		"status":     "accepted for delivery",
@@ -367,7 +372,7 @@ func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, err
 		Workspace  string `json:"workspace"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, err
+		return nil, bus.refuseArgs(ctx, raw, err)
 	}
 	// The broadcast workspace goes into the address; omit it to broadcast to
 	// your own workspace, set it to reach another. resolveSubject builds the
@@ -386,10 +391,10 @@ func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, err
 	e.Performative = "INFORM"
 	e.Content = Content{Type: "text", Data: a.Text}
 	if err := e.validate(); err != nil {
-		return nil, err
+		return nil, bus.refuseEnvelope(ctx, e, "validate", err)
 	}
 	if _, err := bus.publish(ctx, e, ""); err != nil {
-		return nil, err
+		return nil, bus.refuseEnvelope(ctx, e, "publish", err)
 	}
 	return map[string]any{"status": "broadcast sent", "message_id": e.MessageID}, nil
 }

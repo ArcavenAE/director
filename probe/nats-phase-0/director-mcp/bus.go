@@ -733,7 +733,9 @@ type sendResult struct {
 // is the tools' optional workspace argument, passed through to resolveSubject
 // for a cold mailbox; empty means resolve the recipient's workspace from the
 // roster. A resolution refusal (R-92) returns here before any subject is built,
-// so nothing lands on the inbox or the audit stream.
+// so nothing lands on the inbox and the mirror below does not run; the caller
+// records the refusal on the audit stream instead (auditRefusal, LR-6). Each
+// refusal is tagged with its stage (atStage) for that record.
 //
 // A global:// address routes to the hub instead (R-86). The workspace hint has
 // no meaning there: a global subject carries no workspace token, so the
@@ -741,17 +743,17 @@ type sendResult struct {
 func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendResult, error) {
 	body, err := json.Marshal(e)
 	if err != nil {
-		return nil, err
+		return nil, atStage("validate", err)
 	}
 	if len(body) > maxEnvelopeBytes {
-		return nil, fmt.Errorf("envelope %d bytes exceeds 64 KiB; use content.refs pointers", len(body))
+		return nil, atStage("size", fmt.Errorf("envelope %d bytes exceeds 64 KiB; use content.refs pointers", len(body)))
 	}
 	if strings.HasPrefix(e.Recipient.Address, "global://") {
 		return b.publishGlobal(ctx, e, body)
 	}
 	subject, durable, err := b.resolveSubject(ctx, e.Recipient.Address, wsHint)
 	if err != nil {
-		return nil, err
+		return nil, atStage("resolve", err)
 	}
 	msg := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
 	msg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
@@ -759,13 +761,13 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 	if durable {
 		ack, err := b.js.PublishMsg(ctx, msg)
 		if err != nil {
-			return nil, fmt.Errorf("publish to %s: %w", subject, err)
+			return nil, atStage("publish", fmt.Errorf("publish to %s: %w", subject, err))
 		}
 		res.Stream, res.Sequence = ack.Stream, ack.Sequence
 	} else {
 		// broadcast is core NATS, no durable queue (section 2.5)
 		if err := b.nc.PublishMsg(msg); err != nil {
-			return nil, err
+			return nil, atStage("publish", err)
 		}
 	}
 	b.auditMirror(ctx, e, body)
@@ -779,11 +781,11 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 func (b *Bus) publishGlobal(ctx context.Context, e *Envelope, body []byte) (*sendResult, error) {
 	g, err := b.globalReady(ctx)
 	if err != nil {
-		return nil, err
+		return nil, atStage("global", err)
 	}
 	ack, err := g.publish(ctx, e, body)
 	if err != nil {
-		return nil, err
+		return nil, atStage("global", err)
 	}
 	b.auditMirror(ctx, e, body)
 	return &sendResult{Tier: "global", Stream: ack.Stream, Sequence: ack.Sequence}, nil
@@ -796,6 +798,95 @@ func (b *Bus) auditMirror(ctx context.Context, e *Envelope, body []byte) {
 	amsg := &nats.Msg{Subject: "agent.audit", Data: body, Header: nats.Header{}}
 	amsg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
 	_, _ = b.js.PublishMsg(ctx, amsg)
+}
+
+// refusalMaxBytes caps the Director-Refusal header. The full text is in the
+// tool result; the header is for a reader filtering the audit stream.
+const refusalMaxBytes = 1024
+
+// stagedErr is a send refusal tagged with where in the send it happened
+// (parse, validate, resolve, size, publish, global), so the audit record can
+// say so without parsing the error text. The text itself is unchanged.
+type stagedErr struct {
+	stage string
+	err   error
+}
+
+func (s *stagedErr) Error() string { return s.err.Error() }
+func (s *stagedErr) Unwrap() error { return s.err }
+
+func atStage(stage string, err error) error {
+	var se *stagedErr
+	if errors.As(err, &se) {
+		return err
+	}
+	return &stagedErr{stage: stage, err: err}
+}
+
+// refusalStage reads the stage off a refusal, or fallback when none was tagged.
+func refusalStage(err error, fallback string) string {
+	var se *stagedErr
+	if errors.As(err, &se) {
+		return se.stage
+	}
+	return fallback
+}
+
+// auditRefusal puts a refused send on the local audit stream (LR-6), so a
+// refusal leaves a record a supervisor or a compacted sender can read, not
+// only a tool result. body is the envelope exactly as built, or, when the
+// arguments did not parse into one, a record of the raw arguments and the
+// sender. The subject stays agent.audit; readers split refusals by the
+// Director-Outcome header. The Nats-Msg-Id carries a -refused suffix so a
+// later successful send of the same envelope is not deduplicated against it.
+//
+// It reports its own outcome as a read of the publish ack, and never changes
+// the refusal: the caller returns the refusal either way.
+func (b *Bus) auditRefusal(ctx context.Context, msgID, stage string, body []byte, refusal error) string {
+	reason := strings.Join(strings.Fields(refusal.Error()), " ")
+	if len(reason) > refusalMaxBytes {
+		reason = reason[:refusalMaxBytes]
+	}
+	amsg := &nats.Msg{Subject: "agent.audit", Data: body, Header: nats.Header{}}
+	amsg.Header.Set(jetstream.MsgIDHeader, msgID+"-refused")
+	amsg.Header.Set("Director-Outcome", "refused")
+	amsg.Header.Set("Director-Stage", stage)
+	amsg.Header.Set("Director-Refusal", reason)
+	ack, err := b.js.PublishMsg(ctx, amsg)
+	if err != nil {
+		return "not recorded: " + err.Error()
+	}
+	return fmt.Sprintf("recorded agent.audit seq %d", ack.Sequence)
+}
+
+// refuse returns a send refusal with the audit outcome appended, so the tool
+// result carries both. The refusal text leads and is unchanged.
+func (b *Bus) refuse(ctx context.Context, msgID, stage string, body []byte, refusal error) error {
+	return fmt.Errorf("%w; audit: %s", refusal, b.auditRefusal(ctx, msgID, stage, body, refusal))
+}
+
+// refuseEnvelope audits a refusal for an envelope that was built.
+func (b *Bus) refuseEnvelope(ctx context.Context, e *Envelope, fallback string, refusal error) error {
+	body, err := json.Marshal(e)
+	if err != nil {
+		return refusal
+	}
+	return b.refuse(ctx, e.MessageID, refusalStage(refusal, fallback), body, refusal)
+}
+
+// refuseArgs audits a refusal that happened before any envelope existed: the
+// raw arguments, capped at the envelope limit, beside the sender block.
+func (b *Bus) refuseArgs(ctx context.Context, raw json.RawMessage, refusal error) error {
+	if len(raw) > maxEnvelopeBytes {
+		raw = raw[:maxEnvelopeBytes]
+	}
+	sender := b.self
+	sender.Principal = nil
+	body, err := json.Marshal(map[string]any{"sender": sender, "raw_arguments": string(raw)})
+	if err != nil {
+		return refusal
+	}
+	return b.refuse(ctx, ulid.Make().String(), "parse", body, refusal)
 }
 
 // receive is the long-poll. It pulls the next message for this agent from its
