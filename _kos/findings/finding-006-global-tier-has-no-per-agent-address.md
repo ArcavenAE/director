@@ -123,3 +123,19 @@ Layer 2 filed as ArcavenAE/director#63 (2026-09-21), on the supervisor's
 ruling: a GitHub issue rather than a bd slot, for the same reason as
 [finding-005]: bd would mean committing to close it on a timeframe, and whether
 the director plane takes a change is the operator's call.
+
+## Addendum (2026-09-27): a verdict to a seat with no global address was lost, not queued
+
+Live, from another team's seat harvest: a review verdict sent across clusters
+to a supervisor seat that held no global address never reached it. The seat
+found the verdict on the forge 19 hours later, during a routine sweep. The
+seat had asked for the restart that would give it a global address, and that
+restart had not happened, so every cross-cluster message it sent or expected
+went through the director seat by hand, one relay at a time.
+
+This is section 0's asymmetry seen from the receiving end. With no per-agent
+address on the global tier, a seat without global presence has no mailbox a
+peer on another cluster can write to, and nothing holds the message until one
+appears. Not established: whether the sender's call was refused (R-92, no
+presence) or accepted and stored on a subject nobody reads. The harvest
+records only that it never arrived.

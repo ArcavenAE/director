@@ -135,7 +135,13 @@ Result:
 
 `stream` and `sequence` are the broker's own word that the bytes are
 stored. A global send is refused before publish when nobody is live at the
-address, so nothing is stored and the audit mirror stays empty.
+address, so nothing is stored on the hub.
+
+A refused send, local or global, returns the refusal as a tool error with
+the audit outcome appended: `...; audit: recorded agent.audit seq N`, or
+`...; audit: not recorded: <err>` when the audit stream could not take it.
+The refusal is returned either way; the audit never turns a refusal into a
+success. See "Refusal records" below.
 
 ### `wait_for_message`
 
@@ -368,8 +374,26 @@ Local broker:
 | Object | Subjects | Shape |
 |---|---|---|
 | `AGENT_INBOX` | `agent.*.*.*.inbox`, `agent.*.*.role.*.inbox` | file storage, limits retention, 72h max age, 64 KiB max message, 2m dedupe window |
-| `AGENT_AUDIT` | `agent.audit` | file, append-only, 30 days; every envelope is mirrored here |
+| `AGENT_AUDIT` | `agent.audit` | file, append-only, 30 days; every sent envelope is mirrored here, and every refused one is recorded here with `Director-Outcome: refused` |
 | `AGENT_STATE` (KV) | `presence.<team>.<id>.<instance>` | 90s TTL on the bucket; a heartbeat rewrite resets the key's age |
+
+### Refusal records
+
+A send or broadcast that is refused leaves one record on `agent.audit`, so
+"did X try to reach Y" has an answer after the sender's context is gone.
+
+| Header | Value |
+|---|---|
+| `Director-Outcome` | `refused` (a sent envelope's mirror carries no such header) |
+| `Director-Stage` | `parse`, `validate`, `resolve`, `size`, `publish`, or `global` |
+| `Director-Refusal` | the refusal text, whitespace collapsed, capped at 1 KiB |
+| `Nats-Msg-Id` | `<message_id>-refused`, so a later successful send of the same envelope is not deduplicated against the refusal |
+
+The body is the envelope exactly as built. When the arguments did not parse
+into an envelope (`Director-Stage: parse`), the body is
+`{"sender": {...}, "raw_arguments": "..."}`, the arguments capped at 64 KiB,
+and the message id is a fresh one. Readers split refusals from sends by the
+`Director-Outcome` header; the subject is the same.
 
 Global hub (domain `global`):
 

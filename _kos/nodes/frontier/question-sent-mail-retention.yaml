@@ -1,0 +1,54 @@
+id: question-sent-mail-retention
+type: question
+confidence: frontier
+title: "What should a seat keep, and be able to learn, about the mail it sent?"
+tags: [director, bus, succession]
+content: |
+  Opened 2026-09-27 from another team's seat harvest. Several seats reported
+  that the content of what they sent did not survive a restart or a context
+  compaction. Replies survived only as message ids, a predecessor's reports
+  could not be read by its successor, and one harvest reply exists only
+  because a later seat copied it into a file.
+
+  ## What the broker already holds
+
+  Every successful send is mirrored, full body, to `agent.audit`
+  (`auditMirror` in probe/nats-phase-0/director-mcp/bus.go, read at
+  02a3188). The AGENT_AUDIT stream keeps 30 days. So the content is not
+  lost on the broker; the seat has no tool to read it back. The tools are
+  send_message, wait_for_message, inbox_summary, list_roster, set_presence
+  and broadcast: all of them read the inbox or presence, none read the
+  sender's own sent mail.
+
+  ## The question
+
+  A. Should a seat be able to list and read its own sent mail (and its
+     predecessors'), and from which store: the audit mirror, or something
+     scoped per seat?
+  B. What should a sender learn after "accepted": nothing more (R-08), an
+     unread age (loss-reduction item 3), or a warning when the subject it
+     wrote has no reader (finding-010, finding-012)?
+  C. Is sent-mail retention a bus feature at all, or a handoff duty
+     (loss-reduction item 4 adds "sent, unread, promised" to the handoff)?
+
+  ## Why it is open, not decided
+
+  The audit stream was built as an append-only record for operators, not as
+  a seat's history, and it holds every seat's mail. Exposing it to seats is
+  an authority question (who may read whose sent mail), not only a tool.
+edges:
+  - target: finding-010-explicit-workspace-send-is-accepted-for-a-mailbox-nobody-reads
+    type: derives
+  - target: finding-012-a-result-for-a-dead-seat-has-no-route-back
+    type: derives
+  - target: question-director-seat-startup
+    type: supports
+provenance:
+  created_by: human
+  session: 2026-09-27-arcaven-builder-g5-0-harvest-placement
+  created_at: "2026-09-27"
+  notes: >
+    Placed from a 2026-09-27 seat harvest (rows on sent-message content).
+    Related open items: director#83 (reconnect replays the whole inbox),
+    director#85 (role mail never read), director#121 (broadcast reaches no
+    inbox).
