@@ -26,9 +26,11 @@ content: |
      only.
   2. After the operator makes the mokuzai grant change: one PROBE publish
      (body says ignore) from mokuzai to global.kinu.supervisor.inbox, with
-     a control to global.mokuzai.supervisor.inbox, and a read-only check
-     of GLOBAL_TO_kinu's message count on the hub (monitoring jsz).
-  3. Only if step 2 still fails, and only with operator approval: reconnect
+     a control to global.mokuzai.supervisor.inbox, before any leaf
+     reconnect, and a read-only check of GLOBAL_TO_kinu's message count on
+     the hub (monitoring jsz) and of mokuzai's log for a Publish Violation.
+  3. Only if step 2 fails with no Publish Violation on mokuzai, and only
+     with operator approval: reconnect
      the mokuzai leaf (marvel bus leaf disconnect then connect on mokuzai,
      or the owner's equivalent), then repeat the PROBE. A pass here
      confirms the kinu reload timing as a second layer (finding-009).
@@ -47,9 +49,9 @@ content: |
   ## Harvest
 
   If step 2 passes: a new finding naming the mokuzai-side grant as the
-  cause, and question A closes. If only step 3 passes: that finding plus an
-  addendum to finding-009 (second instance, mokuzai leaf, 2026-09-27
-  reload). Step 4 and question B feed a runbook or code change. If neither
+  cause and the hub grant as live, and question A closes. If only step 3
+  passes: that finding plus an addendum to finding-009 (second instance,
+  mokuzai leaf, 2026-09-27 reload), and question A closes. Step 4 and question B feed a runbook or code change. If neither
   passes: a new finding naming what remains, and question A stays open.
 edges:
   - target: question-cross-cluster-supervisor-reach
@@ -59,12 +61,14 @@ provenance:
   session: 2026-09-28 cross-cluster supervisor reach, kinu arm (arcaven-research-supervisor-g5-0)
   created_at: "2026-09-28"
   notes: >
-    Tracked as director#155 and bd aae-orc-8u04y. The finding-009 addendum
+    Tracked as director#155 and bd aae-orc-8u04y. predicted_confidence 0.7
+    is for the two-layer hypothesis; 0.9 that the mokuzai grant is
+    necessary. The finding-009 addendum
     text is held until step 3 shows the kinu reload timing is a real
     second layer.
 brief:
-  hypothesis: "The proximate cause of the mokuzai to kinu supervisor failure is mokuzai's own authorization: its leaf users hold no publish grant for global.kinu.supervisor.inbox, and mokuzai's server logs a Publish Violation on each send. Adding that grant on mokuzai restores reach. The hub's grant for the mokuzai leaf arrived by a reload after the leaf connected (finding-009), so a leaf reconnect may also be needed; that second layer is untested."
+  hypothesis: "Two grants stand in series. The proximate block is mokuzai's local authorization: its leaf users may publish globally only to global.director.inbox and $JS.global.API.>, so global.kinu.supervisor.inbox is a Publish Violation on mokuzai. Behind it, the hub's grant for the mokuzai leaf to publish global.kinu.supervisor.inbox was added by reload after that leaf connected, which finding-009 says an open leaf does not see. Reach returns only when mokuzai grants the subject and the mokuzai leaf reconnects to the hub."
   excluded_scope: "Edits, restarts or credential changes on the running hub or leaves without operator approval; quoting any configuration value or credential; reading leaf-kinu.conf."
-  success_signal: "After the operator's grant change on mokuzai, one PROBE publish from mokuzai to global.kinu.supervisor.inbox is acked, GLOBAL_TO_kinu's message count rises by one, and mokuzai logs no Publish Violation for it; the control to global.mokuzai.supervisor.inbox succeeds."
+  success_signal: "With mokuzai's grant applied and before any leaf reconnect, one PROBE publish to global.kinu.supervisor.inbox either is acked (GLOBAL_TO_kinu count +1, the hub layer is live) or fails with no Publish Violation on mokuzai (the hub layer blocks). If it fails, the same PROBE after an approved leaf reconnect is acked."
   timebox: "Step 2 within one working session of the operator's grant change; step 3 only if step 2 fails; step 4 within one working session."
-  predicted_confidence: 0.6
+  predicted_confidence: 0.7

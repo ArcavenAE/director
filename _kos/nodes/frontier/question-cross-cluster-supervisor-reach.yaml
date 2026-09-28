@@ -45,9 +45,10 @@ content: |
 
   ## The question
 
-  A. After the grant change on mokuzai, is mokuzai to kinu supervisor reach
-     restored? If not, the kinu reload timing above (finding-009) is the
-     next layer to test, with a leaf reconnect.
+  A. After mokuzai grants global.kinu.supervisor.inbox, is reach restored
+     with no leaf reconnect, or only after the mokuzai leaf reconnects? (The
+     first confirms the hub grant is live; the second is a second instance
+     of finding-009.)
   B. Follow-on: what should a grant change do so that it cannot silently
      leave an open leaf on stale permissions: end the runbook with a leaf
      reconnect and a named check (finding-009 question B), have the hub
