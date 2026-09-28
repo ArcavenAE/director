@@ -1107,6 +1107,9 @@ func (b *Bus) writePresence(ctx context.Context, state string) error {
 		"pid":       b.pid,
 		"state":     state,
 		"ts":        time.Now().UTC().Format(time.RFC3339),
+		// The shim revision this session runs, from the binary's own build
+		// info, so a seat on a stale shim can be told apart (LR-3).
+		"rev": shimRevision(),
 	}
 	if b.self.Role != "" {
 		rec["role"] = b.self.Role
