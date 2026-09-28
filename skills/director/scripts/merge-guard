@@ -12,8 +12,10 @@
 #
 # It proceeds only when every read succeeds and says yes: the PR is OPEN (read
 # first, since a merged PR reports an UNKNOWN merge state, R-157), not a draft
-# (R-148), its merge state is CLEAN, every reported check passed, and no open PR
-# is based on its head branch (stacked-pr-merge-order). A read that errors,
+# (R-148), its merge state is CLEAN, every reported check passed, a non-author
+# approved the current head after that commit was made and no reviewer's latest
+# review at the head requests changes (director#159), and no open PR is based
+# on its head branch (stacked-pr-merge-order). A read that errors,
 # times out, comes back empty or unparseable, or lacks a field stops, with its
 # output. UNKNOWN is GitHub still computing mergeability, so it is re-read
 # MERGE_GUARD_RETRIES times (default 3), MERGE_GUARD_DELAY seconds apart
@@ -51,7 +53,7 @@ field() { jq -r --arg f "$1" 'if has($f) then .[$f] | tostring else "__missing__
 
 view() {
   read_json "gh pr view" pr view "$num" -R "$repo" \
-    --json state,isDraft,mergeStateStatus,headRefName,headRefOid,statusCheckRollup
+    --json state,isDraft,mergeStateStatus,headRefName,headRefOid,statusCheckRollup,author,commits,reviews
 }
 
 view
@@ -99,6 +101,33 @@ not_passing="$(jq -r '.statusCheckRollup[]
 [[ -z "$not_passing" ]] || stop "checks not passing: $(tr '\n' ';' <<<"$not_passing" | sed 's/;$//')"
 nchecks="$(jq '.statusCheckRollup | length' <<<"$json")"
 
+# Approval at the current head (director#159). A merge proceeds only on a
+# non-author approval of the commit being merged, given after that commit
+# existed. The sha alone is not enough: GitHub has reported a stale approval's
+# commit as the current head, so the review must also postdate the head
+# commit's committer date. Any reviewer whose latest review at the head
+# requests changes stops it. A missing field is a failed read, not a pass.
+jq -e '(.reviews | type == "array") and (.commits | type == "array")' >/dev/null <<<"$json" \
+  || stop "the view has no reviews or commits list; cannot tell whether the head is approved"
+author="$(jq -r '.author.login // empty' <<<"$json")"
+[[ -n "$author" ]] || stop "the view has no author; cannot tell an approval from a self-approval"
+head_at="$(jq -r --arg h "$head_sha" '[.commits[] | select(.oid == $h)] | last | .committedDate // empty' <<<"$json")"
+[[ -n "$head_at" ]] || stop "the head commit $head_sha is not in the view's commit list; cannot date it"
+# Latest non-comment review per reviewer, at the head, from anyone but the author.
+latest="$(jq -c --arg h "$head_sha" --arg a "$author" '
+  [.reviews[]
+   | select((.commit.oid // "") == $h and (.author.login // "") != $a)
+   | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")]
+  | group_by(.author.login) | map(max_by(.submittedAt))' <<<"$json")"
+blocking="$(jq -r '.[] | select(.state == "CHANGES_REQUESTED") | .author.login' <<<"$latest" | tr '\n' ' ')"
+[[ -z "$blocking" ]] || stop "changes requested at the head by ${blocking% }"
+fresh="$(jq -r --arg t "$head_at" '.[] | select(.state == "APPROVED" and .submittedAt > $t) | .author.login' <<<"$latest" | head -1)"
+if [[ -z "$fresh" ]]; then
+  stale="$(jq -r --arg t "$head_at" '.[] | select(.state == "APPROVED" and .submittedAt <= $t) | "\(.author.login) at \(.submittedAt)"' <<<"$latest" | tr '\n' ';')"
+  [[ -z "$stale" ]] || stop "the only approval at $head_sha was submitted before the head commit ($head_at): ${stale%;}; it approved earlier code"
+  stop "no approval by a non-author at the head $head_sha after its commit ($head_at)"
+fi
+
 # Stacked children: an open PR based on this head would be closed by merging
 # with --delete-branch. An error or an empty read is not "no children".
 read_json "gh pr list (stacked children)" pr list -R "$repo" --base "$head_ref" --state open --json number
@@ -106,4 +135,4 @@ jq -e 'type == "array"' >/dev/null <<<"$json" || stop "the stacked-child read is
 children="$(jq -r '.[].number | "#\(.)"' <<<"$json" | tr '\n' ' ')"
 [[ -z "$children" ]] || stop "open PR(s) based on $head_ref: ${children% }; merge the base without --delete-branch first (stacked-pr-merge-order)"
 
-echo "PROCEED $repo#$num @$head_sha: OPEN, not draft, CLEAN, $nchecks check(s) passing, no stacked child"
+echo "PROCEED $repo#$num @$head_sha: OPEN, not draft, CLEAN, $nchecks check(s) passing, approved at head by $fresh, no stacked child"

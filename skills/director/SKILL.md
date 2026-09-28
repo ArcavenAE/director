@@ -99,7 +99,10 @@ for that PR, and act only on its line:
 
 The guard fails closed. A read that errors, times out, or comes back empty,
 and a merge state of UNKNOWN that does not resolve, are all a STOP, never a
-pass. Operator merge exclusions (R-153) are checked separately, before the
+pass. It also stops unless someone other than the author approved the current
+head after that commit was made, and no reviewer's latest review at the head
+requests changes (director#159): an approval of earlier code is not an
+approval of what merges. Operator merge exclusions (R-153) are checked separately, before the
 guard.
 
 ## Replay: the retrospective evidence source
