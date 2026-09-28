@@ -24,9 +24,12 @@ content: |
   global.<cluster>.supervisor.inbox. The leaf is up, and a control send to
   global://director from the same seat worked.
 
-  The fix is a grant change in mokuzai's authorization, which marvel
-  renders. It is operator-owned. It has not been approved, and nothing has
-  been changed.
+  The mokuzai-side grant change is marvel#403 (merged as b1f4953, released
+  in alpha-20260928-201034-b1f4953). It gives a team holding a role named
+  exactly "supervisor" publish on global.*.supervisor.inbox once a daemon
+  running that build re-renders its broker authorization. Whether mokuzai
+  runs that build and has re-rendered is not recorded here; the probe
+  checks it.
 
   ## What the kinu side shows (read-only, 2026-09-28 ~14:35Z)
 
@@ -45,7 +48,8 @@ content: |
 
   ## The question
 
-  A. After mokuzai grants global.kinu.supervisor.inbox, is reach restored
+  A. After mokuzai grants global.kinu.supervisor.inbox (marvel#403), is
+     reach restored
      with no leaf reconnect, or only after the mokuzai leaf reconnects? (The
      first confirms the hub grant is live; the second is a second instance
      of finding-009.)

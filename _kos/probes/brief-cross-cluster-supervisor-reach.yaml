@@ -17,27 +17,44 @@ content: |
     Under finding-009 an open leaf keeps its old grant, so this may be a
     second layer behind the first.
 
-  The fix is operator-owned: a grant change in mokuzai's authorization,
-  which marvel renders. It is not approved, and nothing has been changed.
+  The mokuzai-side grant change is marvel#403 (merged as b1f4953, released
+  in alpha-20260928-201034-b1f4953): a team holding a role named exactly
+  "supervisor" gains publish on global.*.supervisor.inbox when a daemon
+  running that build re-renders its broker authorization.
 
   ## Approach
 
   1. Done, read-only: both arms above. Grants reported by subject name
      only.
-  2. After the operator makes the mokuzai grant change: one PROBE publish
-     (body says ignore) from mokuzai to global.kinu.supervisor.inbox, with
-     a control to global.mokuzai.supervisor.inbox, before any leaf
-     reconnect, and a read-only check of GLOBAL_TO_kinu's message count on
-     the hub (monitoring jsz) and of mokuzai's log for a Publish Violation.
+  2. Trigger: mokuzai runs a b1f4953 build and has re-rendered its broker
+     authorization. First, read-only, confirm the supervisor team's broker
+     user now holds publish on global.*.supervisor.inbox (by subject name
+     only). Then, before any leaf reconnect, one PROBE publish (body says
+     ignore) to global.kinu.supervisor.inbox from a seat on a team with a
+     role named exactly "supervisor" (marvel#403's scope; any other sender
+     still meets the Publish Violation and says nothing about the hub),
+     with a control to global.mokuzai.supervisor.inbox. Read GLOBAL_TO_kinu's
+     message count on the hub (monitoring jsz) and mokuzai's log for a
+     Publish Violation.
   3. Only if step 2 fails with no Publish Violation on mokuzai, and only
-     with operator approval: reconnect
-     the mokuzai leaf (marvel bus leaf disconnect then connect on mokuzai,
-     or the owner's equivalent), then repeat the PROBE. A pass here
-     confirms the kinu reload timing as a second layer (finding-009).
+     with operator approval: reconnect the mokuzai leaf (marvel bus leaf
+     disconnect then connect on mokuzai, or the owner's equivalent), then
+     repeat the PROBE.
   4. Scratch hub (finding-009 question A): on a throwaway hub and leaf, add
      a publish grant by reload and test an existing leaf and a new one.
      Confirm which nats-server behavior this is and whether any reload
      option refreshes an open leaf's permissions.
+
+  ## Outcomes of step 2
+
+  - Acked before any reconnect (GLOBAL_TO_kinu count +1): the two-layer
+    hypothesis is FALSIFIED; the hub grant is live and the mokuzai grant
+    was the only block.
+  - No Publish Violation on mokuzai and not acked, then acked after the
+    approved reconnect in step 3: the two-layer hypothesis is SUPPORTED.
+  - Publish Violation still present on mokuzai: a VOID run. The grant is
+    not in effect for that sender (wrong build, no re-render, or a sender
+    outside a "supervisor" team); fix that and rerun step 2.
 
   ## Excluded scope
 
@@ -48,11 +65,12 @@ content: |
 
   ## Harvest
 
-  If step 2 passes: a new finding naming the mokuzai-side grant as the
-  cause and the hub grant as live, and question A closes. If only step 3
-  passes: that finding plus an addendum to finding-009 (second instance,
-  mokuzai leaf, 2026-09-27 reload), and question A closes. Step 4 and question B feed a runbook or code change. If neither
-  passes: a new finding naming what remains, and question A stays open.
+  Falsified: a new finding naming the mokuzai-side grant as the only cause
+  and the hub grant as live; question A closes. Supported: that finding
+  plus an addendum to finding-009 (second instance, mokuzai leaf,
+  2026-09-27 reload); question A closes. Void: no harvest; rerun. Step 4
+  and question B feed a runbook or code change. If step 3 also fails: a
+  new finding naming what remains, and question A stays open.
 edges:
   - target: question-cross-cluster-supervisor-reach
     type: supports
@@ -69,6 +87,6 @@ provenance:
 brief:
   hypothesis: "Two grants stand in series. The proximate block is mokuzai's local authorization: its leaf users may publish globally only to global.director.inbox and $JS.global.API.>, so global.kinu.supervisor.inbox is a Publish Violation on mokuzai. Behind it, the hub's grant for the mokuzai leaf to publish global.kinu.supervisor.inbox was added by reload after that leaf connected, which finding-009 says an open leaf does not see. Reach returns only when mokuzai grants the subject and the mokuzai leaf reconnects to the hub."
   excluded_scope: "Edits, restarts or credential changes on the running hub or leaves without operator approval; quoting any configuration value or credential; reading leaf-kinu.conf."
-  success_signal: "With mokuzai's grant applied and before any leaf reconnect, one PROBE publish to global.kinu.supervisor.inbox either is acked (GLOBAL_TO_kinu count +1, the hub layer is live) or fails with no Publish Violation on mokuzai (the hub layer blocks). If it fails, the same PROBE after an approved leaf reconnect is acked."
-  timebox: "Step 2 within one working session of the operator's grant change; step 3 only if step 2 fails; step 4 within one working session."
+  success_signal: "Three outcomes, decided at step 2 with a sender on a team holding a role named exactly supervisor, after mokuzai runs b1f4953 and has re-rendered authorization: acked before any leaf reconnect (GLOBAL_TO_kinu count +1) falsifies the two-layer hypothesis; no Publish Violation on mokuzai and not acked, then acked after an approved leaf reconnect, supports it; a Publish Violation still present on mokuzai makes the run void."
+  timebox: "Step 2 within one working session of mokuzai running b1f4953 with authorization re-rendered; step 3 only if step 2 fails; step 4 within one working session."
   predicted_confidence: 0.7
