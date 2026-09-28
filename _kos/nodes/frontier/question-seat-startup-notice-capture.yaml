@@ -1,0 +1,39 @@
+id: question-seat-startup-notice-capture
+type: question
+confidence: frontier
+title: "Should the launcher capture what a harness shows in the first seconds of a seat start?"
+tags: [director, seat-launch, observability]
+content: |
+  Opened 2026-09-27 from a seat harvest. Startup notices (a trust dialog, an
+  update modal, a login-expiry notice, a "1 warning" line) appear only in
+  the pane. Some block the seat; some scroll away. The only way they were
+  collected was by hand, sampling the pane within about ten seconds of the
+  start. Several are not written anywhere else: one codex warning is
+  dropped by its rollout policy, so the pane is its only reader.
+
+  ## The question
+
+  A. Should the launcher (cast-launch.sh, or marvel's adapter) capture the
+     pane for a short window after start and keep it beside the spawn log?
+  B. What does it do with a match: record it, refuse to report the start as
+     healthy, or both? Blocking notices (the claude trust dialog, whose
+     default answer exits the seat; marvel finding-045) differ from
+     cosmetic ones.
+  C. Where do the patterns live? The signature catalog is being built
+     elsewhere (a separate patterns database); this node asks only about
+     capture at start, not about the catalog.
+
+  ## Why it is open
+
+  Capture is cheap; deciding which notices mean "this start failed" is not,
+  and the text changes with each harness release.
+edges:
+  - target: question-director-seat-startup
+    type: supports
+provenance:
+  created_by: human
+  session: 2026-09-27-arcaven-builder-g5-0-harvest-placement
+  created_at: "2026-09-27"
+  notes: >
+    Placed from a 2026-09-27 seat harvest (startup notices captured by hand).
+    The signature filing is tracked separately and is not part of this node.
