@@ -72,7 +72,21 @@ func TestSendToBroadcastAddressRefusesAtZero(t *testing.T) {
 	if got := streamMsgs(t, ctx, js, "AGENT_INBOX"); got != inbox {
 		t.Errorf("AGENT_INBOX moved %d -> %d", inbox, got)
 	}
-	if got := streamMsgs(t, ctx, js, "AGENT_AUDIT"); got != audit {
-		t.Errorf("AGENT_AUDIT moved %d -> %d", audit, got)
+	// Audited like the broadcast tool's refusal (LR-6): exactly one record,
+	// refused at resolve, carrying the envelope as the caller addressed it.
+	if got := streamMsgs(t, ctx, js, "AGENT_AUDIT"); got != audit+1 {
+		t.Fatalf("AGENT_AUDIT %d -> %d, want exactly one refusal record", audit, got)
+	}
+	s, _ := js.Stream(ctx, "AGENT_AUDIT")
+	info, _ := s.Info(ctx)
+	rec, err := s.GetMsg(ctx, info.State.LastSeq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Header.Get("Director-Outcome") != "refused" || rec.Header.Get("Director-Stage") != "resolve" {
+		t.Errorf("refusal record headers: outcome %q stage %q", rec.Header.Get("Director-Outcome"), rec.Header.Get("Director-Stage"))
+	}
+	if !strings.Contains(string(rec.Data), `"address":"broadcast://w/t"`) || !strings.Contains(string(rec.Data), `"anyone?"`) {
+		t.Errorf("refusal record is not the send as asked: %s", rec.Data)
 	}
 }
