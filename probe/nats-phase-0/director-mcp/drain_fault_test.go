@@ -87,7 +87,7 @@ func fmsg(t *testing.T, id string, seq uint64) *fakeMsg {
 }
 
 func busWith(c *fakeConsumer) *Bus {
-	return &Bus{consumer: c, self: Sender{AgentID: "michael", Workspace: "aae-orc", Team: "ops"}}
+	return &Bus{consumer: c, self: Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}}
 }
 
 // An ack that fails on the second of three messages must not drop the first,

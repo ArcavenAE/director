@@ -564,7 +564,7 @@ evidence R-22 is needed, and a specific warning not to copy gen-1's GC.
 
 Filed 2026-09-12 from the identity roundtable, after a live incident: several
 Claude Code sessions on one host loaded the same local-scope MCP config and all
-registered as `agent://ops/michael` (the OS user), so two real sessions
+registered as `agent://ops/operator` (the OS user), so two real sessions
 collided on one address and one presence key. The OBSERVED entries below are
 grounded in that collision and in a same-session cross-harness demo. The
 JUDGMENT entries are design conclusions from the roundtable; each carries a
@@ -579,7 +579,7 @@ ownership (R-55).
 **R-49. Session identity is assigned at spawn by the launcher, never
 self-asserted by the session and never derived from the OS user.** On one host,
 N sessions must get N distinct addresses.
-*Earned by: two live sessions collided on agent://ops/michael this session.*
+*Earned by: two live sessions collided on agent://ops/operator this session.*
 *Source: OBSERVED. Design: design/identity-at-spawn.md (ID-A).*
 
 **R-50. A session's durable consumer is unique per address, and a second
@@ -595,7 +595,7 @@ silent duplication (R-78) and leaked one durable per shim start
 (aae-orc-iejcx).
 *Amendment: design brief 11 (`sim/design/leaf-fabric-one-address-space.md`)
 section 2.5, ruled by the operator 2026-09-24 on director#77.*
-*Earned by: JetStream durable semantics plus the michael collision this session.*
+*Earned by: JetStream durable semantics plus the operator collision this session.*
 *Source: OBSERVED. Design: design/identity-at-spawn.md (ID-B).*
 
 **R-51. Distinct identities route correctly across harnesses; the bus supports
@@ -800,7 +800,7 @@ Filed 2026-09-12 from the naming party (casting: bmad-extras/rulings/2026-09-12-
 *Earned by: the drift measured this sitting; `claude --help` 2.1.270.*
 *Source: OBSERVED (the drift); the one-source rule is the design fix.*
 
-**R-74. Director owns lookup, not assignment, and does not mint a second name registry beside the one the harness already runs.** No director-owned allocator sits in the spawn path: an allocated name is unavailable under partition and a derived one is not, so an allocator puts a lease and a fencing problem (R-55's shape) in front of every spawn. 2.1.270 already carries a name-settle path (outcomes pre-decided, own-name, held, kept, superseded), generation-ordinal de-collision (`name (2)`), a formerNames history, and five nameSource values (user, auto, derived, collision, peer); a second assignment authority on one host is the michael collision in a new coat, so the open question is whether director's table matches that path, not whether director invents one. The lookup is a read-only join, writing nothing, keyed on the session key once R-73 puts it on both sides; the presence value today carries agent_id, instance, pid, state, team, ts, and workspace and no sessionId, so that join is not computable on the current build. The interim probe is the shim-pid to harness-pid join (86491 under 86456, 90079 under 90044, 5281 under 5241 this minute), which is a bootstrap measurement and not the binding: ppid dies with the process, breaks under reparenting, and says nothing off-host. The join reads names and cannot read provenance, since nameSource is not on the supported surface and is not inferred from the string. If a durable binding record is ever wanted, it records a fact observed at spawn and inherits gen-1's stomp (`--force` in persistent-agent-ops.md:43, because a name that outlives its process leaves a cached binding). Falsifier: run the join for two weeks; if the operator is still hand-renaming sessions with it in daily use, reopen the allocator question on that evidence.
+**R-74. Director owns lookup, not assignment, and does not mint a second name registry beside the one the harness already runs.** No director-owned allocator sits in the spawn path: an allocated name is unavailable under partition and a derived one is not, so an allocator puts a lease and a fencing problem (R-55's shape) in front of every spawn. 2.1.270 already carries a name-settle path (outcomes pre-decided, own-name, held, kept, superseded), generation-ordinal de-collision (`name (2)`), a formerNames history, and five nameSource values (user, auto, derived, collision, peer); a second assignment authority on one host is the operator collision in a new coat, so the open question is whether director's table matches that path, not whether director invents one. The lookup is a read-only join, writing nothing, keyed on the session key once R-73 puts it on both sides; the presence value today carries agent_id, instance, pid, state, team, ts, and workspace and no sessionId, so that join is not computable on the current build. The interim probe is the shim-pid to harness-pid join (86491 under 86456, 90079 under 90044, 5281 under 5241 this minute), which is a bootstrap measurement and not the binding: ppid dies with the process, breaks under reparenting, and says nothing off-host. The join reads names and cannot read provenance, since nameSource is not on the supported surface and is not inferred from the string. If a durable binding record is ever wanted, it records a fact observed at spawn and inherits gen-1's stomp (`--force` in persistent-agent-ops.md:43, because a name that outlives its process leaves a cached binding). Falsifier: run the join for two weeks; if the operator is still hand-renaming sessions with it in daily use, reopen the allocator question on that evidence.
 *Earned by: the measured settle machinery in the 2.1.270 binary; the presence value shape; the pid pairs this sitting.*
 *Source: JUDGMENT, on a measured basis.*
 
@@ -978,7 +978,7 @@ the split above are its output.
 
 ## Harvest 2026-09-20 (director seat reach, identity, and transport)
 
-From session aae-orc-05 (the michael/ops seat operating as director with the
+From session aae-orc-05 (the operator/ops seat operating as director with the
 global tier OFF). Seven candidates, promoted with source class. The session
 itself was the instrument: a director seat launched hobbled, and every workaround
 it reached for named a requirement. Cross-refs: observations.md candidate list,
@@ -1025,7 +1025,7 @@ aae-orc-anwnh.
 **R-101 (OBSERVED) · a director seat's identity, global role, and working
 context are assigned PER-SEAT at spawn, never drawn from a config shared by other
 agents, and the seat must run at the orchestrator root.** The shared aae-orc
-project MCP block bakes `DIRECTOR_AGENT_ID=michael` local-only and would brand
+project MCP block bakes `DIRECTOR_AGENT_ID=operator` local-only and would brand
 every claude in the tree the global director if extended; the per-seat launcher
 (`--strict-mcp-config`) is the correct shape. A seat launched from the wrong cwd
 loses the orc CLAUDE.md, rules, skills, and tools. Three distinct spawn traps in
@@ -1677,6 +1677,149 @@ hosts with its provenance (source host, path, sender) and a checksum, and
 tells the recipient where it landed.
 *Earned by: O 2026-09-26 docs review stranded on the remote cluster.*
 *Source: OBSERVED.*
+
+**R-159 (RULED) · director is not the relay between supervisors.** Operator
+ruling 2026-09-27: "director should NOT be a bottleneck, supervisors can
+coordinate, talk with each other, cross-cluster and otherwise." The night
+before, 14 review requests queued on one cluster sat 6 to 16 hours while the
+other cluster's reviewers were idle, because every cross-cluster relay needed
+a director turn and none was running. Supervisors address peer supervisors
+directly on both tiers, and director is copied, not interposed. The ruling
+takes effect only where the transport lets it: the same day no supervisor on
+one cluster held a global address until restart, so director hand-forwarded
+every item it was meant to stop carrying. Director checks that the reach a
+ruling assumes exists, and reports the gap when it does not.
+*Earned by: the overnight stall; the operator's ruling; O 2026-09-27a.*
+*Source: RULED. Cross-refs R-92, R-119.*
+
+**R-160 (OBSERVED) · a reply to an unreachable seat is held and surfaced,
+never discarded.** A review verdict addressed to a seat with no global
+address was lost, not queued, and was found 19 hours later only because the
+seat swept the forge itself. On the other cluster two worker replies were
+accepted in their panes and never reached their supervisor after an auth
+refresh. A message whose recipient cannot be reached stays in custody with its
+age, and the sender and director both see it as undelivered.
+*Earned by: O 2026-09-27b; the loss dossier specimens S1, S2, S5, S12.*
+*Source: OBSERVED. Cross-refs R-08, R-155.*
+
+**R-161 (OBSERVED) · a broadcast reports who received it.** A freeze notice
+sent as a team broadcast returned "broadcast sent" while all five of that
+team's workers drained empty and learned of it only from a pane inject. A
+broadcast returns the count of inboxes it reached, or refuses and names why;
+a broadcast that reached no inbox is a failure, not a success.
+*Earned by: the loss dossier S3; ranked first by the loss-reduction panel
+(7 of 7 seats).*
+*Source: OBSERVED. Cross-refs R-08.*
+
+**R-162 (OBSERVED) · director's own outbound queue is aged and surfaces
+unprompted.** A supervisor's request to forward three review asks sat in
+director's queue for about 90 minutes, and the operator saw the stalled pull
+request before director did. Earlier, a lane's catch-up waited two hours on a
+director turn. Every item director owes someone (a forward, a relay, an
+answer) carries an age, and anything older than a set interval surfaces
+without anyone asking.
+*Earned by: O 2026-09-27e; O 2026-09-26 cold-mailbox catch-up.*
+*Source: OBSERVED. Cross-refs R-115, R-117.*
+
+**R-163 (RULED) · capture happens at the source, automatically.** Work moved
+to workers, and harvest stayed a pull: director asks supervisors, supervisors
+ask workers, and the answers ride the bus that lost verdicts the same day.
+Three workers answered a harvest a day late, and error texts died with
+compacted context. Each seat writes a small capture record at the moment of
+the struggle, into a durable per-seat store that the launcher provisions, and
+harvest becomes a read. The operator approved the design and its first slice
+(supervisors and architect) on 2026-09-27.
+*Earned by: O 2026-09-27c; the 2026-09-27 fleet harvest (31 seat files).*
+*Source: RULED. Cross-refs R-155.*
+
+**R-164 (OBSERVED) · director's transport configuration is declared, not
+hand-edited.** Director hand-edited the global hub's permissions to add a
+cluster's publish grant and reloaded it. The change exists on one host,
+outside git, with a backup file beside it, and cannot be repeated on another
+machine. Hub and leaf grants live in a versioned config and are applied by an
+installer, with the applied version readable back.
+*Earned by: O 2026-09-27d.*
+*Source: OBSERVED. Cross-refs R-154, R-156.*
+
+**R-165 (JUDGMENT) · an operator grant covers the change it names.** Director
+re-asked whether a grant naming one launcher file also covered the companion
+wrapper edits of the same change, and stopped at a verification read the
+operator had in effect ordered. The operator's correction was blunt. A grant
+covers the change it names, including the edits that change cannot work
+without; director asks again only when the scope would widen beyond that
+change or touch a new resource.
+*Earned by: the operator's correction 2026-09-26.*
+*Source: JUDGMENT. Cross-refs R-150.*
+
+**R-166 (RULED) · a harvest routes every item to the graph that owns it.**
+Asked to harvest, director promoted only its own register from a fleet
+harvest of 31 seat files whose content mostly belonged elsewhere (the fleet
+controller, the knowledge graph, the role library, the pack tooling, project
+repos). The operator asked why the harvest was limited to director, and said
+twice that harvests "should not be limited to director." Director requests
+harvest material from every team, workers included, routes each item to the
+repo or graph that owns its subject, keeps a ledger of where each item landed,
+and takes the items with no home to the operator.
+*Earned by: O 2026-09-27g; the operator's rulings 2026-09-27 and 2026-09-28.*
+*Source: RULED. Cross-refs R-163.*
+
+**R-167 (RULED) · director's address names the role, never the operator.**
+The director seat registered on the bus under the operator's first name, so its
+local address read as a person's inbox rather than a role. The operator ruled
+that the name come out and the seat be addressed as director. The seat's local
+address is `agent://ops/director`; the global address `global://director` is
+unchanged, and `director` stays the one reserved fleet name (R-94). This amends
+R-54 only in which literal the seat answers to: the seat remains a capability
+held as a lease, so a session reaches that address by acquiring the lease, never
+by registering the name. A session that registers `director` without the lease
+does not take the address. Seats that hold the old address are told when the new
+one goes live, and the old subject is drained before it is abandoned, so a reply
+in flight is not lost. This resolves IDD-1 (director#148, identity-default.md
+section 6) in favor of `agent://ops/director` over the `role://ops/director`
+default, with the lease guard carried over.
+*Earned by: the operator's ruling 2026-09-27; aae-orc#435 review (no durable
+record found); review of this entry (G413).*
+*Source: RULED. Amends R-54; cross-refs R-08, R-94, R-95, R-140.*
+
+### Harvest diff (2026-09-27)
+
+- **Promoted (8):** R-159 (director is not the relay), R-160 (unreachable
+  replies are held), R-161 (a broadcast reports who received it), R-162
+  (director's outbound queue is aged), R-163 (capture at the source), R-164
+  (transport config declared), R-165 (a grant covers the change it names),
+  R-166 (a harvest routes every item to its owning graph).
+- **Unchanged, new instances:**
+  - R-162: the forward stall recurred the same evening (four batches, up to
+    90 minutes), after it had been logged once. Logging did not change the
+    behaviour; only an age alarm would.
+  - R-117: director sent two remote batches (about 36 reviews) without the
+    pane doorbell; the remote review team sat idle about five hours with
+    three reviewers free. Capacity was not the constraint; the wake was.
+  - R-117 and R-93: a remote supervisor sat at an expired login and swallowed
+    six messages while every send returned accepted; the panel's pane-text
+    deaf-seat detection is the proposed mechanism.
+  - R-156: an inject with a wrong key failed with "resource not found",
+    hidden by a tail pipe, and was read as delivered; three more merge calls
+    timed out and had succeeded.
+  - R-155: the loss-reduction panel's dissent, that verdicts, rulings and
+    promises belong in durable artifacts with a pointer on the bus.
+  - R-154: a hub reload did not reach an established leaf; a merged launcher
+    change was not live until the host checkout moved.
+- **Rejected for the register (routed elsewhere):**
+  - A history rewrite stripped commit signatures (every commit before the
+    rewrite point now reads unsigned, every merge after it reads signed, so
+    the source is the rewrite itself, not any seat), and a signed-commit
+    ruleset applied later blocked a pull request built on rewritten commits. General
+    repository practice, true with or without director: routed to the
+    platform graph as a tooling finding.
+  - The operator's reproducibility concern (accumulated local state versus
+    declared state): its subject is the composition, filed in the platform
+    graph as question-declared-vs-accumulated-state. R-164 keeps only
+    director's own share.
+  - Same-cluster supervisors timing out when publishing to each other: cause
+    unverified; kept as friction until diagnosed.
+  - Moving security work down two notches: a prioritization ruling, not a
+    director requirement.
 
 ### Harvest diff (2026-09-26, third)
 

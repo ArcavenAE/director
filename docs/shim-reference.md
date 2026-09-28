@@ -49,9 +49,33 @@ daemon; a launcher supplies the rest.
 |---|---|
 | `director-mcp` | serve MCP on stdin and stdout, log to stderr |
 | `director-mcp --preflight` | connect, verify the broker is provisioned (and the hub through the domain when global mode is on), print `preflight: ok`, exit. Creates no consumer, writes no presence. |
+| `director-mcp unread [--json]` | read-only report of unread mail per seat durable on `AGENT_INBOX` (see below). Needs only `NATS_URL`; no identity. Creates no consumer, acks nothing, writes no presence. Always exits 0. |
+
+Any other argument is refused with exit 2, rather than ignored and a live
+shim started (director#75).
 
 Exit codes: 2 for a configuration refusal (missing or malformed identity,
-bad global levers), 1 for a failed connection or preflight.
+bad global levers, unknown arguments), 1 for a failed connection or
+preflight.
+
+### `unread`
+
+For every durable named `mcp_<agent>_<instance>` on `AGENT_INBOX`, one line,
+oldest unread first:
+
+- `pending`: messages not yet acked (`NumPending` plus `NumAckPending`),
+  with the ack floor;
+- the oldest unread message: the first stored message on any of the
+  durable's filter subjects after its ack floor (and never before a resumed
+  durable's start), with its sequence, stored time and age;
+- the live session's presence `state`, `ts` and `rev`, or `no presence`
+  when no row matches. A durable with no presence is mail waiting for a
+  session that is not live.
+
+`--json` prints the same as `{stream, read_at, durables: [...],
+warnings}`. A presence bucket or consumer listing it could not read is a
+warning, and the presence it did not read is not reported as absent. The
+global tier's durables are not covered yet (LR-3 slice M).
 
 ## Startup behaviour
 
@@ -245,7 +269,7 @@ No arguments. Result:
 {
   "count": 2,
   "present": [
-    { "agent_id": "michael", "instance": "01M2JJ8R...", "pid": 42657,
+    { "agent_id": "operator", "instance": "01M2JJ8R...", "pid": 42657,
       "state": "busy", "team": "ops", "workspace": "aae-orc", "ts": "2026-09-15T19:50:00Z" }
   ]
 }
@@ -274,9 +298,28 @@ regardless.
 | `team` | no | a team; omit for the whole workspace |
 | `workspace` | no | a target workspace; omit for your own |
 
-Sends an INFORM to `broadcast://{workspace}[/{team}]`. There is no durable
-queue for broadcasts: late joiners do not replay them. Result:
-`{ "status": "broadcast sent", "message_id": "..." }`.
+Fans an INFORM out as one durable `agent://{team}/{id}` send per seat live
+in scope: every presence record naming the workspace (and the team, when
+given), excluding the sender, deduplicated by team and id. Each send has its
+own `message_id` and audit record; all share one `conversation_id`. A seat
+that joins after the call is not included, since the scope is read once.
+
+When no seat other than the sender is live in scope, the broadcast is refused
+before any publish (R-92), and the refusal says whether presence rows were
+there but unreadable rather than claim absence it did not establish.
+Result:
+
+```json
+{ "status": "accepted for delivery", "recipients": 2,
+  "conversation_id": "cid-...", "sent": ["...", "..."], "failed": [],
+  "skipped_unreadable": 0,
+  "note": "accepted is not delivered or read; each recipient reports those (R-08)" }
+```
+
+`failed` lists `{ "to", "error" }` for any per-recipient publish that failed;
+the others still went. Before director#121 a broadcast published core NATS to
+a subject no stream captured and no session subscribed, and reported
+`"broadcast sent"` for a message that reached no one.
 
 ## Addresses and subjects
 
@@ -284,7 +327,7 @@ queue for broadcasts: late joiners do not replay them. Result:
 |---|---|---|
 | `agent://{team}/{id}` | `agent.{ws}.{team}.{id}.inbox` | durable, at least once, deduplicated on `message_id` within a 2 minute window (R-13) |
 | `role://{team}/{role}` | `agent.{ws}.{team}.role.{role}.inbox` | durable, read by every live holder of the role (fan-out); refused before publish when no live session holds it |
-| `broadcast://{ws}[/{team}]` | `agent.{ws}.broadcast` or `agent.{ws}.{team}.broadcast` | fan-out, no replay |
+| `broadcast://{ws}[/{team}]` | the `agent://` inbox subject of each seat live in scope | fan-out to live presence as durable directed sends; refused when no one is live |
 | `global://director` | `global.director.inbox` in stream `GLOBAL_TO_DIRECTOR` | durable at the hub; refused before publish when no director is live |
 | `global://{cluster}/supervisor` | `global.{cluster}.supervisor.inbox` in stream `GLOBAL_TO_{cluster}` | durable at the hub; refused when no supervisor of that cluster is live |
 
@@ -411,7 +454,7 @@ the same contract (`schema.arcaven.com`).
   "in_reply_to": null,
   "sender": { "agent_id": "reviewer-a", "role": "reviewer", "workspace": "aae-orc",
               "session": "uuid-abc", "principal": null },
-  "recipient": { "address": "agent://ops/michael", "team": "ops" },
+  "recipient": { "address": "agent://ops/operator", "team": "ops" },
   "performative": "REQUEST",
   "content": { "type": "text", "data": "please review PR #12", "refs": ["bd:aae-orc-spbc"] },
   "reply_by": null,
@@ -468,10 +511,16 @@ type.
 
 ```json
 { "agent_id": "fleet-envoy-g1-0", "instance": "01M2GQ1KMEDB39RAPCGA8CK5HM", "pid": 92392,
-  "state": "idle", "team": "fleet", "workspace": "ops2", "ts": "2026-09-15T19:50:00Z" }
+  "state": "idle", "team": "fleet", "workspace": "ops2", "ts": "2026-09-15T19:50:00Z",
+  "rev": "5c5faa3...+dirty" }
 ```
 
 A session holding a role adds `role` (for example `"role": "reviewer"`).
+
+`rev` is the shim revision, read from the binary's own build info:
+`vcs.revision`, with `+dirty` when `vcs.modified` is true, and `"unknown"`
+for a binary built without VCS stamping (`-buildvcs=false`, or outside a
+repository). A row with no `rev` comes from a shim older than LR-3.
 
 Global rows add `cluster` and `role`, and a `tier` column in the merged
 roster. The record carries the harness's own view of nothing: `state` is

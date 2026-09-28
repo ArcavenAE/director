@@ -103,7 +103,7 @@ three stay inside the cluster; the last two cross it.
 flowchart TD
   A1["agent://team/id"] --> S1["agent.ws.team.id.inbox<br/>durable, at-least-once, dedupe on message_id (R-13)"]
   A2["role://team/role"] --> S2["agent.ws.team.role.role.inbox<br/>resolved to current holder at delivery"]
-  A3["broadcast://ws[/team]"] --> S3["agent.ws.broadcast<br/>fan-out, no replay for late joiners"]
+  A3["broadcast://ws[/team]"] --> S3["each live seat's agent inbox<br/>fan-out to presence at send time"]
   A4["global://director"] --> S4["global.director.inbox<br/>durable on the hub, from any cluster"]
   A5["global://{cluster}/supervisor"] --> S5["global.{cluster}.supervisor.inbox<br/>durable on the hub, one per cluster"]
   S2 -->|"no holder"| NU["NOT-UNDERSTOOD back to sender"]
@@ -127,10 +127,10 @@ sequenceDiagram
   participant Snd as reviewer-a (sender)
   participant Bus as NATS inbox (durable)
   participant Sh as director-mcp shim
-  participant M as michael (model session)
+  participant M as operator (model session)
 
-  Snd->>Bus: send_message to agent://ops/michael
-  Note over Bus: envelope stored, michael offline
+  Snd->>Bus: send_message to agent://ops/operator
+  Note over Bus: envelope stored, operator offline
   Snd-->>Snd: "accepted for delivery" + message_id (R-08: not delivered, not read)
   M->>Sh: wait_for_message (the poll)
   Sh->>Bus: fetch(1), long wait

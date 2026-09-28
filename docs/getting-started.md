@@ -14,7 +14,7 @@ flowchart LR
   subgraph host["one host"]
     B["nats-server (JetStream)<br/>127.0.0.1:4222"]
     S1["director-mcp shim<br/>agent://ops/reviewer-a"]
-    S2["director-mcp shim<br/>agent://ops/michael"]
+    S2["director-mcp shim<br/>agent://ops/operator"]
     H1["Claude Code session"]
     H2["codex, or a second Claude Code"]
   end
@@ -134,7 +134,7 @@ writes the server into Claude Code's local-scope config for this project:
 
 ```sh
 claude mcp add --scope local director-mcp \
-  -e DIRECTOR_AGENT_ID=michael -e DIRECTOR_TEAM=ops -e DIRECTOR_WORKSPACE=aae-orc \
+  -e DIRECTOR_AGENT_ID=operator -e DIRECTOR_TEAM=ops -e DIRECTOR_WORKSPACE=aae-orc \
   -e NATS_URL=nats://127.0.0.1:4222 \
   -- "$PWD/probe/nats-phase-0/director-mcp/director-mcp"
 claude mcp list                    # director-mcp ... Connected
@@ -151,8 +151,8 @@ Both forms produce the same result: `claude mcp list` reports the server
 connected, and the shim's presence record appears in the bucket:
 
 ```sh
-nats kv ls AGENT_STATE                                   # presence.ops.michael.<instance>
-nats kv get AGENT_STATE 'presence.ops.michael.<instance>' --raw
+nats kv ls AGENT_STATE                                   # presence.ops.operator.<instance>
+nats kv get AGENT_STATE 'presence.ops.operator.<instance>' --raw
 ```
 
 ## 5. Join a second harness
@@ -195,16 +195,16 @@ model calls them:
 
 ```
 list_roster
-  -> present: [ {agent_id: michael, team: ops, workspace: aae-orc, state: idle, ...},
+  -> present: [ {agent_id: operator, team: ops, workspace: aae-orc, state: idle, ...},
                 {agent_id: reviewer-a, ...} ]
 
-send_message  to: agent://ops/michael  performative: REQUEST
+send_message  to: agent://ops/operator  performative: REQUEST
               text: "please review PR #12"  refs: ["pr:12"]
   -> status: accepted for delivery, message_id: 01M2..., tier: local
      note: accepted is not delivered or read; the recipient reports those (R-08)
 ```
 
-On michael's side nothing happens until the model polls:
+On operator's side nothing happens until the model polls:
 
 ```
 wait_for_message  timeout_seconds: 60
@@ -236,11 +236,11 @@ The sequence, with the two facts that shape every director design decision:
 sequenceDiagram
   participant A as reviewer-a
   participant Bus as AGENT_INBOX (durable)
-  participant M as michael
+  participant M as operator
 
   A->>Bus: send_message REQUEST
   Bus-->>A: accepted for delivery + message_id
-  Note over Bus: stored; michael may be offline, or busy, or asleep
+  Note over Bus: stored; operator may be offline, or busy, or asleep
   M->>Bus: wait_for_message (the poll)
   Bus-->>M: the REQUEST
   M->>Bus: send_message AGREE, in_reply_to

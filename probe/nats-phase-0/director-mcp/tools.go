@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -88,7 +89,7 @@ func toolCatalog(gcfg *globalConfig) []toolDef {
 		},
 		{
 			Name:        "broadcast",
-			Description: "Send an INFORM to every session in the workspace or a team. No durable queue: late joiners do not replay it.",
+			Description: "Send an INFORM to every seat live in the workspace or a team: one durable send per seat found in presence, excluding you. Returns recipients:N and refuses when N is 0. A seat that joins after the call is not included.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -374,27 +375,87 @@ func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, err
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return nil, bus.refuseArgs(ctx, raw, err)
 	}
-	// The broadcast workspace goes into the address; omit it to broadcast to
-	// your own workspace, set it to reach another. resolveSubject builds the
-	// subject from the address's workspace, so no roster hint is needed here.
 	ws := a.Workspace
 	if ws == "" {
 		ws = bus.self.Workspace
 	}
-	e := newEnvelope(bus.self)
+	// The envelope as the caller addressed it, so a refusal of the whole
+	// broadcast is audited with what was asked for (LR-6).
+	asked := newEnvelope(bus.self)
 	if a.Team == "" {
-		e.Recipient.Address = "broadcast://" + ws
+		asked.Recipient.Address = "broadcast://" + ws
 	} else {
-		e.Recipient.Address = "broadcast://" + ws + "/" + a.Team
+		asked.Recipient.Address = "broadcast://" + ws + "/" + a.Team
 	}
-	e.Recipient.Team = a.Team
-	e.Performative = "INFORM"
-	e.Content = Content{Type: "text", Data: a.Text}
-	if err := e.validate(); err != nil {
-		return nil, bus.refuseEnvelope(ctx, e, "validate", err)
+	asked.Recipient.Team = a.Team
+	asked.Performative = "INFORM"
+	asked.Content = Content{Type: "text", Data: a.Text}
+	if err := validToken("broadcast workspace", ws); err != nil {
+		return nil, bus.refuseEnvelope(ctx, asked, "validate", err)
 	}
-	if _, err := bus.publish(ctx, e, ""); err != nil {
-		return nil, bus.refuseEnvelope(ctx, e, "publish", err)
+	if a.Team != "" {
+		if err := validToken("broadcast team", a.Team); err != nil {
+			return nil, bus.refuseEnvelope(ctx, asked, "validate", err)
+		}
 	}
-	return map[string]any{"status": "broadcast sent", "message_id": e.MessageID}, nil
+	// A broadcast is a fan-out of durable directed sends to the seats live in
+	// scope (director#121). It used to publish core NATS to a subject no stream
+	// captures and no session subscribes, and answer "broadcast sent" to a
+	// message that reached no one.
+	targets, scan, err := bus.broadcastRecipients(ctx, ws, a.Team)
+	if err != nil {
+		return nil, bus.refuseEnvelope(ctx, asked, "resolve", err)
+	}
+	if len(targets) == 0 {
+		return nil, bus.refuseEnvelope(ctx, asked, "resolve", noBroadcastRecipientsErr(ws, a.Team, scan))
+	}
+	// One conversation for the whole fan-out; one message id per recipient, so
+	// each inbox dedupes and each audit record stands alone.
+	conv := asked.ConversationID
+	sent := []string{}
+	failed := []map[string]string{}
+	for _, t := range targets {
+		e := newEnvelope(bus.self)
+		e.ConversationID = conv
+		e.Recipient.Address = "agent://" + t.Team + "/" + t.ID
+		e.Performative = "INFORM"
+		e.Content = Content{Type: "text", Data: a.Text}
+		if err := e.validate(); err != nil {
+			return nil, bus.refuseEnvelope(ctx, e, "validate", err)
+		}
+		if _, err := bus.publish(ctx, e, ws); err != nil {
+			// One recipient refused is not the broadcast refused: the others
+			// still go. The refused copy is audited like any refused send.
+			body, _ := json.Marshal(e)
+			failed = append(failed, map[string]string{
+				"to":    e.Recipient.Address,
+				"error": err.Error(),
+				"audit": bus.auditRefusal(ctx, e.MessageID, refusalStage(err, "publish"), body, err),
+			})
+			continue
+		}
+		sent = append(sent, e.MessageID)
+	}
+	return map[string]any{
+		"status":             "accepted for delivery",
+		"recipients":         len(targets),
+		"conversation_id":    conv,
+		"sent":               sent,
+		"failed":             failed,
+		"skipped_unreadable": scan.Unreadable,
+		"note":               "accepted is not delivered or read; each recipient reports those (R-08)",
+	}, nil
+}
+
+// noBroadcastRecipientsErr refuses a broadcast no live seat would receive,
+// before any publish, and says only what the scan established (finding-188).
+func noBroadcastRecipientsErr(ws, team string, scan presenceScan) error {
+	scope := fmt.Sprintf("workspace %q", ws)
+	if team != "" {
+		scope = fmt.Sprintf("workspace %q team %q", ws, team)
+	}
+	if scan.Unreadable > 0 || scan.Incomplete > 0 {
+		return fmt.Errorf("no usable live presence in %s other than the sender, and %d record(s) could not be used (%d unreadable, %d incomplete), so whether anyone is live was NOT established; this is not a report that no one is. Broadcast refused before publish rather than sent to no one (R-92)", scope, scan.Unreadable+scan.Incomplete, scan.Unreadable, scan.Incomplete)
+	}
+	return fmt.Errorf("no live presence in %s other than the sender (%d presence key(s) read, %d in scope); no session would receive this broadcast, so it is refused before publish (R-92)", scope, scan.Keys, scan.Matched)
 }

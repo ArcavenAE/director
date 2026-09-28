@@ -8,6 +8,8 @@
 #   ./install.sh --target DIR install somewhere other than ~/.claude
 #
 # The repo is the authoritative source. A symlinked install edits live.
+# The launcher is not installed here: director-install (installed below)
+# installs it from a commit, versioned, verified, and behind an atomic switch.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
@@ -19,7 +21,7 @@ while [ $# -gt 0 ]; do
     --copy) MODE=copy ;;
     --link) MODE=link ;;
     --target) TARGET="$2"; shift ;;
-    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -53,6 +55,9 @@ install_one "$SRC/commands/director.md" "$TARGET/commands/director.md"
 DIRECTOR_HOME="${DIRECTOR_HOME:-$HOME/.director}"
 mkdir -p "$DIRECTOR_HOME/bin"
 install_one "$SRC/skills/director/scripts/board-html" "$DIRECTOR_HOME/bin/board-html"
+# The component installer. After this, a host upgrades the launcher from a
+# commit with no checkout: director-install cast-launch --ref origin/main
+install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"
 
 STATE="${DIRECTOR_STATE:-$HOME/.director/state}"
 mkdir -p "$STATE"
