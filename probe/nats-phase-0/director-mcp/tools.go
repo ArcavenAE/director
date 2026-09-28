@@ -169,7 +169,9 @@ func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, err
 		e.CorrelationID = a.InReplyTo
 	}
 	if err := e.validate(); err != nil {
-		return nil, "", err
+		// The envelope is returned with its refusal so the caller can audit it
+		// as built (LR-6).
+		return e, "", atStage("validate", err)
 	}
 	return e, a.Workspace, nil
 }
@@ -177,11 +179,14 @@ func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, err
 func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	e, wsHint, err := buildSendEnvelope(bus.self, raw)
 	if err != nil {
-		return nil, err
+		if e == nil {
+			return nil, bus.refuseArgs(ctx, raw, err)
+		}
+		return nil, bus.refuseEnvelope(ctx, e, "validate", err)
 	}
 	res, err := bus.publish(ctx, e, wsHint)
 	if err != nil {
-		return nil, err
+		return nil, bus.refuseEnvelope(ctx, e, "publish", err)
 	}
 	out := map[string]any{
 		"status":     "accepted for delivery",
@@ -368,18 +373,29 @@ func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, err
 		Workspace  string `json:"workspace"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, err
+		return nil, bus.refuseArgs(ctx, raw, err)
 	}
 	ws := a.Workspace
 	if ws == "" {
 		ws = bus.self.Workspace
 	}
+	// The envelope as the caller addressed it, so a refusal of the whole
+	// broadcast is audited with what was asked for (LR-6).
+	asked := newEnvelope(bus.self)
+	if a.Team == "" {
+		asked.Recipient.Address = "broadcast://" + ws
+	} else {
+		asked.Recipient.Address = "broadcast://" + ws + "/" + a.Team
+	}
+	asked.Recipient.Team = a.Team
+	asked.Performative = "INFORM"
+	asked.Content = Content{Type: "text", Data: a.Text}
 	if err := validToken("broadcast workspace", ws); err != nil {
-		return nil, err
+		return nil, bus.refuseEnvelope(ctx, asked, "validate", err)
 	}
 	if a.Team != "" {
 		if err := validToken("broadcast team", a.Team); err != nil {
-			return nil, err
+			return nil, bus.refuseEnvelope(ctx, asked, "validate", err)
 		}
 	}
 	// A broadcast is a fan-out of durable directed sends to the seats live in
@@ -388,14 +404,14 @@ func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, err
 	// message that reached no one.
 	targets, scan, err := bus.broadcastRecipients(ctx, ws, a.Team)
 	if err != nil {
-		return nil, err
+		return nil, bus.refuseEnvelope(ctx, asked, "resolve", err)
 	}
 	if len(targets) == 0 {
-		return nil, noBroadcastRecipientsErr(ws, a.Team, scan)
+		return nil, bus.refuseEnvelope(ctx, asked, "resolve", noBroadcastRecipientsErr(ws, a.Team, scan))
 	}
 	// One conversation for the whole fan-out; one message id per recipient, so
 	// each inbox dedupes and each audit record stands alone.
-	conv := newEnvelope(bus.self).ConversationID
+	conv := asked.ConversationID
 	sent := []string{}
 	failed := []map[string]string{}
 	for _, t := range targets {
@@ -405,10 +421,17 @@ func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, err
 		e.Performative = "INFORM"
 		e.Content = Content{Type: "text", Data: a.Text}
 		if err := e.validate(); err != nil {
-			return nil, err
+			return nil, bus.refuseEnvelope(ctx, e, "validate", err)
 		}
 		if _, err := bus.publish(ctx, e, ws); err != nil {
-			failed = append(failed, map[string]string{"to": e.Recipient.Address, "error": err.Error()})
+			// One recipient refused is not the broadcast refused: the others
+			// still go. The refused copy is audited like any refused send.
+			body, _ := json.Marshal(e)
+			failed = append(failed, map[string]string{
+				"to":    e.Recipient.Address,
+				"error": err.Error(),
+				"audit": bus.auditRefusal(ctx, e.MessageID, refusalStage(err, "publish"), body, err),
+			})
 			continue
 		}
 		sent = append(sent, e.MessageID)

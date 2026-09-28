@@ -127,7 +127,24 @@ func TestBroadcastRefusesAtZeroRecipientsBeforePublish(t *testing.T) {
 	if got := streamMsgs(t, ctx, js, "AGENT_INBOX"); got != inbox {
 		t.Errorf("AGENT_INBOX moved %d -> %d on a refusal", inbox, got)
 	}
-	if got := streamMsgs(t, ctx, js, "AGENT_AUDIT"); got != audit {
-		t.Errorf("AGENT_AUDIT moved %d -> %d on a refusal", audit, got)
+	// With LR-6, the refusal itself is recorded: exactly one audit record,
+	// marked refused at the resolve stage, and nothing on any inbox.
+	if got := streamMsgs(t, ctx, js, "AGENT_AUDIT"); got != audit+1 {
+		t.Fatalf("AGENT_AUDIT %d -> %d on a refusal, want exactly one refusal record", audit, got)
+	}
+	if !strings.Contains(msg, "audit: recorded agent.audit seq") {
+		t.Errorf("refusal does not report its audit record: %q", msg)
+	}
+	s, _ := js.Stream(ctx, "AGENT_AUDIT")
+	info, _ := s.Info(ctx)
+	rec, err := s.GetMsg(ctx, info.State.LastSeq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Header.Get("Director-Outcome") != "refused" || rec.Header.Get("Director-Stage") != "resolve" {
+		t.Errorf("refusal record headers: outcome %q stage %q", rec.Header.Get("Director-Outcome"), rec.Header.Get("Director-Stage"))
+	}
+	if !strings.Contains(string(rec.Data), `"address":"broadcast://w/t"`) {
+		t.Errorf("refusal record is not the broadcast as asked: %s", rec.Data)
 	}
 }
