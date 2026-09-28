@@ -1,0 +1,58 @@
+id: question-cross-cluster-supervisor-reach
+type: question
+confidence: frontier
+title: "Can a supervisor on a non-hub cluster reach the hub cluster's supervisors over the global tier, and what keeps that reach after a grant change?"
+tags: [director, global-tier, leafnode, supervisor]
+content: |
+  Opened 2026-09-28 from an operator request. On 2026-09-28 a mokuzai
+  supervisor sent to global://kinu/supervisor twice (13:18Z and 13:20Z).
+  Both failed with "global publish to global://kinu/supervisor
+  (global.kinu.supervisor.inbox) failed: context deadline exceeded (... a
+  down link and a credential that does not grant this cluster's stream both
+  surface as no responders)". The reverse direction worked the same hour,
+  and global://director from mokuzai kept working, so every mokuzai to kinu
+  supervisor reply went through director by hand.
+
+  ## What the kinu side shows (read-only, 2026-09-28 ~14:35Z)
+
+  - The leaf link is up: the mokuzai leaf (JetStream domain "mokuzai")
+    connected 2026-09-26 06:08Z and carries traffic in both directions.
+  - The consumer side exists: stream GLOBAL_TO_kinu (global.kinu.>) has four
+    consumers filtered on global.kinu.supervisor.inbox, one per kinu
+    supervisor that holds a global presence (4 of 6). Nothing from mokuzai
+    has ever landed in it.
+  - The grant is in the file but not in the connection: the mokuzai leaf
+    user's permission to publish global.kinu.supervisor.inbox first appears
+    in the config reloaded at 2026-09-27 16:22Z, after that leaf connected.
+    finding-009 records that such a grant does not reach an open leaf.
+
+  ## The question
+
+  A. Does a reconnect of the mokuzai leaf restore mokuzai to kinu supervisor
+     reach? (That confirms the cause, and it is the second instance of
+     finding-009.)
+  B. What should a grant change do so that it cannot silently leave an open
+     leaf on stale permissions: end the runbook with a leaf reconnect and a
+     named check (finding-009 question B), have the hub refuse or flag the
+     change until affected leaves reconnect, or have the sender's error name
+     the stale-grant case apart from a down link?
+  C. Is reach symmetric by construction? Today each direction depends on a
+     separate per-leaf publish list, so reach is granted pair by pair. What
+     keeps a new cluster from starting half-reachable?
+
+  Prior in this graph: finding-009 (reloaded grant misses an open leaf),
+  finding-008 (a refusal seen as a timeout), finding-006 (global tier has no
+  per-agent address). Orc finding-178 (marvel leaf controls are reload-only).
+edges:
+  - target: finding-009-hub-grant-reload-misses-existing-leaf
+    type: derives
+provenance:
+  created_by: agent
+  session: 2026-09-28 cross-cluster supervisor reach, kinu arm (arcaven-research-supervisor-g5-0)
+  created_at: "2026-09-28"
+  notes: >
+    Operator request routed by director to arcaven-supervisor. The far-side
+    arm runs on mokuzai (ops-supervisor-g5-0). Related: director#119 (the
+    kinu local broker has no authorization block); R-86, R-94, R-95 in
+    sim/requirements.md. Tracked as director#155 (the defect report) and
+    bd aae-orc-8u04y.
