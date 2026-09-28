@@ -3,7 +3,7 @@
 Owner: arcaven-architect-g5-0. Commission: operator ruling via director and
 arcaven-supervisor, 2026-09-27 (PR 2 of the identity change; PR 1 moves tests
 and docs to the placeholder `agent://ops/operator` and leaves the runtime
-alone). Status: design for skippy review. No build until the review passes
+alone). Status: design under adversarial review. No build until the review passes
 and the operator rules on section 6.
 
 ## Why
@@ -57,14 +57,13 @@ Three rules, each covering one path by which a session gets a name:
    - **No person's name, anywhere.** The team and workspace stay explicit
      flags, defaulting to `ops` and the current directory's workspace.
 2. **The director is a role held under the seat lease, not an agent id.**
-   - The address is `role://ops/director`. It resolves to whichever session
-     holds the seat lease (`director-seat-lease.md` SEAT-A; this answers that
-     brief's open question on unifying the lease with `role://`: yes).
+   - The address is `agent://ops/director` (RULED, R-167; IDD-1). It
+     resolves to whichever session holds the seat lease
+     (`director-seat-lease.md` SEAT-A).
+   - The shim refuses to register that name without winning the lease, so it
+     is the lease spelled as an agent address. The unguarded spelling is the
+     unsafe one.
    - The holder keeps its own unique agent id.
-   - If the operator wants `agent://ops/director` as a literal address, the
-     shim must refuse to register it without winning the lease. That makes it
-     the same lease, spelled as an agent address. Either spelling is safe;
-     only the unguarded one is not.
 3. **No shared fallback.**
    - `director-mcp` keeps refusing an empty `DIRECTOR_AGENT_ID`. It does not
      mint one: a mint inside the shim would hide a missing launcher.
@@ -128,9 +127,11 @@ braces, not the only guard.
 
 ## 6. Rulings needed
 
-- **IDD-1:** the director address. Default: `role://ops/director`, resolved
-  through the seat lease. The alternative is a lease-guarded literal
-  `agent://ops/director`.
+- **IDD-1: RULED** (R-167, director#151, merged 292ad14). The director
+  seat's local address is the lease-guarded literal `agent://ops/director`
+  (this brief's alternative, not its default); `global://director` is
+  unchanged. A session reaches that address by acquiring the seat lease, never
+  by registering the name.
 - **IDD-2:** the hand-run id shape. Default: `hand-<host>-<4 base36>`.
 - **IDD-3:** remove the local-scope personal-id registration (an operator
   action on `~/.claude.json`), with the launcher's `--strict-mcp-config` as
