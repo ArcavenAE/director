@@ -1766,16 +1766,20 @@ and takes the items with no home to the operator.
 **R-167 (RULED) · director's address names the role, never the operator.**
 The director seat registered on the bus under the operator's first name, so its
 local address read as a person's inbox rather than a role. The operator ruled
-that the name come out and the seat be addressed as director. The seat's agent
-id is `director`; its local address is `agent://ops/director`, and the global
-address `global://director` is unchanged. The id comes from the seat's own
-registration, not from the host user name, so a second operator on another
-machine still reaches a seat called director. Seats that hold the old address
-are told when the new one goes live, and the old subject is drained before it
-is abandoned, so a reply in flight is not lost.
+that the name come out and the seat be addressed as director. The seat's local
+address is `agent://ops/director`; the global address `global://director` is
+unchanged, and `director` stays the one reserved fleet name (R-94). This amends
+R-54 only in which literal the seat answers to: the seat remains a capability
+held as a lease, so a session reaches that address by acquiring the lease, never
+by registering the name. A session that registers `director` without the lease
+does not take the address. Seats that hold the old address are told when the new
+one goes live, and the old subject is drained before it is abandoned, so a reply
+in flight is not lost. This resolves IDD-1 (director#148, identity-default.md
+section 6) in favor of `agent://ops/director` over the `role://ops/director`
+default, with the lease guard carried over.
 *Earned by: the operator's ruling 2026-09-27; aae-orc#435 review (no durable
-record found).*
-*Source: RULED. Cross-refs R-08, R-95.*
+record found); review of this entry (G413).*
+*Source: RULED. Amends R-54; cross-refs R-08, R-94, R-95, R-140.*
 
 ### Harvest diff (2026-09-27)
 
