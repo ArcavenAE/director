@@ -1763,6 +1763,20 @@ and takes the items with no home to the operator.
 *Earned by: O 2026-09-27g; the operator's rulings 2026-09-27 and 2026-09-28.*
 *Source: RULED. Cross-refs R-163.*
 
+**R-167 (RULED) · director's address names the role, never the operator.**
+The director seat registered on the bus under the operator's first name, so its
+local address read as a person's inbox rather than a role. The operator ruled
+that the name come out and the seat be addressed as director. The seat's agent
+id is `director`; its local address is `agent://ops/director`, and the global
+address `global://director` is unchanged. The id comes from the seat's own
+registration, not from the host user name, so a second operator on another
+machine still reaches a seat called director. Seats that hold the old address
+are told when the new one goes live, and the old subject is drained before it
+is abandoned, so a reply in flight is not lost.
+*Earned by: the operator's ruling 2026-09-27; aae-orc#435 review (no durable
+record found).*
+*Source: RULED. Cross-refs R-08, R-95.*
+
 ### Harvest diff (2026-09-27)
 
 - **Promoted (8):** R-159 (director is not the relay), R-160 (unreachable
