@@ -118,7 +118,12 @@ that stands in for a push the transport cannot make.
 | `refs` | no | pointers: `bd:`, `finding:`, `file:`, `url:`, `pr:` |
 | `in_reply_to` | no | the `message_id` being answered; also sets `correlation_id` so receipts correlate (R-88) |
 | `reply_by` | no | RFC 3339 deadline |
-| `workspace` | no | the recipient's workspace. Omit and it is resolved from the recipient's live presence; with no live presence the send is refused rather than misdelivered (R-92). Set it to address a known cold mailbox verbatim. Ignored for `global://`. |
+| `workspace` | no | the recipient's workspace. Omit and it is resolved from the recipient's live presence; with no live presence the send is refused rather than misdelivered (R-92). Set it to address a known cold mailbox verbatim. Ignored for `global://` and `broadcast://`, whose address carries its own scope. |
+
+A `broadcast://` address takes the same path as the `broadcast` tool (see
+below): one durable send per live seat in scope, the broadcast result shape,
+and a refusal before publish when no one is live. The caller's performative,
+`refs`, `in_reply_to` and `reply_by` ride on every copy.
 
 Result:
 
@@ -492,7 +497,7 @@ type.
 | `AGREE` | the recipient will do it |
 | `REFUSE` | the recipient will not |
 | `FAILURE` | agreed, then could not (distinct from a refusal and from partial compliance, R-24, R-25) |
-| `INFORM` | a result, a status, a notice; also the verb of every broadcast |
+| `INFORM` | a result, a status, a notice; also the verb of the `broadcast` tool |
 | `QUERY` | ask for information |
 | `CFP` | call for proposals |
 | `PROPOSE`, `ACCEPT-PROPOSAL`, `REJECT-PROPOSAL` | the negotiation triple |

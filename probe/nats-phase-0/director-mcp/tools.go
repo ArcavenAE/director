@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -183,6 +184,20 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 			return nil, bus.refuseArgs(ctx, raw, err)
 		}
 		return nil, bus.refuseEnvelope(ctx, e, "validate", err)
+	}
+	// A broadcast address takes the broadcast path, so both entry points reach
+	// the same fan-out, refuse alike, and audit alike (director#121).
+	if rest, ok := strings.CutPrefix(e.Recipient.Address, "broadcast://"); ok {
+		ws, team, _ := strings.Cut(rest, "/")
+		if err := validToken("broadcast workspace", ws); err != nil {
+			return nil, bus.refuseEnvelope(ctx, e, "validate", err)
+		}
+		if team != "" {
+			if err := validToken("broadcast team", team); err != nil {
+				return nil, bus.refuseEnvelope(ctx, e, "validate", err)
+			}
+		}
+		return broadcastFanout(ctx, bus, ws, team, e)
 	}
 	res, err := bus.publish(ctx, e, wsHint)
 	if err != nil {
@@ -398,28 +413,41 @@ func toolBroadcast(ctx context.Context, bus *Bus, raw json.RawMessage) (any, err
 			return nil, bus.refuseEnvelope(ctx, asked, "validate", err)
 		}
 	}
-	// A broadcast is a fan-out of durable directed sends to the seats live in
-	// scope (director#121). It used to publish core NATS to a subject no stream
-	// captures and no session subscribes, and answer "broadcast sent" to a
-	// message that reached no one.
-	targets, scan, err := bus.broadcastRecipients(ctx, ws, a.Team)
+	return broadcastFanout(ctx, bus, ws, a.Team, asked)
+}
+
+// broadcastFanout is the one path to a broadcast, from the broadcast tool and
+// from send_message to a broadcast:// address alike (director#121). It
+// resolves the scope from live presence, refuses at zero before any publish,
+// and otherwise sends the template's performative, content and reply fields
+// to each seat as its own durable agent:// message. A broadcast is a fan-out
+// of durable directed sends; it used to publish core NATS to a subject no
+// stream captures and answer "broadcast sent" to a message that reached no
+// one. Every refusal is audited (LR-6): a refusal of the whole broadcast with
+// tmpl, the envelope as the caller addressed it, and each refused copy with
+// its own envelope.
+func broadcastFanout(ctx context.Context, bus *Bus, ws, team string, tmpl *Envelope) (any, error) {
+	targets, scan, err := bus.broadcastRecipients(ctx, ws, team)
 	if err != nil {
-		return nil, bus.refuseEnvelope(ctx, asked, "resolve", err)
+		return nil, bus.refuseEnvelope(ctx, tmpl, "resolve", err)
 	}
 	if len(targets) == 0 {
-		return nil, bus.refuseEnvelope(ctx, asked, "resolve", noBroadcastRecipientsErr(ws, a.Team, scan))
+		return nil, bus.refuseEnvelope(ctx, tmpl, "resolve", noBroadcastRecipientsErr(ws, team, scan))
 	}
 	// One conversation for the whole fan-out; one message id per recipient, so
 	// each inbox dedupes and each audit record stands alone.
-	conv := asked.ConversationID
+	conv := tmpl.ConversationID
 	sent := []string{}
 	failed := []map[string]string{}
 	for _, t := range targets {
 		e := newEnvelope(bus.self)
 		e.ConversationID = conv
+		e.CorrelationID = tmpl.CorrelationID
+		e.InReplyTo = tmpl.InReplyTo
+		e.ReplyBy = tmpl.ReplyBy
 		e.Recipient.Address = "agent://" + t.Team + "/" + t.ID
-		e.Performative = "INFORM"
-		e.Content = Content{Type: "text", Data: a.Text}
+		e.Performative = tmpl.Performative
+		e.Content = tmpl.Content
 		if err := e.validate(); err != nil {
 			return nil, bus.refuseEnvelope(ctx, e, "validate", err)
 		}
