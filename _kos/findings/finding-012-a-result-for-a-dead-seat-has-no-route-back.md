@@ -27,7 +27,7 @@ so even a reader of the dead inbox could not forward by rule. This is the
 agent-address sibling of director#85 (role mail sits on a role subject no
 session reads), and of the stale-id cause recorded as orc finding-169 cause 4.
 
-The envelope declares `expires_at` (probe/nats-phase-0/director-mcp/envelope.go; optional in docs/shim-reference.md) and the ledger writes it, but `git grep expires_at` on director main finds no reader, so an ask to a dead holder has no expiry to trip either.
+The envelope declares `expires_at` (envelope.go; optional in docs/shim-reference.md), but no tool sets it and nothing reads it, so an ask to a dead holder has no expiry to trip either.
 
 ## 3. What this does not establish
 
