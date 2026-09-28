@@ -491,6 +491,8 @@ type.
   "rev": "5c5faa3...+dirty" }
 ```
 
+(The example `rev` 5c5faa3 was re-signed as 07a2681; map in tag resign-2026-09-27.)
+
 A session holding a role adds `role` (for example `"role": "reviewer"`).
 
 `rev` is the shim revision, read from the binary's own build info:

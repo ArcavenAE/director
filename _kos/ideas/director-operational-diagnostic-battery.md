@@ -65,7 +65,7 @@ replay, grants, and the launcher.
 
 - `sim/twin/verify-cast-launch.sh`: 26 broker-free checks that the launcher
   hands the global-tier levers to the right roles and clears them for the
-  rest (26 passed on 5c5faa3).
+  rest (26 passed on 5c5faa3; re-signed as 07a2681; map in tag resign-2026-09-27).
 - The director-mcp `--preflight` (`probe/nats-phase-0/director-mcp/bus.go`):
   broker reachable and provisioned before a seat starts.
 - The hub acceptance steps in `sim/design/global-bus-tier.md`.
