@@ -464,6 +464,12 @@ func broadcastFanout(ctx context.Context, bus *Bus, ws, team string, tmpl *Envel
 		}
 		sent = append(sent, e.MessageID)
 	}
+	// Nothing was accepted for delivery when every copy failed, so the
+	// broadcast is a refusal, not a success with an empty sent list. Each
+	// copy's own refusal is already audited above; the error names them all.
+	if len(sent) == 0 {
+		return nil, allFailedErr(ws, team, failed)
+	}
 	return map[string]any{
 		"status":             "accepted for delivery",
 		"recipients":         len(targets),
@@ -473,6 +479,21 @@ func broadcastFanout(ctx context.Context, bus *Bus, ws, team string, tmpl *Envel
 		"skipped_unreadable": scan.Unreadable,
 		"note":               "accepted is not delivered or read; each recipient reports those (R-08)",
 	}, nil
+}
+
+// allFailedErr refuses a broadcast whose every per-seat send failed. Live
+// seats were found, so the refusal is not a claim that no one is live; it
+// names each seat, its error, and where its refused copy was recorded.
+func allFailedErr(ws, team string, failed []map[string]string) error {
+	scope := fmt.Sprintf("workspace %q", ws)
+	if team != "" {
+		scope = fmt.Sprintf("workspace %q team %q", ws, team)
+	}
+	parts := make([]string, 0, len(failed))
+	for _, f := range failed {
+		parts = append(parts, fmt.Sprintf("%s: %s (audit: %s)", f["to"], f["error"], f["audit"]))
+	}
+	return fmt.Errorf("broadcast to %s reached no one: 0 of %d per-seat sends were accepted, so nothing was sent and the broadcast is refused rather than reported as accepted (R-92). %s", scope, len(failed), strings.Join(parts, "; "))
 }
 
 // noBroadcastRecipientsErr refuses a broadcast no live seat would receive,
