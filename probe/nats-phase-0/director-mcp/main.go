@@ -24,6 +24,13 @@
 // beats presence into GLOBAL_PRESENCE, and accepts global:// addresses. It
 // holds no hub credential; the leaf link does (sim/design/global-bus-tier.md).
 //
+// A read-only report of unread mail per seat durable, with each live seat's
+// shim revision, and nothing created (LR-3):
+//
+//	NATS_URL=nats://127.0.0.1:4222 director-mcp unread [--json]
+//
+// Any other argument is refused (director#75).
+//
 // Logs go to stderr so stdout stays clean JSON-RPC.
 package main
 
@@ -47,11 +54,19 @@ func env(k, def string) string {
 func main() {
 	// --preflight: connect, verify the broker is provisioned, and exit. Used by
 	// cast-launch before starting the harness (finding-166, R-93).
-	preflightMode := false
-	for _, a := range os.Args[1:] {
-		if a == "--preflight" || a == "-preflight" {
-			preflightMode = true
-		}
+	cli, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "director-mcp: %v\n", err)
+		os.Exit(2)
+	}
+	preflightMode := cli.mode == "preflight"
+	// unread is a read-only report over every seat's durable: it needs no
+	// identity of its own and never registers one (LR-3).
+	if cli.mode == "unread" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		code := runUnreadCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli.json, os.Stdout, os.Stderr)
+		cancel()
+		os.Exit(code)
 	}
 	self := Sender{
 		AgentID:   env("DIRECTOR_AGENT_ID", ""),
