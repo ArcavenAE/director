@@ -20,8 +20,13 @@ so badly from conways law".
   and the leaf, so it can ring a doorbell on arrival. That is the automated
   form of what the supervisor does by hand today.
 - **Smallest first phase:** probe P0 (half a seat-day), then P1, a channel cue
-  in director-mcp (two to three seat-days). After P1, no Claude seat, director
-  included, waits for someone to wake it.
+  in director-mcp (about three seat-days). After P1, no Claude seat, director
+  included, waits for someone to wake it, **provided two gates are open**: the
+  account's organization allows channels (`channelsEnabled`; channels are not
+  available on Bedrock, Vertex or Foundry), and every seat to be woken either
+  launches with the development-channels flag or loads director-mcp as a
+  plugin on the approved channels allowlist. If either gate is shut, P1 does
+  nothing and P2 is the first phase.
 
 ## 2. Is there a written plan?
 
@@ -46,7 +51,7 @@ seat already drains in one turn. This estimate is written to be that plan.
 
 | Harness | Today (verified here) | Only planned or unverified |
 |---|---|---|
-| Claude Code, interactive | The binary carries the MCP capability `experimental: {'claude/channel': {}}`, the notification `notifications/claude/channel`, the flags `--channels` and `--dangerously-load-development-channels` (hidden from `--help`), the message "server: entries need --dangerously-load-development-channels", and policy keys `channelsEnabled` and `allowedChannelPlugins` (`strings` on 2.1.285) | **Not measured:** whether a channel notification wakes an idle session and starts a turn, how it behaves mid-turn, and whether the account's policy allows it. Upstream describes channels as a research preview for exactly the idle-wake case. P0 settles it |
+| Claude Code, interactive | The binary carries the MCP capability `experimental: {'claude/channel': {}}`, the notification `notifications/claude/channel`, the flags `--channels` and `--dangerously-load-development-channels` (hidden from `--help`), the message "server: entries need --dangerously-load-development-channels", and policy keys `channelsEnabled` and `allowedChannelPlugins` (`strings` on 2.1.285) | **Not measured:** whether a channel notification wakes an idle session and starts a turn, how it behaves mid-turn, and whether the account's policy allows it. The binary labels the feature "Channels (experimental)" and carries three refusals: "Channels are not enabled for your org" (`channelsEnabled` in managed settings), "Channels are not available on Bedrock, Vertex, or Foundry", and "not available on third-party providers"; and a server's capability registers only when its plugin is on the approved channels allowlist or the development flag is set (strings quoted in the #163 review). P0 settles the rest |
 | Claude Code, headless (`-p`) | a one-shot run; nothing to wake | n/a |
 | codex | MCP client only; no channel equivalent found in `codex --help` | an experimental `app-server` with `remote-control` exists; not assessed |
 | opencode, others | no push path known | not assessed |
@@ -83,27 +88,40 @@ or more.
 
 | Phase | Work | Size | Takes director out of |
 |---|---|---|---|
-| P0 | Probe: director-mcp declares `claude/channel`; one test seat loaded with the development-channels flag (operator-run, since the flag is named "dangerously"); send to it while idle, while mid-turn, and under plan and auto modes; record wake, latency, and any prompt | S (0.5) | nothing yet; decides P1 |
-| P1 | director-mcp: a background inbox watcher; on arrival, one `notifications/claude/channel` cue carrying the sender, performative and message id, never the body; the model then calls `wait_for_message` as today, so FIFO order and R-08 are unchanged; dedupe and rate limit; tests | M (2 to 3) | waking Claude seats, itself included |
+| P0 | First, at no seat cost: read whether the fleet's accounts allow channels (`channelsEnabled`, and the provider: subscription, not Bedrock, Vertex or Foundry). If they do not, stop: P1 is dead and P2 goes first. Otherwise probe: director-mcp declares `claude/channel`; one test seat loaded with the development-channels flag (operator-run, since the flag is named "dangerously"); send to it while idle, while mid-turn, and under plan and auto modes; record wake, latency, and any prompt | S (0.5) | nothing yet; decides P1 |
+| P1 | director-mcp: a background inbox watcher; on arrival, one `notifications/claude/channel` cue carrying the sender, performative and message id, never the body; the model then calls `wait_for_message` as today, so FIFO order and R-08 are unchanged; dedupe and rate limit; a receipt check (section 6) so an unanswered cue fails loud; tests | M (about 3) | waking Claude seats, itself included |
 | P2 | marvel doorbell (section 4) for non-Claude seats and as a fallback when channels are off; idle signal from hooks for Claude, `turn.started` and `turn.ended` for codex and opencode | M to L (4 to 6) | waking codex and other seats; the manual inject after each send |
 | P3 | Route seat to seat without director: supervisors and builders address each other by `role://` on the bus (fln6p), with director copied, not relaying | M (2 to 3), mostly process text in wardrobe | the relay hop (the Conway cost) |
 
 **The smallest first phase that takes director out of the polling loop is P0
-plus P1**, about three seat-days, if P0 is green. If P0 is red, P2 becomes the
-first phase and the estimate is about five seat-days.
+plus P1**, about three and a half seat-days, if the org gate is open and P0 is
+green. If either fails, P2 becomes the first phase and the estimate is about
+five seat-days. The org check comes first because it changes that answer
+before any seat time is spent.
 
 ## 6. Risks
 
-- **Research preview.** The channel surface is experimental and hidden from
-  `--help`; it can change between Claude Code releases. P1 keeps the cue
+- **Experimental.** The channel surface is labelled experimental and hidden
+  from `--help`; it can change between Claude Code releases. P1 keeps the cue
   optional, and `wait_for_message` stays the only receive, so a regression
   degrades to today's polling rather than to loss.
 - **The development flag.** A non-plugin server needs
   `--dangerously-load-development-channels`. Putting that in every fleet
   launch is the operator's decision (no-control-bypass). Packaging director-mcp
   as a plugin may remove the need; unverified.
-- **Account policy.** `channelsEnabled` suggests an organization policy can
-  switch channels off. The fleet's accounts are not checked.
+- **Account policy.** An organization can switch channels off
+  (`channelsEnabled`), and they are unavailable on Bedrock, Vertex and
+  Foundry. The fleet's accounts are not checked; P0 checks them first.
+- **A blocked cue drops silently, so a bare cue does not meet R-89.** For a
+  policy-blocked channel the binary says "Inbound messages will be silently
+  dropped". The shim writes the notification and gets no acknowledgement, so
+  a cue that never landed looks like one that did. P1 therefore includes a
+  receipt check the shim can make on its own: it sees its model's tool calls,
+  so after a cue it waits a bounded window for `wait_for_message`, and if none
+  comes it emits a wake failure on the bus (to director, and to the sender
+  where the envelope names one). That is the fail-loud half of R-89. Without
+  it, P1's cue is fire-and-forget and the fail-loud half stays with P2's
+  doorbell.
 - **Injection surface.** A channel event lands in the model's context. The cue
   therefore carries only metadata the bus already authenticates, never a
   sender's text (INJ-A..C, `authority-never-in-content.md`).
