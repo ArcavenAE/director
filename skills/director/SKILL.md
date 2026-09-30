@@ -99,8 +99,15 @@ for that PR, and act only on its line:
 
 The guard fails closed. A read that errors, times out, or comes back empty,
 and a merge state of UNKNOWN that does not resolve, are all a STOP, never a
-pass. Operator merge exclusions (R-153) are checked separately, before the
-guard.
+pass. It also stops unless someone other than the author approved the current
+head after that head reached GitHub, and it stops while any reviewer's latest
+review, on any commit, requests changes (director#159). An approval of earlier
+code is not an approval of what merges, and an objection to earlier code is
+not withdrawn by someone else approving later code. "Reached GitHub" is the
+later of the head's commit date and its first check suite; GitHub exposes no
+time the head joined the PR, so with no check suite the PROCEED line says the
+push time is unknown. Operator merge exclusions (R-153) are checked
+separately, before the guard.
 
 ## Replay: the retrospective evidence source
 
