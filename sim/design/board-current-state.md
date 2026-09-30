@@ -165,7 +165,7 @@ changes nothing.
 
 This is one stdlib Python script beside `dsi` and `dsx`
 (`skills/director/scripts/`), installed to `$DIRECTOR_HOME/bin`. Its name
-is the operator's choice; this doc calls it `ditem`.
+is `ditem` (operator ruling 4, 2026-09-30).
 
 | verb | does |
 |---|---|
@@ -176,6 +176,7 @@ is the operator's choice; this doc calls it `ditem`.
 | `close ID --disposition D` | appends `close` |
 | `alarms [--notify]` | the timer's entry point (section 7) |
 | `show [ID] [--json]`, `fold` | prints the projection; appends nothing |
+| `snapshot` | copies board.md to `$DIRECTOR_STATE/snapshots/board-<UTC timestamp>.md` (`0600`), keeps the newest 20; appends nothing (X1) |
 
 An invalid event exits nonzero and appends nothing. After a mutating verb,
 the CLI reruns the renderer when `board.html` already exists. That keeps the
@@ -395,8 +396,14 @@ lines:
   - parse board.md to open items;
   - fail when the CLI is absent. Without it, the sweep runs as today.
 
-The step 4 addition sits inside the step's text without changing its shape,
-so it needs an operator ruling.
+The step 4 addition sits inside the step's text without changing its shape.
+The operator ruled it in as written (ruling 2, 2026-09-30).
+
+- **Snapshot before a board.md edit (X1, ruling 3).** Before the director
+  edits board.md, it copies the file to
+  `$DIRECTOR_STATE/snapshots/board-<UTC timestamp>.md`, created `0600`, and
+  keeps the newest 20; the oldest beyond 20 are removed by the same step.
+  Restore is one copy back. A failed snapshot stops the edit and says why.
 
 ## 9. Install, upgrade, and which renderer ran
 
@@ -459,7 +466,7 @@ These are flat work items with dependency edges.
 | I1b | alarm, silent-timer and not-installed banners | I1a, A1 |
 | K1 | skill text for the sweep (section 8) | SH2, SH3 |
 | K2 | optional: install dsi and dsx; absolute paths for all | P0b |
-| X1 | board.md snapshot before director edits, only on an operator ruling | none |
+| X1 | board.md snapshot before director edits (ruled in): `ditem snapshot`, keep the newest 20, and the skill line that calls it | SH2 |
 | DOC | this document | none |
 
 **Pull requests.** No pull request is based on another's branch.
@@ -469,7 +476,7 @@ These are flat work items with dependency edges.
 | PR1 | P0b, SH1 | runs in parallel with PR2 |
 | PR2 | SH2, SH3, SH4, A1, B1-demo, D2 | after PR1 merges, fold main in and rerun P0b's install test |
 | PR3 | E1, G1, H1, I1a, I1b | after PR1 and PR2 merge |
-| PR4 | K1 (and K2) | alone, because its step 4 line waits on a ruling |
+| PR4 | K1, X1 (and K2) | after PR2 merges; the step 4 line and X1 are ruled |
 
 **Operator steps with no PR:** P0a (first), B1-seed, and the i demo run.
 
@@ -488,6 +495,7 @@ fixtures.
   appends one line with an event id. Two processes each append 200 events at
   once, giving 400 parseable lines with unique ids. Two sequential `move`s
   with the same stale `--from`: the second exits nonzero and appends nothing.
+  The script installs as `ditem` and answers to that name.
 - **SH3:**
   - refolding the ledger, with a duplicated last line, is byte-identical;
   - in the `replayed-move` fixture (a hand-appended `move` line with a wrong
@@ -518,15 +526,24 @@ fixtures.
 - **K1:** the sweep's step 4 fence is byte-identical to main, and from the
   `sweep` fixture the rendered lines read `<owner> - <source_ref> <summary>`,
   `<owner> - <summary>` for an item with no `source_ref`, and a Stranded line
-  ends in `(died Nh ago)`.
+  ends in `(died Nh ago)`. The skill's step 4 carries the one ruled sentence,
+  and step 5 calls `ditem snapshot` before any board.md edit.
+- **X1:** 21 `ditem snapshot` runs leave 20 files, newest kept, each `0600`;
+  a snapshot of an unwritable directory exits nonzero and names it; copying
+  the newest snapshot back restores board.md byte for byte.
 
 ## 12. Rulings the operator holds
 
-1. **P0a.** Moving the installed file is the operator's act.
-2. **The step 4 text line** (section 8).
-3. **X1.** Whether board.md gets a snapshot before director edits. It has no
-   history today.
-4. **The CLI's name.**
+All four are ruled (operator, via director, 2026-09-30):
+
+1. **P0a.** Moving the installed file is the operator's act. Done: the stale
+   renderer is kept aside and the installed tools link into the repo.
+2. **The step 4 text line** (section 8): the one added sentence, as written.
+3. **X1.** A dated snapshot of board.md before each director edit, under
+   `$DIRECTOR_STATE/snapshots/`, keeping the newest 20 (section 8).
+4. **The CLI's name:** `ditem`.
+
+No gallery page was needed.
 
 ## 13. What this does not do
 
