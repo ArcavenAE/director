@@ -85,13 +85,20 @@ on P0's working channel, so it proves nothing, and the shim cannot see
 whether Claude Code registered the channel. The only positive proof is the
 round trip:
 
-1. After `notifications/initialized`, the shim sends one cue with
-   `meta.kind = "self-test"` and content "director cue self-test: call
-   inbox_summary once".
-2. If the model calls `inbox_summary` (or `wait_for_message`) within the
-   self-test window (default 120 s), the shim records `cue: live`.
+1. After `notifications/initialized`, the shim draws a random nonce for
+   this start (16 bytes, hex) and sends one cue with
+   `meta.kind = "self-test"`, `meta.nonce = <nonce>`, and content "director
+   cue self-test: call inbox_summary with cue_ack set to the nonce in this
+   notice".
+2. `inbox_summary` gains an optional `cue_ack` argument. Only a call whose
+   `cue_ack` equals this start's nonce, within the self-test window (default
+   120 s), records `cue: live`. An inbox call alone proves nothing: seats
+   drain their inbox at start whether or not a cue arrived, which is the
+   false positive #163's review named. The nonce can only be known by a model
+   that received the notice.
 3. Otherwise it records `cue: unverified` with the reason it can name
-   (`no tool call after self-test`). The cause could be a flag not bound, an
+   (`no nonce echo after self-test`, or `wrong nonce`). A nonce is valid for
+   one start; a shim restart draws a new one. The cause could be a flag not bound, an
    org gate shut, the seat held by an onboarding dialog (3.6), or a busy
    first turn; the shim does not guess which.
 4. The state is published beside presence (a `cue` field) and returned in
@@ -99,7 +106,10 @@ round trip:
    whose cue is not live. `unverified` does not stop cues: a later answered
    cue promotes the seat to `live`.
 
-The self-test costs one short turn per seat start. That is ruling 2.
+The self-test costs one short turn per seat start. That is ruling 2. The
+nonce is not a secret and carries no authority; it only proves the notice
+reached the model. It never appears in presence or on the bus, only the
+resulting state does.
 
 ### 3.4 The watcher
 
@@ -185,7 +195,7 @@ read as a diagnostic (never a gate), before any other team opts in.
 | C-1 | `DIRECTOR_CUE`; capability; version echo list; the explicit `server/discover` pin | none |
 | C-2 | The watcher: `NumPending` poll per tier, open-wait suppression, coalescing, reconnect | C-1 |
 | C-3 | Receipt window, `cue.unanswered`, one re-cue | C-2 |
-| C-4 | Startup self-test; the `cue` field in presence and `inbox_summary` | C-1 |
+| C-4 | Startup self-test with a per-start nonce; `cue_ack` on `inbox_summary`; the `cue` field in presence and `inbox_summary` | C-1 |
 | C-5 | `cast-launch.sh`: `DIRECTOR_CUE` from the role env, the shim env entry, the flag | C-1, ruling 1 |
 
 The builder writes C-1 to C-4 red first against these tests: the cue-off
@@ -194,8 +204,11 @@ gets `-32601`; a rise in `NumPending` with no open wait emits one cue with
 metadata only and no body; with an open wait, none; three arrivals inside the
 floor emit one cue with `count = 3`; an unanswered cue emits
 `cue.unanswered` after W, re-cues once, then stops; a drain inside W emits
-nothing; the self-test sets `live` on a tool call and `unverified` without
-one; a client version outside the list reports `cue: off`.
+nothing; the self-test sets `live` only on an `inbox_summary` whose `cue_ack`
+equals this start's nonce; a drain with no `cue_ack` (both `inbox_summary`
+and `wait_for_message`) inside the window leaves `unverified`; a `cue_ack`
+carrying a wrong nonce, or the previous start's nonce, leaves `unverified`
+with reason `wrong nonce`; a client version outside the list reports `cue: off`.
 
 ## 6. Rulings needed
 
