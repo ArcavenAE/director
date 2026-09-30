@@ -13,9 +13,11 @@ so badly from conways law".
 
 ## 1. The answer in brief
 
-- **Feasible for Claude Code seats, subject to one probe.** Claude Code 2.1.285
+- **Feasible for Claude Code seats; P0 is green.** Claude Code 2.1.285
   ships an MCP server-to-client push path ("channels"), which the Phase 0
-  settlement predates. director-mcp can adopt it with a small change.
+  settlement predates. P0 (section 5a) measured an idle seat woken by a
+  channel notice, with a turn started in about 1 second and no human input.
+  director-mcp can adopt it with a small change.
 - **For every other harness, marvel is the push path.** It holds the panes
   and the leaf, so it can ring a doorbell on arrival. That is the automated
   form of what the supervisor does by hand today.
@@ -89,9 +91,62 @@ or more.
 | Phase | Work | Size | Takes director out of |
 |---|---|---|---|
 | P0 | First, at no seat cost: read whether the fleet's accounts allow channels (`channelsEnabled`, and the provider: subscription, not Bedrock, Vertex or Foundry). If they do not, stop: P1 is dead and P2 goes first. Otherwise probe: director-mcp declares `claude/channel`; one test seat loaded with the development-channels flag (operator-run, since the flag is named "dangerously"); send to it while idle, while mid-turn, and under plan and auto modes; record wake, latency, and any prompt | S (0.5) | nothing yet; decides P1 |
-| P1 | director-mcp: a background inbox watcher; on arrival, one `notifications/claude/channel` cue carrying the sender, performative and message id, never the body; the model then calls `wait_for_message` as today, so FIFO order and R-08 are unchanged; dedupe and rate limit; a receipt check (section 6) so an unanswered cue fails loud; tests | M (about 3) | waking Claude seats, itself included |
+| P1 | director-mcp: a background inbox watcher; on arrival, one `notifications/claude/channel` cue carrying the sender, performative and message id, never the body; the model then calls `wait_for_message` as today, so FIFO order and R-08 are unchanged; dedupe and rate limit; a receipt check (section 6) so an unanswered cue fails loud; the startup bind check and handshake pin from section 5a; tests including the P0 cases still unmeasured | M (about 3) | waking Claude seats, itself included |
 | P2 | marvel doorbell (section 4) for non-Claude seats and as a fallback when channels are off; idle signal from hooks for Claude, `turn.started` and `turn.ended` for codex and opencode | M to L (4 to 6) | waking codex and other seats; the manual inject after each send |
 | P3 | Route seat to seat without director: supervisors and builders address each other by `role://` on the bus (fln6p), with director copied, not relaying | M (2 to 3), mostly process text in wardrobe | the relay hop (the Conway cost) |
+
+## 5a. P0 result (2026-09-30)
+
+Measured by a builder seat on kinu with Claude Code 2.1.285, one test seat,
+a minimal stdio server declaring `experimental: {'claude/channel': {}}`, and
+the development-channels flag. Evidence: the server's JSON-RPC log and three
+pane captures (before the notice, 8 seconds after, 35 seconds after), kept in
+that seat's scratch directory.
+
+- **Wake: yes.** One `notifications/claude/channel` with `content` and
+  `meta` (`sender`, `performative`, `message_id`) woke the idle session and
+  started a turn in about 1 second, with no human input. The model's reply
+  named the sender from `meta`, so it sees the metadata, not only the content.
+- **The org gate is open** for this subscription account, which has no
+  managed settings. The development flag was required.
+- **The banner is not a health signal.** The session showed
+  `server:<name> · no MCP server configured with that name` at start, and the
+  channel bound anyway. A real misconfiguration shows the same banner, so a
+  seat cannot tell from it whether its cue path is live.
+- **The handshake era carried it.** On the later launch the client first sent
+  `server/discover` at protocol version `2026-07-28`; the server answered
+  `-32601`, and the client fell back to `initialize` at `2025-11-25`. The
+  notice travelled on that legacy session. (An earlier launch the same day
+  went straight to `initialize` at `2025-11-25`.) The binary also carries
+  "negotiated a modern protocol revision with no unsolicited notification
+  path", so on a modern session the notice may have nowhere to go.
+- **A dialog followed the turn.** After the woken turn, an onboarding dialog
+  ("Teach auto mode about your environment?") appeared. A fresh seat could
+  sit on it, which is a seat-bootstrap concern (marvel#422).
+
+**Still unmeasured:** behaviour mid-turn; plan mode; whether the woken seat
+meets the `wait_for_message` permission prompt (aae-orc-r675b); coalescing of
+several notices.
+
+**What P1 takes from it:**
+
+1. **A positive bind check.** At startup the shim confirms its own cue path
+   rather than trusting the banner: the client advertised or accepted the
+   channel capability on the session it holds, and the negotiated protocol
+   version is one P1 was verified on. It reports the result on the bus
+   (`cue: live` or `cue: off, <reason>`), and the section 6 receipt check
+   still runs per cue.
+2. **Pin the handshake, or verify the modern one.** P1 answers
+   `server/discover` with `-32601` so the client falls back to the
+   `2025-11-25` `initialize` that carried the notice, or P1 is measured on a
+   modern session before it relies on one. Either way a Claude Code upgrade
+   that changes the negotiation shows up as `cue: off` at startup, not as a
+   silent drop.
+3. **The flag stays an operator decision** (section 6), now with a measured
+   reason: without it the channel did not bind.
+4. **P1's tests add** the remaining P0 cases (mid-turn, plan mode, the
+   permission prompt, a burst of notices) before the cue is enabled for any
+   fleet seat.
 
 **The smallest first phase that takes director out of the polling loop is P0
 plus P1**, about three and a half seat-days, if the org gate is open and P0 is
@@ -143,7 +198,6 @@ before any seat time is spent.
 
 ## 8. Asks
 
-1. Run P0, or grant a seat to run it, including the development-channels flag
-   on one test seat. Default: yes, one seat, torn down after.
+1. ~~Run P0.~~ Done 2026-09-30: green (section 5a).
 2. Choose P1 (Claude channel cue) or P2 (marvel doorbell) as the first build
    if P0 is green. Default: P1 first, P2 next for codex seats.
