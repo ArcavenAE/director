@@ -78,4 +78,10 @@ team covers the work, tell the operator before sending; do not leave the
 choice to the receiving supervisor, and never default to a builder. Director
 asked a supervisor for an MSSCI ticket without naming a role, and a code
 builder got it. The operator: "why do we need a code builder for a jira
-ticket?" Jira work has no owning role yet. Source: O-30n.
+ticket?" Source: O-30n.
+
+The operator's ruling on Jira work (2026-09-30): any seat on the owning team
+may do it, and supervisors and architects are preferred. Builders, reviewers
+and others may update tickets. Closing belongs to a non-delivery seat
+(reviewer or supervisor), never the builder that did the work: the agent
+does not mark its own work done.
