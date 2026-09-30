@@ -76,9 +76,9 @@ the role's definition (its can_handle and write domain), not its title: a
 builder, design to an architect, research to a researcher. If no role on the
 team covers the work, tell the operator before sending; do not leave the
 choice to the receiving supervisor, and never default to a builder. Director
-asked a supervisor for an MSSCI ticket without naming a role, and a code
+asked a supervisor for a ticket in the operator's work tracker without naming a role, and a code
 builder got it. The operator: "why do we need a code builder for a jira
-ticket?" Source: O-30n.
+ticket?"
 
 The operator's ruling on Jira work (2026-09-30): any seat on the owning team
 may do it, and supervisors and architects are preferred. Builders, reviewers
