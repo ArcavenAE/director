@@ -55,7 +55,7 @@ MARVEL_OVERLAY_ROOT="${MARVEL_OVERLAY_ROOT:-${DIRECTOR_HOME:-$HOME/.director}/ov
 # serves three manifest rows; the scope is a parameter, not a role.
 case "$MARVEL_ROLE" in
   maintainer)        WROLE=reader;  SCOPE="";;
-  builder)           WROLE=builder; SCOPE="general (kos, fleet CI, stave, sidestep, bloomctl, critic, beadle, curtain, ThreeDoors, BetterDials)";;
+  builder)           WROLE=builder; SCOPE="general (kos, director, fleet CI, stave, sidestep, bloomctl, critic, beadle, curtain, ThreeDoors, BetterDials)";;
   marvel-builder)    WROLE=builder; SCOPE="marvel";;
   sideshow-builder)  WROLE=builder; SCOPE="sideshow and sideshow-packs";;
   claude-reviewer)   WROLE=reviewer; SCOPE="";;

@@ -252,6 +252,18 @@ else
   bad "claude-reviewer cast" "$(cat "$root/out/stderr")"
 fi
 
+# --- the general builder's scope matches the wrapper's (director#161) ---------
+# A seat launched without the cast wrapper reads its scope from this script, so
+# the list must match the wrapper's row, director included.
+builder_scope="general (kos, director, fleet CI, stave, sidestep, bloomctl, critic, beadle, curtain, ThreeDoors, BetterDials)"
+if cast builder; then
+  grep -qF "Your scope, set at cast time and recorded by the supervisor: $builder_scope." "$root/out/claude.args" \
+    && ok "builder: cast with the general scope, director included" \
+    || bad "builder scope" "$(grep -o 'Your scope[^.]*' "$root/out/claude.args")"
+else
+  bad "builder cast" "$(cat "$root/out/stderr")"
+fi
+
 # --- a research-supervisor is a supervisor at the global tier (R-94, amended) --
 # R-94 as amended (RULED 2026-09-24, director#77); the operator reaffirmed on
 # 2026-09-26 that research-supervisors hold the supervisor global role, so they
