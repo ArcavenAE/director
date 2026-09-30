@@ -67,3 +67,14 @@ Do not transcribe every guardrail a party or architect recommended (extra
 hooks, gates, acks) into the brief. The operator called that "mitigation
 ratcheting." Let the builder ship, and let it ask for architect, reviewer, or
 tester input if it wants that input. Source: O-2026-09-25-director-layered-the-brief.
+
+## Name the role that fits the work (2026-09-30, operator correction)
+
+A relay names the team AND the role. Work that only touches Jira (create,
+transition, comment, label) goes to the team's filer seat. Code goes to a
+builder, design to an architect, research to a researcher. Check the roster
+for the team's roles before sending. If no fitting role exists, tell the
+operator; do not leave the choice to the receiving supervisor, and never
+default to a builder. Director asked a supervisor for an MSSCI ticket without
+naming a role, and a code builder got it. The operator: "why do we need a
+code builder for a jira ticket?" Source: O-30n.
