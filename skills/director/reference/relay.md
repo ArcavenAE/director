@@ -67,3 +67,21 @@ Do not transcribe every guardrail a party or architect recommended (extra
 hooks, gates, acks) into the brief. The operator called that "mitigation
 ratcheting." Let the builder ship, and let it ask for architect, reviewer, or
 tester input if it wants that input. Source: O-2026-09-25-director-layered-the-brief.
+
+## Name the role that fits the work (2026-09-30, operator correction)
+
+A relay names the team AND the role whose declared acts cover the work. Check
+the role's definition (its can_handle and write domain), not its title: a
+"filer" may file only GitHub defects from a typed record. Code goes to a
+builder, design to an architect, research to a researcher. If no role on the
+team covers the work, tell the operator before sending; do not leave the
+choice to the receiving supervisor, and never default to a builder. Director
+asked a supervisor for a work-tracker ticket without naming a role, and a
+code builder got it. The operator: "why do we need a code builder for a jira
+ticket?"
+
+The operator's ruling on Jira work (2026-09-30): any seat on the owning team
+may do it, and supervisors and architects are preferred. Builders, reviewers
+and others may update tickets. Closing belongs to a non-delivery seat
+(reviewer or supervisor), never the builder that did the work: the agent
+does not mark its own work done.
