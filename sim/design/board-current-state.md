@@ -46,8 +46,8 @@ session as its only writer. Item state moves to a new append-only ledger,
 into a current-state projection on every read. The page shows that
 projection first, as one capped panel in an actionable order, with the
 history collapsed below. Views, filters, badges and lanes read item fields
-only; nothing on the page derives state from prose. The sweep's one-line
-shape does not change.
+only; nothing on the page derives state from prose. The sweep's four blocks
+and its `<session> - <the ask>` line form do not change (section 8).
 
 ## 3. Writers and write sets
 
@@ -119,12 +119,17 @@ legitimate history because it looks odd.
 
 1. Order is line order, not `at`.
 2. A repeated event id is ignored.
-3. Each kind accepts only its listed actors.
+3. Each kind accepts only its listed actors. The actor is declared by the
+   CLI flag, so this is an allowlist over a claim, not authentication;
+   acceptable for a prototype with one operator's processes as the writers.
 4. `open` for an existing id, or any other kind for an unknown id, is an
    error.
 5. `set` is last write wins per field.
 6. `move` applies only when `from` equals the current state and the step is
-   in the table. Otherwise it is an error, and the state does not change. A
+   in the table. Otherwise it is an error, and the state does not change.
+   The CLI never writes such a line: it folds and checks under the lock and
+   refuses a stale `--from` (section 4.5). Rule 6 therefore covers only lines
+   the CLI did not write (a hand-appended or replayed line), where a
    mismatched `from` is the visible trace of a lost update.
 7. `verify` does not change `updated_at`.
 8. `alarm` counts only while the item is open and `deadline` equals the
@@ -150,7 +155,11 @@ changes nothing.
   Nothing rewrites the ledger. There is no compaction in the prototype.
 - **Retries are safe.** Human-driven appends print their event id. A retry
   passes it back, so a retry of an append that landed is a no-op. Machine
-  appends use a hash of their inputs as the event id.
+  appends use a hash of their inputs as the event id. For the timer the
+  inputs are item, rule and due date, so one deadline alarms once. For
+  `dsx` they include the check time bucketed at the 10-minute skip, so a
+  repeated passing check still advances `last_verified_at` and a verified
+  item does not drift into the stale tier.
 
 ### 4.5 The CLI
 
@@ -187,7 +196,9 @@ Now: 7 open, 2 overdue, 3 on you | ledger 14m | page 3m
 ```
 
 When the page is over an hour old, the header adds: `This page is 5h old.
-Re-render before acting.`
+Re-render before acting.` When the page carries no render time at all (a
+page rendered before this change), the header says `Page age unknown.
+Re-render before acting.`, so an old page never looks fresh.
 
 **Columns:**
 
@@ -238,6 +249,10 @@ show all`, so nothing is ever truncated silently.
 | `failed` | the last check failed |
 | `unverified` | no verification yet (grey, not red) |
 | `claim differs` | the check disagrees with the item's state, for example a merged PR on an open item |
+
+PR and issue state belong to the repositories and to beadle's boards, which
+read them live. The ledger never stores them as item state; it keeps only a
+dated `verify` observation. `claim differs` is the one place the two meet.
 
 Every badge carries text, so color is never the only signal. Checks come from
 a `dsx` pass that reads only `id`, `artifact` and `state` of open items. It
@@ -349,14 +364,29 @@ This is the first process in the design that runs without a director turn.
 
 ## 8. The sweep
 
-The printed shape (skill "Mode: sweep", step 4) does not change. The skill
-text gains a few lines:
+The printed contract (skill "Mode: sweep", step 4: the four blocks and the
+`<session> - <the ask in one line>` line form) does not change. An item's
+`owner` is the session the line names today: the seat waiting on the
+operator, or the seat whose ask is stranded. The skill text gains a few
+lines:
 
 - **Step 2.** After board.md, read the fold (`ditem show --json`). State comes
   from the fold, the story from the board.
 - **Step 4.** Blocked on you and Stranded are filled from items where an item
-  exists. Each line is the item's summary, prefixed by its `source_ref`,
-  never the minted id. "Detail by number" still means list position.
+  exists. The line form is the skill's own, `<session> - <the ask in one
+  line>`:
+  - `<session>` is the item's `owner`;
+  - the ask is `<source_ref> <summary>`, or the summary alone when the item
+    has no `source_ref`. The minted id never appears;
+  - a Stranded line keeps `(died Nh ago)`, taken from the owner's session in
+    `sessions.json`, because Stranded means an ask whose owner has no
+    process.
+  "Detail by number" still means list position.
+- **Stale moves.** The director reads the fold at step 2 and moves items at
+  step 5. If an item changed in between, the CLI refuses the move (its
+  `--from` no longer matches) and appends nothing. The director refolds and
+  retries with the current state. Two `set`s on one item are fine: last write
+  wins per field.
 - **Step 5.** Open an item for each surfaced ask that lacks one. Move or close
   items whose state changed. Never write item state into board.md.
 - **Standing mode.** After relaying a forward, open it with `--due`.
@@ -456,10 +486,12 @@ fixtures.
   file.
 - **SH2:** an invalid `open` exits nonzero and appends nothing; a valid one
   appends one line with an event id. Two processes each append 200 events at
-  once, giving 400 parseable lines with unique ids.
+  once, giving 400 parseable lines with unique ids. Two sequential `move`s
+  with the same stale `--from`: the second exits nonzero and appends nothing.
 - **SH3:**
   - refolding the ledger, with a duplicated last line, is byte-identical;
-  - a wrong `--from` adds exactly one error and leaves the state unchanged;
+  - in the `replayed-move` fixture (a hand-appended `move` line with a wrong
+    `from`), the fold adds exactly one error and leaves the state unchanged;
   - two concurrent closes on one item: one is accepted, one rejected.
 - **SH4 and A1:** with `DIRECTOR_NOW` fixed:
   - the tiers fixture renders its first 13 row ids in the expected order;
@@ -483,7 +515,10 @@ fixtures.
   - the alarm state shows the alarm banner and the stopped state shows the
     silent-timer banner;
   - neither banner has a dismiss control.
-- **K1:** the sweep's step 4 fence is byte-identical to main.
+- **K1:** the sweep's step 4 fence is byte-identical to main, and from the
+  `sweep` fixture the rendered lines read `<owner> - <source_ref> <summary>`,
+  `<owner> - <summary>` for an item with no `source_ref`, and a Stranded line
+  ends in `(died Nh ago)`.
 
 ## 12. Rulings the operator holds
 
