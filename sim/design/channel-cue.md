@@ -94,7 +94,7 @@ round trip:
    `cue_ack` equals this start's nonce, within the self-test window (default
    120 s), records `cue: live`. An inbox call alone proves nothing: seats
    drain their inbox at start whether or not a cue arrived, which is the
-   false positive #163's review named. The nonce can only be known by a model
+   false positive this PR's first review named. The nonce can only be known by a model
    that received the notice.
 3. Otherwise it records `cue: unverified` with the reason it can name
    (`no nonce echo after self-test`, or `wrong nonce`). A nonce is valid for
@@ -103,8 +103,12 @@ round trip:
    first turn; the shim does not guess which.
 4. The state is published beside presence (a `cue` field) and returned in
    every `inbox_summary`, so director and the supervisor can list seats
-   whose cue is not live. `unverified` does not stop cues: a later answered
-   cue promotes the seat to `live`.
+   whose cue is not live. `unverified` does not stop cues, and only a nonce
+   echo changes the cue state. While a seat is `unverified`, every cue it
+   is sent carries a fresh `meta.nonce` and asks for `cue_ack`; an
+   `inbox_summary` echoing that nonce within W promotes the seat to `live`.
+   A drain, a `wait_for_message`, or an `inbox_summary` without the nonce
+   never promotes it. A restart runs the self-test again.
 
 The self-test costs one short turn per seat start. That is ruling 2. The
 nonce is not a secret and carries no authority; it only proves the notice
@@ -136,6 +140,9 @@ resulting state does.
   and cues once if anything is waiting.
 
 ### 3.5 Receipt, without false failures
+
+This "answered" rule governs receipt and re-cue suppression only. It never
+changes the cue state; only a nonce echo does (3.3).
 
 A cue is **answered** when, within the window W after it, any of these
 happens: the model calls `wait_for_message` or `inbox_summary`; an open wait
@@ -208,7 +215,10 @@ nothing; the self-test sets `live` only on an `inbox_summary` whose `cue_ack`
 equals this start's nonce; a drain with no `cue_ack` (both `inbox_summary`
 and `wait_for_message`) inside the window leaves `unverified`; a `cue_ack`
 carrying a wrong nonce, or the previous start's nonce, leaves `unverified`
-with reason `wrong nonce`; a client version outside the list reports `cue: off`.
+with reason `wrong nonce`; while `unverified`, a cue followed by a
+`wait_for_message` drain with no `cue_ack` leaves the state `unverified`
+(and counts as answered for receipt); a later cue's nonce echoed through
+`inbox_summary` promotes to `live`; a client version outside the list reports `cue: off`.
 
 ## 6. Rulings needed
 
