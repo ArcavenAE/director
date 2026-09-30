@@ -70,11 +70,12 @@ tester input if it wants that input. Source: O-2026-09-25-director-layered-the-b
 
 ## Name the role that fits the work (2026-09-30, operator correction)
 
-A relay names the team AND the role. Work that only touches Jira (create,
-transition, comment, label) goes to the team's filer seat. Code goes to a
-builder, design to an architect, research to a researcher. Check the roster
-for the team's roles before sending. If no fitting role exists, tell the
-operator; do not leave the choice to the receiving supervisor, and never
-default to a builder. Director asked a supervisor for an MSSCI ticket without
-naming a role, and a code builder got it. The operator: "why do we need a
-code builder for a jira ticket?" Source: O-30n.
+A relay names the team AND the role whose declared acts cover the work. Check
+the role's definition (its can_handle and write domain), not its title: a
+"filer" may file only GitHub defects from a typed record. Code goes to a
+builder, design to an architect, research to a researcher. If no role on the
+team covers the work, tell the operator before sending; do not leave the
+choice to the receiving supervisor, and never default to a builder. Director
+asked a supervisor for an MSSCI ticket without naming a role, and a code
+builder got it. The operator: "why do we need a code builder for a jira
+ticket?" Jira work has no owning role yet. Source: O-30n.
