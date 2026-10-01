@@ -164,11 +164,17 @@ fi
 # tells the shim to cue and loads the director server as a development
 # channel. Only the value 1 does, as in the shim; unset or anything else, the
 # launch line is exactly what it was before.
+# The value can be inherited from the shell that started the tmux server, not
+# only set in the role's manifest, so a cue that is on is named in the spawn
+# line below. The flag goes last: a bare -- in a role's args would make it a
+# positional, and a headless (--print) role gets a channel it cannot use.
 cue_env=""
 cue_args=()
+cue_note=""
 if [[ "${DIRECTOR_CUE:-}" == 1 ]]; then
   cue_env=',"DIRECTOR_CUE":"1"'
   cue_args=(--dangerously-load-development-channels server:director)
+  cue_note=", channel cue ON (DIRECTOR_CUE=1)"
 fi
 
 mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_ROLE":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"%s%s}}}}' \
@@ -273,7 +279,7 @@ if [[ -f "$overlay_file" ]]; then
   echo "cast-launch: attaching backend overlay $overlay_file for role $MARVEL_ROLE (merged over marvel policy as --settings $merged)" >&2
 fi
 
-echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD" >&2
+echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD$cue_note" >&2
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$prompt" \
