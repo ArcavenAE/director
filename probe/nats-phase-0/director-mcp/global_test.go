@@ -211,13 +211,13 @@ func TestPollSliceSpendsTheBudgetAndStops(t *testing.T) {
 // session cannot route; with it on, it must name the session's own address so
 // a receiver knows how to be answered.
 func TestToolCatalogDescribesGlobalOnlyWhenOn(t *testing.T) {
-	off := toolCatalog(nil)
+	off := toolCatalog(nil, false)
 	for _, td := range off {
 		if strings.Contains(td.Description, "global://") {
 			t.Errorf("tool %q advertises a global address with the tier off", td.Name)
 		}
 	}
-	on := toolCatalog(&globalConfig{Domain: "global", Cluster: "mokuzai", Role: roleSupervisor})
+	on := toolCatalog(&globalConfig{Domain: "global", Cluster: "mokuzai", Role: roleSupervisor}, false)
 	var send toolDef
 	for _, td := range on {
 		if td.Name == "send_message" {

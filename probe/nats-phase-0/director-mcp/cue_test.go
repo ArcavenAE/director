@@ -20,7 +20,7 @@ type fakeSource struct {
 	oldest *cueMeta
 }
 
-func (f *fakeSource) count(context.Context) (uint64, error)     { return f.n, nil }
+func (f *fakeSource) count(context.Context) (uint64, error)        { return f.n, nil }
 func (f *fakeSource) oldestMeta(context.Context) (*cueMeta, error) { return f.oldest, nil }
 
 type cueRig struct {
@@ -35,7 +35,7 @@ type cueRig struct {
 
 func newCueRig(t *testing.T) *cueRig {
 	r := &cueRig{t: t, now: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
-	r.src = &fakeSource{oldest: &cueMeta{Sender: "sup@aae", Performative: "REQUEST", MessageID: "m1"}}
+	r.src = &fakeSource{oldest: &cueMeta{Sender: "sup@ws", Performative: "REQUEST", MessageID: "m1"}}
 	cfg := defaultCueConfig()
 	cfg.Enabled = true
 	r.c = newCue(cfg, r.src,
@@ -151,7 +151,7 @@ func TestARiseWithNoOpenWaitSendsOneMetadataOnlyCue(t *testing.T) {
 		}
 	}
 	m := meta(t, p)
-	if m["sender"] != "sup@aae" || m["performative"] != "REQUEST" || m["message_id"] != "m1" || m["count"] != "1" {
+	if m["sender"] != "sup@ws" || m["performative"] != "REQUEST" || m["message_id"] != "m1" || m["count"] != "1" {
 		t.Fatalf("meta: %v", m)
 	}
 	for k := range m {
