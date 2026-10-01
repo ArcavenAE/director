@@ -219,6 +219,11 @@ func (c *cue) params(m *cueMeta, count uint64, now time.Time) map[string]any {
 	}
 	content := cueContent
 	if c.state != cueStateLive {
+		for k, exp := range c.valid {
+			if now.After(exp) {
+				delete(c.valid, k) // expired: it can no longer promote
+			}
+		}
 		n := c.nonce()
 		c.valid[n] = now.Add(c.cfg.Window)
 		meta["nonce"] = n
@@ -335,10 +340,27 @@ func cueAckArg(raw json.RawMessage) string {
 // message by sequence, through the same paths inbox_summary uses.
 type busCueSource struct{ b *Bus }
 
+// count fails when a tier's state cannot be read, so the watcher skips that
+// tick: a tier left out would read as a drop and the next good read as an
+// arrival, one spurious cue. A hub not yet attached is left out, as in
+// remaining().
 func (s busCueSource) count(ctx context.Context) (uint64, error) {
-	var n uint64
-	for _, v := range s.b.remaining(ctx) {
-		n += v
+	info, err := s.b.consumer.Info(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := info.NumPending + uint64(info.NumAckPending)
+	if s.b.globalCfg != nil {
+		s.b.globalMu.Lock()
+		g := s.b.global
+		s.b.globalMu.Unlock()
+		if g != nil {
+			gi, err := g.consumer.Info(ctx)
+			if err != nil {
+				return 0, err
+			}
+			n += gi.NumPending + uint64(gi.NumAckPending)
+		}
 	}
 	return n, nil
 }

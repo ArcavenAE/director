@@ -305,9 +305,13 @@ func TestTheSelfTestSendsANonceAndOnlyItsEchoMakesTheCueLive(t *testing.T) {
 }
 
 func TestAWrongOrPreviousNonceLeavesItUnverified(t *testing.T) {
+	prev := newCueRig(t)
+	prev.started()
+	old := meta(t, prev.cues[0])["nonce"].(string) // the previous start's self-test nonce
 	r := newCueRig(t)
+	r.c.nonce = func() string { return "this-start" }
 	r.started()
-	r.c.ack("nonce0") // a previous start's nonce
+	r.c.ack(old)
 	if st := r.c.status(); st["state"] != "unverified" || st["reason"] != "wrong nonce" {
 		t.Fatalf("previous start's nonce: %v", st)
 	}
@@ -371,5 +375,46 @@ func TestCueAckIsReadFromInboxSummaryArguments(t *testing.T) {
 	}
 	if got := cueAckArg(json.RawMessage(`{}`)); got != "" {
 		t.Fatalf("absent cue_ack: %q", got)
+	}
+}
+
+func TestALateSelfTestEchoLeavesItUnverified(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.now = r.now.Add(121 * time.Second) // past the 120 s self-test window
+	r.c.ack("nonce1")
+	if st := r.c.status(); st["state"] != "unverified" || st["reason"] != "wrong nonce" {
+		t.Fatalf("a late self-test echo must not promote: %v", st)
+	}
+}
+
+func TestACueNonceEchoedAfterWLeavesItUnverifiedAndInsideWPromotes(t *testing.T) {
+	for _, tc := range []struct {
+		after time.Duration
+		want  string
+	}{{301 * time.Second, "unverified"}, {299 * time.Second, "live"}} {
+		r := newCueRig(t)
+		r.started()
+		r.now = r.now.Add(121 * time.Second)
+		r.src.n = 1
+		r.step(2 * time.Second)
+		n, _ := meta(t, r.cues[len(r.cues)-1])["nonce"].(string)
+		r.now = r.now.Add(tc.after) // W is 300 s; no tick, so no re-cue
+		r.c.ack(n)
+		if st := r.c.status(); st["state"] != tc.want {
+			t.Fatalf("echo %s after the cue: want %s, got %v", tc.after, tc.want, st)
+		}
+	}
+}
+
+func TestExpiredCueNoncesArePrunedWhileUnverified(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	for i := 0; i < 50; i++ {
+		r.src.n++
+		r.step(400 * time.Second) // each cue's nonce expires before the next
+	}
+	if got := len(r.c.valid); got > 2 {
+		t.Fatalf("an unverified seat keeps only live nonces, kept %d", got)
 	}
 }
