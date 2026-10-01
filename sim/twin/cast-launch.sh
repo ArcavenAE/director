@@ -52,15 +52,19 @@ MARVEL_OVERLAY_ROOT="${MARVEL_OVERLAY_ROOT:-${DIRECTOR_HOME:-$HOME/.director}/ov
 
 # Manifest role name -> wardrobe role id, plus the cast-time scope the
 # supervisor's cast record carries (brief 7, 2.2). One wardrobe builder role
-# serves three manifest rows; the scope is a parameter, not a role.
+# serves every builder row; the scope is a parameter, not a role. CAST_SCOPE,
+# when set, replaces the row's scope for any role, so a scope that must not be
+# published (this file is public) is passed in from the private seat file.
 case "$MARVEL_ROLE" in
   maintainer)        WROLE=reader;  SCOPE="";;
   builder)           WROLE=builder; SCOPE="general (kos, director, fleet CI, stave, sidestep, bloomctl, critic, beadle, curtain, ThreeDoors, BetterDials)";;
   marvel-builder)    WROLE=builder; SCOPE="marvel";;
   sideshow-builder)  WROLE=builder; SCOPE="sideshow and sideshow-packs";;
+  infra-builder)     WROLE=builder; SCOPE="the infra checkout and its MCP, as named in the private seat file; production is read-only";;
   claude-reviewer)   WROLE=reviewer; SCOPE="";;
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
 esac
+[[ -n "${CAST_SCOPE:-}" ]] && SCOPE="$CAST_SCOPE"
 # Identities that compose with a role (sole_fit at proposal): director and envoy.
 case "$WROLE" in
   director) IDENTITY=assistive-agent;;
