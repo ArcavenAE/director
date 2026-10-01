@@ -397,5 +397,42 @@ LAUNCH="$root/linkbin/cast-launch"
 overlay_case "a launcher run through a symlink uses the home overlay" home
 LAUNCH="$LAUNCH_SAVED"
 
+# --- C-5: the channel cue is opt-in per seat (sim/design/channel-cue.md) -------
+# Operator rulings 2026-10-01: the development-channels flag is adopted per
+# seat. Only DIRECTOR_CUE=1, the value the shim itself honors, turns it on.
+# Unset, the launch line must be exactly today's.
+today_head="$(printf '%s\n' -n verify-builder-0 --strict-mcp-config --mcp-config \
+  "{\"mcpServers\":{\"director\":{\"command\":\"$root/bin/director-mcp\",\"env\":{\"DIRECTOR_AGENT_ID\":\"verify-builder-0\",\"DIRECTOR_ROLE\":\"builder\",\"DIRECTOR_TEAM\":\"fleet\",\"DIRECTOR_WORKSPACE\":\"verifyws\",\"NATS_URL\":\"nats://127.0.0.1:4222\"}}}}" \
+  --append-system-prompt)"
+if cast builder; then
+  [[ "$(head -6 "$root/out/claude.args")" == "$today_head" ]] \
+    && ok "cue unset: the launch line is today's, byte for byte" \
+    || bad "cue unset: the launch line is today's, byte for byte" "$(head -6 "$root/out/claude.args")"
+  grep -q -- "--dangerously-load-development-channels" "$root/out/claude.args" \
+    && bad "cue unset: no development-channels flag" || ok "cue unset: no development-channels flag"
+else
+  bad "builder cast, cue unset" "$(cat "$root/out/stderr")"
+fi
+if cast builder DIRECTOR_CUE=1; then
+  in_mcp DIRECTOR_CUE 1 && ok "cue on: the shim env in mcp_json carries DIRECTOR_CUE=1" \
+    || bad "cue on: the shim env in mcp_json carries DIRECTOR_CUE=1" "$(cat "$root/out/claude.args")"
+  grep -A1 -x -- "--dangerously-load-development-channels" "$root/out/claude.args" | tail -1 | grep -qx "server:director" \
+    && ok "cue on: the flag names the director server" \
+    || bad "cue on: the flag names the director server" "$(cat "$root/out/claude.args")"
+else
+  bad "builder cast, cue on" "$(cat "$root/out/stderr")"
+fi
+for v in 0 true yes; do
+  if cast builder DIRECTOR_CUE="$v"; then
+    if has_mcp DIRECTOR_CUE || grep -q -- "--dangerously-load-development-channels" "$root/out/claude.args"; then
+      bad "cue=$v: only the value 1 opts in"
+    else
+      ok "cue=$v: only the value 1 opts in"
+    fi
+  else
+    bad "builder cast, cue=$v" "$(cat "$root/out/stderr")"
+  fi
+done
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
