@@ -443,6 +443,8 @@ if cast builder; then
     || bad "cue unset: the launch line is today's, byte for byte" "$(head -6 "$root/out/claude.args")"
   grep -q -- "--dangerously-load-development-channels" "$root/out/claude.args" \
     && bad "cue unset: no development-channels flag" || ok "cue unset: no development-channels flag"
+  grep -qi "channel cue" "$root/out/stderr" \
+    && bad "cue unset: the spawn line says nothing about a cue" || ok "cue unset: the spawn line says nothing about a cue"
 else
   bad "builder cast, cue unset" "$(cat "$root/out/stderr")"
 fi
@@ -452,6 +454,11 @@ if cast builder DIRECTOR_CUE=1; then
   grep -A1 -x -- "--dangerously-load-development-channels" "$root/out/claude.args" | tail -1 | grep -qx "server:director" \
     && ok "cue on: the flag names the director server" \
     || bad "cue on: the flag names the director server" "$(cat "$root/out/claude.args")"
+  # A dangerous-shaped flag that is on must be visible (review of #175): the
+  # variable can be inherited from whatever shell started the tmux server.
+  grep -q "^cast-launch: verify-builder-0 -> .*, channel cue ON (DIRECTOR_CUE=1)" "$root/out/stderr" \
+    && ok "cue on: the spawn line says the channel cue is on" \
+    || bad "cue on: the spawn line says the channel cue is on" "$(cat "$root/out/stderr")"
 else
   bad "builder cast, cue on" "$(cat "$root/out/stderr")"
 fi
