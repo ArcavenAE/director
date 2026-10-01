@@ -155,8 +155,20 @@ else
   GLOBAL_ADDR=""
 fi
 
-mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_ROLE":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"%s}}}}' \
-  "$SHIM_BIN" "$DIRECTOR_AGENT_ID" "$DIRECTOR_ROLE" "$DIRECTOR_TEAM" "$DIRECTOR_WORKSPACE" "$NATS_URL" "$global_env")"
+# The channel cue (sim/design/channel-cue.md, C-5), opt-in per seat by the
+# operator's ruling of 2026-10-01: DIRECTOR_CUE=1 in the role's environment
+# tells the shim to cue and loads the director server as a development
+# channel. Only the value 1 does, as in the shim; unset or anything else, the
+# launch line is exactly what it was before.
+cue_env=""
+cue_args=()
+if [[ "${DIRECTOR_CUE:-}" == 1 ]]; then
+  cue_env=',"DIRECTOR_CUE":"1"'
+  cue_args=(--dangerously-load-development-channels server:director)
+fi
+
+mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_ROLE":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"%s%s}}}}' \
+  "$SHIM_BIN" "$DIRECTOR_AGENT_ID" "$DIRECTOR_ROLE" "$DIRECTOR_TEAM" "$DIRECTOR_WORKSPACE" "$NATS_URL" "$global_env" "$cue_env")"
 
 cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_ROLE in team $DIRECTOR_TEAM, address agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID."
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
@@ -262,4 +274,5 @@ exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$prompt" \
   "$@" \
-  ${settings_args[@]+"${settings_args[@]}"}
+  ${settings_args[@]+"${settings_args[@]}"} \
+  ${cue_args[@]+"${cue_args[@]}"}
