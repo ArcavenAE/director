@@ -74,8 +74,10 @@ and that complaint is a requirement.
 
 5. Update `board.md` with anything you concluded. It is authored, edited
    rather than overwritten, and it is what survives a context compression.
-   If `$DIRECTOR_STATE/board.html` exists, run `scripts/board-html` after the
-   edit so the rendered view stays current. The page exists only if the
+   If `$DIRECTOR_STATE/board.html` exists, run
+   `${DIRECTOR_HOME:-$HOME/.director}/bin/board-html` after the edit so the
+   rendered view stays current. Use that installed path, so the renderer
+   `install.sh` placed is the one that runs. The page exists only if the
    operator asked for it; never create it unasked.
 
 ## Mode: standing, additionally

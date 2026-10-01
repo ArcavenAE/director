@@ -29,12 +29,17 @@ done
 
 mkdir -p "$TARGET/skills" "$TARGET/commands"
 
+# A refusal is recorded and the rest still installs, so one stale plain file
+# cannot leave every later target behind (an old renderer did). The refusals
+# are reported together at the end and the script exits nonzero.
+REFUSED=()
+
 install_one() {
   src="$1"; dst="$2"
   if [ -e "$dst" ] && [ ! -L "$dst" ]; then
     echo "refusing to replace non-symlink: $dst" >&2
-    echo "move it aside first; this script never deletes your files" >&2
-    exit 1
+    REFUSED+=("$dst")
+    return 0
   fi
   rm -f "$dst"
   if [ "$MODE" = link ]; then
@@ -62,4 +67,9 @@ install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin
 STATE="${DIRECTOR_STATE:-$HOME/.director/state}"
 mkdir -p "$STATE"
 echo "state root: $STATE  (operational; never committed)"
+if [ "${#REFUSED[@]}" -gt 0 ]; then
+  echo "not installed, because a plain file is in the way (move it aside; this script never deletes your files):" >&2
+  printf '  %s\n' "${REFUSED[@]}" >&2
+  exit 1
+fi
 echo "done. /director for a sweep, /director standing to adopt the role."
