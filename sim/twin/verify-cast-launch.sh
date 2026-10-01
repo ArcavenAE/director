@@ -397,5 +397,38 @@ LAUNCH="$root/linkbin/cast-launch"
 overlay_case "a launcher run through a symlink uses the home overlay" home
 LAUNCH="$LAUNCH_SAVED"
 
+# --- infra-builder: the builder role, with a scope from the environment --------
+# A manifest role with no row falls through to WROLE=$MARVEL_ROLE, and there is
+# no wardrobe role named infra-builder, so the cast would slice nothing. The row
+# maps it to builder. Its default scope is generic on purpose: this repo is
+# public, and the exact scope lives in the private seat file, which passes it
+# in CAST_SCOPE.
+if cast infra-builder; then
+  grep -q "stub slice for builder" "$root/out/claude.args" \
+    && ok "infra-builder: slices the wardrobe builder role" \
+    || bad "infra-builder: slices the wardrobe builder role" "$(cat "$root/out/claude.args")"
+  grep -q "Your scope, set at cast time and recorded by the supervisor: the infra checkout and its MCP, as named in the private seat file; production is read-only." "$root/out/claude.args" \
+    && ok "infra-builder: the default scope is the generic one" \
+    || bad "infra-builder: the default scope is the generic one"
+else
+  bad "infra-builder cast" "$(cat "$root/out/stderr")"
+fi
+if cast infra-builder CAST_SCOPE="CAST-SCOPE-MARK only"; then
+  grep -q "recorded by the supervisor: CAST-SCOPE-MARK only." "$root/out/claude.args" \
+    && ok "CAST_SCOPE replaces the default scope" \
+    || bad "CAST_SCOPE replaces the default scope" "$(cat "$root/out/claude.args")"
+  grep -q "as named in the private seat file" "$root/out/claude.args" \
+    && bad "CAST_SCOPE leaves no trace of the default" || ok "CAST_SCOPE leaves no trace of the default"
+else
+  bad "infra-builder cast with CAST_SCOPE" "$(cat "$root/out/stderr")"
+fi
+if cast builder CAST_SCOPE="BUILDER-SCOPE-MARK"; then
+  grep -q "recorded by the supervisor: BUILDER-SCOPE-MARK." "$root/out/claude.args" \
+    && ok "CAST_SCOPE works for any role, builder included" \
+    || bad "CAST_SCOPE works for any role, builder included"
+else
+  bad "builder cast with CAST_SCOPE" "$(cat "$root/out/stderr")"
+fi
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
