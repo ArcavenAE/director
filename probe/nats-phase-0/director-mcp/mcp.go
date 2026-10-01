@@ -50,11 +50,13 @@ type Server struct {
 	outMu sync.Mutex
 	tools []toolDef
 	log   func(string, ...any)
+	// cue is the P1 channel cue, nil unless the seat opted in (cue.go).
+	cue *cue
 }
 
-func newServer(bus *Bus, logf func(string, ...any)) *Server {
+func newServer(bus *Bus, logf func(string, ...any), cueOn bool) *Server {
 	s := &Server{bus: bus, out: bufio.NewWriter(os.Stdout), log: logf}
-	s.tools = toolCatalog(bus.globalCfg)
+	s.tools = toolCatalog(bus.globalCfg, cueOn)
 	return s
 }
 
@@ -81,12 +83,27 @@ func (s *Server) serve(ctx context.Context, in io.Reader) error {
 func (s *Server) dispatch(ctx context.Context, req *rpcRequest) {
 	switch req.Method {
 	case "initialize":
+		version, caps := "2025-06-18", map[string]any{"tools": map[string]any{}}
+		if s.cue != nil {
+			var p struct {
+				ProtocolVersion string `json:"protocolVersion"`
+			}
+			_ = json.Unmarshal(req.Params, &p)
+			var channel bool
+			if version, channel = s.cue.handshake(p.ProtocolVersion); channel {
+				caps["experimental"] = map[string]any{"claude/channel": map[string]any{}}
+			}
+		}
 		s.reply(req.ID, map[string]any{
-			"protocolVersion": "2025-06-18",
-			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"protocolVersion": version,
+			"capabilities":    caps,
 			"serverInfo":      map[string]any{"name": "director-mcp", "version": "0.1-probe"},
 		})
-	case "notifications/initialized", "notifications/cancelled":
+	case "notifications/initialized":
+		if s.cue != nil {
+			s.cue.initialized()
+		}
+	case "notifications/cancelled":
 		// notifications: no response
 	case "tools/list":
 		s.reply(req.ID, map[string]any{"tools": s.tools})
@@ -95,6 +112,9 @@ func (s *Server) dispatch(ctx context.Context, req *rpcRequest) {
 	case "ping":
 		s.reply(req.ID, map[string]any{})
 	default:
+		// server/discover lands here on purpose: -32601 makes Claude Code fall
+		// back to the legacy initialize, the handshake the cue was measured on
+		// (channel-cue.md 3.2). Do not implement it without re-measuring.
 		if len(req.ID) > 0 {
 			s.replyErr(req.ID, -32601, "method not found: "+req.Method)
 		}
@@ -112,7 +132,9 @@ func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
 		s.replyErr(req.ID, -32602, "bad params: "+err.Error())
 		return
 	}
+	done := s.cueBefore(p.Name, p.Args)
 	res, err := dispatchTool(ctx, s.bus, p.Name, p.Args)
+	done(res)
 	if err != nil {
 		// A tool-level failure is reported inside the result with isError,
 		// per MCP, so the model sees the failure rather than an RPC fault.
@@ -126,6 +148,36 @@ func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
 	s.reply(req.ID, map[string]any{
 		"content": []map[string]any{{"type": "text", "text": string(blob)}},
 	})
+}
+
+// cueBefore tells the cue about a tool call before it runs and returns what to
+// do after: a wait brackets the open-wait count, an inbox_summary settles the
+// receipt, reads any cue_ack, and carries the cue state in its result.
+func (s *Server) cueBefore(name string, args json.RawMessage) func(any) {
+	if s.cue == nil {
+		return func(any) {}
+	}
+	switch name {
+	case "wait_for_message":
+		s.cue.waitBegin()
+		return func(any) { s.cue.waitEnd() }
+	case "inbox_summary":
+		s.cue.answered()
+		if n := cueAckArg(args); n != "" {
+			s.cue.ack(n)
+		}
+		return func(res any) {
+			if m, ok := res.(map[string]any); ok {
+				m["cue"] = s.cue.status()
+			}
+		}
+	}
+	return func(any) {}
+}
+
+// notifyCue writes one notifications/claude/channel line under outMu.
+func (s *Server) notifyCue(params map[string]any) {
+	s.write(map[string]any{"jsonrpc": "2.0", "method": "notifications/claude/channel", "params": params})
 }
 
 func (s *Server) reply(id json.RawMessage, result any) {

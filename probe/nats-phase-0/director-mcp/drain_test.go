@@ -118,7 +118,7 @@ func TestSummarizeEmptyHasNonNilCollections(t *testing.T) {
 
 func TestCatalogCarriesBatchAndSummary(t *testing.T) {
 	var sawMax, sawSummary bool
-	for _, td := range toolCatalog(nil) {
+	for _, td := range toolCatalog(nil, false) {
 		if td.Name == "wait_for_message" {
 			props := td.InputSchema["properties"].(map[string]any)
 			_, sawMax = props["max"]

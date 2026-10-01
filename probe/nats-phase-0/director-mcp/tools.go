@@ -21,7 +21,7 @@ import (
 // toolCatalog describes the tools this session actually has. The global forms
 // appear only when the launcher turned the global tier on, so a session with
 // no hub is never told about addresses it cannot route (gcfg nil = off).
-func toolCatalog(gcfg *globalConfig) []toolDef {
+func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 	toDesc := "recipient address: agent://{team}/{id}, role://{team}/{role}, or broadcast://{workspace}[/{team}]"
 	sendDesc := "Send a director envelope to another session or role. Returns accepted-for-delivery with a message_id; this is a send acknowledgement, not a delivery or read receipt."
@@ -35,7 +35,7 @@ func toolCatalog(gcfg *globalConfig) []toolDef {
 		summaryDesc += " Covers both the local inbox and this session's global inbox."
 		rosterDesc += " Rows from both tiers are merged and carry a tier column; global rows carry the cluster and role that address them."
 	}
-	return []toolDef{
+	tools := []toolDef{
 		{
 			Name:        "send_message",
 			Description: sendDesc,
@@ -102,6 +102,16 @@ func toolCatalog(gcfg *globalConfig) []toolDef {
 			},
 		},
 	}
+	if cueOn {
+		// The self-test proof (channel-cue.md 3.3): only a model that received a
+		// cue knows its nonce. Offered only to a seat that opted in.
+		for i := range tools {
+			if tools[i].Name == "inbox_summary" {
+				tools[i].InputSchema["properties"].(map[string]any)["cue_ack"] = map[string]any{"type": "string", "description": "the nonce from a director cue notice, echoed to prove the cue reached you"}
+			}
+		}
+	}
+	return tools
 }
 
 func dispatchTool(ctx context.Context, bus *Bus, name string, rawArgs json.RawMessage) (any, error) {

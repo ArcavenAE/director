@@ -42,6 +42,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 func env(k, def string) string {
@@ -138,7 +140,19 @@ func main() {
 		logf("global tier on: %s, consuming %s from stream %s in domain %q", gcfg.selfAddress(), gcfg.inboxSubject(), gcfg.streamName(), gcfg.Domain)
 	}
 
-	srv := newServer(bus, logf)
+	cueCfg := loadCueConfig()
+	srv := newServer(bus, logf, cueCfg.Enabled)
+	if cueCfg.Enabled {
+		c := newCue(cueCfg, busCueSource{bus}, srv.notifyCue, func(ids []string, state string) {
+			warnUnanswered(ctx, bus, logf, ids, state)
+		}, time.Now, randomNonce)
+		c.logf = logf
+		srv.cue = c
+		bus.cueState = func() string { return c.status()["state"] }
+		bus.nc.SetReconnectHandler(func(*nats.Conn) { c.reconnected() })
+		go c.run(ctx)
+		logf("channel cue on (DIRECTOR_CUE=1): measured versions %v, poll %s, floor %s, window %s", cueCfg.Versions, cueCfg.Poll, cueCfg.Floor, cueCfg.Window)
+	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.serve(ctx, os.Stdin) }()
 	select {

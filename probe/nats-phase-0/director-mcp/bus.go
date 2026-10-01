@@ -64,6 +64,8 @@ type Bus struct {
 	// what was waiting, reported once in the next wait_for_message result.
 	resumedMu sync.Mutex
 	resumed   []string
+	// cueState reports the channel cue state for presence; nil when off.
+	cueState func() string
 }
 
 // localConsumerInactive is the local durable's inactive threshold. The inbox
@@ -1204,6 +1206,11 @@ func (b *Bus) writePresence(ctx context.Context, state string) error {
 	}
 	if b.self.Role != "" {
 		rec["role"] = b.self.Role
+	}
+	// The P1 cue state beside presence (channel-cue.md 3.3), only on a seat
+	// that opted in, so director can list seats whose cue is not live.
+	if b.cueState != nil {
+		rec["cue"] = b.cueState()
 	}
 	body, _ := json.Marshal(rec)
 	key := "presence." + b.self.Team + "." + b.self.AgentID + "." + b.instance
