@@ -103,6 +103,10 @@ type cue struct {
 	fold          uint64
 	out           *pendingCue
 	reconnect     bool
+	// readErr is set while the watcher cannot read inbox state. It shows in
+	// the reason beside, never instead of, the self-test reason.
+	readErr string
+	logf    func(string, ...any)
 }
 
 func newCue(cfg cueConfig, src cueSource, emit func(map[string]any), warn func([]string, string), now func() time.Time, nonce func() string) *cue {
@@ -207,7 +211,14 @@ func (c *cue) reconnected() {
 func (c *cue) status() map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return map[string]string{"state": c.state, "reason": c.reason}
+	reason := c.reason
+	if c.readErr != "" {
+		if reason != "" {
+			reason += "; "
+		}
+		reason += c.readErr
+	}
+	return map[string]string{"state": c.state, "reason": reason}
 }
 
 // params builds one cue. While unverified, each cue carries a fresh nonce and
@@ -247,11 +258,23 @@ func (c *cue) tick(ctx context.Context) {
 	c.mu.Unlock()
 
 	n, err := c.src.count(ctx)
+	c.mu.Lock()
 	if err != nil {
+		// Skip the tick, so a transient error cannot read as a drop. Show it
+		// on the first failure, so a permanent one (a deleted durable, a lost
+		// permission) is visible rather than a seat that looks live and is
+		// never cued.
+		if c.readErr == "" {
+			c.readErr = "watcher: cannot read inbox state: " + err.Error()
+			c.logOnce("channel cue %s", c.readErr)
+		}
+		c.mu.Unlock()
 		return
 	}
-
-	c.mu.Lock()
+	if c.readErr != "" {
+		c.readErr = ""
+		c.logOnce("channel cue watcher: inbox state readable again")
+	}
 	if c.reconnect {
 		c.reconnect = false
 		if n > 0 && c.openWaits == 0 {
@@ -310,6 +333,14 @@ func (c *cue) tick(ctx context.Context) {
 	}
 	for _, p := range emits {
 		c.emit(p)
+	}
+}
+
+// logOnce logs a watcher transition; callers hold mu and call it only when
+// the transition happens, so it cannot repeat per tick.
+func (c *cue) logOnce(format string, a ...any) {
+	if c.logf != nil {
+		c.logf(format, a...)
 	}
 }
 

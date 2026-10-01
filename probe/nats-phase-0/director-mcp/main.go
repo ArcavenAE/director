@@ -146,6 +146,7 @@ func main() {
 		c := newCue(cueCfg, busCueSource{bus}, srv.notifyCue, func(ids []string, state string) {
 			warnUnanswered(ctx, bus, logf, ids, state)
 		}, time.Now, randomNonce)
+		c.logf = logf
 		srv.cue = c
 		bus.cueState = func() string { return c.status()["state"] }
 		bus.nc.SetReconnectHandler(func(*nats.Conn) { c.reconnected() })

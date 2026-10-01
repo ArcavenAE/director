@@ -18,9 +18,10 @@ import (
 type fakeSource struct {
 	n      uint64
 	oldest *cueMeta
+	err    error
 }
 
-func (f *fakeSource) count(context.Context) (uint64, error)        { return f.n, nil }
+func (f *fakeSource) count(context.Context) (uint64, error)        { return f.n, f.err }
 func (f *fakeSource) oldestMeta(context.Context) (*cueMeta, error) { return f.oldest, nil }
 
 type cueRig struct {
@@ -416,5 +417,63 @@ func TestExpiredCueNoncesArePrunedWhileUnverified(t *testing.T) {
 	}
 	if got := len(r.c.valid); got > 2 {
 		t.Fatalf("an unverified seat keeps only live nonces, kept %d", got)
+	}
+}
+
+func TestAFailedInboxReadIsShownOnceAndClearsOnTheNextGoodRead(t *testing.T) {
+	r := newCueRig(t)
+	var logs []string
+	r.c.logf = func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	r.started()
+	r.c.ack("nonce1")
+	r.src.err = fmt.Errorf("consumer not found")
+	r.step(2 * time.Second)
+	r.step(2 * time.Second)
+	st := r.c.status()
+	if st["state"] != "live" || !strings.Contains(st["reason"], "watcher: cannot read inbox state: consumer not found") {
+		t.Fatalf("a failed read must show in the reason without changing the state: %v", st)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("logged once per transition, got %v", logs)
+	}
+	r.src.err = nil
+	r.step(2 * time.Second)
+	r.step(2 * time.Second)
+	if st := r.c.status(); st["reason"] != "" {
+		t.Fatalf("a good read clears it: %v", st)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("one log on failure, one on recovery, got %v", logs)
+	}
+}
+
+func TestAWatcherReasonDoesNotEraseTheSelfTestReason(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.step(121 * time.Second) // no echo: the self-test reason is set
+	r.src.err = fmt.Errorf("boom")
+	r.step(2 * time.Second)
+	r.src.err = nil
+	r.step(2 * time.Second)
+	if st := r.c.status(); st["reason"] != "no nonce echo after self-test" {
+		t.Fatalf("the self-test reason must survive the watcher clearing: %v", st)
+	}
+}
+
+func TestPruningKeepsANonceStillInsideW(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.now = r.now.Add(121 * time.Second)
+	r.src.n = 1
+	r.step(2 * time.Second)
+	first, _ := meta(t, r.cues[len(r.cues)-1])["nonce"].(string)
+	r.src.n = 2
+	r.step(10 * time.Second) // a second cue while the first nonce is live
+	if len(r.cues) < 3 {
+		t.Fatalf("want a second cue, got %d", len(r.cues))
+	}
+	r.c.ack(first)
+	if st := r.c.status(); st["state"] != "live" {
+		t.Fatalf("an earlier cue's nonce still inside W must promote: %v", st)
 	}
 }
