@@ -250,8 +250,14 @@ func noGlobalPresenceErr(addr, prefix string, scan presenceScan) error {
 type globalTier struct {
 	cfg      globalConfig
 	js       jetstream.JetStream
+	local    jetstream.JetStream // the local tier on the same connection
 	kv       jetstream.KeyValue
 	consumer jetstream.Consumer
+
+	// floorWhy is why the seat's earlier hub position could not be read at
+	// attach, empty when it was read or there was none. Reported once with
+	// resumedFrom.
+	floorWhy string
 
 	// resumedFrom is the seat ack floor the durable was created after, 0 when
 	// it read from the start or bound an existing durable. Reported once by
@@ -283,7 +289,11 @@ func attachGlobal(ctx context.Context, nc *nats.Conn, cfg globalConfig, agentID,
 	if err != nil {
 		return nil, fmt.Errorf("global presence bucket %s in domain %q: %w (%s)", globalPresenceBucket, cfg.Domain, err, hubHint(cfg))
 	}
-	g := &globalTier{cfg: cfg, js: js, kv: kv}
+	local, err := jetstream.New(nc)
+	if err != nil {
+		return nil, fmt.Errorf("local JetStream: %w", err)
+	}
+	g := &globalTier{cfg: cfg, js: js, local: local, kv: kv}
 	if err := g.ensureConsumer(ctx, agentID, instance); err != nil {
 		return nil, err
 	}
@@ -311,7 +321,8 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 		g.mu.Unlock()
 		return nil
 	}
-	floor := g.seatFloor(ctx, agentID)
+	floor, why := g.seatFloor(ctx, agentID, instance)
+	g.floorWhy = why
 	start := uint64(0)
 	if floor > 0 {
 		start = floor + 1
@@ -332,15 +343,83 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 	return nil
 }
 
+// floorListTimeout bounds each lookup seatFloor makes, so a request that gets
+// no reply cannot hold up attach. A var so tests can shorten it.
+var floorListTimeout = 5 * time.Second
+
 // seatFloor is the highest ack floor among this seat's departed durables on
-// the hub stream, 0 when there is none or the hub cannot be asked.
-func (g *globalTier) seatFloor(ctx context.Context, agentID string) uint64 {
-	liveGlobal := func(inst string) bool {
-		_, err := g.kv.Get(ctx, g.cfg.presenceKey(inst))
-		return err == nil
+// the hub stream, 0 when there is none. why, when set, says the position could
+// not be read, so a replay is not reported as a seat with no earlier durable.
+//
+// It lists the hub stream's consumers first. A cluster credential may not
+// (CONSUMER.NAMES and CONSUMER.LIST are outside the leaf's allow-list and
+// answer "no responders", finding-006), and the error used to be dropped, so
+// every reconnect replayed the global inbox from the start (aae-orc-2ro3e). On
+// that error it reads the departed instances' hub durables by name instead.
+func (g *globalTier) seatFloor(ctx context.Context, agentID, self string) (uint64, string) {
+	prefix := "mcp_global_" + agentID + "_"
+	filters := []string{g.cfg.inboxSubject()}
+	liveGlobal := func(c context.Context) func(string) bool {
+		return func(inst string) bool {
+			_, err := g.kv.Get(c, g.cfg.presenceKey(inst))
+			return err == nil
+		}
 	}
-	floor, _ := seatAckFloor(ctx, g.js, g.cfg.streamName(), "mcp_global_"+agentID+"_", []string{g.cfg.inboxSubject()}, liveGlobal)
-	return floor
+	lctx, lcancel := context.WithTimeout(ctx, floorListTimeout)
+	floor, err := seatAckFloor(lctx, g.js, g.cfg.streamName(), prefix, filters, liveGlobal(lctx))
+	lcancel()
+	if err == nil {
+		return floor, ""
+	}
+	nctx, ncancel := context.WithTimeout(ctx, floorListTimeout)
+	defer ncancel()
+	byName, nerr := g.floorByName(nctx, agentID, self, prefix, filters, liveGlobal(nctx))
+	if byName > floor {
+		floor = byName
+	}
+	if nerr != nil && floor == 0 {
+		return 0, fmt.Sprintf("listing hub consumers failed (%v), and reading them by name failed (%v)", err, nerr)
+	}
+	return floor, ""
+}
+
+// floorByName finds this seat's departed instances without listing the hub:
+// every instance also holds a local durable under the same instance id
+// (mcp_<agent>_<instance> on AGENT_INBOX), and listing local consumers is
+// allowed. For each departed instance it reads mcp_global_<agent>_<instance>
+// on the hub by name, which a cluster credential may, and keeps the highest
+// ack floor among those filtering the seat's own subject. A live instance is
+// skipped, as in seatAckFloor: a joining session does not take its live
+// sibling's position.
+func (g *globalTier) floorByName(ctx context.Context, agentID, self, prefix string, filters []string, live func(string) bool) (uint64, error) {
+	st, err := g.local.Stream(ctx, "AGENT_INBOX")
+	if err != nil {
+		return 0, err
+	}
+	localPrefix := "mcp_" + agentID + "_"
+	var floor uint64
+	names := st.ConsumerNames(ctx)
+	for name := range names.Name() {
+		instance, ok := strings.CutPrefix(name, localPrefix)
+		if !ok || instance == "" || instance == self || strings.Contains(instance, "_") || live(instance) {
+			continue
+		}
+		cons, err := g.js.Consumer(ctx, g.cfg.streamName(), prefix+instance)
+		if errors.Is(err, jetstream.ErrConsumerNotFound) {
+			continue
+		}
+		if err != nil {
+			return floor, err
+		}
+		info := cons.CachedInfo()
+		if info == nil || !sameSubjects(filterSubjects(info.Config), filters) {
+			continue
+		}
+		if info.AckFloor.Stream > floor {
+			floor = info.AckFloor.Stream
+		}
+	}
+	return floor, names.Err()
 }
 
 // consumerConfig is the durable's shape. start > 0 resumes at that stream
