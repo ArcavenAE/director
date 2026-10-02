@@ -62,8 +62,8 @@ open_at 2030-12-30T06:00:00Z b1 --title "building one" --stage building --owner 
 open_at 2030-12-30T16:00:00Z bo --title "blocked old" --stage designed --owner architect --blocked operator --next "rule on X"
 open_at 2030-12-31T10:00:00Z bn --title "blocked new" --stage defined --owner architect --blocked operator --next "ship <b>it</b>"
 open_at 2030-12-27T08:00:00Z pk --title "parked" --stage parked --owner supervisor --next "wait"
-open_at 2030-12-31T11:00:00Z ak --title "asks" --stage idea --owner supervisor --next "answer" --link ask:ask-9 ask:b1
-touch -t 203012311154 "$DIRECTOR_STATE/workstreams.jsonl"   # ledger 6m old at now
+open_at 2030-12-31T11:00:00Z ak --title "asks" --stage idea --owner supervisor --next "answer" --link ask:ask-9 ask:b1 bd:aae-orc-zz9
+TZ=UTC touch -t 203012311154 "$DIRECTOR_STATE/workstreams.jsonl"   # ledger 6m old at now
 
 page() {
   DWS_NOW=2030-12-31T12:00:00Z "$BOARD_HTML" >/dev/null 2>"$root/err" || { bad "board-html runs with a ledger" "$(cat "$root/err")"; return 1; }
@@ -106,7 +106,7 @@ elif grep -qF 'ship &lt;b&gt;it&lt;/b&gt;' "$root/page.html"; then ok "values ar
 u="$(text_of uncaptured)"
 grep -qF "PROPOSE from sup-seat (ws aae) to agent://ops/michael" <<<"$u" && ok "Uncaptured carries the board's Uncaptured lines" || bad "Uncaptured carries the board's Uncaptured lines" "$u"
 grep -qF "ask:ask-9" <<<"$u" && ok "an ask id with no row of its own is Uncaptured" || bad "an ask id with no row of its own is Uncaptured" "$u"
-[[ -n "$u" ]] && ! grep -qF "ask:b1" <<<"$u" && ok "an ask id that has a row is not Uncaptured" || bad "an ask id that has a row is not Uncaptured" "$u"
+[[ -n "$u" ]] && ! grep -qF "ask:b1" <<<"$u" && ! grep -qF "aae-orc-zz9" <<<"$u" && ok "an ask id that has a row, and a link that is not an ask, are not Uncaptured" || bad "an ask id that has a row, and a link that is not an ask, are not Uncaptured" "$u"
 
 # The ledger (item 4): stage order, oldest first within a stage, parked last;
 # the 30h building row says so as text, the 20h designed row does not.
