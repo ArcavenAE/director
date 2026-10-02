@@ -193,12 +193,13 @@ global_tier_connected() {
     url="http://$host:8222"
   fi
   url="${url%/}"
-  case "$url" in
-    http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;;
-    *) return 1;;
-  esac
+  # An exact match, not a prefix: curl connects to the host after any "@", so
+  # http://127.0.0.1:1@elsewhere would pass a prefix match and leave the box.
+  [[ "$url" =~ ^http://(127\.0\.0\.1|localhost|\[::1\]):[0-9]{1,5}$ ]] || return 1
   command -v curl >/dev/null 2>&1 || return 1
-  body="$(curl -s -m 1 "$url/leafz" 2>/dev/null)" || return 1
+  # -q (first) skips ~/.curlrc and --noproxy skips every proxy variable, so
+  # neither can carry the probe off the loopback host.
+  body="$(curl -q -s --noproxy '*' -m 1 "$url/leafz" 2>/dev/null)" || return 1
   [[ "$body" =~ \"leafnodes\":[[:space:]]*([0-9]+) ]] || return 1
   (( BASH_REMATCH[1] > 0 ))
 }
