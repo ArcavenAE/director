@@ -49,7 +49,7 @@ daemon; a launcher supplies the rest.
 |---|---|
 | `director-mcp` | serve MCP on stdin and stdout, log to stderr |
 | `director-mcp --preflight` | connect, verify the broker is provisioned (and the hub through the domain when global mode is on), print `preflight: ok`, exit. Creates no consumer, writes no presence. |
-| `director-mcp unread [--json]` | read-only report of unread mail per seat durable on `AGENT_INBOX` (see below). Needs only `NATS_URL`; no identity. Creates no consumer, acks nothing, writes no presence. Always exits 0. |
+| `director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <dur>]` | read-only report of unread mail per seat durable on `AGENT_INBOX`, or on the hub with `--global` (see below). Needs only `NATS_URL`; no identity. Creates no consumer, acks nothing, writes no presence. Always exits 0. |
 
 Any other argument is refused with exit 2, rather than ignored and a live
 shim started (director#75).
@@ -74,8 +74,34 @@ oldest unread first:
 
 `--json` prints the same as `{stream, read_at, durables: [...],
 warnings}`. A presence bucket or consumer listing it could not read is a
-warning, and the presence it did not read is not reported as absent. The
-global tier's durables are not covered yet (LR-3 slice M).
+warning, and the presence it did not read is not reported as absent.
+
+Slice M (`sim/design/unread-slice-m.md`):
+
+- **Live rows first.** The default view lists each address's live rows,
+  then one line for its dead durables: `dead durables: N, pending P in
+  total, oldest A (--all to list)`. `--all` lists every durable; `--json`
+  always carries every durable with `live` set.
+- **Named states for live rows.** `reading` (nothing pending), `behind`
+  (pending, the durable has delivered), `durable-idle` (pending, and nothing
+  delivered since the durable's `Created`, at least 10 minutes ago), and
+  `reads-outside-durable` (a `durable-idle` row whose session, under its own
+  `sender.instance`, answered a message still pending on it; not unread
+  mail). The reply scan reads at most 2,000 messages per stream per run,
+  newest first; a row whose window it did not reach stays `durable-idle`
+  with `scan_truncated`. The match rests on the sender's own claim: any process holding the agent's bus credentials can write any `sender.instance`, so the evidence carries a `basis` saying it is self-asserted and not verified, and the text views say so too. A sender with no `sender.instance` never counts; `sender.session` is the harness session UUID and is never read for this.
+- **`--older-than <dur>`** marks `behind` and `durable-idle` rows older than
+  the threshold (`!` in text, `over_threshold` in JSON) and counts them.
+  Exit stays 0.
+- **`--global`** reads every `mcp_global_` durable on each `GLOBAL_TO_*`
+  stream through the hub's domain (`DIRECTOR_GLOBAL_DOMAIN`, default
+  `global`), with presence from `GLOBAL_PRESENCE`, one section per stream.
+  With no hub reachable it prints the reason and exits 0. `--json` prints
+  `{domain, reports: [...], error}`.
+- **`--by-role`** prints one line per team and role: holders, total
+  pending, the oldest age among `behind` and `durable-idle` holders, and the
+  count in each state. The role comes from a `role.<role>.inbox` filter, or
+  else from the agent id with its replica suffix and team prefix removed.
 
 ## Startup behaviour
 
