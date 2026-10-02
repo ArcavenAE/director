@@ -332,9 +332,16 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 	return nil
 }
 
+// floorListTimeout bounds the hub consumer listing seatFloor makes, so a
+// request that gets no reply cannot hold up attach. A var so tests can shorten
+// it.
+var floorListTimeout = 5 * time.Second
+
 // seatFloor is the highest ack floor among this seat's departed durables on
 // the hub stream, 0 when there is none or the hub cannot be asked.
 func (g *globalTier) seatFloor(ctx context.Context, agentID string) uint64 {
+	ctx, cancel := context.WithTimeout(ctx, floorListTimeout)
+	defer cancel()
 	liveGlobal := func(inst string) bool {
 		_, err := g.kv.Get(ctx, g.cfg.presenceKey(inst))
 		return err == nil

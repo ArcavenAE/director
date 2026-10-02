@@ -246,15 +246,20 @@ func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer) {
 	if info := cons.CachedInfo(); info != nil {
 		waiting = info.NumPending
 	}
-	var msg string
-	if floor > 0 {
-		msg = fmt.Sprintf("%s inbox resumed after stream sequence %d, the seat's last ack, so mail already read is not replayed; %d message(s) waiting", tier, floor, waiting)
-	} else {
-		msg = fmt.Sprintf("%s inbox has no earlier durable for this seat, so it reads everything the stream still holds; %d message(s) waiting", tier, waiting)
-	}
+	msg := resumeNote(tier, floor, waiting, "")
 	b.resumedMu.Lock()
 	b.resumed = append(b.resumed, msg)
 	b.resumedMu.Unlock()
+}
+
+// resumeNote is the start note for one tier: where its new durable began and
+// what waits. why, when set, is the reason the seat's earlier position could
+// not be read.
+func resumeNote(tier string, floor, waiting uint64, why string) string {
+	if floor > 0 {
+		return fmt.Sprintf("%s inbox resumed after stream sequence %d, the seat's last ack, so mail already read is not replayed; %d message(s) waiting", tier, floor, waiting)
+	}
+	return fmt.Sprintf("%s inbox has no earlier durable for this seat, so it reads everything the stream still holds; %d message(s) waiting", tier, waiting)
 }
 
 // takeResumed returns the pending resume notes once, then clears them.
