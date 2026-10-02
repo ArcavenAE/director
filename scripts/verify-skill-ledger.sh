@@ -40,8 +40,10 @@ FENCE=f8b035199d1d451f28b415de387b951494856bb991cd72df7ef17ca7ba35fff4
 got="$(part fence | shasum -a 256 | cut -d' ' -f1)"
 [[ "$got" == "$FENCE" ]] && ok "the step 4 fence is byte-identical to main's" || bad "the step 4 fence is byte-identical to main's" "$got"
 
-step4="$(part before)$(part after)"
-step5="$(part step5)"
+# Markdown wraps anywhere, so match on the text with whitespace collapsed.
+flat() { tr '\n' ' ' | sed -E 's/ +/ /g'; }
+step4="$( { part before; part after; } | flat)"
+step5="$(part step5 | flat)"
 has() { grep -qF -- "$2" <<<"$1"; }
 
 # Step 4: where Blocked on you comes from, and the form of each line.
