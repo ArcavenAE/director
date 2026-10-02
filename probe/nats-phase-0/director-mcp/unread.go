@@ -500,7 +500,7 @@ func dedupe(sorted []string) []string {
 	return out
 }
 
-// instanceSuffix is the replica suffix a cast adds to an agent id (-g5-2).
+// instanceSuffix is the replica suffix a cast adds to an agent id (-g9-9).
 var instanceSuffix = regexp.MustCompile(`-g\d+-\d+$`)
 
 // teamAndRole reads a row's team and role from its filter subjects: the team
