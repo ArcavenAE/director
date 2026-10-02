@@ -51,12 +51,14 @@ SH
 chmod +x "$root/bin/gh" "$root/bin/bd"
 export PATH="$root/bin:$PATH"
 
-pr() { # repo num state isDraft updatedAt mergedAt mergeCommit
-  local merged=null commit=null
+pr() { # repo num state isDraft updatedAt mergedAt mergeCommit lastCommitDate
+  # The last commit defaults to updatedAt; pass it to model an update that is
+  # not a commit, review, ready or merge (a comment).
+  local merged=null commit=null committed="${8:-$5}"
   [[ -n "${6:-}" ]] && merged="\"$6\""
   [[ -n "${7:-}" ]] && commit="{\"oid\":\"$7\"}"
-  printf '{"state":"%s","isDraft":%s,"reviewDecision":"","updatedAt":"%s","mergedAt":%s,"mergeCommit":%s}\n' \
-    "$3" "$4" "$5" "$merged" "$commit" >"$FIX/pr-$(echo "$1" | tr '/#' '__')-$2.json"
+  printf '{"state":"%s","isDraft":%s,"reviewDecision":"","updatedAt":"%s","mergedAt":%s,"mergeCommit":%s,"commits":[{"committedDate":"%s"}],"reviews":[]}\n' \
+    "$3" "$4" "$5" "$merged" "$commit" "$committed" >"$FIX/pr-$(echo "$1" | tr '/#' '__')-$2.json"
 }
 row() { python3 -c 'import json,sys; print(json.dumps([r for r in json.load(sys.stdin)["rows"] if r["slug"]==sys.argv[1]][0]))' "$1"; }
 field() { "$DWS" show --json | row "$1" | python3 -c 'import json,sys; v=json.load(sys.stdin).get(sys.argv[1]); print(" | ".join(v) if isinstance(v,list) else v)' "$2" 2>/dev/null || true; }
@@ -93,6 +95,16 @@ echo ahead >"$FIX/compare-repos_o_rel_compare_bbb222___v1_2_0"
 "$DWS" refresh rel1 >/dev/null 2>&1 || true
 [[ "$(field rel1 stage)" == merged ]] && ok "a release tag moves nothing" || bad "a release tag moves nothing" "$(field rel1 stage)"
 field rel1 hints | grep -q 'v1.2.0' && ok "a release tag that contains the merge gives a hint" || bad "a release tag that contains the merge gives a hint" "$(field rel1 hints)"
+grep -q 'release list -R o/rel .*--exclude-drafts' "$CALLS" && grep -q 'release list -R o/rel .*--exclude-pre-releases' "$CALLS" \
+  && ok "only stable releases are considered" || bad "only stable releases are considered" "$(grep 'release list' "$CALLS")"
+
+# --- a failing release check is a hint; the merged fact still applies -----
+"$DWS" open rel2 --title "release check fails" --stage "in review" --link pr:o/rel2#11 >/dev/null 2>&1 || true
+pr o/rel2 11 MERGED false 2030-10-01T09:30:00Z 2030-10-01T09:30:00Z eee555
+echo '[{"tagName":"v2.0.0","publishedAt":"2030-10-02T09:00:00Z"}]' >"$FIX/release-o_rel2.json"
+"$DWS" refresh rel2 >"$root/out" 2>&1 || true
+[[ "$(field rel2 stage)" == merged ]] && ok "a failing release check does not block the merged move" || bad "a failing release check does not block the merged move" "$(field rel2 stage): $(cat "$root/out")"
+field rel2 hints | grep -qi 'release check' && ok "a failing release check becomes a hint" || bad "a failing release check becomes a hint" "$(field rel2 hints)"
 
 # --- the skip window -------------------------------------------------------
 export DWS_REFRESH_SKIP_SECONDS=600
@@ -123,11 +135,18 @@ if [[ "$(field rev1 stage)" == merged ]]; then ok "every PR merged carries build
 "$DWS" stage rev1 building --from merged >/dev/null 2>&1 || bad "director moves the row back"
 "$DWS" refresh rev1 >/dev/null 2>&1 || true
 [[ $reverted == 1 && "$(field rev1 stage)" == building ]] && ok "the next refresh does not re-advance a reverted row" || bad "the next refresh does not re-advance a reverted row" "$(field rev1 stage)"
-pr o/r 7 MERGED false 2030-10-02T15:30:00Z 2030-10-02T14:00:00Z ddd444
+moved_before="$(field rev1 last_moved)"
+pr o/r 7 MERGED false 2030-10-02T15:30:00Z 2030-10-02T14:00:00Z ddd444 2030-10-02T14:00:00Z
 "$DWS" refresh rev1 >/dev/null 2>&1 || true
 [[ $reverted == 1 && "$(field rev1 stage)" == building ]] && ok "a comment after the revert does not re-advance it" || bad "a comment after the revert does not re-advance it" "$(field rev1 stage)"
-[[ "$(field rev1 last_moved)" == "2030-10-02T15:30:00Z" ]] \
-  && ok "the comment still moves last moved" || bad "the comment still moves last moved" "$(field rev1 last_moved)"
+[[ -n "$moved_before" && "$(field rev1 last_moved)" == "$moved_before" ]] \
+  && ok "a comment does not move last moved (design section 5 table)" || bad "a comment does not move last moved (design section 5 table)" "$moved_before -> $(field rev1 last_moved)"
+"$DWS" open com1 --title "commit moves" --stage building --link pr:o/r#12 >/dev/null 2>&1 || true
+pr o/r 12 OPEN true 2030-10-03T08:00:00Z "" "" 2030-10-03T08:00:00Z
+"$DWS" refresh com1 >/dev/null 2>&1 || true
+pr o/r 12 OPEN true 2030-10-03T09:00:00Z "" "" 2030-10-03T09:00:00Z
+"$DWS" refresh com1 >/dev/null 2>&1 || true
+[[ "$(field com1 last_moved)" == "2030-10-03T09:00:00Z" ]] && ok "a new commit moves last moved" || bad "a new commit moves last moved" "$(field com1 last_moved)"
 
 # --- rows with no PR never move --------------------------------------------
 "$DWS" open iss1 --title "issue only" --stage building --link issue:o/r#8 >/dev/null 2>&1 || true
@@ -157,6 +176,14 @@ if "$DWS" refresh err1 >"$root/out" 2>&1; then
 else
   bad "an unreadable link is reported and moves nothing" "refresh exited nonzero: $(cat "$root/out")"
 fi
+
+# --- links refresh does not read are said, and an id is never an option ---
+"$DWS" open unr1 --title "unread links" --stage building --link ask:01ABC ArcavenAE/director#1 bd:--db=/x >/dev/null 2>&1 || true
+: >"$CALLS"
+"$DWS" refresh unr1 >"$root/out" 2>&1 || true
+grep -q 'ask:01ABC' "$root/out" && grep -q 'ArcavenAE/director#1' "$root/out" && grep -q 'bd:--db=/x' "$root/out" \
+  && ok "links refresh does not read are named in its output" || bad "links refresh does not read are named in its output" "$(cat "$root/out")"
+grep -q -- '--db' "$CALLS" && bad "a bd id that looks like an option is never passed to bd" "$(cat "$CALLS")" || ok "a bd id that looks like an option is never passed to bd"
 
 # --- refresh with no slugs covers every row; director cannot be impersonated
 : >"$CALLS"
