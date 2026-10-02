@@ -74,6 +74,7 @@ fresh() { export DWS_REFRESH_SKIP_SECONDS=0; }
 fresh
 # The clock (DWS_NOW): rows open before the fixtures' times, and refresh runs
 # after them, so last moved is decided by the sources, never by the open.
+export DWS_TEST_CLOCK=1
 export DWS_NOW=2030-12-31T00:00:00Z
 dws_open() { DWS_NOW=2030-09-01T00:00:00Z "$DWS" open "$@"; }
 
@@ -181,7 +182,7 @@ dws_open mrg1 --title "merge moves" --stage merged --link pr:o/r#16 >/dev/null 2
 pr o/r 16 MERGED false 2030-10-04T11:00:00Z 2030-10-04T11:00:00Z hhh888 2030-10-04T08:00:00Z
 "$DWS" refresh mrg1 >/dev/null 2>&1 || true
 [[ "$(field mrg1 last_moved)" == "2030-10-04T11:00:00Z" ]] && ok "a merge moves last moved" || bad "a merge moves last moved" "$(field mrg1 last_moved)"
-dws_open rdy1 --title "ready moves" --stage building --link pr:o/r#17 >/dev/null 2>&1 || true
+dws_open rdy1 --title "ready moves" --stage "in review" --link pr:o/r#17 >/dev/null 2>&1 || true
 pr o/r 17 OPEN true 2030-10-04T08:00:00Z "" "" 2030-10-04T08:00:00Z
 DWS_NOW=2030-10-05T00:00:00Z "$DWS" refresh rdy1 >/dev/null 2>&1 || true
 pr o/r 17 OPEN false 2030-10-04T08:00:00Z "" "" 2030-10-04T08:00:00Z

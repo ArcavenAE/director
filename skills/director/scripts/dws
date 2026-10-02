@@ -54,9 +54,11 @@ class Refused(Exception):
 
 
 def now():
-    """The clock, as the ledger writes it. DWS_NOW overrides it for the
-    verify scripts, which need a fixed now on either side of their fixtures."""
-    fixed = os.environ.get("DWS_NOW")
+    """The clock, as the ledger writes it. DWS_NOW overrides it only when
+    DWS_TEST_CLOCK=1 is also set (the verify scripts, which need a fixed now
+    on either side of their fixtures), so a stray DWS_NOW cannot pin the
+    ledger's timestamps."""
+    fixed = os.environ.get("DWS_NOW") if os.environ.get("DWS_TEST_CLOCK") == "1" else None
     if fixed:
         return fixed
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
