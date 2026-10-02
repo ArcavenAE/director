@@ -54,6 +54,11 @@ class Refused(Exception):
 
 
 def now():
+    """The clock, as the ledger writes it. DWS_NOW overrides it for the
+    verify scripts, which need a fixed now on either side of their fixtures."""
+    fixed = os.environ.get("DWS_NOW")
+    if fixed:
+        return fixed
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -353,14 +358,20 @@ def pr_state(d):
 
 
 def release_containing(repo, commit):
-    """The newest stable release tag of repo (drafts and pre-releases left
-    out) when its history contains commit, or None. A hint only: refresh
-    never moves a row to released (section 5)."""
-    releases = json.loads(run_json(["gh", "release", "list", "-R", repo, "--exclude-drafts", "--exclude-pre-releases",
-                                    "--limit", "1", "--json", "tagName,publishedAt"]) or "[]")
-    if not releases or not commit:
+    """The latest stable release tag of repo (GitHub's releases/latest, which
+    leaves out drafts and pre-releases) when its history contains commit, or
+    None. A repo with no stable release answers 404, which is None, not a
+    failure. A hint only: refresh never moves a row to released (section 5)."""
+    if not commit:
         return None
-    tag = releases[0]["tagName"]
+    try:
+        tag = run_json(["gh", "api", f"repos/{repo}/releases/latest", "--jq", ".tag_name"]).strip()
+    except RuntimeError as err:
+        if "HTTP 404" in str(err):
+            return None
+        raise
+    if not tag:
+        return None
     status = run_json(["gh", "api", f"repos/{repo}/compare/{commit}...{tag}", "--jq", ".status"]).strip()
     return tag if status in ("ahead", "identical") else None
 
@@ -452,7 +463,7 @@ def cmd_refresh(a):
     slugs = a.slugs or [r["slug"] for r in sorted_rows(rows)]
     for slug in slugs:
         need(rows, slug)
-    t_now = datetime.datetime.now(datetime.timezone.utc)
+    t_now = parse_ts(now())
     observed, warnings = {}, []
     for slug in slugs:
         row = rows[slug]
@@ -484,7 +495,9 @@ def cmd_refresh(a):
                     continue
                 ev = {"event": "observe", "ws": slug, "link": link, "seen": seen, "checked_at": now()}
                 if moved:
-                    ev["moved_at"] = moved
+                    # A source time ahead of now (a skewed or forged commit
+                    # date) would sort as freshest forever; clamp it.
+                    ev["moved_at"] = min(moved, now())
                 events.append(ev)
                 seen_by_link[link] = seen
             moves, hints = decide(row, seen_by_link)

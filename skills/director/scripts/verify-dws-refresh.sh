@@ -89,8 +89,8 @@ print(",".join(e["actor"] for e in ev if e.get("ws") == "ready1" and e.get("even
 PY
 )"
 [[ "$actor" == refresh ]] && ok "the move is appended as actor refresh" || bad "the move is appended as actor refresh" "$actor"
-[[ "$(field ready1 last_moved)" == "2030-10-02T10:00:00Z" ]] \
-  && ok "last moved follows the PR's update" || bad "last moved follows the PR's update" "$(field ready1 last_moved)"
+[[ "$(field ready1 last_moved)" == "$DWS_NOW" ]] \
+  && ok "a stage move dates last moved by the refresh that saw it" || bad "a stage move dates last moved by the refresh that saw it" "$(field ready1 last_moved)"
 
 # --- in review -> merged when every linked PR has merged -------------------
 dws_open merge1 --title "merge" --stage "in review" --link pr:o/r#2 >/dev/null 2>&1 || true
@@ -177,7 +177,7 @@ dws_open rvw1 --title "review moves" --stage "in review" --link pr:o/r#15 >/dev/
 pr o/r 15 OPEN false 2030-10-04T10:00:00Z "" "" 2030-10-04T08:00:00Z 2030-10-04T10:00:00Z
 "$DWS" refresh rvw1 >/dev/null 2>&1 || true
 [[ "$(field rvw1 last_moved)" == "2030-10-04T10:00:00Z" ]] && ok "a review moves last moved" || bad "a review moves last moved" "$(field rvw1 last_moved)"
-dws_open mrg1 --title "merge moves" --stage building --link pr:o/r#16 >/dev/null 2>&1 || true
+dws_open mrg1 --title "merge moves" --stage merged --link pr:o/r#16 >/dev/null 2>&1 || true
 pr o/r 16 MERGED false 2030-10-04T11:00:00Z 2030-10-04T11:00:00Z hhh888 2030-10-04T08:00:00Z
 "$DWS" refresh mrg1 >/dev/null 2>&1 || true
 [[ "$(field mrg1 last_moved)" == "2030-10-04T11:00:00Z" ]] && ok "a merge moves last moved" || bad "a merge moves last moved" "$(field mrg1 last_moved)"
