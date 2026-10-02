@@ -547,6 +547,44 @@ else
   bad "supervisor cast with a non-loopback monitor" "$(cat "$root/out/stderr")"
 fi
 
+# Userinfo and a path suffix must not steer the probe off the loopback host:
+# curl connects to the host after the "@", so a prefix match is not a guard.
+for url in 'http://127.0.0.1:1@example.invalid:8222' 'http://localhost:1@other.invalid:8222' 'http://127.0.0.1:8222/x'; do
+  leafz "$LEAF_UP"
+  if cast supervisor "DIRECTOR_NATS_MONITOR_URL=$url"; then
+    if [[ -f "$root/out/curl.args" ]] || grep -q "global tier is connected" "$root/out/stderr"; then
+      bad "supervisor: the monitor URL $url was queried"
+    else
+      ok "supervisor: the monitor URL $url is refused by the loopback guard and never queried"
+    fi
+  else
+    bad "supervisor cast with monitor $url" "$(cat "$root/out/stderr")"
+  fi
+done
+
+# A trailing slash on a loopback override is still the same endpoint.
+leafz "$LEAF_UP"
+if cast supervisor DIRECTOR_NATS_MONITOR_URL=http://127.0.0.1:9999/; then
+  grep -qx "http://127.0.0.1:9999/leafz" "$root/out/curl.args" && grep -q "global tier is connected" "$root/out/stderr" \
+    && ok "supervisor: a loopback override with a trailing slash is still queried" \
+    || bad "trailing-slash override" "$(cat "$root/out/curl.args" 2>/dev/null)"
+else
+  bad "supervisor cast with a trailing-slash monitor" "$(cat "$root/out/stderr")"
+fi
+
+# A proxy in the environment or in ~/.curlrc must not carry the probe off-box:
+# curl is told to skip .curlrc (-q, which must come first) and to use no proxy.
+leafz "$LEAF_UP"
+if cast supervisor http_proxy=http://127.0.0.1:18224; then
+  miss=""
+  [[ "$(head -1 "$root/out/curl.args" 2>/dev/null)" == "-q" ]] || miss+=" -q-first"
+  grep -qx -- "--noproxy" "$root/out/curl.args" 2>/dev/null   || miss+=" --noproxy"
+  [[ -z "$miss" ]] && ok "supervisor: the probe skips .curlrc and every proxy" \
+                   || bad "probe proxy isolation" "missing:$miss"
+else
+  bad "supervisor cast with a proxy set" "$(cat "$root/out/stderr")"
+fi
+
 leafz "$LEAF_UP"
 if cast builder; then
   if [[ -f "$root/out/curl.args" ]] || grep -q "global tier is connected" "$root/out/stderr"; then
