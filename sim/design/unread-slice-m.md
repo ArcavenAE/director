@@ -88,24 +88,52 @@ M4 counts it over threshold like `behind`, and lists it under its own
 heading so a reader sees the class.
 
 **`reads-outside-durable` (only with evidence).** A `durable-idle` row is
-reclassed when the seat has sent at least one message, since its durable's
-`Created`, whose `in_reply_to` names a message still pending on that
-durable. A seat that answers mail it never acked read it somewhere else. Subjects
-are keyed by recipient (`agent.<ws>.<team>.<id>.inbox`), so there is no
-per-sender subject to filter. The reader scans AGENT_INBOX by sequence from
-the first message at or after the durable's `Created`, decodes each envelope,
-and keeps those whose `sender.agent_id` is the seat and whose `in_reply_to`
-names a pending message on its durable. It is read-only (`GetMsg` by
-sequence), runs only for `durable-idle` rows, is capped at the last 2,000
-messages per run, and reports when the cap cut it short. With `--global` it
-scans the hub streams the same way. It records the evidence:
+reclassed when **this session** has sent at least one message, since its
+durable's `Created`, whose `in_reply_to` names a message still pending on
+that durable. A session that answers mail it never acked read it somewhere
+else.
+
+**The evidence must name the session, not the agent.** `sender.agent_id`
+names the agent, and two live sessions of one agent share it, so live
+session 1 replying to message M would otherwise reclass deaf session 2. A
+process that only sends under the agent id would do the same. The envelope
+already has a `sender.session` field (`envelope.go:17`), but the shim never
+fills it (`main.go:73` builds the sender without it). Part E1 fills it with
+the session's instance on every send. Evidence then counts only when
+`sender.session` equals this durable's instance. A message with no
+`sender.session` (any shim before E1, a send-only process, a sibling) never
+counts. So until E1 ships, no row is upgraded and every idle durable stays
+`durable-idle`, which is the alarming default.
+
+**How the pending set is enumerated.** The pending ids are the messages on
+the durable's filter subjects from its ack floor plus one (or its
+`OptStartSeq`, when later) to the stream's last sequence, walked with
+`GetMsg` as slice S already does for the oldest age. A resumed durable can
+hold pending messages older than its `Created`. They are in the pending set
+all the same, because the set comes from the floor, not from `Created`.
+
+**Finding the replies.** Subjects are keyed by recipient
+(`agent.<ws>.<team>.<id>.inbox`), so there is no per-sender subject to
+filter. The reader scans AGENT_INBOX by sequence from the first message at
+or after the durable's `Created`, decodes each envelope, and keeps those
+whose `sender.session` is this durable's instance and whose `in_reply_to` is
+in the pending set. It is read-only (`GetMsg` by sequence), runs only for
+`durable-idle` rows, and is capped at the last 2,000 messages per run. With
+`--global` it scans the hub streams the same way.
+
+**A truncated scan never upgrades a row.** When the cap cuts the scan short
+of `Created`, the row stays `durable-idle` even if a matching reply was found
+in the part scanned, and `--json` carries `scan_truncated: true`. A partial
+scan proves less than the rule asks for, so the default holds.
+
+It records the evidence:
 
 ```
 seat-c/1  reads-outside-durable  pending 41 (answered 3 of them, latest 12m ago; not unread mail)
 ```
 
-`--json` carries `state` and `evidence` (`in_reply_to` ids matched, the
-latest send time). This row shows no age and M4 does not count it. The fix
+`--json` carries `state`, `evidence` (`in_reply_to` ids matched, the
+latest send time) and `scan_truncated`. This row shows no age and M4 does not count it. The fix
 for such a seat is to read through `wait_for_message` or `inbox_summary`,
 which ack and advance the floor; the reader names the class, it does not
 change the seat.
@@ -159,6 +187,13 @@ is not under the stamped VCS root, the row shows `rev <sha> (stamp from an
 enclosing repo, see ldteb)`. When ldteb lands, that mark never fires. #68's
 release (a pinned, reproducible build) removes the case for installed seats.
 
+## 4a. Parts
+
+| part | what | depends on |
+|---|---|---|
+| E1 | the shim sets `sender.session` to its instance on every send | none |
+| M1 to M5 | the reader changes above | none; M2's upgrade path only fires after E1 |
+
 ## 5. Tests (red first)
 
 1. **Collapse.** Scratch broker: one live session plus three durables of
@@ -174,6 +209,15 @@ release (a pinned, reproducible build) removes the case for installed seats.
    - **Correlation:** the same session sends a reply whose `in_reply_to`
      names one of the pending messages; it becomes `reads-outside-durable`
      with that id as evidence and no age, and is not counted over threshold.
+   - **Siblings and senders (negative):** session 1 of an agent is live and
+     reading; session 2 of the same agent is deaf with message M pending.
+     Session 1 replies to M. Session 2 stays `durable-idle`. A process that
+     publishes a reply to M with the agent id and no `sender.session` leaves
+     it `durable-idle` too. Before E1, the correlation case also stays
+     `durable-idle` (no session on the envelope).
+   - **Truncated:** with the cap set to 10 and the matching reply within the
+     last 10 messages but `Created` earlier, the row stays `durable-idle`
+     and `--json` shows `scan_truncated: true`.
    - **Reading:** after it drains through the shim it is `reading`. A session
      reading through the durable with mail waiting is `behind` with an age.
    - **Anchor:** rewriting the presence `ts` does not change the state; the
