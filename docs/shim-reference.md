@@ -419,6 +419,13 @@ A new global durable resumes the way the local one does: after the highest
 ack floor among the seat's departed `mcp_global_<id>_` durables (filtered on
 the same inbox subject, no live hub presence row for the instance), or from
 the start of the stream when there are none.
+To find them it lists the hub stream's consumers first. A cluster credential
+may not list them (`CONSUMER.NAMES` and `CONSUMER.LIST` answer "no
+responders"), so on that error it takes the seat's instance ids from its
+local durables (`mcp_<id>_<instance>` on `AGENT_INBOX`, which every instance
+holds under the same instance id) and reads each departed instance's hub
+durable by name, which the credential may (aae-orc-2ro3e). Each lookup is
+bounded at 5 s, so a request with no reply cannot hold up attach.
 Every supervisor of a cluster filters on the same role inbox, so the name
 is what keeps one seat's position from moving another's. Agent ids may
 contain `_`, so the prefix `mcp_global_sup_` also matches `sup_T1`'s
@@ -428,7 +435,9 @@ message (fan-out, not a work queue).
 
 The first `wait_for_message` result after a start (or after the global tier
 attaches) carries `resumed`: one line per tier saying where the durable
-started and how many messages were waiting. It is reported once.
+started and how many messages were waiting. It is reported once. When the
+seat's earlier position could not be read, the line says so and why, so a
+replay is not reported as a seat with no earlier durable.
 
 When the hub no longer has a session's global durable, a pull does not say
 "consumer not found". On a single server it fails with no responders, the
