@@ -27,6 +27,17 @@ not one harness session. So the instance needs its own field.
 - **marvel's Go package** (`contracts/go/envelope`) is generated from the
   same schema and validates against an embedded copy. Nothing in marvel's own
   daemon imports it today.
+- **The shim's envelopes do not conform to the schema today, for another
+  reason.** The schema requires a top-level `authority` object (`strength`
+  of `direct`, `relayed` or `none`), and the shim's `Envelope` has no such
+  field, so a delivered envelope fails with "'authority' is a required
+  property" (review 5395136227). beadle's generated type has `authority` as a
+  required field too. That gap is separate from this one and is tracked in
+  director#197; section 5 keeps the two apart.
+- **No strict reader is on the bus yet.** beadle at c7e9fd9 has no NATS
+  client, so today the forward-only pin is the real guard: beadle cannot
+  decode a field it was not built with, and the order in section 4 keeps it
+  that way once it does read the bus.
 - **The director shim does not validate inbound envelopes.** It decodes with
   `encoding/json`, which ignores unknown fields, so it reads a new field
   without change.
@@ -41,7 +52,7 @@ Add to `sender` in the canonical schema:
 ```json
 "instance": {
   "type": ["string", "null"],
-  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+  "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
   "description": "The sending shim process's instance id, a ULID minted at shim start. It is the suffix of that process's durable, mcp_<agent>_<instance>. One harness session can span several instances (a shim restart) and one agent can run several at once. Informational: self-asserted by the sender, never a routing or authorization input (as role, R-71, R-82)."
 }
 ```
@@ -53,8 +64,11 @@ Add to `sender` in the canonical schema:
 - The schema `$id` stays `.../envelope/v1` and `schema_version` stays 1. The
   change is additive for a lenient reader. It is not additive for a strict
   one (beadle), which is why the order in section 4 matters.
+- The first character is limited to `0` to `7`, since a ULID's 48-bit
+  timestamp cannot set the top bit of its first base32 character.
 - Fixtures: `valid-sender-instance.json` (a ULID), `valid-sender-instance-null.json`,
-  `invalid-bad-instance.json` (lower case, 25 characters, a UUID).
+  `invalid-bad-instance.json` (lower case, 25 characters, a UUID, a first
+  character of `8`).
 
 ## 4. Order of the three PRs
 
@@ -67,17 +81,23 @@ beadle refuses every message from an upgraded shim.
 | 2 | beadle | re-pin: copy the schema at step 1's merge commit, update `PINNED.md` and `PINNED.sha256`, `just contracts-gen`, add the fixtures; `just contracts-check` passes | merged, released, and the running beadle on every host that reads the bus is that release or later |
 | 3 | director | #190 reworked: a `Sender.Instance` field (`json:"instance,omitempty"`) set to the instance on every send; `Sender.Session` left unset | merged after step 2's "done when" |
 
-Step 3 waits on a deployed beadle, not only a merged one. The supervisor
-confirms the running beadle's version on each host before step 3 merges. If
+Step 3 waits on a deployed beadle, not only a merged one. "Running on every
+host" is a manual check: the supervisor reads the running beadle's version
+on each host before step 3 merges, and nothing automates it. Today beadle
+does not read the bus at all, so the check matters from the day it does. If
 any other strict reader of the envelope appears before then, it joins step 2.
 
 ## 5. director#190, reworked
 
 - Keep the test shape, and change the field: a sent envelope's
   `sender.instance` equals the bus's instance, and `sender.session` is absent.
-- Add one test that validates a sent envelope against the canonical schema at
-  step 1's commit, copied into the test's testdata with its commit named, so a
-  later drift fails the test.
+- Add one test that validates the sent envelope's `sender` object against
+  the `sender` subschema of the canonical schema at step 1's commit, copied
+  into the test's testdata with its commit named, so a later drift fails the
+  test. It validates `sender` only, not the whole envelope: the whole
+  envelope fails today on the missing `authority` (director#197), which this
+  change does not touch. When #197 is resolved, the test widens to the full
+  envelope.
 - The commit stays on #190's branch as a new commit; the title becomes "set
   sender.instance on every send (unread slice M, part E1)".
 
@@ -102,3 +122,4 @@ any other strict reader of the envelope appears before then, it joins step 2.
 |---|---|---|
 | 1 | Name the field `sender.instance` (optional, ULID, informational) | yes |
 | 2 | Step 3 waits on beadle deployed on every host, not only merged | yes |
+| 3 | The missing `authority` (director#197): the shim emits `{"strength": "none"}` on every send (a wire change, every message), or the schema relaxes it. Out of this change either way | decide in #197; this design scopes its test to `sender` |
