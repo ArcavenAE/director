@@ -14,9 +14,10 @@ type Sender struct {
 	AgentID   string `json:"agent_id"`
 	Role      string `json:"role,omitempty"`
 	Workspace string `json:"workspace"`
-	Session   string `json:"session,omitempty"`
-	Principal any    `json:"principal"` // RESERVED, null in Phase 0
-	Team      string `json:"-"`         // in-process routing only; not an envelope field (team lives on recipient)
+	Session   string `json:"session,omitempty"`  // the harness session UUID, marvel's to set (R-71); the shim leaves it unset
+	Instance  string `json:"instance,omitempty"` // the shim process's ULID, the suffix of its durable; informational, self-asserted
+	Principal any    `json:"principal"`          // RESERVED, null in Phase 0
+	Team      string `json:"-"`                  // in-process routing only; not an envelope field (team lives on recipient)
 }
 
 type Recipient struct {
