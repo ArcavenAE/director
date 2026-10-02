@@ -96,14 +96,22 @@ else.
 **The evidence must name the session, not the agent.** `sender.agent_id`
 names the agent, and two live sessions of one agent share it, so live
 session 1 replying to message M would otherwise reclass deaf session 2. A
-process that only sends under the agent id would do the same. The envelope
-already has a `sender.session` field (`envelope.go:17`), but the shim never
-fills it (`main.go:73` builds the sender without it). Part E1 fills it with
-the session's instance on every send. Evidence then counts only when
-`sender.session` equals this durable's instance. A message with no
-`sender.session` (any shim before E1, a send-only process, a sibling) never
+process that only sends under the agent id would do the same. The envelope's
+`sender.session` is not the field for this: the canonical schema defines it
+as the harness session UUID (R-71, R-73), which marvel sets, and the shim's
+instance is a ULID naming one shim process. A new optional field,
+`sender.instance`, carries the instance (`sim/design/envelope-sender-instance.md`).
+Part E1 fills it on every send. Evidence then counts only when
+`sender.instance` equals this durable's instance. A message with no
+`sender.instance` (any shim before E1, a send-only process, a sibling) never
 counts. So until E1 ships, no row is upgraded and every idle durable stays
 `durable-idle`, which is the alarming default.
+
+**The instance is self-asserted.** Any process holding the agent's bus
+credentials can write any value in `sender.instance`. So
+`reads-outside-durable` rests on the sender's own claim, not on proof, and
+the reader says so in its `evidence`. Whenever the claim is absent, the row
+keeps the default (`durable-idle`, with its age).
 
 **How the pending set is enumerated.** The pending ids are the messages on
 the durable's filter subjects from its ack floor plus one (or its
@@ -116,7 +124,7 @@ all the same, because the set comes from the floor, not from `Created`.
 (`agent.<ws>.<team>.<id>.inbox`), so there is no per-sender subject to
 filter. The reader scans AGENT_INBOX by sequence from the first message at
 or after the durable's `Created`, decodes each envelope, and keeps those
-whose `sender.session` is this durable's instance and whose `in_reply_to` is
+whose `sender.instance` is this durable's instance and whose `in_reply_to` is
 in the pending set. It is read-only (`GetMsg` by sequence), runs only for
 `durable-idle` rows, and is capped at the last 2,000 messages per run. With
 `--global` it scans the hub streams the same way.
@@ -191,7 +199,7 @@ release (a pinned, reproducible build) removes the case for installed seats.
 
 | part | what | depends on |
 |---|---|---|
-| E1 | the shim sets `sender.session` to its instance on every send | none |
+| E1 | the shim sets `sender.instance` to its instance on every send | the schema field in marvel, then beadle re-pinned and deployed (`envelope-sender-instance.md` section 4) |
 | M1 to M5 | the reader changes above | none; M2's upgrade path only fires after E1 |
 
 ## 5. Tests (red first)
@@ -212,9 +220,11 @@ release (a pinned, reproducible build) removes the case for installed seats.
    - **Siblings and senders (negative):** session 1 of an agent is live and
      reading; session 2 of the same agent is deaf with message M pending.
      Session 1 replies to M. Session 2 stays `durable-idle`. A process that
-     publishes a reply to M with the agent id and no `sender.session` leaves
-     it `durable-idle` too. Before E1, the correlation case also stays
-     `durable-idle` (no session on the envelope).
+     publishes a reply to M with the agent id and no `sender.instance` leaves
+     it `durable-idle` too. A reply that carries M's agent id and a
+     `sender.session` equal to the instance, but no `sender.instance`, also
+     leaves it `durable-idle`. Before E1, the correlation case stays
+     `durable-idle` (no instance on the envelope).
    - **Truncated:** with the cap set to 10 and the matching reply within the
      last 10 messages but `Created` earlier, the row stays `durable-idle`
      and `--json` shows `scan_truncated: true`.
