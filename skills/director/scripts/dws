@@ -4,7 +4,7 @@
 One row per workstream (an issue, a design and its builds), folded on read
 from an append-only event file. Part W1 of the workstream ledger design
 (sim/design/board-workstream-ledger.md): the store, the fold, the lock, the
-CLI and the instance-id refusal. refresh (W2) and the page (W3) come later.
+CLI and the instance-id refusal; W2 adds refresh. The page (W3) comes later.
 
   $DIRECTOR_STATE/workstreams.jsonl   append-only events
   $DIRECTOR_STATE/workstreams.lock    one flock around fold, check, append
@@ -15,7 +15,12 @@ CLI and the instance-id refusal. refresh (W2) and the page (W3) come later.
   dws [--actor A] set <slug> [--owner O] [--next N] [--blocked B] [--repos R..]
   dws [--actor A] link <slug> [--remove] <link>...
   dws [--actor A] park <slug> --from <current>
+  dws refresh [<slug>...]
   dws show [--json]
+
+Links are typed: pr:<owner>/<repo>#<n>, issue:<owner>/<repo>#<n>, bd:<id>
+and ask:<id>. refresh (W2) reads the first three; ask ids wait for W5, and an
+untyped link is shown but never read.
 
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
@@ -121,6 +126,7 @@ def apply(rows, e):
             "owner": e.get("owner", ""), "stage": e.get("stage", "idea"),
             "last_moved": ts, "next": e.get("next", ""), "blocked": e.get("blocked", ""),
             "links": list(e.get("links", [])), "opened": ts,
+            "hints": [], "observed": {}, "facts": [],
         }
         return
     r = rows.get(slug)
@@ -129,6 +135,8 @@ def apply(rows, e):
     if ev in ("stage", "park"):
         r["stage"] = e.get("to", "parked" if ev == "park" else r["stage"])
         r["last_moved"] = max(r["last_moved"], ts)
+        if e.get("actor") == "refresh" and e.get("fact"):
+            r["facts"].append(e["fact"])
     elif ev == "set":
         for k in ("owner", "next", "blocked", "repos"):
             if k in e:
@@ -139,10 +147,15 @@ def apply(rows, e):
                 r["links"].append(link)
         r["links"] = [x for x in r["links"] if x not in e.get("remove", [])]
     elif ev == "observe":
-        # refresh (W2) records what it saw; a linked artifact that moved
-        # moves the row's last-moved time (section 5).
+        # refresh records what it saw; a linked artifact that moved moves the
+        # row's last-moved time (section 5). A row-level observe (no link)
+        # carries the hints from that refresh.
         if e.get("moved_at"):
             r["last_moved"] = max(r["last_moved"], e["moved_at"])
+        if e.get("link"):
+            r["observed"][e["link"]] = {"seen": e.get("seen", {}), "checked_at": e.get("checked_at", ts)}
+        elif "hints" in e:
+            r["hints"] = list(e["hints"])
 
 
 def sorted_rows(rows):
@@ -209,6 +222,21 @@ def write(actor, event, check):
         check(rows)
         append(event)
     rerender()
+
+
+def write_many(actor, plan):
+    """Fold, then let plan(rows) return the events to append, all under one
+    lock, so the stage each move is checked against is the current one."""
+    with Locked():
+        rows, _ = fold()
+        events = [{"ts": now(), "actor": actor, **e} for e in plan(rows)]
+        for e in events:
+            allowed(actor, e)
+        for e in events:
+            append(e)
+    if events:
+        rerender()
+    return events
 
 
 def rerender():
@@ -290,6 +318,160 @@ def cmd_link(a):
     write(a.actor, ev, lambda rows: need(rows, a.slug))
 
 
+LINK = re.compile(r"^(pr|issue):([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)$|^(bd):(\S+)$")
+
+
+def refresh_skip():
+    return float(os.environ.get("DWS_REFRESH_SKIP_SECONDS", "600"))
+
+
+def parse_ts(ts):
+    try:
+        return datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def run_json(cmd):
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if out.returncode != 0:
+        raise RuntimeError((out.stderr or out.stdout).strip() or f"exit {out.returncode}")
+    return out.stdout
+
+
+def pr_state(d):
+    if d.get("mergedAt") or d.get("state") == "MERGED":
+        return "merged"
+    if d.get("state") == "CLOSED":
+        return "closed"
+    return "draft" if d.get("isDraft") else "ready"
+
+
+def release_containing(repo, commit):
+    """The newest release tag of repo whose history contains commit, or None.
+    A hint only: refresh never moves a row to released (section 5)."""
+    releases = json.loads(run_json(["gh", "release", "list", "-R", repo, "--limit", "1", "--json", "tagName,publishedAt"]) or "[]")
+    if not releases or not commit:
+        return None
+    tag = releases[0]["tagName"]
+    status = run_json(["gh", "api", f"repos/{repo}/compare/{commit}...{tag}", "--jq", ".status"]).strip()
+    return tag if status in ("ahead", "identical") else None
+
+
+def fetch(link):
+    """What the source says now: (seen, moved_at). Reads only."""
+    m = LINK.match(link)
+    kind = m.group(1) or m.group(4)
+    if kind == "pr":
+        repo, num = m.group(2), m.group(3)
+        d = json.loads(run_json(["gh", "pr", "view", num, "-R", repo, "--json", "state,isDraft,reviewDecision,updatedAt,mergedAt,mergeCommit"]))
+        seen = {"kind": "pr", "state": pr_state(d)}
+        if seen["state"] == "merged":
+            commit = (d.get("mergeCommit") or {}).get("oid")
+            tag = release_containing(repo, commit)
+            if tag:
+                seen["release"] = tag
+        return seen, d.get("updatedAt")
+    if kind == "issue":
+        repo, num = m.group(2), m.group(3)
+        d = json.loads(run_json(["gh", "issue", "view", num, "-R", repo, "--json", "state,updatedAt"]))
+        return {"kind": "issue", "state": d.get("state", "").lower()}, d.get("updatedAt")
+    d = json.loads(run_json(["bd", "show", m.group(5), "--json"]))
+    d = d[0] if isinstance(d, list) and d else d
+    moved = d.get("updated_at")
+    if moved and not moved.endswith("Z"):
+        t = datetime.datetime.fromisoformat(moved)
+        moved = t.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"kind": "bd", "state": d.get("status", "")}, moved
+
+
+def decide(row, seen_by_link):
+    """The factual moves and the hints for one row (section 5). A PR closed
+    unmerged is left out of the agreement and shown. A fact is the set of the
+    row's PRs with their states, never a time; a fact already recorded on an
+    earlier refresh move is never applied again, so a revert holds until a PR
+    reaches a state not acted on before."""
+    prs = sorted((link, s["state"]) for link, s in seen_by_link.items() if s.get("kind") == "pr")
+    hints = [f"PR {link[3:]} closed unmerged" for link, st in prs if st == "closed"]
+    active = [(link, st) for link, st in prs if st != "closed"]
+    for link, s in seen_by_link.items():
+        if s.get("release"):
+            hints.append(f"release {s['release']} contains {link[3:]}; moving to released is director's call")
+    if not active:
+        return [], hints
+    fact = ", ".join(f"{link[3:]} {st}" for link, st in prs)
+    states = {st for _, st in active}
+    moves, stage = [], row["stage"]
+    if fact not in row["facts"]:
+        if stage == "building" and states <= {"ready", "merged"}:
+            moves.append(("building", "in review"))
+            stage = "in review"
+        if stage == "in review" and states == {"merged"}:
+            moves.append(("in review", "merged"))
+            stage = "merged"
+    if not moves and stage in ("building", "in review") and len(states) > 1:
+        hints.append("linked PRs disagree (" + ", ".join(f"{link[3:]} {st}" for link, st in active) + "); stage left as is")
+    return [{"event": "stage", "ws": row["slug"], "from": f, "to": t, "fact": fact} for f, t in moves], hints
+
+
+def cmd_refresh(a):
+    """Read each row's linked sources and record what they say (W2). Network
+    reads happen outside the lock; the moves are decided under it, against
+    the stage as it is then. Appends as actor refresh whatever --actor says."""
+    rows, _ = fold()
+    slugs = a.slugs or [r["slug"] for r in sorted_rows(rows)]
+    for slug in slugs:
+        need(rows, slug)
+    t_now = datetime.datetime.now(datetime.timezone.utc)
+    observed, warnings = {}, []
+    for slug in slugs:
+        row = rows[slug]
+        for link in row["links"]:
+            if not LINK.match(link):
+                continue
+            last = row["observed"].get(link)
+            checked = parse_ts(last["checked_at"]) if last else None
+            if checked and (t_now - checked).total_seconds() < refresh_skip():
+                continue
+            try:
+                seen, moved = fetch(link)
+            except (RuntimeError, ValueError, OSError, subprocess.SubprocessError, KeyError) as err:
+                warnings.append(f"{slug}: {link} unreadable: {err}")
+                continue
+            observed[(slug, link)] = (seen, moved)
+
+    def plan(current):
+        events = []
+        for slug in slugs:
+            row = current.get(slug)
+            if row is None:
+                continue
+            seen_by_link = {link: v["seen"] for link, v in row["observed"].items() if link in row["links"]}
+            for (s, link), (seen, moved) in observed.items():
+                if s != slug:
+                    continue
+                ev = {"event": "observe", "ws": slug, "link": link, "seen": seen, "checked_at": now()}
+                if moved:
+                    ev["moved_at"] = moved
+                events.append(ev)
+                seen_by_link[link] = seen
+            moves, hints = decide(row, seen_by_link)
+            events.extend(moves)
+            if hints != row["hints"]:
+                events.append({"event": "observe", "ws": slug, "hints": hints, "checked_at": now()})
+        return events
+
+    events = write_many("refresh", plan)
+    for e in events:
+        if e["event"] == "stage":
+            print(f"{e['ws']}: {e['from']} -> {e['to']} ({e['fact']})")
+        elif "hints" in e:
+            for h in e["hints"]:
+                print(f"{e['ws']}: hint: {h}")
+    for w in warnings:
+        print(f"dws refresh: {w}", file=sys.stderr)
+
+
 def cmd_show(a):
     rows, torn = fold()
     ordered = sorted_rows(rows)
@@ -346,6 +528,10 @@ def main(argv):
     n.add_argument("--remove", action="store_true")
     n.add_argument("links", nargs="+")
     n.set_defaults(fn=cmd_link)
+
+    f = sub.add_parser("refresh")
+    f.add_argument("slugs", nargs="*")
+    f.set_defaults(fn=cmd_refresh)
 
     w = sub.add_parser("show")
     w.add_argument("--json", action="store_true")
