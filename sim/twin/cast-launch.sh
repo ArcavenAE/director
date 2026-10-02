@@ -177,6 +177,50 @@ if [[ "${DIRECTOR_CUE:-}" == 1 ]]; then
   cue_note=", channel cue ON (DIRECTOR_CUE=1)"
 fi
 
+# A supervisor-type cast with no global address on a host whose broker IS
+# leafed to the global tier is the silent case director#180 names: the cast
+# succeeds, the seat never appears at global://<cluster>/supervisor, and mail
+# sent there waits unread. The tier stays optional (operator ruling), so this
+# warns and never refuses, and only when the local broker's monitor reports a
+# leaf remote up. The probe is loopback only with a 1s timeout, and every
+# failure (no curl, monitor port closed, timeout, unreadable reply) reads as
+# "not connected", so a host with no global tier casts exactly as before.
+global_tier_connected() {
+  local url="${DIRECTOR_NATS_MONITOR_URL:-}" hostport host body
+  if [[ -z "$url" ]]; then
+    hostport="${NATS_URL#*://}"; hostport="${hostport##*@}"
+    if [[ "$hostport" == \[* ]]; then host="${hostport%%]*}]"; else host="${hostport%%:*}"; fi
+    url="http://$host:8222"
+  fi
+  url="${url%/}"
+  case "$url" in
+    http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;;
+    *) return 1;;
+  esac
+  command -v curl >/dev/null 2>&1 || return 1
+  body="$(curl -s -m 1 "$url/leafz" 2>/dev/null)" || return 1
+  [[ "$body" =~ \"leafnodes\":[[:space:]]*([0-9]+) ]] || return 1
+  (( BASH_REMATCH[1] > 0 ))
+}
+
+startup_note=""
+if [[ "$GROLE" == supervisor && -z "$GLOBAL_ADDR" ]] && global_tier_connected; then
+  echo "cast-launch: WARNING: the global tier is connected on this host (the local broker reports a leaf remote up), but this $WROLE cast carries no global levers (DIRECTOR_GLOBAL_DOMAIN, DIRECTOR_CLUSTER), so it holds no global address and mail to its global://<cluster>/supervisor address will wait unread. Set both on the marvel daemon and recast; casting anyway (director#180). This check reads the local broker's monitor port: a monitor port closed, a timeout or an unreadable reply reads as not connected and gives no warning." >&2
+  startup_note="Note from the launcher: the global tier is connected on this host, but you were cast with no global levers, so you hold no global address. Tell the operator through the director so you can be recast with DIRECTOR_GLOBAL_DOMAIN and DIRECTOR_CLUSTER set (director#180)."
+fi
+# A supervisor that does hold a global address proves its reach once at
+# startup. It is a duty, not a gate on routing. DIRECTOR_PEER_CLUSTER names
+# another cluster whose supervisor answers the test; without one, the test
+# goes to the director seat. Either way the result is reported to the director.
+if [[ "$GROLE" == supervisor && -n "$GLOBAL_ADDR" ]]; then
+  peer="${DIRECTOR_PEER_CLUSTER:-}"
+  if [[ -n "$peer" && ! "$peer" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "cast-launch: refusing DIRECTOR_PEER_CLUSTER '$peer'; the class is [A-Za-z0-9_-] (R-76)" >&2; exit 1
+  fi
+  if [[ -n "$peer" && "$peer" != "$DIRECTOR_CLUSTER" ]]; then reach="global://$peer/supervisor"; else reach="global://director"; fi
+  startup_note="After the ruling 84 echo, as a startup duty: send one reach test to $reach, note whether an ack came back and how long it took, and report both to global://director. It is a check, not a gate: route as usual whatever it shows (director#180)."
+fi
+
 mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_ROLE":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"%s%s}}}}' \
   "$SHIM_BIN" "$DIRECTOR_AGENT_ID" "$DIRECTOR_ROLE" "$DIRECTOR_TEAM" "$DIRECTOR_WORKSPACE" "$NATS_URL" "$global_env" "$cue_env")"
 
@@ -221,6 +265,8 @@ done
 for x in ${caller_extra[@]+"${caller_extra[@]}"}; do
   prompt+=$'\n\n'"$x"
 done
+# After the caller's text, so a wrapper-rendered cast carries it too.
+[[ -n "$startup_note" ]] && prompt+=$'\n\n'"$startup_note"
 set -- ${passthrough[@]+"${passthrough[@]}"}
 
 # The session's working directory must be one the harness already trusts on
