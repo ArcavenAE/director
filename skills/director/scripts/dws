@@ -38,7 +38,7 @@ REFRESH_MOVES = {("building", "in review"), ("in review", "merged")}
 ACTORS = {"director", "refresh"}
 
 SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-# Section 2: a token like g9-9 anywhere in a normalized value is an instance
+# Section 2: a token like g9-9 anywhere in a value's match key is an instance
 # id. Instance ids change at every respawn; a role does not.
 INSTANCE_ID = re.compile(r"(^|[^a-z0-9])(g[0-9]+ ?- ?[0-9]+)")
 
@@ -51,26 +51,36 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def normalize(value):
-    """The section-2 normalization, in the order the architect ruled
-    (2026-10-02, director#195): NFKC; every whitespace character, Cc
-    whitespace such as tab and newline included, and each run of them, to one
-    space; the remaining Cc, and Cf and Mn, stripped; Pd and U+2212 to '-'."""
+def stored_form(value):
+    """What dws writes (two-form rule, re-ruled 2026-10-02, director#195):
+    NFKC; every whitespace run, Cc whitespace included, to one space, trimmed;
+    the remaining Cc stripped. Nothing else is removed or mapped, so marks,
+    selectors, joiners and dashes in real text are stored as typed."""
     v = unicodedata.normalize("NFKC", value)
-    v = re.sub(r"\s+", " ", v)
-    v = "".join(ch for ch in v if unicodedata.category(ch) not in ("Cc", "Cf", "Mn"))
-    return "".join("-" if unicodedata.category(ch) == "Pd" or ch == "\u2212" else ch for ch in v)
+    v = re.sub(r"\s+", " ", v).strip()
+    return "".join(ch for ch in v if unicodedata.category(ch) != "Cc")
+
+
+def match_key(stored):
+    """The key the instance-id refusal matches on, computed from the stored
+    form and never stored: U+00AD to '-'; NFKD, so a mark composed onto a
+    letter comes apart; Cf, Mn, Mc and Me stripped; Pd and U+2212 to '-';
+    lower case."""
+    v = unicodedata.normalize("NFKD", stored.replace("\u00ad", "-"))
+    v = "".join(ch for ch in v if unicodedata.category(ch) not in ("Cf", "Mn", "Mc", "Me"))
+    v = "".join("-" if unicodedata.category(ch) == "Pd" or ch == "\u2212" else ch for ch in v)
+    return v.lower()
 
 
 def checked(field, value):
-    """The normalized value, or Refused when it carries an instance id."""
-    v = normalize(value)
-    m = INSTANCE_ID.search(v.lower())
+    """The stored form, or Refused when its match key carries an instance id."""
+    stored = stored_form(value)
+    m = INSTANCE_ID.search(match_key(stored))
     if m:
         raise Refused(f"{field} {value!r} carries instance id {m.group(2)!r}; "
                       "name the seat or role, never an instance id (they change at "
                       "every respawn). Reword the value if the token is not an id.")
-    return v
+    return stored
 
 
 def fold(path=LEDGER):
