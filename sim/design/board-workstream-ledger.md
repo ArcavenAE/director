@@ -33,19 +33,58 @@ workstream, with the log kept below as history.
 | blocked on | `operator`, a role, `external`, or empty |
 | links | PRs, issues, bd ids, ask ids |
 
-Owner, blocked on and next action refuse an instance id. On `open` and on
-`set`, each value is normalized (Unicode NFKC; format characters, category
-Cf, such as a zero-width space, removed; every character of category Pd and
-U+2212, which is Sm, mapped to `-`; every run of whitespace to one space)
-and refused if a token matching `(^|[^a-z0-9])g[0-9]+ ?- ?[0-9]+` appears
-anywhere in it, case-insensitively. That refuses a pasted id followed by a space, `(acting)`
-or `/`, one in upper case, one written with a Unicode hyphen, en dash, minus
-sign or fullwidth digits, one with a space or tab on either side of the
-hyphen, one with a zero-width space inside it, and a bare `g9-9`. The match
-can refuse an innocent value such as `see sheet g2-3` in next action; that
-false positive is accepted, and the message names the token so the value can
-be reworded. Instance ids
-change at every respawn; the role does not.
+Owner, blocked on and next action refuse an instance id. Instance ids change
+at every respawn; the role does not. The check uses two forms of each value,
+so the refusal can see through look-alike spellings without rewriting what
+the person wrote (as built in director#195, reviews 5395342060 and
+5395479960).
+
+**The stored form** is what the ledger writes, on `open` and on `set`:
+1. Unicode NFKC.
+2. Every run of whitespace, including tab and newline, becomes one space;
+   the value is trimmed.
+3. The remaining control characters (category Cc) are removed.
+Nothing else is changed: combining marks, format characters such as a
+zero-width joiner, and dashes in prose are stored as written.
+
+**The match key** is computed from the stored form, used only for the
+refusal, and never stored. It is built twice, once with each soft hyphen
+(U+00AD) mapped to `-` and once with each removed, and the value is refused
+if either key matches:
+4. Soft hyphen mapped to `-` (first key) or removed (second key).
+5. NFKD.
+6. Format characters (Cf) and every combining mark (Mn, Mc, Me) removed.
+7. Every dash (category Pd) and U+2212 (category Sm) mapped to `-`.
+8. Whitespace runs collapsed to one space again, since a removed mark can
+   leave two spaces side by side.
+9. Lower case.
+10. Refused if `(^|[^a-z0-9])g[0-9]+ ?- ?[0-9]+` matches anywhere; the
+    message names the token so the value can be reworded.
+
+Running NFKD and removing marks in the key, not in the stored form, is the
+point of the split: NFKC first would compose `g` and a combining mark into
+one letter that survives, and removing marks from the stored form would
+delete real text (Hindi and Thai vowel signs, an emoji's variation
+selector).
+
+**What it refuses:** a pasted id followed by a space, `(acting)` or `/`; upper
+case; a Unicode hyphen, en dash or minus sign; fullwidth digits; a space or
+tab on either side of the hyphen; a zero-width space, a control character or
+a combining mark inside the id (including `g` with an acute, circumflex,
+cedilla or macron, precomposed or not, and an enclosing or spacing mark after
+the digits); a soft hyphen as the separator or beside the `g`; and a bare
+`g9-9`.
+
+**What it accepts, by design:** a glued `xg9-9`, because fleet ids always
+follow a hyphen and the leading boundary keeps text such as `photo.jpg9-9`
+from matching; and `x-g9--9`, because a doubled hyphen does not match ` ?- ?`.
+**False positive accepted:** an innocent `see sheet g2-3` in next action is
+refused, and the message names the token.
+
+**Known limits, out of scope:** punctuation and modifier look-alikes
+(categories Po and Sk), digits from other scripts, and a `g` from another
+script. These are not refused.
+
 
 ## 3. Stages
 
@@ -223,9 +262,16 @@ On approval, #168 gets a comment pointing here and is closed by its author.
    refuse a synthetic instance id written as `x-g9-9`, `x-g9-9 ` (trailing
    space), `x-g9-9 (acting)`, `x-g9-9/`, `X-G9-9`, with U+2010, an en dash or
    U+2212 for the hyphen, with fullwidth digits, as `x-g9<TAB>-9`,
-   `x-g9-<TAB>9` and `x-g9- 9`, with a U+200B zero-width space after `g9`, and
-   as a bare `g9-9`, while `team-a/architect` and `review g9 then 9 items` are
-   accepted; a move with a stale `from`
+   `x-g9-<TAB>9` and `x-g9- 9`, with a U+200B zero-width space after `g9`,
+   with a control character inside it, with `g` followed by U+0301, U+0302,
+   U+0327 or U+0304, with the precomposed U+01F5 or U+011F, with U+20DD or
+   U+0903 after the digits, with a soft hyphen as the separator or beside the
+   `g`, with a mark between two spaces, and as a bare `g9-9`, while
+   `team-a/architect`, `review g9 then 9 items`, a glued `xg9-9` and
+   `x-g9--9` are accepted, and `revisión` (both forms), Hindi text with
+   U+0902, Thai text with U+0E34, an emoji with U+FE0F, a zero-width-joiner
+   emoji sequence and a prose en dash are stored byte-identical to their
+   NFKC and whitespace form; a move with a stale `from`
    exits nonzero and appends nothing; two processes appending 200 events each
    give 400 parseable lines; a torn last line is skipped and counted.
 2. **W1 sort:** a fixture of 12 rows across stages folds into stage order,
