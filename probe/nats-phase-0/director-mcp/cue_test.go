@@ -391,6 +391,23 @@ func TestALostFirstSelfTestIsResentAndItsEchoMakesTheCueLive(t *testing.T) {
 	}
 }
 
+// The resend goes out before the inbox read, so a watcher read failure cannot
+// hold it back (director#200). Moving the emit after the read, or skipping it
+// when the read fails, passes every other case; this one pins the order.
+func TestASelfTestResendGoesOutWhileTheInboxReadFails(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.src.err = fmt.Errorf("boom")
+	r.step(10 * time.Second) // the first backoff, with the read failing
+	if r.selfTests() != 2 {
+		t.Fatalf("a failing inbox read held back the resend, got %d self-tests", r.selfTests())
+	}
+	r.step(20 * time.Second) // the doubled backoff, still failing
+	if r.selfTests() != 3 {
+		t.Fatalf("a failing inbox read held back the second resend, got %d self-tests", r.selfTests())
+	}
+}
+
 func TestSelfTestResendsBackOffAndStopAtTheLimit(t *testing.T) {
 	r := newCueRig(t)
 	r.started()
