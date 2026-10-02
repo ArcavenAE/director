@@ -72,13 +72,16 @@ case; a Unicode hyphen, en dash or minus sign; fullwidth digits; a space or
 tab on either side of the hyphen; a zero-width space, a control character or
 a combining mark inside the id (including `g` with an acute, circumflex,
 cedilla or macron, precomposed or not, and an enclosing or spacing mark after
-the digits); a soft hyphen as the separator or beside the `g`; and a bare
+a digit); a soft hyphen as the separator, beside the `g`, or beside the
+hyphen on either side; a zero-width space between two spaces; and a bare
 `g9-9`.
 
 **What it accepts, by design:** a glued `xg9-9`, because fleet ids always
 follow a hyphen and the leading boundary keeps text such as `photo.jpg9-9`
-from matching; and `x-g9--9`, because a doubled hyphen does not match ` ?- ?`.
-**False positive accepted:** an innocent `see sheet g2-3` in next action is
+from matching; `x-g9--9`, because a doubled hyphen does not match ` ?- ?`;
+and a doubled soft hyphen as the separator, whose two keys are `x-g9--9` and
+`x-g99`, neither of which matches.
+**False positive accepted:** an innocent `see sheet g9-9` in next action is
 refused, and the message names the token.
 
 **Known limits, out of scope:** punctuation and modifier look-alikes
@@ -265,10 +268,12 @@ On approval, #168 gets a comment pointing here and is closed by its author.
    `x-g9-<TAB>9` and `x-g9- 9`, with a U+200B zero-width space after `g9`,
    with a control character inside it, with `g` followed by U+0301, U+0302,
    U+0327 or U+0304, with the precomposed U+01F5 or U+011F, with U+20DD or
-   U+0903 after the digits, with a soft hyphen as the separator or beside the
-   `g`, with a mark between two spaces, and as a bare `g9-9`, while
-   `team-a/architect`, `review g9 then 9 items`, a glued `xg9-9` and
-   `x-g9--9` are accepted, and `revisión` (both forms), Hindi text with
+   U+0903 after a digit, with a soft hyphen as the separator, beside the
+   `g` or beside the hyphen on either side, with a zero-width space between
+   two spaces, with a mark between two spaces, and as a bare `g9-9`, while
+   `team-a/architect`, `review g9 then 9 items` and a glued `xg9-9` are
+   accepted (`x-g9--9` and a doubled soft hyphen are accepted by dws but not
+   yet pinned by a test; a later builder commit adds them), and `revisión` (both forms), Hindi text with
    U+0902, Thai text with U+0E34, an emoji with U+FE0F, a zero-width-joiner
    emoji sequence and a prose en dash are stored byte-identical to their
    NFKC and whitespace form; a move with a stale `from`
