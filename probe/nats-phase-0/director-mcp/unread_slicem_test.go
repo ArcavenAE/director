@@ -59,7 +59,7 @@ func rowFor(t *testing.T, r unreadReport, instance string) unreadDurable {
 	return unreadDurable{}
 }
 
-func drainAll(t *testing.T, ctx context.Context, b *Bus) {
+func drainSeat(t *testing.T, ctx context.Context, b *Bus) {
 	t.Helper()
 	for {
 		e, _, err := b.receive(ctx, 500*time.Millisecond)
@@ -114,7 +114,7 @@ func TestUnreadCollapsesDeadDurables(t *testing.T) {
 	live := liveSeat(t, ctx, url, self)
 	pubEnv(t, ctx, js, "agent.w.t.seat.inbox", "m1", "INFORM", "one")
 	pubEnv(t, ctx, js, "agent.w.t.seat.inbox", "m2", "INFORM", "two")
-	drainAll(t, ctx, live)
+	drainSeat(t, ctx, live)
 	time.Sleep(200 * time.Millisecond)
 
 	r := unchanged(t, ctx, js, func() unreadReport { return mustRead(t, ctx, js, time.Now()) })
@@ -247,7 +247,7 @@ func TestUnreadSiblingOrSessionlessReplyLeavesIdle(t *testing.T) {
 	one := liveSeat(t, ctx, url, self)
 	two := liveSeat(t, ctx, url, self)
 	pubEnv(t, ctx, js, "agent.w.t.twin.inbox", "M", "REQUEST", "hello")
-	drainAll(t, ctx, one)
+	drainSeat(t, ctx, one)
 	replyFrom(t, ctx, js, "twin", one.instance, "M", "r-sibling")
 	replyFrom(t, ctx, js, "twin", "", "M", "r-nosession")
 
@@ -336,7 +336,7 @@ func TestUnreadBehindReadingAndThreshold(t *testing.T) {
 		t.Errorf("text view does not mark over-threshold rows:\n%s", out.String())
 	}
 
-	drainAll(t, ctx, slow)
+	drainSeat(t, ctx, slow)
 	time.Sleep(200 * time.Millisecond)
 	if d := rowFor(t, mustRead(t, ctx, js, later), slow.instance); d.State != "reading" {
 		t.Errorf("after drain %+v, want reading", d)
