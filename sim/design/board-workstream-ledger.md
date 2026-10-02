@@ -33,10 +33,13 @@ workstream, with the log kept below as history.
 | blocked on | `operator`, a role, `external`, or empty |
 | links | PRs, issues, bd ids, ask ids |
 
-Owner and blocked on refuse an instance id. On `open` and on `set`, each
-value is trimmed and refused if a token matching `-g[0-9]+-[0-9]+` appears
-anywhere in it, case-insensitively, so a pasted id followed by a space,
-`(acting)` or `/`, or written in upper case, is refused too. Instance ids
+Owner, blocked on and next action refuse an instance id. On `open` and on
+`set`, each value is normalized (Unicode NFKC, every character in the dash
+class mapped to `-`, every run of whitespace to one space) and refused if a
+token matching `(^|[^a-z0-9])g[0-9]+ ?-[0-9]+` appears anywhere in it,
+case-insensitively. That refuses a pasted id followed by a space, `(acting)`
+or `/`, one in upper case, one written with a Unicode hyphen, en dash, minus
+sign or fullwidth digits, one with a tab inside it, and a bare `g9-9`. Instance ids
 change at every respawn; the role does not.
 
 ## 3. Stages
@@ -92,17 +95,25 @@ last 10 minutes, and records what it saw as an `observe` event with the time.
 **What refresh may change, under the automation boundary (SOUL section 8,
 ADR-007):**
 - It always updates last moved, which is an observation.
-- It advances a stage only when the fact holds for the whole row: `building`
-  to `in review` when every linked PR has left draft, and `in review` to
-  `merged` when every linked PR has merged. A PR fact is a fact about the
-  workstream only when the row's PRs agree. When they do not (a design PR
-  merged, two build PRs in draft), refresh shows a hint and leaves the stage.
-- It never re-applies a consumed fact. Each refresh `stage` event records the
-  fact it read (the PR numbers and the time of the latest ready or merge
-  among them). Refresh skips a move whose fact is already recorded on an
-  earlier refresh event for that row, or is older than director's latest
-  `stage` event on the row. So when director moves a row back, the move
-  holds until a new fact arrives.
+- It advances a stage only when the fact holds for the whole row, and the row
+  links at least one open or merged PR: `building` to `in review` when every
+  such PR has left draft, and `in review` to `merged` when every such PR has
+  merged. A row with no PR (issue-only, bd-only) never moves by refresh,
+  since "every linked PR" is vacuously true there. A PR fact is a fact about
+  the workstream only when the row's PRs agree. When they do not (a design
+  PR merged, two build PRs in draft), refresh shows a hint and leaves the
+  stage.
+- A PR closed without merging is left out of the agreement set and shown on
+  the row as `PR #n closed unmerged`, so it neither blocks a move nor leaves
+  a hint standing forever. Director unlinks or relinks it.
+- It never re-applies a consumed fact, and it decides that by ledger
+  position, never by clocks. A fact is the set of the row's PRs with their
+  states (`#12 ready, #14 merged`), not any timestamp. Each refresh `stage`
+  event records the fact it acted on. Refresh skips a move whose fact equals
+  one already recorded on any earlier refresh event for that row. A comment,
+  a review or a clock skew changes no PR state, so it is not a new fact. So
+  when director moves a row back, the move holds until a PR changes state or
+  a PR is linked or unlinked.
 - Every other stage (`released`, `deployed`, `accepted`, `parked`) is
   director's act. Refresh shows a hint when a source suggests one (a release
   tag that contains the merge), and never applies it.
@@ -200,9 +211,11 @@ On approval, #168 gets a comment pointing here and is closed by its author.
 
 ## 11. Tests (red first)
 
-1. **W1:** on both `open` and `set`, owner and blocked on refuse a synthetic
-   instance id written as `x-g9-9`, `x-g9-9 ` (trailing space),
-   `x-g9-9 (acting)`, `x-g9-9/` and `X-G9-9`, while `team-a/architect` is
+1. **W1:** on both `open` and `set`, owner, blocked on and next action
+   refuse a synthetic instance id written as `x-g9-9`, `x-g9-9 ` (trailing
+   space), `x-g9-9 (acting)`, `x-g9-9/`, `X-G9-9`, with U+2010, an en dash or
+   U+2212 for the hyphen, with fullwidth digits, with a tab inside it, and as
+   a bare `g9-9`, while `team-a/architect` and `review g9 then 9 items` are
    accepted; a move with a stale `from`
    exits nonzero and appends nothing; two processes appending 200 events each
    give 400 parseable lines; a torn last line is skipped and counted.
@@ -213,7 +226,11 @@ On approval, #168 gets a comment pointing here and is closed by its author.
    `merged`; a release tag produces a hint and no move; a link checked 5
    minutes ago is skipped. A row linking two PRs, one merged and one in
    draft, gets a hint and no move. Director moves a row from `merged` back to
-   `building`; the next refresh, with no new PR fact, does not re-advance it.
+   `building`; the next refresh, with no new PR fact, does not re-advance it,
+   and a comment added to that PR after the revert does not re-advance it
+   either. An issue-only row and a bd-only row never move by refresh. A row
+   whose second PR was closed unmerged moves on the first PR alone and shows
+   `PR #n closed unmerged`.
 4. **W3:** the fixture renders Blocked on you first, Uncaptured second, the
    ledger third, history collapsed; a `building` row unmoved 30h carries
    `unmoved 30h` as text. Guard (passes on main): with no ledger file the page
