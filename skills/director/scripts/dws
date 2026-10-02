@@ -20,7 +20,8 @@ CLI and the instance-id refusal; W2 adds refresh. The page (W3) comes later.
 
 Links are typed: pr:<owner>/<repo>#<n>, issue:<owner>/<repo>#<n>, bd:<id>
 and ask:<id>. refresh (W2) reads the first three; ask ids wait for W5, and an
-untyped link is shown but never read.
+untyped link is shown but never read. refresh names every link it does not
+read on stderr, so nothing is skipped silently.
 
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
@@ -318,7 +319,11 @@ def cmd_link(a):
     write(a.actor, ev, lambda rows: need(rows, a.slug))
 
 
-LINK = re.compile(r"^(pr|issue):([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)$|^(bd):(\S+)$")
+# The links refresh reads. A bd id must start with a letter or digit, so it can
+# never reach bd as an option. ask: is typed but not read until W5; any other
+# link is untyped. refresh names every link it does not read.
+LINK = re.compile(r"^(pr|issue):([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)$|^(bd):([A-Za-z0-9][A-Za-z0-9._-]*)$")
+ASK = re.compile(r"^ask:\S+$")
 
 
 def refresh_skip():
@@ -348,9 +353,11 @@ def pr_state(d):
 
 
 def release_containing(repo, commit):
-    """The newest release tag of repo whose history contains commit, or None.
-    A hint only: refresh never moves a row to released (section 5)."""
-    releases = json.loads(run_json(["gh", "release", "list", "-R", repo, "--limit", "1", "--json", "tagName,publishedAt"]) or "[]")
+    """The newest stable release tag of repo (drafts and pre-releases left
+    out) when its history contains commit, or None. A hint only: refresh
+    never moves a row to released (section 5)."""
+    releases = json.loads(run_json(["gh", "release", "list", "-R", repo, "--exclude-drafts", "--exclude-pre-releases",
+                                    "--limit", "1", "--json", "tagName,publishedAt"]) or "[]")
     if not releases or not commit:
         return None
     tag = releases[0]["tagName"]
@@ -358,20 +365,41 @@ def release_containing(repo, commit):
     return tag if status in ("ahead", "identical") else None
 
 
-def fetch(link):
+def pr_moved_at(d):
+    """When the PR last moved in the sense of the section 5 table: its latest
+    commit, review or merge. A comment changes updatedAt and is not a move. A
+    ready event carries no time here; refresh dates it by the state change."""
+    times = [c.get("committedDate") for c in d.get("commits") or []]
+    times += [r.get("submittedAt") for r in d.get("reviews") or []]
+    times.append(d.get("mergedAt"))
+    times = [t for t in times if t]
+    return max(times) if times else None
+
+
+def fetch(link, last_seen=None):
     """What the source says now: (seen, moved_at). Reads only."""
     m = LINK.match(link)
     kind = m.group(1) or m.group(4)
     if kind == "pr":
         repo, num = m.group(2), m.group(3)
-        d = json.loads(run_json(["gh", "pr", "view", num, "-R", repo, "--json", "state,isDraft,reviewDecision,updatedAt,mergedAt,mergeCommit"]))
+        d = json.loads(run_json(["gh", "pr", "view", num, "-R", repo, "--json",
+                                 "state,isDraft,reviewDecision,updatedAt,mergedAt,mergeCommit,commits,reviews"]))
         seen = {"kind": "pr", "state": pr_state(d)}
+        moved = pr_moved_at(d)
+        if last_seen and last_seen.get("state") and last_seen["state"] != seen["state"]:
+            moved = max(filter(None, [moved, now()]))  # ready, merge or close seen now
         if seen["state"] == "merged":
+            # A hint only (section 5): a release check that fails is a hint
+            # too, and never costs the PR its observation or its move.
             commit = (d.get("mergeCommit") or {}).get("oid")
-            tag = release_containing(repo, commit)
-            if tag:
-                seen["release"] = tag
-        return seen, d.get("updatedAt")
+            try:
+                tag = release_containing(repo, commit)
+            except (RuntimeError, ValueError, OSError, subprocess.SubprocessError, KeyError) as err:
+                seen["release_error"] = str(err).splitlines()[0][:200] if str(err) else type(err).__name__
+            else:
+                if tag:
+                    seen["release"] = tag
+        return seen, moved
     if kind == "issue":
         repo, num = m.group(2), m.group(3)
         d = json.loads(run_json(["gh", "issue", "view", num, "-R", repo, "--json", "state,updatedAt"]))
@@ -397,6 +425,8 @@ def decide(row, seen_by_link):
     for link, s in seen_by_link.items():
         if s.get("release"):
             hints.append(f"release {s['release']} contains {link[3:]}; moving to released is director's call")
+        if s.get("release_error"):
+            hints.append(f"release check for {link[3:]} failed ({s['release_error']}); no release hint")
     if not active:
         return [], hints
     fact = ", ".join(f"{link[3:]} {st}" for link, st in prs)
@@ -428,13 +458,15 @@ def cmd_refresh(a):
         row = rows[slug]
         for link in row["links"]:
             if not LINK.match(link):
+                why = "ask ids are read in W5" if ASK.match(link) else "untyped; use pr:, issue: or bd:<id>"
+                warnings.append(f"{slug}: {link} not read ({why})")
                 continue
             last = row["observed"].get(link)
             checked = parse_ts(last["checked_at"]) if last else None
             if checked and (t_now - checked).total_seconds() < refresh_skip():
                 continue
             try:
-                seen, moved = fetch(link)
+                seen, moved = fetch(link, last["seen"] if last else None)
             except (RuntimeError, ValueError, OSError, subprocess.SubprocessError, KeyError) as err:
                 warnings.append(f"{slug}: {link} unreadable: {err}")
                 continue
