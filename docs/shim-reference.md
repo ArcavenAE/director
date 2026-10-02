@@ -89,7 +89,7 @@ Slice M (`sim/design/unread-slice-m.md`):
   `sender.instance`, answered a message still pending on it; not unread
   mail). The reply scan reads at most 2,000 messages per stream per run,
   newest first; a row whose window it did not reach stays `durable-idle`
-  with `scan_truncated`. A sender with no `sender.instance` never counts; `sender.session` is the harness session UUID and is never read for this.
+  with `scan_truncated`. The match rests on the sender's own claim: any process holding the agent's bus credentials can write any `sender.instance`, so the evidence carries a `basis` saying it is self-asserted and not verified, and the text views say so too. A sender with no `sender.instance` never counts; `sender.session` is the harness session UUID and is never read for this.
 - **`--older-than <dur>`** marks `behind` and `durable-idle` rows older than
   the threshold (`!` in text, `over_threshold` in JSON) and counts them.
   Exit stays 0.

@@ -157,7 +157,15 @@ type unreadDurable struct {
 type unreadEvidence struct {
 	InReplyTo  []string `json:"in_reply_to"`
 	LatestSent string   `json:"latest_sent"`
+	// Basis says what the evidence rests on: the sender wrote its own
+	// sender.instance, and nothing verified it (design section 3).
+	Basis string `json:"basis"`
 }
+
+// evidenceBasis is the Basis of every reads-outside-durable row. Any process
+// holding the agent's bus credentials can write any sender.instance, so the
+// match is the sender's own claim, not proof.
+const evidenceBasis = "sender.instance is self-asserted by the sender, not verified"
 
 // unreadRole is one line of the role rollup (M5).
 type unreadRole struct {
@@ -478,7 +486,7 @@ func classify(ctx context.Context, streams []jetstream.Stream, now time.Time, r 
 		sort.Strings(matched)
 		matched = dedupe(matched)
 		d.State = stateReadsOutside
-		d.Evidence = &unreadEvidence{InReplyTo: matched, LatestSent: latest.UTC().Format(time.RFC3339)}
+		d.Evidence = &unreadEvidence{InReplyTo: matched, LatestSent: latest.UTC().Format(time.RFC3339), Basis: evidenceBasis}
 	}
 }
 
@@ -703,7 +711,7 @@ func printRow(w io.Writer, d unreadDurable) {
 	switch d.State {
 	case stateReadsOutside:
 		latest := d.Evidence.LatestSent
-		_, _ = fmt.Fprintf(w, "%s%s  %s  pending %d (answered %d of them, latest %s; not unread mail)%s\n", mark, d.Durable, state, d.Pending, len(d.Evidence.InReplyTo), latest, rev)
+		_, _ = fmt.Fprintf(w, "%s%s  %s  pending %d (answered %d of them, latest %s; not unread mail; instance self-asserted, not verified)%s\n", mark, d.Durable, state, d.Pending, len(d.Evidence.InReplyTo), latest, rev)
 	case stateDurableIdle:
 		trunc := ""
 		if d.ScanTruncated {
@@ -739,7 +747,7 @@ func printTrailer(w io.Writer, r unreadReport) {
 		_, _ = fmt.Fprintf(w, "durable-idle, reads elsewhere or not at all: %s\n", strings.Join(idle, ", "))
 	}
 	if len(outside) > 0 {
-		_, _ = fmt.Fprintf(w, "reads-outside-durable, not unread mail: %s\n", strings.Join(outside, ", "))
+		_, _ = fmt.Fprintf(w, "reads-outside-durable, not unread mail (instance self-asserted, not verified): %s\n", strings.Join(outside, ", "))
 	}
 	if r.OlderThan != "" {
 		_, _ = fmt.Fprintf(w, "over threshold %s: %d (behind %d, durable-idle %d)\n", r.OlderThan, r.OverThresholdCount, behind, idleOver)
