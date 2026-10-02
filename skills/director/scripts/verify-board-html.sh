@@ -32,7 +32,7 @@ Authored, edited not overwritten.
 
 ## Uncaptured
 
-### PROPOSE from sup-seat (ws aae) to agent://ops/michael
+### PROPOSE from sup-seat (ws aae) to agent://example/builder-g9-9
 - stored once, never answered
 
 ## 2030-12-31 ~09:00Z: a later section
@@ -42,7 +42,7 @@ MD
 # The guard: the page with no ledger file. GOLDEN is the sha256 of main's page
 # for this board.md, with the generated stamp and the state path normalized.
 # A deliberate change to the no-ledger page updates it.
-GOLDEN=af6750411461c4fd374fd6e4ce8234f680941eb983e07148f5d4e0f8bbeb971a
+GOLDEN=5d6150e5577e5c34ba18f691e3767658926b9c98bb8d6c045d3caa9329bfd60f
 norm() {
   python3 - "$1" "$DIRECTOR_STATE" <<'PY'
 import hashlib, re, sys
@@ -104,7 +104,7 @@ elif grep -qF 'ship &lt;b&gt;it&lt;/b&gt;' "$root/page.html"; then ok "values ar
 
 # Uncaptured (item 3): board.md's lines, plus an ask id with no row of its own.
 u="$(text_of uncaptured)"
-grep -qF "PROPOSE from sup-seat (ws aae) to agent://ops/michael" <<<"$u" && ok "Uncaptured carries the board's Uncaptured lines" || bad "Uncaptured carries the board's Uncaptured lines" "$u"
+grep -qF "PROPOSE from sup-seat (ws aae) to agent://example/builder-g9-9" <<<"$u" && ok "Uncaptured carries the board's Uncaptured lines" || bad "Uncaptured carries the board's Uncaptured lines" "$u"
 grep -qF "ask:ask-9" <<<"$u" && ok "an ask id with no row of its own is Uncaptured" || bad "an ask id with no row of its own is Uncaptured" "$u"
 [[ -n "$u" ]] && ! grep -qF "ask:b1" <<<"$u" && ! grep -qF "aae-orc-zz9" <<<"$u" && ok "an ask id that has a row, and a link that is not an ask, are not Uncaptured" || bad "an ask id that has a row, and a link that is not an ask, are not Uncaptured" "$u"
 
@@ -133,6 +133,93 @@ grep -qF "unmoved 30h" <<<"$(row b1)" && ok "a building row unmoved 30h carries 
 grep -qE '<details id="history"( [^>]*)?>' "$root/page.html" && ! grep -qE '<details id="history"[^>]* open' "$root/page.html" \
   && ok "history is a collapsed section" || bad "history is a collapsed section"
 has "board.md is still in the page" "a later section"
+
+# ---- the page age counts from the render, not from page load ----------------
+# Run the inline script under node with a faked clock: a page rendered at
+# 12:00 and opened 2 days and 5 minutes later must read 2885m at once.
+if node -e 0 >/dev/null 2>&1; then
+  age() { # elapsed ms since the render
+    python3 - "$root/page.html" <<'PY' >"$root/age.js"
+import re, sys
+t = open(sys.argv[1], encoding="utf-8").read()
+at = re.search(r'id="page-age" data-at="(\d+)"', t).group(1)
+src = re.search(r"<script>(\(function\(\)\{var el=document.getElementById\('page-age'\).*?)</script>", t, re.S).group(1)
+print("var AT=%s;var el={dataset:{at:String(AT)},textContent:'x'};var document={getElementById:function(){return el;}};" % at)
+print("var ELAPSED=Number(process.argv[2]);Date.now=function(){return AT*1000+ELAPSED;};setInterval=function(){};")
+print(src)
+print("console.log(el.textContent);")
+PY
+    node "$root/age.js" "$1"
+  }
+  [[ "$(age $((2*24*3600*1000 + 5*60*1000)))" == "2885m" ]] && ok "a page opened 2 days after its render reads its true age at once" || bad "a page opened 2 days after its render reads its true age at once" "$(age $((2*24*3600*1000 + 5*60*1000)))"
+  [[ "$(age 0)" == "0m" ]] && ok "a page opened at its render reads 0m" || bad "a page opened at its render reads 0m" "$(age 0)"
+else
+  bad "the page age script runs under node" "no working node on PATH; this check cannot run"
+fi
+
+# ---- every rendered field is escaped ------------------------------------------
+# Another state: one hostile payload per field, in a row and in a board.md
+# heading. None may appear raw; each must appear escaped.
+main_state="$DIRECTOR_STATE"
+fresh() { export DIRECTOR_STATE="$root/$1"; mkdir -p "$DIRECTOR_STATE"; }
+fresh hostile
+cat >"$DIRECTOR_STATE/board.md" <<'MD'
+# director board
+
+## Uncaptured
+
+### <i/f=heading> from a seat
+MD
+open_at 2030-12-31T10:00:00Z h1 --title "<i/f=title>" --stage building --owner "<i/f=owner>" --blocked operator --next "<i/f=next>" --link "ask:<i/f=ask>"
+open_at 2030-12-31T10:00:00Z h2 --title "other" --stage building --owner supervisor --blocked "<i/f=blocked>" --next "n"
+DWS_NOW=2030-12-31T12:00:00Z "$BOARD_HTML" >/dev/null 2>"$root/err" || bad "board-html renders hostile text" "$(cat "$root/err")"
+cp "$DIRECTOR_STATE/board.html" "$root/page.html"
+# The board.md source is embedded as JSON in a script, where "<" is escaped
+# as <, so raw means the markup form only.
+if grep -qF '<i/f=' "$root/page.html"; then bad "no field renders raw markup" "$(grep -oE '<i/f=[a-z]*>' "$root/page.html" | sort -u | tr '\n' ' ')"; else ok "no field renders raw markup"; fi
+for f in owner next blocked ask heading; do
+  grep -qF "&lt;i/f=$f&gt;" "$root/page.html" && ok "the $f field is rendered escaped" || bad "the $f field is rendered escaped"
+done
+
+# ---- template placeholders in the data are not substituted ---------------------
+fresh placeholders
+printf '# director board\n\n## __LEDGER_HEAD__ __GENERATED__ __SRC__ in a heading\n- text\n' >"$DIRECTOR_STATE/board.md"
+open_at 2030-12-31T10:00:00Z p1 --title "placeholder" --stage building --owner supervisor --blocked operator --next "__BOARD_JSON__ __GENERATED__ __LEDGER_HEAD__"
+DWS_NOW=2030-12-31T12:00:00Z "$BOARD_HTML" >/dev/null 2>"$root/err" || bad "board-html renders placeholder text" "$(cat "$root/err")"
+cp "$DIRECTOR_STATE/board.html" "$root/page.html"
+python3 - "$root/page.html" <<'PY' && ok "placeholder text in a row or in board.md is not substituted" || bad "placeholder text in a row or in board.md is not substituted"
+import sys
+t = open(sys.argv[1], encoding="utf-8").read()
+want = {
+  'id="ledger-header"': 1,              # board.md's __LEDGER_HEAD__ did not place a second ledger
+  "__BOARD_JSON__ __GENERATED__ __LEDGER_HEAD__": 2,   # the row text, in Blocked on you and the table
+  "const BOARD = ": 1,                  # the row did not splice a second copy of the board
+}
+for k, n in want.items():
+    if t.count(k) != n:
+        print("%r x%d, want %d" % (k, t.count(k), n)); sys.exit(1)
+PY
+
+# ---- the unmoved boundaries ---------------------------------------------------
+# Strictly past the threshold flags; hours below 48, whole days from 48h.
+fresh edges
+printf '# director board\n' >"$DIRECTOR_STATE/board.md"
+open_at 2030-12-30T12:00:00Z e24 --title t --stage building --owner s --next n          # exactly 24h
+open_at 2030-12-30T10:00:00Z e26 --title t --stage "in review" --owner s --next n       # 26h
+open_at 2030-12-29T12:00:00Z e48 --title t --stage building --owner s --next n          # exactly 48h
+open_at 2030-12-29T12:00:00Z d48 --title t --stage designed --owner s --next n          # exactly 48h
+open_at 2030-12-29T11:00:00Z d49 --title t --stage designed --owner s --next n          # 49h
+open_at 2030-12-28T12:00:00Z f72 --title t --stage defined --owner s --next n           # exactly 72h
+open_at 2030-12-28T11:00:00Z f73 --title t --stage defined --owner s --next n           # 73h
+open_at 2030-12-01T12:00:00Z i30 --title t --stage idea --owner s --next n              # 30 days
+DWS_NOW=2030-12-31T12:00:00Z "$BOARD_HTML" >/dev/null 2>"$root/err" || bad "board-html renders the boundary rows" "$(cat "$root/err")"
+cp "$DIRECTOR_STATE/board.html" "$root/page.html"
+flag() { local r; r="$(row "$1")"; [[ -n "$r" ]] || { echo MISSING; return; }; grep -oE 'unmoved [0-9]+[hd]' <<<"$r" || echo none; }
+for c in "e24:none" "e26:unmoved 26h" "e48:unmoved 2d" "d48:none" "d49:unmoved 2d" "f72:none" "f73:unmoved 3d" "i30:none"; do
+  slug="${c%%:*}"; want="${c#*:}"; got="$(flag "$slug")"
+  [[ "$got" == "$want" ]] && ok "unmoved at the boundary: $slug is $want" || bad "unmoved at the boundary: $slug is $want" "$got"
+done
+export DIRECTOR_STATE="$main_state"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

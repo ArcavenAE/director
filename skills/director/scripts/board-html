@@ -145,8 +145,9 @@ def ledger_html(data: dict, board_text: str) -> str:
                    f'<td>{moved}</td><td>{e(r["blocked"])}</td><td>{e(r["next"])}</td><td>{e(" ".join(r.get("links", [])))}</td></tr>')
     out.append("</tbody></table></div></section>")
     out.append("<script>(function(){var el=document.getElementById('page-age');if(!el)return;"
-               "var t0=Date.now(),a=Number(el.dataset.at)*1000;"
-               "function tick(){el.textContent=Math.floor((Date.now()-t0)/60000)+'m';}setInterval(tick,30000);})();</script>")
+               "var a=Number(el.dataset.at)*1000;"
+               "function tick(){el.textContent=Math.max(0,Math.floor((Date.now()-a)/60000))+'m';}"
+               "tick();setInterval(tick,30000);})();</script>")
     return "\n".join(out) + "\n"
 
 
@@ -615,12 +616,11 @@ def main() -> None:
     if ledger is not None:
         head = ledger_html(ledger, text) + '<details id="history"><summary>History (board.md)</summary>\n'
         tail = "\n</details>"
-    html = (TEMPLATE
-            .replace("__LEDGER_HEAD__", head)
-            .replace("__LEDGER_TAIL__", tail)
-            .replace("__GENERATED__", generated)
-            .replace("__SRC__", htmlmod.escape(src_label))
-            .replace("__BOARD_JSON__", payload))
+    # One pass over the template, so text a placeholder is replaced with (a
+    # ledger row, board.md) is never scanned for placeholders again.
+    subs = {"__LEDGER_HEAD__": head, "__LEDGER_TAIL__": tail, "__GENERATED__": generated,
+            "__SRC__": htmlmod.escape(src_label), "__BOARD_JSON__": payload}
+    html = re.sub("|".join(map(re.escape, subs)), lambda m: subs[m.group(0)], TEMPLATE)
     # Write a sibling temp file and rename it over the page. The rename is
     # atomic on one filesystem, so a timed reload never loads a half-written
     # page whose script would not run and would stop auto-refresh.
