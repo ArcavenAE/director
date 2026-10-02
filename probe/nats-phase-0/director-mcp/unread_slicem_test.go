@@ -17,13 +17,20 @@ import (
 // that the reader changed nothing on the broker (design test 6).
 
 // replyFrom publishes, on another seat's inbox, a reply whose sender names the
-// given session (empty for a sender that sets none) and whose in_reply_to
-// names inReplyTo. It stands in for a seat that answers mail it read some
-// other way than through its durable.
-func replyFrom(t *testing.T, ctx context.Context, js jetstream.JetStream, agent, session, inReplyTo, id string) {
+// given instance in sender.instance (empty for a sender that sets none) and
+// whose in_reply_to names inReplyTo. It stands in for a seat that answers mail
+// it read some other way than through its durable.
+func replyFrom(t *testing.T, ctx context.Context, js jetstream.JetStream, agent, instance, inReplyTo, id string) {
 	t.Helper()
-	e := testEnv(id, agent, "INFORM", "answer")
-	e.Sender.Session = session
+	replyWith(t, ctx, js, Sender{AgentID: agent, Workspace: "aae-orc", Instance: instance}, inReplyTo, id)
+}
+
+// replyWith publishes the same reply with a caller-built sender, so a test can
+// set sender.session, which is the harness session UUID and never evidence.
+func replyWith(t *testing.T, ctx context.Context, js jetstream.JetStream, from Sender, inReplyTo, id string) {
+	t.Helper()
+	e := testEnv(id, from.AgentID, "INFORM", "answer")
+	e.Sender = from
 	e.InReplyTo = inReplyTo
 	e.Recipient.Address = "agent://t/elsewhere"
 	b, _ := json.Marshal(e)
@@ -236,8 +243,10 @@ func TestUnreadReplyFromTheSessionIsReadsOutside(t *testing.T) {
 	}
 }
 
-// Design test 2, siblings and senders: a reply by a sibling session, or by a
-// sender that names no session, never reclasses a deaf session.
+// Design test 2, siblings and senders: a reply by a sibling session, by a
+// sender that names no instance, or by one that names the instance only in
+// sender.session (the harness session UUID field), never reclasses a deaf
+// session.
 func TestUnreadSiblingOrSessionlessReplyLeavesIdle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -249,7 +258,8 @@ func TestUnreadSiblingOrSessionlessReplyLeavesIdle(t *testing.T) {
 	pubEnv(t, ctx, js, "agent.w.t.twin.inbox", "M", "REQUEST", "hello")
 	drainSeat(t, ctx, one)
 	replyFrom(t, ctx, js, "twin", one.instance, "M", "r-sibling")
-	replyFrom(t, ctx, js, "twin", "", "M", "r-nosession")
+	replyFrom(t, ctx, js, "twin", "", "M", "r-noinstance")
+	replyWith(t, ctx, js, Sender{AgentID: "twin", Workspace: "aae-orc", Session: two.instance}, "M", "r-session-only")
 
 	later := time.Now().Add(15 * time.Minute)
 	r := unchanged(t, ctx, js, func() unreadReport { return mustRead(t, ctx, js, later) })
