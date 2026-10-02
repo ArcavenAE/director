@@ -34,6 +34,10 @@ ids=(
   $'x-g9\xe2\x80\x8b-9'
   $'x-g9\x01-9'
   $'x-g9\xcc\x81-9'
+  $'x-g\xcc\x819-9' $'x-g\xcc\x829-9' $'x-g\xcc\xa79-9' $'x-g\xcc\x849-9'
+  $'x-\xc7\xb59-9' $'x-\xc4\x9f9-9'
+  $'x-g9\xe2\x83\x9d-9' $'x-g9\xe0\xa4\x83-9'
+  $'x-g9\xc2\xad9'
   'g9-9'
 )
 n=0
@@ -70,6 +74,31 @@ done
   && ok "set accepts an accented role" || bad "set accepts an accented role" "$(cat "$root/out")"
 owner="$("$DWS" show --json | python3 -c 'import json,sys; print([r["owner"] for r in json.load(sys.stdin)["rows"] if r["slug"]=="base"][0])' 2>/dev/null || true)"
 [[ "$owner" == "team-a/revisión" ]] && ok "the accent survives normalization" || bad "the accent survives normalization" "$owner"
+# Stored text round-trips (two-form rule, re-ruled 2026-10-02): the stored
+# value is NFKC with whitespace collapsed and Cc stripped, nothing else; the
+# match key strips marks and maps dashes, and is never stored.
+nfkc() { python3 -c 'import sys,unicodedata; print(unicodedata.normalize("NFKC", sys.argv[1]))' "$1"; }
+for v in \
+  $'team-a/revisi\xc3\xb3n' $'team-a/revisio\xcc\x81n' \
+  $'team-a/\xe0\xa4\xb9\xe0\xa4\xbf\xe0\xa4\x82\xe0\xa4\xa6\xe0\xa5\x80' \
+  $'team-a/\xe0\xb8\x94\xe0\xb8\xb4\xe0\xb8\x99' \
+  $'team-a/\xe2\x9d\xa4\xef\xb8\x8f' \
+  $'team-a/\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb' \
+  $'team-a/architect \xe2\x80\x93 reviews' \
+  'review g9 then 9 items'; do
+  want="$(nfkc "$v")"
+  if "$DWS" set base --next "$v" >"$root/out" 2>&1; then
+    got="$("$DWS" show --json | python3 -c 'import json,sys; print([r["next"] for r in json.load(sys.stdin)["rows"] if r["slug"]=="base"][0])' 2>/dev/null || true)"
+    [[ "$got" == "$want" ]] && ok "next $(printf %q "$v") is accepted and stored as its NFKC form" \
+      || bad "next $(printf %q "$v") is accepted and stored as its NFKC form" "got $(printf %q "$got")"
+  else
+    bad "next $(printf %q "$v") is accepted and stored as its NFKC form" "refused: $(cat "$root/out")"
+  fi
+done
+# Pinned by design: the leading boundary means a glued id is not refused.
+"$DWS" set base --next "xg9-9" >"$root/out" 2>&1 \
+  && ok "glued xg9-9 is accepted, by design (the leading boundary)" \
+  || bad "glued xg9-9 is accepted, by design (the leading boundary)" "$(cat "$root/out")"
 "$DWS" set base --owner "team-a/architect" >/dev/null 2>&1 || true
 "$DWS" set base --owner "x-g9-9 (acting)" >"$root/out" 2>&1 || true
 grep -q 'g9-9' "$root/out" && ok "the refusal names the token" || bad "the refusal names the token" "$(cat "$root/out")"
