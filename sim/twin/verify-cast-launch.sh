@@ -52,6 +52,17 @@ printf '%s\n' "\$@" > "$root/out/claude.args"
 exit 0
 STUB
 chmod +x "$root/wardrobe/scripts/slice.sh" "$root/bin/director-mcp" "$root/bin/claude"
+# The curl stub stands in for the local broker's monitor endpoint, so no case
+# reaches a real broker on the host running this script. It records its args
+# and prints $root/leafz.json when that file exists; otherwise it fails the way
+# a closed monitor port does.
+cat > "$root/bin/curl" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$root/out/curl.args"
+[[ -f "$root/leafz.json" ]] || exit 7
+cat "$root/leafz.json"
+STUB
+chmod +x "$root/bin/curl"
 
 # Run cast-launch.sh with a clean, fully controlled environment. `env -i` is the
 # point: it guarantees the only DIRECTOR_* values in play are the ones each case
@@ -471,6 +482,118 @@ for v in 0 true yes; do
     fi
   else
     bad "builder cast, cue=$v" "$(cat "$root/out/stderr")"
+  fi
+done
+
+# --- a supervisor cast without levers on a leafed host is loud, not refused --
+# director#180. The global tier stays optional: the launcher warns only when the
+# local broker's monitor reports a leaf remote up, and a closed monitor port, a
+# timeout or an unreadable reply all read as "not connected" (no warning).
+leafz() { rm -f "$root/leafz.json" "$root/out/curl.args"; [[ -n "${1:-}" ]] && printf '%s' "$1" > "$root/leafz.json"; return 0; }
+LEAF_UP='{"server_id":"x","now":"t","leafnodes":1,"leafs":[{"name":"hub"}]}'
+LEAF_NONE='{"server_id":"x","now":"t","leafnodes":0,"leafs":[]}'
+
+for role in supervisor research-supervisor; do
+  leafz "$LEAF_UP"
+  if cast "$role"; then
+    miss=""
+    grep -q "global tier is connected" "$root/out/stderr"        || miss+=" stderr-warning"
+    grep -q "monitor port closed" "$root/out/stderr"             || miss+=" stderr-closed-port-caveat"
+    grep -q "no global address" "$root/out/claude.args"          || miss+=" prompt-note"
+    has_mcp DIRECTOR_GLOBAL_ROLE                                 && miss+=" levers-appeared"
+    grep -qx "http://127.0.0.1:8222/leafz" "$root/out/curl.args" || miss+=" loopback-url"
+    [[ -z "$miss" ]] && ok "$role: no levers on a leafed host warns on stderr and in the prompt, and still casts" \
+                     || bad "$role lever warning" "missing:$miss"
+  else
+    bad "$role cast without levers on a leafed host was refused; it must warn only" "$(cat "$root/out/stderr")"
+  fi
+done
+
+leafz ""
+if cast supervisor; then
+  grep -q "global tier is connected" "$root/out/stderr" \
+    && bad "supervisor: a closed monitor port produced a warning" \
+    || ok "supervisor: a closed monitor port reads as not connected, no warning"
+else
+  bad "supervisor cast with the monitor closed" "$(cat "$root/out/stderr")"
+fi
+
+leafz "$LEAF_NONE"
+if cast supervisor; then
+  grep -q "global tier is connected" "$root/out/stderr" \
+    && bad "supervisor: zero leaf remotes produced a warning" \
+    || ok "supervisor: zero leaf remotes reads as not connected, no warning"
+else
+  bad "supervisor cast with zero leaf remotes" "$(cat "$root/out/stderr")"
+fi
+
+leafz "$LEAF_UP"
+if cast supervisor DIRECTOR_NATS_MONITOR_URL=http://127.0.0.1:9999; then
+  grep -qx "http://127.0.0.1:9999/leafz" "$root/out/curl.args" \
+    && ok "supervisor: DIRECTOR_NATS_MONITOR_URL moves the monitor endpoint" \
+    || bad "monitor URL override" "$(cat "$root/out/curl.args" 2>/dev/null)"
+else
+  bad "supervisor cast with a monitor override" "$(cat "$root/out/stderr")"
+fi
+
+leafz "$LEAF_UP"
+if cast supervisor DIRECTOR_NATS_MONITOR_URL=http://192.0.2.1:8222; then
+  if [[ -f "$root/out/curl.args" ]] || grep -q "global tier is connected" "$root/out/stderr"; then
+    bad "supervisor: a non-loopback monitor URL was queried"
+  else
+    ok "supervisor: a non-loopback monitor URL is never queried and reads as not connected"
+  fi
+else
+  bad "supervisor cast with a non-loopback monitor" "$(cat "$root/out/stderr")"
+fi
+
+leafz "$LEAF_UP"
+if cast builder; then
+  if [[ -f "$root/out/curl.args" ]] || grep -q "global tier is connected" "$root/out/stderr"; then
+    bad "builder: a worker cast probed the monitor or warned"
+  else
+    ok "builder: a worker cast on a leafed host never probes and never warns"
+  fi
+else
+  bad "builder cast on a leafed host" "$(cat "$root/out/stderr")"
+fi
+
+# --- a supervisor holding a global address tests its reach once at startup ---
+leafz ""
+if cast supervisor "${GLOBAL_ON[@]}"; then
+  miss=""
+  grep -q "send one reach test to global://director" "$root/out/claude.args"   || miss+=" reach-test"
+  grep -q "report .* to global://director" "$root/out/claude.args"            || miss+=" report-target"
+  [[ -f "$root/out/curl.args" ]]                                               && miss+=" probed-with-levers"
+  [[ -z "$miss" ]] && ok "supervisor with levers: a startup reach test to global://director, reported to the director" \
+                   || bad "supervisor reach test" "missing:$miss"
+else
+  bad "supervisor cast with levers" "$(cat "$root/out/stderr")"
+fi
+
+if cast supervisor "${GLOBAL_ON[@]}" DIRECTOR_PEER_CLUSTER=peerc; then
+  grep -q "send one reach test to global://peerc/supervisor" "$root/out/claude.args" \
+    && ok "supervisor with a peer cluster: the reach test goes to the peer's supervisor" \
+    || bad "peer reach test" "$(grep -o 'reach test[^.]*' "$root/out/claude.args")"
+else
+  bad "supervisor cast with a peer cluster" "$(cat "$root/out/stderr")"
+fi
+
+if cast supervisor "${GLOBAL_ON[@]}" 'DIRECTOR_PEER_CLUSTER=peer.c'; then
+  bad "a peer cluster outside the identity class was accepted"
+else
+  grep -q "DIRECTOR_PEER_CLUSTER" "$root/out/stderr" \
+    && ok "supervisor: a peer cluster outside [A-Za-z0-9_-] is refused before it becomes an address" \
+    || bad "peer cluster class refusal" "$(cat "$root/out/stderr")"
+fi
+
+for role in builder director; do
+  if cast "$role" "${GLOBAL_ON[@]}"; then
+    grep -q "reach test" "$root/out/claude.args" \
+      && bad "$role: carries a reach test it should not" \
+      || ok "$role: no supervisor reach test"
+  else
+    bad "$role cast with levers" "$(cat "$root/out/stderr")"
   fi
 done
 
