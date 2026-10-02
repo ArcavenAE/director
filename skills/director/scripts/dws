@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""dws - director workstreams: the board's current-state ledger.
+
+One row per workstream (an issue, a design and its builds), folded on read
+from an append-only event file. Part W1 of the workstream ledger design
+(sim/design/board-workstream-ledger.md): the store, the fold, the lock, the
+CLI and the instance-id refusal. refresh (W2) and the page (W3) come later.
+
+  $DIRECTOR_STATE/workstreams.jsonl   append-only events
+  $DIRECTOR_STATE/workstreams.lock    one flock around fold, check, append
+
+  dws [--actor A] open <slug> --title T [--owner O] [--stage S] [--repos R..]
+                                       [--next N] [--blocked B] [--link L..]
+  dws [--actor A] stage <slug> <to> --from <current>
+  dws [--actor A] set <slug> [--owner O] [--next N] [--blocked B] [--repos R..]
+  dws [--actor A] link <slug> [--remove] <link>...
+  dws [--actor A] park <slug> --from <current>
+  dws show [--json]
+
+The actor is a claim, not an identity: the writer table is an allowlist over
+--actor, and a caller that passes --actor refresh is believed (section 6).
+"""
+import argparse, datetime, fcntl, json, os, re, subprocess, sys, time, unicodedata
+
+HOME = os.path.expanduser("~")
+STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
+LEDGER = os.path.join(STATE, "workstreams.jsonl")
+LOCK = os.path.join(STATE, "workstreams.lock")
+LOCK_TIMEOUT = 5.0
+
+# Section 3. The order is the sort order; parked sorts last.
+STAGES = ["idea", "defined", "designed", "building", "in review", "merged",
+          "released", "deployed", "accepted", "parked"]
+
+# Section 6, the writer table. refresh may append observe events and the two
+# factual stage moves of section 5; anything not listed may append nothing.
+REFRESH_MOVES = {("building", "in review"), ("in review", "merged")}
+ACTORS = {"director", "refresh"}
+
+SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+# Section 2: a token like g5-2 anywhere in a normalized value is an instance
+# id. Instance ids change at every respawn; a role does not.
+INSTANCE_ID = re.compile(r"(^|[^a-z0-9])(g[0-9]+ ?- ?[0-9]+)")
+
+
+class Refused(Exception):
+    pass
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def normalize(value):
+    """NFKC; format characters (Cf) removed; Pd and U+2212 to '-'; each run
+    of whitespace to one space (section 2)."""
+    v = unicodedata.normalize("NFKC", value)
+    out = []
+    for ch in v:
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            continue
+        if cat == "Pd" or ch == "−":
+            ch = "-"
+        out.append(ch)
+    return re.sub(r"\s+", " ", "".join(out))
+
+
+def checked(field, value):
+    """The normalized value, or Refused when it carries an instance id."""
+    v = normalize(value)
+    m = INSTANCE_ID.search(v.lower())
+    if m:
+        raise Refused(f"{field} {value!r} carries instance id {m.group(2)!r}; "
+                      "name the seat or role, never an instance id (they change at "
+                      "every respawn). Reword the value if the token is not an id.")
+    return v
+
+
+def fold(path=LEDGER):
+    """Rows by slug, and how many lines could not be read. A torn line is
+    skipped and counted, never repaired."""
+    rows, torn = {}, 0
+    try:
+        f = open(path, encoding="utf-8")
+    except FileNotFoundError:
+        return rows, 0
+    with f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                torn += 1
+                continue
+            if not isinstance(e, dict):
+                torn += 1
+                continue
+            apply(rows, e)
+    return rows, torn
+
+
+def apply(rows, e):
+    slug, ev, ts = e.get("ws"), e.get("event"), e.get("ts", "")
+    if ev == "open":
+        rows[slug] = {
+            "slug": slug, "title": e.get("title", ""), "repos": e.get("repos", []),
+            "owner": e.get("owner", ""), "stage": e.get("stage", "idea"),
+            "last_moved": ts, "next": e.get("next", ""), "blocked": e.get("blocked", ""),
+            "links": list(e.get("links", [])), "opened": ts,
+        }
+        return
+    r = rows.get(slug)
+    if r is None:
+        return
+    if ev in ("stage", "park"):
+        r["stage"] = e.get("to", "parked" if ev == "park" else r["stage"])
+        r["last_moved"] = max(r["last_moved"], ts)
+    elif ev == "set":
+        for k in ("owner", "next", "blocked", "repos"):
+            if k in e:
+                r[k] = e[k]
+    elif ev == "link":
+        for link in e.get("add", []):
+            if link not in r["links"]:
+                r["links"].append(link)
+        r["links"] = [x for x in r["links"] if x not in e.get("remove", [])]
+    elif ev == "observe":
+        # refresh (W2) records what it saw; a linked artifact that moved
+        # moves the row's last-moved time (section 5).
+        if e.get("moved_at"):
+            r["last_moved"] = max(r["last_moved"], e["moved_at"])
+
+
+def sorted_rows(rows):
+    return sorted(rows.values(), key=lambda r: (STAGES.index(r["stage"]) if r["stage"] in STAGES else len(STAGES), r["last_moved"], r["slug"]))
+
+
+class Locked:
+    """One exclusive flock around fold, check and append. A holder that does
+    not let go within LOCK_TIMEOUT is a loud failure, not a wait forever."""
+
+    def __enter__(self):
+        os.makedirs(STATE, exist_ok=True)
+        self.f = open(LOCK, "a")
+        deadline = time.monotonic() + LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(self.f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    self.f.close()
+                    raise Refused(f"ledger lock {LOCK} held for more than {LOCK_TIMEOUT:.0f}s; nothing written")
+                time.sleep(0.05)
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+
+
+def append(event):
+    """Append one whole line. A torn last line is left as it is; the new event
+    starts on its own line so it is not glued to the torn one."""
+    line = json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+    with open(LEDGER, "ab") as f:
+        if f.tell() > 0:
+            with open(LEDGER, "rb") as r:
+                r.seek(-1, os.SEEK_END)
+                if r.read(1) != b"\n":
+                    line = "\n" + line
+        f.write(line.encode("utf-8"))
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def allowed(actor, event):
+    if actor not in ACTORS:
+        raise Refused(f"actor {actor!r} may append nothing; writers are {sorted(ACTORS)} (section 6)")
+    if actor == "refresh":
+        ev = event["event"]
+        if ev == "observe":
+            return
+        if ev == "stage" and (event.get("from"), event.get("to")) in REFRESH_MOVES:
+            return
+        raise Refused("refresh may append observe events and the two factual stage moves only "
+                      "(building to in review, in review to merged); director makes every other move")
+
+
+def write(actor, event, check):
+    """Fold, check, append under the lock. check(rows) raises Refused."""
+    event = {"ts": now(), "actor": actor, **event}
+    allowed(actor, event)
+    with Locked():
+        rows, _ = fold()
+        check(rows)
+        append(event)
+    rerender()
+
+
+def rerender():
+    """After a write, re-render the page when board.html exists (opt-in by
+    existence, the rule the renderer already follows)."""
+    if not os.path.exists(os.path.join(STATE, "board.html")):
+        return
+    renderer = os.path.join(os.path.dirname(os.path.abspath(__file__)), "board-html")
+    try:
+        subprocess.run([renderer], check=True, capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as err:
+        print(f"dws: written; board-html re-render failed: {err}", file=sys.stderr)
+
+
+def need(rows, slug):
+    if slug not in rows:
+        raise Refused(f"no workstream {slug!r}; open it first")
+    return rows[slug]
+
+
+def stage_name(s):
+    if s not in STAGES:
+        raise Refused(f"unknown stage {s!r}; stages are: {', '.join(STAGES)}")
+    return s
+
+
+def cmd_open(a):
+    if not SLUG.match(a.slug):
+        raise Refused(f"slug {a.slug!r} must be lower case letters, digits, '.', '_' or '-'")
+    ev = {"event": "open", "ws": a.slug, "title": a.title, "stage": stage_name(a.stage)}
+    for field in ("owner", "next", "blocked"):
+        v = getattr(a, field)
+        if v is not None:
+            ev[field] = checked(field, v)
+    if a.repos:
+        ev["repos"] = a.repos
+    if a.link:
+        ev["links"] = a.link
+
+    def check(rows):
+        if a.slug in rows:
+            raise Refused(f"workstream {a.slug!r} is already open; use set, stage or link")
+    write(a.actor, ev, check)
+
+
+def move(a, event, to):
+    ev = {"event": event, "ws": a.slug, "from": stage_name(a.from_), "to": stage_name(to)}
+
+    def check(rows):
+        cur = need(rows, a.slug)["stage"]
+        if cur != a.from_:
+            raise Refused(f"stale move: {a.slug!r} is in {cur!r}, not {a.from_!r}; re-read and retry")
+    write(a.actor, ev, check)
+
+
+def cmd_stage(a):
+    move(a, "stage", a.to)
+
+
+def cmd_park(a):
+    move(a, "park", "parked")
+
+
+def cmd_set(a):
+    ev = {"event": "set", "ws": a.slug}
+    for field in ("owner", "next", "blocked"):
+        v = getattr(a, field)
+        if v is not None:
+            ev[field] = checked(field, v)
+    if a.repos is not None:
+        ev["repos"] = a.repos
+    if len(ev) == 2:
+        raise Refused("set needs at least one of --owner, --next, --blocked, --repos")
+    write(a.actor, ev, lambda rows: need(rows, a.slug))
+
+
+def cmd_link(a):
+    ev = {"event": "link", "ws": a.slug, ("remove" if a.remove else "add"): a.links}
+    write(a.actor, ev, lambda rows: need(rows, a.slug))
+
+
+def cmd_show(a):
+    rows, torn = fold()
+    ordered = sorted_rows(rows)
+    if a.json:
+        json.dump({"ledger": LEDGER, "torn": torn, "rows": ordered}, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        cols = ("stage", "workstream", "owner", "last moved", "blocked on", "next action", "links")
+        table = [cols] + [(r["stage"], r["slug"], r["owner"], r["last_moved"], r["blocked"], r["next"], " ".join(r["links"])) for r in ordered]
+        widths = [max(len(str(row[i])) for row in table) for i in range(len(cols))]
+        for row in table:
+            print("  ".join(str(c).ljust(w) for c, w in zip(row, widths)).rstrip())
+    if torn:
+        print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
+
+
+def main(argv):
+    p = argparse.ArgumentParser(prog="dws", description="director workstream ledger (W1)")
+    p.add_argument("--actor", default="director", help="the writer, a claim checked against the writer table")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    o = sub.add_parser("open")
+    o.add_argument("slug")
+    o.add_argument("--title", required=True)
+    o.add_argument("--owner")
+    o.add_argument("--stage", default="idea")
+    o.add_argument("--repos", nargs="+")
+    o.add_argument("--next")
+    o.add_argument("--blocked")
+    o.add_argument("--link", nargs="+")
+    o.set_defaults(fn=cmd_open)
+
+    s = sub.add_parser("stage")
+    s.add_argument("slug")
+    s.add_argument("to")
+    s.add_argument("--from", dest="from_", required=True)
+    s.set_defaults(fn=cmd_stage)
+
+    k = sub.add_parser("park")
+    k.add_argument("slug")
+    k.add_argument("--from", dest="from_", required=True)
+    k.set_defaults(fn=cmd_park)
+
+    t = sub.add_parser("set")
+    t.add_argument("slug")
+    t.add_argument("--owner")
+    t.add_argument("--next")
+    t.add_argument("--blocked")
+    t.add_argument("--repos", nargs="+")
+    t.set_defaults(fn=cmd_set)
+
+    n = sub.add_parser("link")
+    n.add_argument("slug")
+    n.add_argument("--remove", action="store_true")
+    n.add_argument("links", nargs="+")
+    n.set_defaults(fn=cmd_link)
+
+    w = sub.add_parser("show")
+    w.add_argument("--json", action="store_true")
+    w.set_defaults(fn=cmd_show)
+
+    a = p.parse_args(argv)
+    try:
+        a.fn(a)
+    except Refused as err:
+        print(f"dws: refused: {err}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
