@@ -243,6 +243,48 @@ func TestUnreadReplyFromTheSessionIsReadsOutside(t *testing.T) {
 	}
 }
 
+// Design section 3: the instance is self-asserted. Any process holding the
+// agent's bus credentials can write any value in sender.instance, so a
+// reads-outside-durable row rests on the sender's own claim, and the reader
+// says so in the JSON evidence and in both text views.
+func TestUnreadEvidenceSaysTheInstanceIsSelfAsserted(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	seat := liveSeat(t, ctx, url, Sender{AgentID: "sup", Workspace: "w", Team: "t"})
+	pubEnv(t, ctx, js, "agent.w.t.sup.inbox", "p1", "REQUEST", "hello")
+	replyFrom(t, ctx, js, "sup", seat.instance, "p1", "r1")
+
+	later := time.Now().Add(15 * time.Minute)
+	r := unchanged(t, ctx, js, func() unreadReport { return mustRead(t, ctx, js, later) })
+	d := rowFor(t, r, seat.instance)
+	if d.Evidence == nil {
+		t.Fatalf("row %+v has no evidence", d)
+	}
+	for _, want := range []string{"self-asserted", "not verified"} {
+		if !strings.Contains(d.Evidence.Basis, want) {
+			t.Errorf("evidence basis %q does not say %q", d.Evidence.Basis, want)
+		}
+	}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"basis":"`) {
+		t.Errorf("--json evidence carries no basis field: %s", raw)
+	}
+	var row, roll bytes.Buffer
+	printUnread(&row, r, unreadOpts{})
+	if !strings.Contains(row.String(), "self-asserted") {
+		t.Errorf("default text view does not say the instance is self-asserted:\n%s", row.String())
+	}
+	printUnread(&roll, r, unreadOpts{All: true})
+	if !strings.Contains(roll.String(), "self-asserted") {
+		t.Errorf("--all text view does not say the instance is self-asserted:\n%s", roll.String())
+	}
+}
+
 // Design test 2, siblings and senders: a reply by a sibling session, by a
 // sender that names no instance, or by one that names the instance only in
 // sender.session (the harness session UUID field), never reclasses a deaf
