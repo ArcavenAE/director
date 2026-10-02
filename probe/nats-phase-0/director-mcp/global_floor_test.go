@@ -44,6 +44,10 @@ func startScratchServerWithSeat(t *testing.T, deny ...string) (adminURL, seatURL
 	var quoted []string
 	for _, verb := range append([]string{"CONSUMER.LIST", "CONSUMER.NAMES"}, deny...) {
 		for _, api := range []string{"$JS.API.", "$JS.global.API."} {
+			if strings.Contains(verb, "."+globalDirectorStream+".") {
+				quoted = append(quoted, fmt.Sprintf("%q", api+verb)) // one exact subject
+				continue
+			}
 			quoted = append(quoted, fmt.Sprintf("%q", api+verb+"."+globalDirectorStream), fmt.Sprintf("%q", api+verb+"."+globalDirectorStream+".>"))
 		}
 	}
@@ -239,5 +243,114 @@ func TestAnUnreadableFloorIsNamedNotDenied(t *testing.T) {
 	}
 	if got := resumeNote("global", 219, 0, "ignored"); !strings.Contains(got, "resumed after stream sequence 219") {
 		t.Errorf("a found floor wins: %q", got)
+	}
+}
+
+// departedInstance builds, as the admin user, what an earlier instance of a
+// seat leaves behind: a local durable mcp_<agent>_<inst> and a hub durable
+// mcp_global_<agent>_<inst> filtering hubFilter, with every message on that
+// subject acked, and no presence row.
+func departedInstance(t *testing.T, ctx context.Context, nc *nats.Conn, agent, inst, hubFilter string) {
+	t.Helper()
+	js, _ := jetstream.New(nc)
+	if _, err := js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", jetstream.ConsumerConfig{
+		Durable: "mcp_" + agent + "_" + inst, FilterSubject: "agent.aae-orc.ops." + agent + ".inbox", AckPolicy: jetstream.AckExplicitPolicy,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	cons, err := gjs.CreateOrUpdateConsumer(ctx, globalDirectorStream, jetstream.ConsumerConfig{
+		Durable: "mcp_global_" + agent + "_" + inst, FilterSubject: hubFilter, AckPolicy: jetstream.AckExplicitPolicy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := cons.Fetch(10, jetstream.FetchMaxWait(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for m := range batch.Messages() {
+		if err := m.DoubleAck(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A departed instance's hub durable on a different subject is not this
+// seat's position on its own inbox.
+func TestBrokerGlobalFloorByNameIgnoresADurableOnAnotherSubject(t *testing.T) {
+	shortFloorList(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	admin, seat := startScratchServerWithSeat(t)
+	nc, _ := provision(t, ctx, admin)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "unread on this seat's subject")
+	pubEnv(t, ctx, gjs, "global.director.other", "x1", "INFORM", "acked on another subject")
+	departedInstance(t, ctx, nc, "operator", "01OLDOTHERSUBJECT", "global.director.other")
+	b, err := connect(ctx, seat, resumeSelf, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.close()
+	res, err := b.receiveBatch(ctx, 3*time.Second, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(res.Items); fmt.Sprint(got) != "[global:g0]" {
+		t.Errorf("read %v, want [global:g0]: an ack on another subject is not this inbox's floor", got)
+	}
+}
+
+// A departed seat whose id extends this one (sup_T1 for sup) is not this
+// seat's predecessor, though its local durable starts mcp_sup_.
+func TestBrokerGlobalFloorByNameIgnoresASeatWhoseIDExtendsThisOne(t *testing.T) {
+	shortFloorList(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	admin, seat := startScratchServerWithSeat(t)
+	nc, _ := provision(t, ctx, admin)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by sup_T1")
+	departedInstance(t, ctx, nc, "sup_T1", "01OLDEXTENDEDSEAT", "global.director.inbox")
+	sup, err := connect(ctx, seat, Sender{AgentID: "sup", Workspace: "aae-orc", Team: "ops"}, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sup.close()
+	res, err := sup.receiveBatch(ctx, 3*time.Second, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(res.Items); fmt.Sprint(got) != "[global:g0]" {
+		t.Errorf("sup read %v, want [global:g0]: sup_T1's position is not sup's", got)
+	}
+}
+
+// When the departed instance cannot be read by name either, the note names
+// the failure rather than claiming there was no earlier durable.
+func TestBrokerGlobalFloorUnreadableByNameIsReported(t *testing.T) {
+	shortFloorList(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	admin, seat := startScratchServerWithSeat(t, "CONSUMER.INFO."+globalDirectorStream+".mcp_global_operator_01OLDUNREADABLE")
+	nc, _ := provision(t, ctx, admin)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "acked by the departed instance")
+	departedInstance(t, ctx, nc, "operator", "01OLDUNREADABLE", "global.director.inbox")
+	b, err := connect(ctx, seat, resumeSelf, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.close()
+	if _, err := b.globalReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	notes := strings.Join(b.takeResumed(), " | ")
+	if strings.Contains(notes, "global inbox has no earlier durable") || !strings.Contains(notes, "global inbox could not read the seat's earlier position") {
+		t.Errorf("resume note: %q", notes)
 	}
 }
