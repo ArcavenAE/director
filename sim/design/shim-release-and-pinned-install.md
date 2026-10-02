@@ -86,9 +86,11 @@ A workflow in this repository, on push to main when
 - attests the artifacts (`actions/attest`, as kos and marvel do).
 
 A tag `director-mcp-v<semver>` cuts a stable release the same way. macOS
-signing and notarization are left out of slice 1: the installer downloads
-with `gh release download`, which sets no quarantine attribute. If a seat
-host ever needs a browser download, marvel's notarize job is the model.
+signing and notarization are left out of slice 1. The installer downloads
+with `gh release download` from a shell, not a browser; V4's test checks that
+the installed binary carries no quarantine attribute and runs. If it does
+not, or a seat host ever needs a browser download, marvel's notarize job is
+the model.
 
 ### R4. A pinned install, one path per host
 
@@ -187,7 +189,9 @@ Together these decide how a cue seat gets a known shim build:
 5. **V4:** `--release` with a tampered asset fails the checksum and does not
    switch the symlink; `--ref` produces the same `--version` line as the
    release of that commit; `--rollback` restores the previous directory;
-   `--status` WARNs on an MCP config naming a checkout path, and exits 0.
+   `--status` WARNs on an MCP config naming a checkout path, and exits 0;
+   on macOS the installed binary has no `com.apple.quarantine` attribute and
+   runs.
 6. **V5:** with `DIRECTOR_CUE=1` and a shim whose features lack `cue`, the
    spawn line carries `cue: unavailable` and the harness starts without the
    channel flag; with a cue-capable shim, the flag is passed and the line
