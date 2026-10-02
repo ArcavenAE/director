@@ -38,7 +38,7 @@ REFRESH_MOVES = {("building", "in review"), ("in review", "merged")}
 ACTORS = {"director", "refresh"}
 
 SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-# Section 2: a token like g5-2 anywhere in a normalized value is an instance
+# Section 2: a token like g9-9 anywhere in a normalized value is an instance
 # id. Instance ids change at every respawn; a role does not.
 INSTANCE_ID = re.compile(r"(^|[^a-z0-9])(g[0-9]+ ?- ?[0-9]+)")
 
