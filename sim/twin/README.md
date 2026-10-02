@@ -119,8 +119,8 @@ tier, and the pre-flight names the missing stream.
 | # | precondition | state | who |
 |---|---|---|---|
 | 1 | `validate` and `index --check` clean at the tagged commit the launcher reads | wardrobe main 8b3d247 validates; NO TAG EXISTS yet | operator tags (`v1.0.0-s0` or the sha) |
-| 2 | helper refuses a dirty tree, a writable root, a path outside, a marker | slice.sh does; the install root must be a separate read-only checkout (`test -w contents/` false) | a builder seat or the operator makes the checkout: `git clone --branch <tag> ... ~/.local/share/wardrobe && chmod -R a-w ~/.local/share/wardrobe/contents` |
-| 3 | spawn log writable, line appended before exec | slice.sh appends to `${WARDROBE_SPAWN_LOG:-~/.local/state/wardrobe/spawn.log}` | a builder seat or the operator confirms the path is writable by the daemon's uid |
+| 2 | helper refuses a dirty tree, a writable root, a path outside, a marker | slice.sh does; the install root must be a separate read-only checkout (`test -w contents/` false) | the operator or any seat with wardrobe in scope makes the checkout: `git clone --branch <tag> ... ~/.local/share/wardrobe && chmod -R a-w ~/.local/share/wardrobe/contents` |
+| 3 | spawn log writable, line appended before exec | slice.sh appends to `${WARDROBE_SPAWN_LOG:-~/.local/state/wardrobe/spawn.log}` | the operator or any seat with wardrobe in scope confirms the path is writable by the daemon's uid |
 | 4 | ruleset on main with `validate` required | human repo setting; PRs #2 to #9 went through review | operator confirms |
 | 5 | stale-reader grep over `repos.yaml` checkouts empty | not run today | build-lead runs it before the first cast |
 | 6 | the broker is provisioned, not bare: `AGENT_INBOX`, `AGENT_AUDIT`, and the `AGENT_STATE` bucket exist before `marvel work` | pre-existed on the origin host from phase 0; absent on a fresh broker (skippy, aae-orc#327, finding-166) | build-lead runs the block below and the verify line before the first cast |
