@@ -38,6 +38,8 @@ ids=(
   $'x-\xc7\xb59-9' $'x-\xc4\x9f9-9'
   $'x-g9\xe2\x83\x9d-9' $'x-g9\xe0\xa4\x83-9'
   $'x-g9\xc2\xad9'
+  $'x-g\xc2\xad9-9' $'x-g9\xc2\xad-9' $'x-g9-\xc2\xad9'
+  $'x-g9 \xe2\x80\x8b -9' $'x-g9 \xcc\x81 -9' $'x-g9- \xe2\x80\x8b 9'
   'g9-9'
 )
 n=0
