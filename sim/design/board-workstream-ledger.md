@@ -33,8 +33,11 @@ workstream, with the log kept below as history.
 | blocked on | `operator`, a role, `external`, or empty |
 | links | PRs, issues, bd ids, ask ids |
 
-Owner refuses an instance id: a value ending in `-g<digits>-<digits>` is an
-error at write. Instance ids change at every respawn; the role does not.
+Owner and blocked on refuse an instance id. On `open` and on `set`, each
+value is trimmed and refused if a token matching `-g[0-9]+-[0-9]+` appears
+anywhere in it, case-insensitively, so a pasted id followed by a space,
+`(acting)` or `/`, or written in upper case, is refused too. Instance ids
+change at every respawn; the role does not.
 
 ## 3. Stages
 
@@ -86,15 +89,26 @@ sources each row links (idea #178, director as a cache):
 `refresh` runs on every render and in the sweep, skips a link checked in the
 last 10 minutes, and records what it saw as an `observe` event with the time.
 
-**What refresh may change, under the automation boundary (SOUL section 8):**
+**What refresh may change, under the automation boundary (SOUL section 8,
+ADR-007):**
 - It always updates last moved, which is an observation.
-- It advances a stage only on a fact the source states: `building` to `in
-  review` when a linked PR leaves draft, and `in review` to `merged` when a
-  linked PR merges. Each such move is an event with actor `refresh` and the
-  fact it read.
+- It advances a stage only when the fact holds for the whole row: `building`
+  to `in review` when every linked PR has left draft, and `in review` to
+  `merged` when every linked PR has merged. A PR fact is a fact about the
+  workstream only when the row's PRs agree. When they do not (a design PR
+  merged, two build PRs in draft), refresh shows a hint and leaves the stage.
+- It never re-applies a consumed fact. Each refresh `stage` event records the
+  fact it read (the PR numbers and the time of the latest ready or merge
+  among them). Refresh skips a move whose fact is already recorded on an
+  earlier refresh event for that row, or is older than director's latest
+  `stage` event on the row. So when director moves a row back, the move
+  holds until a new fact arrives.
 - Every other stage (`released`, `deployed`, `accepted`, `parked`) is
   director's act. Refresh shows a hint when a source suggests one (a release
   tag that contains the merge), and never applies it.
+- Refresh reads PR and issue state; it does not own it. beadle's boards own
+  PR and issue state, and this ledger is a reader of the same sources, not a
+  second record of them.
 
 ## 6. Store and writers
 
@@ -116,9 +130,14 @@ last 10 minutes, and records what it saw as an `observe` event with the time.
   (`skills/director/scripts/`), name the operator's call (ruling 3; working
   name `dws`): `open`, `stage`, `set`, `link`, `park`, `refresh`, `show
   [--json]`. After a write it re-renders when board.html exists.
-- **dsi atomic writes (SH1, already filed):** dsi writes `sessions.json` and
-  `roster.md` by truncate-then-write, and the page reads them. SH1 lands
-  first.
+- **The actor is a claim, not an identity.** The writer table is an
+  allowlist over the CLI's actor flag, not authentication: a caller that
+  passes `--actor refresh` is believed. That is acceptable for a file under
+  `$DIRECTOR_STATE` written only by director's own scripts, and it is named
+  so no reader takes it for more.
+- **dsi atomic writes (SH1)** landed in #172: dsi writes `sessions.json` and
+  `roster.md` through a temp file and `os.replace`, so the page never reads a
+  half-written file.
 
 ## 7. The sweep
 
@@ -150,8 +169,8 @@ intact.
 
 **Carried over from #168:** the append-only ledger with a fold, one lock for
 all writers, refusal of a stale move, the sweep's unchanged line form, the
-opt-in-by-existence page, and the two live small parts (P0b, the install fix;
-SH1, dsi atomic writes).
+opt-in-by-existence page. Its two small parts (P0b, the install fix; SH1,
+dsi atomic writes) have since landed in #172.
 
 **Dropped:** the ask-item model and states, the capped tiered panel, the
 seat health strip, the alarm timer, the board.md snapshot (X1).
@@ -162,7 +181,9 @@ seat health strip, the alarm timer, the board.md snapshot (X1).
   stays history; state is never written there.
 - Review 5371041926 (the sweep line form; stale moves): adopted here in
   sections 7 and 3.
-- The writer table is in section 6.
+- The writer table is in section 6. Its two non-blocking notes are carried:
+  the actor is a self-declared claim (section 6), and beadle owns PR and
+  issue state (section 5).
 
 On approval, #168 gets a comment pointing here and is closed by its author.
 
@@ -170,10 +191,8 @@ On approval, #168 gets a comment pointing here and is closed by its author.
 
 | part | what | depends on |
 |---|---|---|
-| SH1 | dsi atomic writes (filed) | none |
-| P0b | install.sh names a non-symlink target and installs the rest (filed) | none |
 | W1 | store, fold, lock, CLI (`open`, `stage`, `set`, `link`, `park`, `show`), instance-id refusal | none |
-| W2 | `refresh` over PR, issue and bd links; the two factual stage moves; 10-minute skip | W1 |
+| W2 | `refresh` over PR, issue and bd links; the two factual stage moves when every linked PR agrees; no re-applied fact; 10-minute skip | W1 |
 | W3 | board-html renders header, Blocked on you, Uncaptured, ledger, thresholds; history below | W1 |
 | W4 | skill text: sweep step 4 lines from the ledger, step 5 additions | W1, W3 |
 | W5 | ask-id refresh from bus history | W2, and director#126 slice M for the reader |
@@ -181,7 +200,10 @@ On approval, #168 gets a comment pointing here and is closed by its author.
 
 ## 11. Tests (red first)
 
-1. **W1:** an owner ending in `-g9-9` (synthetic) is refused; a move with a stale `from`
+1. **W1:** on both `open` and `set`, owner and blocked on refuse a synthetic
+   instance id written as `x-g9-9`, `x-g9-9 ` (trailing space),
+   `x-g9-9 (acting)`, `x-g9-9/` and `X-G9-9`, while `team-a/architect` is
+   accepted; a move with a stale `from`
    exits nonzero and appends nothing; two processes appending 200 events each
    give 400 parseable lines; a torn last line is skipped and counted.
 2. **W1 sort:** a fixture of 12 rows across stages folds into stage order,
@@ -189,11 +211,15 @@ On approval, #168 gets a comment pointing here and is closed by its author.
 3. **W2:** with `gh` and `bd` stubbed, a PR that left draft moves `building`
    to `in review` with actor `refresh`; a merged PR moves `in review` to
    `merged`; a release tag produces a hint and no move; a link checked 5
-   minutes ago is skipped.
+   minutes ago is skipped. A row linking two PRs, one merged and one in
+   draft, gets a hint and no move. Director moves a row from `merged` back to
+   `building`; the next refresh, with no new PR fact, does not re-advance it.
 4. **W3:** the fixture renders Blocked on you first, Uncaptured second, the
    ledger third, history collapsed; a `building` row unmoved 30h carries
-   `unmoved 30h` as text; with no ledger file the page equals today's.
-5. **W4:** the sweep's step 4 fence is byte-identical to main, and from the
+   `unmoved 30h` as text. Guard (passes on main): with no ledger file the page
+   equals today's.
+5. **W4:** guard (passes on main): the sweep's step 4 fence is byte-identical
+   to main. Red: from the
    fixture each Blocked on you line reads `<owner> - <workstream>: <next>`.
 
 ## 12. Rulings needed (operator, via director)
@@ -201,6 +227,6 @@ On approval, #168 gets a comment pointing here and is closed by its author.
 | # | question | default |
 |---|---|---|
 | 1 | Supersede #168 with this design (section 9) | yes |
-| 2 | Refresh may make the two factual stage moves (draft to ready is `in review`; merge is `merged`) and only those (section 5) | yes |
+| 2 | Refresh may make the two factual stage moves (every linked PR ready is `in review`; every linked PR merged is `merged`), never re-applying a consumed fact, and only those (section 5) | yes |
 | 3 | The CLI's name | `dws` |
 | 4 | Unmoved thresholds (section 4) | as listed |
