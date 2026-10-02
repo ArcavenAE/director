@@ -27,7 +27,15 @@ content: |
 
   Capture is cheap; deciding which notices mean "this start failed" is not,
   and the text changes with each harness release.
+
+  ## Evidence since
+
+  - 2026-10-02: the development-channels consent dialog appears at every
+    start of a cue-enabled seat, so it is a recurring blocking notice, not
+    a one-time onboarding screen (finding-016).
 edges:
+  - target: finding-016-the-channel-cue-on-one-seat-c0-results
+    type: derives
   - target: question-director-seat-startup
     type: supports
 provenance:

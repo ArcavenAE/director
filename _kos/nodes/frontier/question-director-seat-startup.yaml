@@ -114,6 +114,14 @@ content: |
     set the levers for one start, and they did not survive a later start
     through the registration. This bears on where the global levers live
     and how a launcher knows they are required. R-119.
+  - 2026-10-02: a respawned seat still replays its retained inbox after
+    the #84 resume fix, with nothing marking what its predecessor handled;
+    five reports on four dates (finding-015). Bears on sub-question C.
+  - 2026-10-02: two stale-build blind spots measured. A merged launcher
+    change reached no seat until the shared checkout was fast-forwarded
+    (finding-017), and a shim built in a git worktree stamps the enclosing
+    repository's revision, so presence `rev` can be confidently wrong
+    (finding-018). Bears on sub-question F.
 
   ## What a new user would meet
 
@@ -161,6 +169,12 @@ content: |
   The registration collision (ci2gy) is partly harness shape and partly
   ours; it stays here because the seat is the thing colliding.
 edges:
+  - target: finding-015-a-respawned-seat-still-replays-its-inbox-after-the-resume-fix
+    type: derives
+  - target: finding-017-a-merged-launcher-change-is-not-live-until-the-shared-checkout-moves
+    type: derives
+  - target: finding-018-a-shim-built-in-a-git-worktree-stamps-the-enclosing-repo-revision
+    type: derives
   - target: finding-169-director-bus-addressing-and-unattended-operation
     type: derives
   - target: finding-166-dead-bus-session-reports-running
