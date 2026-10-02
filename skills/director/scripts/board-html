@@ -19,6 +19,8 @@ import html as htmlmod
 import json
 import os
 import pathlib
+import re
+import subprocess
 import sys
 import tempfile
 
@@ -26,6 +28,128 @@ HOME = pathlib.Path.home()
 STATE = pathlib.Path(os.environ.get("DIRECTOR_STATE", HOME / ".director" / "state"))
 SRC = STATE / "board.md"
 OUT = STATE / "board.html"
+LEDGER = STATE / "workstreams.jsonl"
+DWS = pathlib.Path(__file__).resolve().with_name("dws")
+
+# Hours a row may sit in a stage before the page says "unmoved" (design section
+# 4). A diagnostic, not a gate (ADR-007). A stage missing here never flags:
+# idea, accepted and parked. The operator changes a threshold in this table.
+UNMOVED_HOURS = {"building": 24, "in review": 24, "designed": 48, "merged": 48,
+                 "released": 48, "deployed": 48, "defined": 72}
+
+
+LEDGER_CSS = """<style>
+#ledger{max-width:1280px;margin:0 auto;padding:10px 16px}
+#ledger h2{font-size:15px;margin:16px 0 6px}
+#ledger-header{font-weight:650;font-variant-numeric:tabular-nums}
+#ledger ul{padding-left:22px;margin:6px 0}
+#ledger .unmoved{color:var(--warn);font-weight:650}
+#ledger .none{color:var(--muted)}
+#history{max-width:1280px;margin:8px auto}
+#history>summary{cursor:pointer;padding:6px 16px;font-weight:650}
+</style>"""
+
+
+def now_utc() -> datetime.datetime:
+    """The clock. DWS_NOW overrides it only under DWS_TEST_CLOCK=1, as in dws."""
+    fixed = os.environ.get("DWS_NOW") if os.environ.get("DWS_TEST_CLOCK") == "1" else None
+    if fixed:
+        return datetime.datetime.strptime(fixed, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def load_ledger():
+    """The ledger rows from dws show --json, or None when there is no ledger
+    file (the page is then today's page). A ledger that cannot be read is an
+    error, not a silent fallback."""
+    if not LEDGER.exists():
+        return None
+    r = subprocess.run([sys.executable, str(DWS), "show", "--json"], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"board-html: dws show failed: {r.stderr.strip() or r.returncode}")
+    return json.loads(r.stdout)
+
+
+def hours_since(ts: str, now: datetime.datetime) -> float:
+    t = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    return (now - t).total_seconds() / 3600
+
+
+def unmoved_text(row: dict, now: datetime.datetime) -> str:
+    """"unmoved 30h" (or "unmoved 2d" from 48h) once a row is past its stage's
+    threshold, else an empty string."""
+    limit = UNMOVED_HOURS.get(row["stage"])
+    if limit is None or not row.get("last_moved"):
+        return ""
+    h = hours_since(row["last_moved"], now)
+    if h <= limit:
+        return ""
+    return f"unmoved {int(h // 24)}d" if h >= 48 else f"unmoved {int(h)}h"
+
+
+def uncaptured_lines(board_text: str) -> list:
+    """The lines under board.md's "## Uncaptured": each "###" heading as one
+    line, or the top-level bullets when it has no headings."""
+    body, inside = [], False
+    for line in board_text.splitlines():
+        if line.startswith("## "):
+            inside = line[3:].strip().lower() == "uncaptured"
+            continue
+        if inside:
+            body.append(line)
+    heads = [l[4:].strip() for l in body if l.startswith("### ")]
+    if heads:
+        return heads
+    return [l[2:].strip() for l in body if l.startswith("- ")]
+
+
+def minutes_since_file(path: pathlib.Path, now: datetime.datetime) -> int:
+    m = datetime.datetime.fromtimestamp(path.stat().st_mtime, datetime.timezone.utc)
+    return max(0, int((now - m).total_seconds() // 60))
+
+
+def ledger_html(data: dict, board_text: str) -> str:
+    """Sections 1 to 4 of the page (design section 4), from the ledger rows
+    and never from prose, except the Uncaptured lines board.md carries."""
+    e = htmlmod.escape
+    now = now_utc()
+    rows = data["rows"]
+    blocked = sorted((r for r in rows if r.get("blocked") == "operator"), key=lambda r: (r["last_moved"], r["slug"]))
+    flagged = {r["slug"]: unmoved_text(r, now) for r in rows}
+    n_unmoved = sum(1 for v in flagged.values() if v)
+    head = (f"Now: {len(rows)} streams, {len(blocked)} blocked on you, {n_unmoved} unmoved past threshold"
+            f" | ledger {minutes_since_file(LEDGER, now)}m | page <span id=\"page-age\" data-at=\"{int(now.timestamp())}\">0m</span>")
+    if data.get("torn"):
+        head += f" | {data['torn']} unreadable ledger line(s) skipped"
+    slugs = {r["slug"] for r in rows}
+    asks = []
+    for r in rows:
+        for link in r.get("links", []):
+            if link.startswith("ask:") and link[4:] not in slugs and link not in asks:
+                asks.append(link)
+    unc = [e(l) for l in uncaptured_lines(board_text)] + [e(a) + " (an ask with no row of its own)" for a in asks]
+    out = [LEDGER_CSS, '<section id="ledger">', f'<div id="ledger-header">{head}</div>']
+    out.append('<h2>Blocked on you</h2><ul id="blocked-on-you">')
+    out += [f"<li>{e(r['owner'])} - {e(r['slug'])}: {e(r['next'])}</li>" for r in blocked] or ['<li class="none">none</li>']
+    out.append("</ul>")
+    out.append('<h2>Uncaptured</h2><ul id="uncaptured">')
+    out += [f"<li>{u}</li>" for u in unc] or ['<li class="none">none</li>']
+    out.append("</ul>")
+    out.append('<h2>Ledger</h2><div class="tw"><table id="ledger-table"><thead><tr>'
+               "<th>stage</th><th>workstream</th><th>owner</th><th>last moved</th><th>blocked on</th><th>next action</th><th>links</th>"
+               "</tr></thead><tbody>")
+    for r in rows:
+        flag = flagged[r["slug"]]
+        moved = e(r["last_moved"]) + (f' <span class="unmoved">{flag}</span>' if flag else "")
+        out.append(f'<tr data-slug="{e(r["slug"], quote=True)}"><td>{e(r["stage"])}</td><td>{e(r["slug"])}</td><td>{e(r["owner"])}</td>'
+                   f'<td>{moved}</td><td>{e(r["blocked"])}</td><td>{e(r["next"])}</td><td>{e(" ".join(r.get("links", [])))}</td></tr>')
+    out.append("</tbody></table></div></section>")
+    out.append("<script>(function(){var el=document.getElementById('page-age');if(!el)return;"
+               "var a=Number(el.dataset.at)*1000;"
+               "function tick(){el.textContent=Math.max(0,Math.floor((Date.now()-a)/60000))+'m';}"
+               "tick();setInterval(tick,30000);})();</script>")
+    return "\n".join(out) + "\n"
+
 
 TEMPLATE = r'''<!doctype html>
 <html lang="en">
@@ -149,14 +273,14 @@ footer{color:var(--muted);font-size:12px;padding:6px 16px 30px;max-width:1280px;
     <div class="chips" id="chips"><span class="lbl">Filter:</span></div>
   </div>
 </header>
-<div class="layout">
+__LEDGER_HEAD__<div class="layout">
   <nav class="toc" id="toc" aria-label="Board sections"></nav>
   <main>
     <div class="preamble" id="preamble"></div>
     <div id="list"></div>
     <div class="empty" id="empty">No section matches.</div>
   </main>
-</div>
+</div>__LEDGER_TAIL__
 <footer>
   Generated __GENERATED__ from <code>__SRC__</code>. Regenerate with <code>board-html</code> (director skill <code>scripts/board-html</code>), then reload, or turn on Auto-refresh. Local file; nothing leaves this machine.
 </footer>
@@ -487,10 +611,16 @@ def main() -> None:
     payload = json.dumps(text).replace("<", "\\u003c")
     generated = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
     src_label = str(SRC).replace(str(HOME), "~", 1)
-    html = (TEMPLATE
-            .replace("__GENERATED__", generated)
-            .replace("__SRC__", htmlmod.escape(src_label))
-            .replace("__BOARD_JSON__", payload))
+    ledger = load_ledger()
+    head, tail = "", ""
+    if ledger is not None:
+        head = ledger_html(ledger, text) + '<details id="history"><summary>History (board.md)</summary>\n'
+        tail = "\n</details>"
+    # One pass over the template, so text a placeholder is replaced with (a
+    # ledger row, board.md) is never scanned for placeholders again.
+    subs = {"__LEDGER_HEAD__": head, "__LEDGER_TAIL__": tail, "__GENERATED__": generated,
+            "__SRC__": htmlmod.escape(src_label), "__BOARD_JSON__": payload}
+    html = re.sub("|".join(map(re.escape, subs)), lambda m: subs[m.group(0)], TEMPLATE)
     # Write a sibling temp file and rename it over the page. The rename is
     # atomic on one filesystem, so a timed reload never loads a half-written
     # page whose script would not run and would stop auto-refresh.
