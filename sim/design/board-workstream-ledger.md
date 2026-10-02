@@ -34,12 +34,17 @@ workstream, with the log kept below as history.
 | links | PRs, issues, bd ids, ask ids |
 
 Owner, blocked on and next action refuse an instance id. On `open` and on
-`set`, each value is normalized (Unicode NFKC, every character in the dash
-class mapped to `-`, every run of whitespace to one space) and refused if a
-token matching `(^|[^a-z0-9])g[0-9]+ ?-[0-9]+` appears anywhere in it,
-case-insensitively. That refuses a pasted id followed by a space, `(acting)`
+`set`, each value is normalized (Unicode NFKC; format characters, category
+Cf, such as a zero-width space, removed; every character of category Pd and
+U+2212, which is Sm, mapped to `-`; every run of whitespace to one space)
+and refused if a token matching `(^|[^a-z0-9])g[0-9]+ ?- ?[0-9]+` appears
+anywhere in it, case-insensitively. That refuses a pasted id followed by a space, `(acting)`
 or `/`, one in upper case, one written with a Unicode hyphen, en dash, minus
-sign or fullwidth digits, one with a tab inside it, and a bare `g9-9`. Instance ids
+sign or fullwidth digits, one with a space or tab on either side of the
+hyphen, one with a zero-width space inside it, and a bare `g9-9`. The match
+can refuse an innocent value such as `see sheet g2-3` in next action; that
+false positive is accepted, and the message names the token so the value can
+be reworded. Instance ids
 change at every respawn; the role does not.
 
 ## 3. Stages
@@ -112,8 +117,11 @@ ADR-007):**
   event records the fact it acted on. Refresh skips a move whose fact equals
   one already recorded on any earlier refresh event for that row. A comment,
   a review or a clock skew changes no PR state, so it is not a new fact. So
-  when director moves a row back, the move holds until a PR changes state or
-  a PR is linked or unlinked.
+  when director moves a row back, the move holds until the row's PR set
+  reaches a state it has not acted on before, by a PR changing state or by a
+  link or unlink. A PR closed and then reopened returns to a state already
+  recorded, so it is not a new fact and does not re-advance the row; that is
+  deliberate.
 - Every other stage (`released`, `deployed`, `accepted`, `parked`) is
   director's act. Refresh shows a hint when a source suggests one (a release
   tag that contains the merge), and never applies it.
@@ -214,8 +222,9 @@ On approval, #168 gets a comment pointing here and is closed by its author.
 1. **W1:** on both `open` and `set`, owner, blocked on and next action
    refuse a synthetic instance id written as `x-g9-9`, `x-g9-9 ` (trailing
    space), `x-g9-9 (acting)`, `x-g9-9/`, `X-G9-9`, with U+2010, an en dash or
-   U+2212 for the hyphen, with fullwidth digits, with a tab inside it, and as
-   a bare `g9-9`, while `team-a/architect` and `review g9 then 9 items` are
+   U+2212 for the hyphen, with fullwidth digits, as `x-g9<TAB>-9`,
+   `x-g9-<TAB>9` and `x-g9- 9`, with a U+200B zero-width space after `g9`, and
+   as a bare `g9-9`, while `team-a/architect` and `review g9 then 9 items` are
    accepted; a move with a stale `from`
    exits nonzero and appends nothing; two processes appending 200 events each
    give 400 parseable lines; a torn last line is skipped and counted.
