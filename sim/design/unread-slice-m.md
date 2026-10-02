@@ -61,30 +61,61 @@ in a separate verb, with its own design and an operator ruling, because it
 discards the record of undelivered mail. Recommended later: `director-mcp
 prune-durables --older-than 72h --dry-run` by default.
 
-### M2. A named state for a seat that reads outside its durable
+### M2. Named states for a seat whose durable is idle
 
-A live row is classed `reads-outside-durable` when both hold:
-- presence has been live for at least 10 minutes, and
-- the durable has delivered nothing since that presence began (its
-  `Delivered.Consumer` is 0, or `Delivered.Last` is older than the presence
-  start), while it has pending mail.
+A live seat's durable can deliver nothing while mail waits for two reasons
+the durable alone cannot tell apart: the seat reads its inbox some other way
+(director today; a seat that drains with `nats stream get`), or the seat
+reads nothing at all (idle, stuck in a turn, never told to poll). Presence
+does not separate them either: the shim renews it on its own 30-second
+timer, never on a model call (R-56). So the default must be the alarming
+reading, and the reassuring one needs positive evidence.
 
-Such a row shows no age:
+**The anchor is the durable's `Created`.** The per-session durable
+`mcp_<agent>_<instance>` is created at shim start, so its consumer-info
+`Created` is the session's start. The presence `ts` is rewritten on every
+write and gives no start time; it is not used for this.
+
+**`durable-idle` (the default).** A live row whose durable is at least 10
+minutes old (from `Created`), has delivered nothing since (`Delivered.Consumer`
+is 0), and has pending mail. The row keeps its age:
 
 ```
-seat-b/1  reads-outside-durable  pending 389 (not unread mail: this seat reads its inbox without the shim's durable)
+seat-b/1  durable-idle  pending 389  oldest 57h  (this seat reads elsewhere, or not at all)
 ```
 
-`--json` carries `state: "reads-outside-durable"` and omits
-`oldest_unread_age_seconds`, so the threshold in M4 never fires on it.
-Director's own row and any seat that drains with `nats stream get` fall in
-this class. The fix for such a seat is to read through `wait_for_message` or
-`inbox_summary`, which ack and advance the floor; the reader names the class,
-it does not change the seat.
+M4 counts it over threshold like `behind`, and lists it under its own
+heading so a reader sees the class.
 
-The other live states are `reading` (pending 0, or delivered within the
-window) and `behind` (pending > 0, reading through the durable, oldest
-unread age shown). Only `behind` carries an age.
+**`reads-outside-durable` (only with evidence).** A `durable-idle` row is
+reclassed when the seat has sent at least one message, since its durable's
+`Created`, whose `in_reply_to` names a message still pending on that
+durable. A seat that answers mail it never acked read it somewhere else. Subjects
+are keyed by recipient (`agent.<ws>.<team>.<id>.inbox`), so there is no
+per-sender subject to filter. The reader scans AGENT_INBOX by sequence from
+the first message at or after the durable's `Created`, decodes each envelope,
+and keeps those whose `sender.agent_id` is the seat and whose `in_reply_to`
+names a pending message on its durable. It is read-only (`GetMsg` by
+sequence), runs only for `durable-idle` rows, is capped at the last 2,000
+messages per run, and reports when the cap cut it short. With `--global` it
+scans the hub streams the same way. It records the evidence:
+
+```
+seat-c/1  reads-outside-durable  pending 41 (answered 3 of them, latest 12m ago; not unread mail)
+```
+
+`--json` carries `state` and `evidence` (`in_reply_to` ids matched, the
+latest send time). This row shows no age and M4 does not count it. The fix
+for such a seat is to read through `wait_for_message` or `inbox_summary`,
+which ack and advance the floor; the reader names the class, it does not
+change the seat.
+
+An operator-ruled allow-list of addresses known to read outside (ruling 4)
+can sit on top of this; without it, nothing is reassured by default.
+
+The other live states are `reading` (pending 0, or delivered since `Created`
+within the window) and `behind` (pending > 0, reading through the durable,
+oldest unread age shown).
 
 ### M3. The global tier
 
@@ -97,21 +128,22 @@ reachable prints the reason and exits 0.
 
 ### M4. An age threshold for the battery
 
-`--older-than <dur>` (default unset) marks each `behind` row whose oldest
+`--older-than <dur>` (default unset) marks each `behind` or `durable-idle` row whose oldest
 unread message is older than the threshold, in text with a leading `!` and in
 JSON as `over_threshold: true`, and adds a summary count. Exit stays 0: this
 is a diagnostic the battery reads and reports, not a gate (ADR-007). The
 battery's live check (a new D-row, read-only) runs `unread --json
 --older-than 1h` on both tiers and reports the over-threshold rows by
-address. `reads-outside-durable` rows are listed separately and never
-counted over threshold.
+address, with `durable-idle` rows under their own heading.
+`reads-outside-durable` rows are listed separately, with their evidence, and
+never counted over threshold.
 
 ### M5. A role rollup
 
 `--by-role` groups live rows by team and role (from the agent id, and the
 `role.<role>.inbox` filter where a durable carries one) and prints one line
 per role: live holders, total pending, the oldest unread age across holders
-in `behind`, and how many holders are `reads-outside-durable`. A message to a
+in `behind` or `durable-idle`, and how many holders are in each named state. A message to a
 role address is read by any holder, so the role line answers "is anyone in
 this role reading" without the reader judging which instance should have.
 
@@ -133,20 +165,28 @@ release (a pinned, reproducible build) removes the case for installed seats.
    ended sessions with mail. Default view shows one live row and one summary
    line (`dead durables: 3, pending N`); `--all` shows four rows; `--json` has
    four entries with `live` set.
-2. **Reads outside.** A live session whose durable delivers nothing for 10
-   minutes (clock injected) while three messages arrive is
-   `reads-outside-durable` with no age; after it drains through the shim it
-   is `reading`. A session reading through the durable with mail waiting is
-   `behind` with an age.
-3. **Threshold.** With `--older-than 1h`, a `behind` row 2h old is marked and
-   counted; a `reads-outside-durable` row with older mail is not; exit 0 in
-   every case.
+2. **Idle durable and reads outside.** Clock injected; durable `Created`
+   used as the start.
+   - **Deaf:** a live session that reads nothing, with three messages waiting
+     past 10 minutes and no outbound replies, is `durable-idle` with an age,
+     never "not unread mail"; with `--older-than 5m` it appears in the
+     over-threshold output.
+   - **Correlation:** the same session sends a reply whose `in_reply_to`
+     names one of the pending messages; it becomes `reads-outside-durable`
+     with that id as evidence and no age, and is not counted over threshold.
+   - **Reading:** after it drains through the shim it is `reading`. A session
+     reading through the durable with mail waiting is `behind` with an age.
+   - **Anchor:** rewriting the presence `ts` does not change the state; the
+     10-minute window counts from the durable's `Created`.
+3. **Threshold.** With `--older-than 1h`, a `behind` row and a `durable-idle`
+   row each 2h old are marked and counted; a `reads-outside-durable` row with
+   older mail is not; exit 0 in every case.
 4. **Global.** Scratch hub and leaf: a `GLOBAL_TO_<cluster>` durable with
    pending mail appears under `--global` and not without it; with no hub
    reachable, `--global` prints the reason and exits 0.
 5. **Role rollup.** Two live holders of one role, one `behind` and one
-   `reads-outside-durable`: one role line, holders 2, the oldest age from the
-   `behind` holder only, outside count 1.
+   `reads-outside-durable` with evidence: one role line, holders 2, the oldest
+   age from the `behind` holder only, outside count 1.
 6. **Still read-only.** In every test, the consumer count and the presence
    bucket are unchanged after the run.
 7. **Rev mark.** A binary whose stamp comes from an enclosing repo carries the
@@ -158,4 +198,5 @@ release (a pinned, reproducible build) removes the case for installed seats.
 |---|---|---|
 | 1 | Collapse dead durables by default, `--all` to list (M1) | yes |
 | 2 | Pruning dead durables is a separate, later verb, not part of the reader (M1) | yes |
-| 3 | The 10-minute window that classes a live seat as reading outside its durable (M2) | 10m |
+| 3 | The 10-minute window, from the durable's `Created`, before a live seat's idle durable is named (M2) | 10m |
+| 4 | An allow-list of addresses known to read outside their durable, on top of the evidence rule (M2) | none; director's row is named by evidence or stays `durable-idle` |
