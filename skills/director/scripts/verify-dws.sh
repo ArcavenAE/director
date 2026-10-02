@@ -32,6 +32,8 @@ ids=(
   $'x-g\xef\xbc\x99-\xef\xbc\x99'
   $'x-g9\t-9' $'x-g9-\t9' 'x-g9- 9'
   $'x-g9\xe2\x80\x8b-9'
+  $'x-g9\x01-9'
+  $'x-g9\xcc\x81-9'
   'g9-9'
 )
 n=0
@@ -64,6 +66,11 @@ done
   && ok "set accepts 'review g9 then 9 items'" || bad "set accepts 'review g9 then 9 items'" "$(cat "$root/out")"
 "$DWS" set base --blocked "team-a/architect" >"$root/out" 2>&1 \
   && ok "set accepts blocked on a role" || bad "set accepts blocked on a role" "$(cat "$root/out")"
+"$DWS" set base --owner "team-a/revisión" >"$root/out" 2>&1 \
+  && ok "set accepts an accented role" || bad "set accepts an accented role" "$(cat "$root/out")"
+owner="$("$DWS" show --json | python3 -c 'import json,sys; print([r["owner"] for r in json.load(sys.stdin)["rows"] if r["slug"]=="base"][0])' 2>/dev/null || true)"
+[[ "$owner" == "team-a/revisión" ]] && ok "the accent survives normalization" || bad "the accent survives normalization" "$owner"
+"$DWS" set base --owner "team-a/architect" >/dev/null 2>&1 || true
 "$DWS" set base --owner "x-g9-9 (acting)" >"$root/out" 2>&1 || true
 grep -q 'g9-9' "$root/out" && ok "the refusal names the token" || bad "the refusal names the token" "$(cat "$root/out")"
 
