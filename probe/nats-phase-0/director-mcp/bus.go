@@ -184,10 +184,12 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		return nil, fmt.Errorf("presence KV AGENT_STATE: %w (run the broker setup first)", err)
 	}
 	b := &Bus{nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), state: "idle", globalCfg: gcfg}
-	// Every envelope this session sends names its instance in sender.session,
+	// Every envelope this session sends names its instance in sender.instance,
 	// so a reply is attributable to one session and not to every session of
-	// the agent (unread slice M, part E1, director#126).
-	b.self.Session = b.instance
+	// the agent (unread slice M, part E1, director#126). It is not
+	// sender.session: the canonical schema keeps that for the harness session
+	// UUID (director#196).
+	b.self.Instance = b.instance
 	// Durable per-SESSION consumer. The durable name includes the per-session
 	// instance, so two sessions sharing one agent id do not bind one durable
 	// and race each other's mail (R-50); each gets its own copy instead of a
