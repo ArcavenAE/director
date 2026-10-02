@@ -140,7 +140,7 @@ func TestBrokerGlobalReconnectResumesWithoutListingHubConsumers(t *testing.T) {
 	admin, seat := startScratchServerWithSeat(t)
 	nc, _ := provision(t, ctx, admin)
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
-	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by the first")
 	b1, err := connect(ctx, seat, resumeSelf, gcfg)
 	if err != nil {
@@ -177,7 +177,7 @@ func TestBrokerGlobalNewSeatReadsUnackedMailWithoutListing(t *testing.T) {
 	admin, seat := startScratchServerWithSeat(t)
 	nc, _ := provision(t, ctx, admin)
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
-	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "waiting")
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g1", "INFORM", "waiting too")
 	b, err := connect(ctx, seat, resumeSelf, gcfg)
@@ -203,7 +203,7 @@ func TestBrokerGlobalJoiningALiveSeatWithoutListingGetsItsOwnCopy(t *testing.T) 
 	admin, seat := startScratchServerWithSeat(t)
 	nc, _ := provision(t, ctx, admin)
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
-	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by the first")
 	b1, err := connect(ctx, seat, resumeSelf, gcfg)
 	if err != nil {
@@ -285,7 +285,7 @@ func TestBrokerGlobalFloorByNameIgnoresADurableOnAnotherSubject(t *testing.T) {
 	admin, seat := startScratchServerWithSeat(t)
 	nc, _ := provision(t, ctx, admin)
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
-	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "unread on this seat's subject")
 	pubEnv(t, ctx, gjs, "global.director.other", "x1", "INFORM", "acked on another subject")
 	departedInstance(t, ctx, nc, "operator", "01OLDOTHERSUBJECT", "global.director.other")
@@ -312,7 +312,7 @@ func TestBrokerGlobalFloorByNameIgnoresASeatWhoseIDExtendsThisOne(t *testing.T) 
 	admin, seat := startScratchServerWithSeat(t)
 	nc, _ := provision(t, ctx, admin)
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
-	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by sup_T1")
 	departedInstance(t, ctx, nc, "sup_T1", "01OLDEXTENDEDSEAT", "global.director.inbox")
 	sup, err := connect(ctx, seat, Sender{AgentID: "sup", Workspace: "aae-orc", Team: "ops"}, gcfg)
@@ -338,7 +338,7 @@ func TestBrokerGlobalFloorUnreadableByNameIsReported(t *testing.T) {
 	admin, seat := startScratchServerWithSeat(t, "CONSUMER.INFO."+globalDirectorStream+".mcp_global_operator_01OLDUNREADABLE")
 	nc, _ := provision(t, ctx, admin)
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
-	gcfg := &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector}
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "acked by the departed instance")
 	departedInstance(t, ctx, nc, "operator", "01OLDUNREADABLE", "global.director.inbox")
 	b, err := connect(ctx, seat, resumeSelf, gcfg)
