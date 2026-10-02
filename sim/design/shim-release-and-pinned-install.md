@@ -103,8 +103,7 @@ A workflow in this repository, on push to main when
 - publishes a prerelease tagged `director-mcp-alpha-<date>-<time>-<sha7>`
   (prefixed, since the repository may release other things later), with the
   four binaries and a `SHA256SUMS`;
-- attests each binary (`actions/attest-build-provenance`, as kos and marvel
-  do) and publishes the attestation bundle as a release asset
+- attests each binary (`actions/attest`, as kos and marvel do) and publishes the attestation bundle as a release asset
   (`director-mcp-<os>-<arch>.sigstore.json`).
 
 A tag `director-mcp-v<semver>` cuts a stable release the same way. macOS
@@ -228,7 +227,8 @@ Together these decide how a cue seat gets a known shim build:
    root), with a Go newer than 1.26.5 on `PATH`, build one commit twice
    through the script: once from a `git clone` checkout and once from `git
    archive`. The two binaries are byte-identical, `go version -m` reports
-   go1.26.5 and `-buildvcs=false`, and `--version` names that commit with a
+   go1.26.5 and no `vcs.*` lines (build info never records the
+   `-buildvcs` flag itself, so the test asserts its effect), and `--version` names that commit with a
    VERSION built from the commit timestamp. Red on content: the red run puts
    today's plain `go build -o director-mcp .` in the script, so the
    comparison fails on the bytes, the toolchain and the revision, not on a
