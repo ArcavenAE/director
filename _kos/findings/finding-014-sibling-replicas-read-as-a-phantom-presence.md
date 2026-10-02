@@ -26,6 +26,12 @@ killed, presence ended correctly. I then compounded the error in a relay by
 calling the live replica a "duplicate", until the team manifest showed
 `replicas: 2` for the role.
 
+The issue was filed before anyone ran the one command that settles it: `ps`
+on the row's pid, then `ps eww` on that pid for its agent id. That read took a
+minute and was enough to withdraw the issue. This is the case the premise-check
+rule in the orchestrator's task workflow is for: a claim about a process that
+one command on its host can confirm or refute.
+
 ## 2. Why it was easy to get wrong
 
 - The agent id encodes a generation and an index (`-g4-1`), but nothing says
