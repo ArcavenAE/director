@@ -52,18 +52,14 @@ def now():
 
 
 def normalize(value):
-    """NFKC; format characters (Cf) removed; Pd and U+2212 to '-'; each run
-    of whitespace to one space (section 2)."""
+    """The section-2 normalization, in the order the architect ruled
+    (2026-10-02, director#195): NFKC; every whitespace character, Cc
+    whitespace such as tab and newline included, and each run of them, to one
+    space; the remaining Cc, and Cf and Mn, stripped; Pd and U+2212 to '-'."""
     v = unicodedata.normalize("NFKC", value)
-    out = []
-    for ch in v:
-        cat = unicodedata.category(ch)
-        if cat == "Cf":
-            continue
-        if cat == "Pd" or ch == "−":
-            ch = "-"
-        out.append(ch)
-    return re.sub(r"\s+", " ", "".join(out))
+    v = re.sub(r"\s+", " ", v)
+    v = "".join(ch for ch in v if unicodedata.category(ch) not in ("Cc", "Cf", "Mn"))
+    return "".join("-" if unicodedata.category(ch) == "Pd" or ch == "\u2212" else ch for ch in v)
 
 
 def checked(field, value):
