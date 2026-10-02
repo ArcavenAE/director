@@ -89,15 +89,20 @@ round trip:
    this start (16 bytes, hex) and sends one cue with
    `meta.kind = "self-test"`, `meta.nonce = <nonce>`, and content "director
    cue self-test: call inbox_summary with cue_ack set to the nonce in this
-   notice".
+   notice". The first notice can go out before Claude Code registers the
+   channel and be lost (C-0, finding-016), and nothing in the MCP traffic
+   marks registration. So while no echo has come, the shim sends the same
+   notice again at 10, 30 and 70 s (three retries, backoff doubling from
+   10 s; director#188).
 2. `inbox_summary` gains an optional `cue_ack` argument. Only a call whose
    `cue_ack` equals this start's nonce, within the self-test window (default
-   120 s), records `cue: live`. An inbox call alone proves nothing: seats
+   120 s, counted from the latest send), records `cue: live`. An inbox call alone proves nothing: seats
    drain their inbox at start whether or not a cue arrived, which is the
    false positive this PR's first review named. The nonce can only be known by a model
    that received the notice.
 3. Otherwise it records `cue: unverified` with the reason it can name
-   (`no nonce echo after self-test`, or `wrong nonce`). A nonce is valid for
+   (`no nonce echo after self-test`, set only once the last send's window
+   has closed, or `wrong nonce`). A nonce is valid for
    one start; a shim restart draws a new one. The cause could be a flag not bound, an
    org gate shut, the seat held by an onboarding dialog (3.6), or a busy
    first turn; the shim does not guess which.
@@ -110,7 +115,8 @@ round trip:
    A drain, a `wait_for_message`, or an `inbox_summary` without the nonce
    never promotes it. A restart runs the self-test again.
 
-The self-test costs one short turn per seat start. That is ruling 2. The
+The self-test costs one short turn per seat start, and up to four notices
+when none is echoed. That is ruling 2. The
 nonce is not a secret and carries no authority; it only proves the notice
 reached the model. It never appears in presence or on the bus, only the
 resulting state does.

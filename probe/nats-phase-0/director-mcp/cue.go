@@ -42,15 +42,23 @@ type cueConfig struct {
 	Floor          time.Duration
 	Window         time.Duration
 	SelfTestWindow time.Duration
+	// SelfTestRetries is how many times an unechoed self-test is sent again,
+	// and SelfTestBackoff the wait before the first resend, doubling after
+	// each. The first notice can go out before the harness registers the
+	// channel and be lost (director#188).
+	SelfTestRetries int
+	SelfTestBackoff time.Duration
 }
 
 func defaultCueConfig() cueConfig {
 	return cueConfig{
-		Versions:       []string{"2025-11-25"},
-		Poll:           2 * time.Second,
-		Floor:          5 * time.Second,
-		Window:         300 * time.Second,
-		SelfTestWindow: 120 * time.Second,
+		Versions:        []string{"2025-11-25"},
+		Poll:            2 * time.Second,
+		Floor:           5 * time.Second,
+		Window:          300 * time.Second,
+		SelfTestWindow:  120 * time.Second,
+		SelfTestRetries: 3,
+		SelfTestBackoff: 10 * time.Second,
 	}
 }
 
@@ -95,6 +103,8 @@ type cue struct {
 	active        bool
 	state, reason string
 	selfNonce     string
+	selfSent      int       // self-test notices sent this start
+	selfNext      time.Time // when an unechoed self-test is sent again
 	selfAt        time.Time
 	valid         map[string]time.Time // nonces sent while unverified, with expiry
 	openWaits     int
@@ -144,9 +154,16 @@ func (c *cue) initialized() {
 		return
 	}
 	c.selfNonce, c.selfAt = c.nonce(), c.now()
-	p := map[string]any{"content": cueSelfTest, "meta": map[string]any{"kind": "self-test", "nonce": c.selfNonce}}
+	c.selfSent, c.selfNext = 1, c.selfAt.Add(c.cfg.SelfTestBackoff)
+	p := c.selfTestParams()
 	c.mu.Unlock()
 	c.emit(p)
+}
+
+// selfTestParams is one self-test notice. A resend carries the same nonce, so
+// an echo of any copy proves the channel; callers hold mu.
+func (c *cue) selfTestParams() map[string]any {
+	return map[string]any{"content": cueSelfTest, "meta": map[string]any{"kind": "self-test", "nonce": c.selfNonce}}
 }
 
 // ack records an inbox_summary cue_ack. Only this start's self-test nonce
@@ -252,10 +269,23 @@ func (c *cue) tick(ctx context.Context) {
 		return
 	}
 	now := c.now()
-	if c.state == cueStateUnver && c.reason == "" && c.selfNonce != "" && now.Sub(c.selfAt) > c.cfg.SelfTestWindow {
+	// An unechoed self-test is sent again with backoff, since the first can be
+	// lost before the harness registers the channel (director#188). The window
+	// runs from the latest send, and the reason waits for the last one: a
+	// notice that may never have arrived is not yet a missing echo.
+	var resend map[string]any
+	if c.state == cueStateUnver && c.selfNonce != "" && c.selfSent <= c.cfg.SelfTestRetries && !now.Before(c.selfNext) {
+		c.selfSent++
+		c.selfAt, c.selfNext = now, now.Add(c.cfg.SelfTestBackoff<<(c.selfSent-1))
+		resend = c.selfTestParams()
+	}
+	if c.state == cueStateUnver && c.reason == "" && c.selfNonce != "" && c.selfSent > c.cfg.SelfTestRetries && now.Sub(c.selfAt) > c.cfg.SelfTestWindow {
 		c.reason = "no nonce echo after self-test"
 	}
 	c.mu.Unlock()
+	if resend != nil {
+		c.emit(resend) // before the inbox read, so a read failure cannot hold it back
+	}
 
 	n, err := c.src.count(ctx)
 	c.mu.Lock()

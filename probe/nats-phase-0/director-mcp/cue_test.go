@@ -69,6 +69,18 @@ func (r *cueRig) selfTests() int {
 	return n
 }
 
+// mailCues are the cues sent for inbox mail, without self-test notices,
+// which an unverified seat may resend while a watcher test runs (director#188).
+func (r *cueRig) mailCues() []map[string]any {
+	var out []map[string]any
+	for _, p := range r.cues {
+		if m, ok := p["meta"].(map[string]any); !ok || m["kind"] != "self-test" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // unanswered ticks at the real poll interval until every self-test resend has
 // gone out and the last one's window has closed (sends at 0, 10, 30 and 70 s,
 // then 120 s), with no echo.
@@ -242,12 +254,12 @@ func TestAReconnectCuesOnceIfAnythingIsWaiting(t *testing.T) {
 	r.step(10 * time.Second) // nothing new
 	r.c.reconnected()
 	r.step(2 * time.Second)
-	if len(r.cues) != 1 {
-		t.Fatalf("after reconnect with mail waiting, one cue: %v", r.cues)
+	if len(r.mailCues()) != 1 {
+		t.Fatalf("after reconnect with mail waiting, one cue: %v", r.mailCues())
 	}
 	r.step(10 * time.Second)
-	if len(r.cues) != 1 {
-		t.Fatalf("only once: %v", r.cues)
+	if len(r.mailCues()) != 1 {
+		t.Fatalf("only once: %v", r.mailCues())
 	}
 }
 
@@ -264,19 +276,19 @@ func TestAnUnansweredCueWarnsRecuesOnceThenStops(t *testing.T) {
 		t.Fatalf("no warning inside W: %v", r.warns)
 	}
 	r.step(2 * time.Second)
-	if len(r.warns) != 1 || len(r.cues) != 2 {
-		t.Fatalf("after W: want 1 warning and 1 re-cue, got %v / %d cues", r.warns, len(r.cues))
+	if len(r.warns) != 1 || len(r.mailCues()) != 2 {
+		t.Fatalf("after W: want 1 warning and 1 re-cue, got %v / %d cues", r.warns, len(r.mailCues()))
 	}
 	if !strings.HasPrefix(r.warns[0], "m1 ") {
 		t.Fatalf("the warning names the message: %q", r.warns[0])
 	}
 	r.step(301 * time.Second)
-	if len(r.warns) != 2 || len(r.cues) != 2 {
-		t.Fatalf("after a second W: a second warning and no third cue, got %v / %d cues", r.warns, len(r.cues))
+	if len(r.warns) != 2 || len(r.mailCues()) != 2 {
+		t.Fatalf("after a second W: a second warning and no third cue, got %v / %d cues", r.warns, len(r.mailCues()))
 	}
 	r.step(900 * time.Second)
-	if len(r.warns) != 2 || len(r.cues) != 2 {
-		t.Fatalf("then it stops: %v / %d cues", r.warns, len(r.cues))
+	if len(r.warns) != 2 || len(r.mailCues()) != 2 {
+		t.Fatalf("then it stops: %v / %d cues", r.warns, len(r.mailCues()))
 	}
 }
 
@@ -290,8 +302,8 @@ func TestADrainInsideTheWindowEmitsNothing(t *testing.T) {
 	r.src.n = 0 // the cued message left the durable
 	r.step(2 * time.Second)
 	r.step(600 * time.Second)
-	if len(r.warns) != 0 || len(r.cues) != 1 {
-		t.Fatalf("a drained cue is answered: %v / %d cues", r.warns, len(r.cues))
+	if len(r.warns) != 0 || len(r.mailCues()) != 1 {
+		t.Fatalf("a drained cue is answered: %v / %d cues", r.warns, len(r.mailCues()))
 	}
 }
 
@@ -408,6 +420,30 @@ func TestTheReasonWaitsForTheLastResendWindow(t *testing.T) {
 		}
 	}
 	r.step(2 * time.Second) // 192 s
+	if st := r.c.status(); st["reason"] != "no nonce echo after self-test" {
+		t.Fatalf("after the last window: %v", st)
+	}
+}
+
+// With more tries, a backoff outgrows the window (sends at 0, 10, 30, 70, 150
+// and 310 s): the reason still waits for the last try.
+func TestTheReasonWaitsForEveryTryWhenABackoffOutgrowsTheWindow(t *testing.T) {
+	r := newCueRig(t)
+	r.c.cfg.SelfTestRetries = 5
+	r.started()
+	for s := 2; s < 310; s += 2 {
+		r.step(2 * time.Second)
+		if st := r.c.status(); st["reason"] != "" {
+			t.Fatalf("at %d s, with a try still to come: %v", s, st)
+		}
+	}
+	r.step(2 * time.Second) // 310 s: the sixth and last send
+	if r.selfTests() != 6 {
+		t.Fatalf("six sends in all, got %d", r.selfTests())
+	}
+	for i := 0; i < 61; i++ {
+		r.step(2 * time.Second)
+	}
 	if st := r.c.status(); st["reason"] != "no nonce echo after self-test" {
 		t.Fatalf("after the last window: %v", st)
 	}
