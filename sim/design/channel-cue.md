@@ -225,11 +225,13 @@ with reason `wrong nonce`; while `unverified`, a cue followed by a
 Ruled by the operator on 2026-10-01, all as the defaults proposed here:
 
 1. **The development flag on fleet seats.** Adopted per seat, arcaven team
-   first, after C-0 passes. `DIRECTOR_CUE=1` in a seat's environment opts it
-   in (C-5), and the spawn line names a cue that is on.
-2. **The self-test turn at every seat start.** Yes, at every start; it is not
-   configurable.
+   first, after C-0 passes.
+2. **The self-test turn at every seat start.** Yes, at every seat start.
 3. **W = 300 s and the floor = 5 s.** Yes, revisited after the one-day team
    run.
 
 Rollout is one seat at a time (default (a)).
+
+Implemented by C-5, and not part of the rulings: `DIRECTOR_CUE=1` in a seat's
+environment opts it in, and the spawn line names a cue that is on. The
+current code has no switch to skip the self-test.
