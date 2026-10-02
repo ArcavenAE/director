@@ -86,10 +86,10 @@ Slice M (`sim/design/unread-slice-m.md`):
   (pending, the durable has delivered), `durable-idle` (pending, and nothing
   delivered since the durable's `Created`, at least 10 minutes ago), and
   `reads-outside-durable` (a `durable-idle` row whose session, under its own
-  `sender.session`, answered a message still pending on it; not unread
+  `sender.instance`, answered a message still pending on it; not unread
   mail). The reply scan reads at most 2,000 messages per stream per run,
   newest first; a row whose window it did not reach stays `durable-idle`
-  with `scan_truncated`. A sender with no `sender.session` never counts.
+  with `scan_truncated`. A sender with no `sender.instance` never counts; `sender.session` is the harness session UUID and is never read for this.
 - **`--older-than <dur>`** marks `behind` and `durable-idle` rows older than
   the threshold (`!` in text, `over_threshold` in JSON) and counts them.
   Exit stays 0.

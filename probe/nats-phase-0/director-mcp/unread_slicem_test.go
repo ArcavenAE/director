@@ -214,7 +214,7 @@ func TestUnreadDeafSeatIsDurableIdle(t *testing.T) {
 }
 
 // Design test 2, correlation: the session answers one of its pending
-// messages under its own sender.session, so it reads elsewhere.
+// messages under its own sender.instance, so it reads elsewhere.
 func TestUnreadReplyFromTheSessionIsReadsOutside(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

@@ -153,7 +153,7 @@ type unreadDurable struct {
 }
 
 // unreadEvidence is what reclassed a durable-idle row: the pending message ids
-// this session answered under its own sender.session, and its latest such send.
+// this session answered under its own sender.instance, and its latest such send.
 type unreadEvidence struct {
 	InReplyTo  []string `json:"in_reply_to"`
 	LatestSent string   `json:"latest_sent"`
@@ -374,21 +374,22 @@ type sentReply struct {
 }
 
 // replyScan is one capped, newest-first pass over a stream: the replies found,
-// keyed by sender.session, how far back it reached, and whether the cap cut it
+// keyed by sender.instance, how far back it reached, and whether the cap cut it
 // short.
 type replyScan struct {
-	bySession map[string][]sentReply
-	oldest    time.Time
-	truncated bool
+	byInstance map[string][]sentReply
+	oldest     time.Time
+	truncated  bool
 }
 
 // scanReplies reads a stream newest first, by sequence, until a message older
 // than since, the start of the stream, or the cap. Read-only: GetMsg by
-// sequence. A message with no sender.session is never kept, so a sender that
+// sequence. A message with no sender.instance is never kept, so a sender that
 // names only the agent (a shim before part E1, a sibling, a send-only process)
-// can never stand as evidence for a session.
+// can never stand as evidence for a session. sender.session is the harness
+// session UUID, a different identifier, and is never read here (director#196).
 func scanReplies(ctx context.Context, stream jetstream.Stream, since time.Time) (replyScan, error) {
-	out := replyScan{bySession: map[string][]sentReply{}}
+	out := replyScan{byInstance: map[string][]sentReply{}}
 	info, err := stream.Info(ctx)
 	if err != nil {
 		return out, err
@@ -413,10 +414,10 @@ func scanReplies(ctx context.Context, stream jetstream.Stream, since time.Time) 
 		}
 		out.oldest = m.Time
 		var e Envelope
-		if json.Unmarshal(m.Data, &e) != nil || e.Sender.Session == "" || e.InReplyTo == "" {
+		if json.Unmarshal(m.Data, &e) != nil || e.Sender.Instance == "" || e.InReplyTo == "" {
 			continue
 		}
-		out.bySession[e.Sender.Session] = append(out.bySession[e.Sender.Session], sentReply{inReplyTo: e.InReplyTo, at: m.Time})
+		out.byInstance[e.Sender.Instance] = append(out.byInstance[e.Sender.Instance], sentReply{inReplyTo: e.InReplyTo, at: m.Time})
 	}
 	return out, nil
 }
@@ -457,7 +458,7 @@ func classify(ctx context.Context, streams []jetstream.Stream, now time.Time, r 
 			if sc.truncated && (sc.oldest.IsZero() || !sc.oldest.Before(d.created)) {
 				truncated = true
 			}
-			for _, rep := range sc.bySession[d.Instance] {
+			for _, rep := range sc.byInstance[d.Instance] {
 				if rep.at.Before(d.created) || !d.pendingIDs[rep.inReplyTo] {
 					continue
 				}
