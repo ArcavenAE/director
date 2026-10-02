@@ -114,9 +114,10 @@ content: |
     set the levers for one start, and they did not survive a later start
     through the registration. This bears on where the global levers live
     and how a launcher knows they are required. R-119.
-  - 2026-10-02: a respawned seat still replays its retained inbox after
-    the #84 resume fix, with nothing marking what its predecessor handled;
-    five reports on four dates (finding-015). Bears on sub-question C.
+  - 2026-10-02: respawned seats replayed their retained inbox after the
+    #84 resume fix merged, with nothing marking what a predecessor handled;
+    six counts from 2026-09-26 to 2026-10-02, and no replaying shim's
+    revision is known (finding-015). Bears on sub-question C.
   - 2026-10-02: two stale-build blind spots measured. A merged launcher
     change reached no seat until the shared checkout was fast-forwarded
     (finding-017), and a shim built in a git worktree stamps the enclosing

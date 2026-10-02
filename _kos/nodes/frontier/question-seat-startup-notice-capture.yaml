@@ -30,9 +30,11 @@ content: |
 
   ## Evidence since
 
-  - 2026-10-02: the development-channels consent dialog appears at every
-    start of a cue-enabled seat, so it is a recurring blocking notice, not
-    a one-time onboarding screen (finding-016).
+  - 2026-10-02: the development-channels warning ("WARNING: Loading
+    development channels", choose "1. I am using this for local
+    development" or "2. Exit") appears at every start of a cue-enabled
+    seat, so it is a recurring blocking notice. It is separate from the
+    "Teach auto mode" onboarding dialog, which did not appear (finding-016).
 edges:
   - target: finding-016-the-channel-cue-on-one-seat-c0-results
     type: derives
