@@ -61,25 +61,31 @@ def stored_form(value):
     return "".join(ch for ch in v if unicodedata.category(ch) != "Cc")
 
 
-def match_key(stored):
-    """The key the instance-id refusal matches on, computed from the stored
-    form and never stored: U+00AD to '-'; NFKD, so a mark composed onto a
-    letter comes apart; Cf, Mn, Mc and Me stripped; Pd and U+2212 to '-';
-    lower case."""
-    v = unicodedata.normalize("NFKD", stored.replace("\u00ad", "-"))
-    v = "".join(ch for ch in v if unicodedata.category(ch) not in ("Cf", "Mn", "Mc", "Me"))
-    v = "".join("-" if unicodedata.category(ch) == "Pd" or ch == "\u2212" else ch for ch in v)
-    return v.lower()
+def match_keys(stored):
+    """The keys the instance-id refusal matches on, computed from the stored
+    form and never stored. U+00AD is taken both ways, mapped to '-' and
+    removed, since either reading can be the one that hides an id; then
+    NFKD, so a mark composed onto a letter comes apart; Cf, Mn, Mc and Me
+    stripped; Pd and U+2212 to '-'; whitespace runs collapsed again, since a
+    stripped character between two spaces leaves two; lower case."""
+    keys = []
+    for shy in ("-", ""):
+        v = unicodedata.normalize("NFKD", stored.replace("\u00ad", shy))
+        v = "".join(ch for ch in v if unicodedata.category(ch) not in ("Cf", "Mn", "Mc", "Me"))
+        v = "".join("-" if unicodedata.category(ch) == "Pd" or ch == "\u2212" else ch for ch in v)
+        keys.append(re.sub(r"\s+", " ", v).lower())
+    return keys
 
 
 def checked(field, value):
-    """The stored form, or Refused when its match key carries an instance id."""
+    """The stored form, or Refused when either match key carries an instance id."""
     stored = stored_form(value)
-    m = INSTANCE_ID.search(match_key(stored))
-    if m:
-        raise Refused(f"{field} {value!r} carries instance id {m.group(2)!r}; "
-                      "name the seat or role, never an instance id (they change at "
-                      "every respawn). Reword the value if the token is not an id.")
+    for key in match_keys(stored):
+        m = INSTANCE_ID.search(key)
+        if m:
+            raise Refused(f"{field} {value!r} carries instance id {m.group(2)!r}; "
+                          "name the seat or role, never an instance id (they change at "
+                          "every respawn). Reword the value if the token is not an id.")
     return stored
 
 
