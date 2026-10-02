@@ -60,6 +60,9 @@ install_one "$SRC/commands/director.md" "$TARGET/commands/director.md"
 DIRECTOR_HOME="${DIRECTOR_HOME:-$HOME/.director}"
 mkdir -p "$DIRECTOR_HOME/bin"
 install_one "$SRC/skills/director/scripts/board-html" "$DIRECTOR_HOME/bin/board-html"
+# board-html runs dws from beside itself (the board's workstream ledger), so a
+# copy install needs dws in the same directory.
+install_one "$SRC/skills/director/scripts/dws" "$DIRECTOR_HOME/bin/dws"
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"

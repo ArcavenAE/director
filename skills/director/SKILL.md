@@ -72,8 +72,18 @@ in the list. Detail on request, by number. Session 1's operator complaint was
 "can you get to the point? These summaries are a wall of distracting text",
 and that complaint is a requirement.
 
+When `$DIRECTOR_STATE/workstreams.jsonl` exists, take Blocked on you from the
+ledger: run `scripts/dws show --json` and list the rows with `blocked on =
+operator`, oldest last moved first, each as `<owner> - <workstream>: <next action>`
+with the owner in the session slot. The other blocks are unchanged. With no
+ledger, or no CLI, build the list from the board and the roster as above.
+
 5. Update `board.md` with anything you concluded. It is authored, edited
    rather than overwritten, and it is what survives a context compression.
+   With a ledger, also keep it current: `scripts/dws open <slug> --title ...`
+   for each new stream of work, `scripts/dws stage <slug> <to> --from <current>`
+   for a stage that changed, and `scripts/dws refresh` to read last moved and
+   the two factual stage moves from the PR, issue and bd links.
    If `$DIRECTOR_STATE/board.html` exists, run
    `${DIRECTOR_HOME:-$HOME/.director}/bin/board-html` after the edit so the
    rendered view stays current. Use that installed path, so the renderer

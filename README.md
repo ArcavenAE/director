@@ -75,7 +75,9 @@ skills/director/     the skill: role, modes, output contract, capture triggers
   scripts/dsi        session inventory across all four adapters
   scripts/dsx        external state verification (the board has no expiry)
   scripts/board-html render board.md as a self-contained local page (search,
-                     filters, collapsible sections, auto-refresh); no network
+                     filters, collapsible sections, auto-refresh); no network;
+                     with a ledger, the ledger sections above the history
+  scripts/dws        the workstream ledger: one row per stream, stage, last moved
 skills/stansfield/   full fleet roll call: enumerate every session across the
                      bus, marvel clusters and SendMessage, deduped to one
                      identity each, then optionally relay an action
@@ -122,7 +124,7 @@ into the platform's knowledge graph.
 /director standing    # adopt the role for the session
 ```
 
-That installs the skill and the command, links `board-html` into
+That installs the skill and the command, links `board-html` and `dws` into
 `~/.director/bin` (override with `DIRECTOR_HOME`), and creates the state root.
 It is the whole of what `install.sh` does.
 

@@ -22,7 +22,7 @@ run_install() { # $1 = scratch home
 
 targets() { # every target install.sh places, relative to the scratch home
   printf '%s\n' claude/skills/director claude/skills/stansfield claude/commands/director.md \
-    director/bin/board-html director/bin/director-install
+    director/bin/board-html director/bin/dws director/bin/director-install
 }
 
 # Positive control: a clean home installs everything and exits 0.
