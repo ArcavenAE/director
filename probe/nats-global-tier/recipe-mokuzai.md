@@ -178,7 +178,12 @@ Only a supervisor's role needs them; leave them off a worker's list.
 The shim's global mode is built (aae-orc-gvf6k). Cast every supervisor on the
 cluster (the supervisor and research-supervisor roles; both take
 `DIRECTOR_GLOBAL_ROLE=supervisor`) with three more environment variables, and
-nothing else changes:
+nothing else changes. One caveat for a research-supervisor: marvel's broker
+renderer grants the global subjects only to a role literally named
+`supervisor` (`GlobalAddressRoles` in marvel's `internal/config/config.go`).
+So a research-supervisor reaches the global tier only through its team's
+broker user, when that team also has a `supervisor` role. A marvel issue
+tracks this.
 
 ```sh
 DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=mokuzai \
