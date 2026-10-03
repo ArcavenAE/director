@@ -1,9 +1,13 @@
 # Joining the global tier from mokuzai (skippy's cluster)
 
 The hub runs on kinu, LAN address 192.168.100.110, leaf port 7442. Your
-supervisor keeps talking to your own local broker; the leaf link carries the
-director channel. Nothing in your supervisor changes until the shim's global
-mode ships; then it is three environment variables in the cast.
+supervisors keep talking to your own local broker; the leaf link carries the
+director channel. Every supervisor on the cluster joins the global tier: the
+supervisor and research-supervisor roles, both with
+`DIRECTOR_GLOBAL_ROLE=supervisor`. Workers never do; the director holds the
+one fleet address. Nothing in your supervisors
+changes until the shim's global mode ships; then it is three environment
+variables in each supervisor's cast.
 
 ## Before you start: a network path to the hub
 
@@ -151,7 +155,7 @@ runtime:
     - "-c"
     - 'mcp_servers.director.command="/path/to/director-mcp-seat"'
     - "-c"
-    - 'mcp_servers.director.env_vars=["MARVEL_SESSION","MARVEL_TEAM","MARVEL_WORKSPACE","DIRECTOR_NATS_USER","DIRECTOR_NATS_PASS","NATS_URL"]'
+    - 'mcp_servers.director.env_vars=["MARVEL_SESSION","MARVEL_TEAM","MARVEL_WORKSPACE","DIRECTOR_NATS_USER","DIRECTOR_NATS_PASS","NATS_URL","DIRECTOR_GLOBAL_DOMAIN","DIRECTOR_CLUSTER","DIRECTOR_GLOBAL_ROLE"]'
     - "-c"
     - 'mcp_servers.director.default_tools_approval_mode="approve"'
 ```
@@ -165,10 +169,21 @@ forever; `approve` is the value that lets it run unattended.
 **Diagnostic.** If a marvel-managed agent appears on the roster as `director-seat`
 instead of its session name, the `env_vars` line is missing from its role.
 
-## 4. Casting a supervisor onto the global tier
+The last three names carry the global tier (section 4). Without them a codex
+supervisor's shim never sees them and stays on the local tier, with no error.
+Only a supervisor's role needs them; leave them off a worker's list.
 
-The shim's global mode is built (aae-orc-gvf6k). Cast your supervisor with
-three more environment variables and nothing else changes:
+## 4. Casting the supervisors onto the global tier
+
+The shim's global mode is built (aae-orc-gvf6k). Cast every supervisor on the
+cluster (the supervisor and research-supervisor roles; both take
+`DIRECTOR_GLOBAL_ROLE=supervisor`) with three more environment variables, and
+nothing else changes. One caveat for a research-supervisor: marvel's broker
+renderer grants the global subjects only to a role literally named
+`supervisor` (`GlobalAddressRoles` in marvel's `internal/config/config.go`).
+So a research-supervisor reaches the global tier only through its team's
+broker user, when that team also has a `supervisor` role. marvel#518
+tracks this.
 
 ```sh
 DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=mokuzai \

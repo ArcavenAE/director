@@ -217,11 +217,12 @@ connect, the cluster simply never receives its global grants
 costs the global tier with no message is the kind of setup failure that burns hours
 without a documented cause, so treat the `supervisor` role name as load-bearing.
 
-The per-cluster global address belongs to the supervisor. The two-role property (only
-the supervisor and the director hold a global address, R-86 and R-94) does not mean
-each cluster runs both roles: per cluster it is the supervisor that carries the
-cluster's global address, while the director address is the one fleet seat, not a
-per-cluster role. An operator reading the two-role rule should not expect a
+The per-cluster global address belongs to the supervisor roles (supervisor and
+research-supervisor). The two-role property (only the supervisor roles and the director
+hold a global address, R-86, and R-94 as worded before its 2026-09-24 amendment) does not
+mean each cluster runs both roles: per cluster, every supervisor carries the cluster's
+global address (global://<cluster>/supervisor, shared), while the director address is
+the one fleet seat, not a per-cluster role. An operator reading the two-role rule should not expect a
 per-cluster director to hold a global address, because it does not.
 
 ## Operating modes
