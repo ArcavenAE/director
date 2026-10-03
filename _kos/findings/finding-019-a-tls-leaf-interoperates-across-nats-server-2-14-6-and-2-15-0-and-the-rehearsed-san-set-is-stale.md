@@ -7,7 +7,7 @@
 
 ## 0. The sentence
 
-**A TLS leaf links across the two nats-server versions in the fleet in both directions, and a rogue CA or a plaintext leaf is refused. The SAN set finding-002 rehearsed is stale, the hub's client port has no direct clients, and changing FLEET users reloads without dropping a live leaf.**
+**A TLS leaf links across the two nats-server versions in the fleet in both directions, and a rogue CA or a plaintext leaf is refused. The SAN set finding-002 rehearsed is stale, the hub's client port has no direct clients, and a FLEET user reload keeps live leafs connected, though a changed grant is not honored on an established leaf until it reconnects (finding-009).**
 
 ## 1. What was measured
 
@@ -25,7 +25,7 @@
 
    `hub-csr.sh` needs the current addresses, or the leafs should dial by name, before the ceremony signs.
 3. **No client connects to the hub's client port** (0 established connections, checked 2026-10-03). finding-002's diff puts TLS on both listeners. Leaf-only TLS is a valid smaller step, and the client-listener half stays reloadable for later.
-4. **Adding or changing FLEET users reloads without dropping a live leaf**, on this hub's own log. Three reloads logged `Reloaded: authorization nkey users`: 2026-09-26 13:28, 2026-09-27 11:22 and 2026-10-03 05:11 (local time; the last is the stage 7 reload at 10:11Z). In the ten minutes around each, the log holds no leaf close, and the hub process kept running. The stage 7 reload kept both leafs.
+4. **A FLEET user reload keeps live leafs connected, and does not by itself apply a changed grant to an established leaf.** The hub's log shows three reloads that logged `Reloaded: authorization nkey users`: 2026-09-26 13:28, 2026-09-27 11:22 and 2026-10-03 05:11 (local time; the last is the stage 7 reload at 10:11Z, which kept both leafs). In the ten minutes around each, the log holds no leaf close, and the hub process kept running. That is all the log shows: no drop. It does not show a changed grant reaching an established leaf. finding-009 records that the 2026-09-26 reload's newly granted request answered `No responders` over the established leaf while an older grant still worked, and worked only after the leaf reconnected (R-154 instances at `sim/requirements.md:1806` and `:1834`, "applied is not running"). So adding a user is safe for live leafs; a changed grant needs the leaf to reconnect.
 
 ## 2. What this does not restate
 
@@ -40,6 +40,7 @@ These are doc fixes, not graph content:
 ## 4. Edges
 
 - extends: finding-001 (mechanics on 2.14.6)
+- qualifies: finding-009 (a reload keeps live leafs, but a changed grant waits for a reconnect)
 - corrects: finding-002 (the rehearsed SAN set; its method still applies)
 - informs: aae-orc#461 stages 5 to 8
 

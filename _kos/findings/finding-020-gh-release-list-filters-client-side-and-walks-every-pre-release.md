@@ -7,7 +7,7 @@
 
 ## 0. The sentence
 
-**`gh release list --exclude-drafts --exclude-pre-releases --limit 1` pages through releases until one passes the filter, so on a repo with no stable release it reads all of them: 148 s against ArcavenAE/marvel (about four pages of alpha releases, no stable one), against 1 s unfiltered. `gh api repos/{repo}/releases/latest --jq .tag_name` is one request, GitHub defines it as the most recent non-draft, non-prerelease release, and it answers 404 when there is none.**
+**`gh release list --exclude-drafts --exclude-pre-releases --limit 1` pages through releases until one passes the filter, so on a repo with no stable release it reads all of them: about 150 s against ArcavenAE/marvel (148 s in the review's run and 153.1 s in a re-measurement; about four pages of alpha releases, no stable one), against 1 s unfiltered. `gh api repos/{repo}/releases/latest --jq .tag_name` is one request, GitHub defines it as the most recent non-draft, non-prerelease release, and it answers 404 when there is none.**
 
 ## 1. Why it mattered
 
