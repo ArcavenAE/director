@@ -182,7 +182,7 @@ nothing else changes. One caveat for a research-supervisor: marvel's broker
 renderer grants the global subjects only to a role literally named
 `supervisor` (`GlobalAddressRoles` in marvel's `internal/config/config.go`).
 So a research-supervisor reaches the global tier only through its team's
-broker user, when that team also has a `supervisor` role. A marvel issue
+broker user, when that team also has a `supervisor` role. marvel#518
 tracks this.
 
 ```sh
