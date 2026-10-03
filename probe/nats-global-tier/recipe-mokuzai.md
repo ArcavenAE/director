@@ -1,9 +1,11 @@
 # Joining the global tier from mokuzai (skippy's cluster)
 
 The hub runs on kinu, LAN address 192.168.100.110, leaf port 7442. Your
-supervisor keeps talking to your own local broker; the leaf link carries the
-director channel. Nothing in your supervisor changes until the shim's global
-mode ships; then it is three environment variables in the cast.
+supervisors keep talking to your own local broker; the leaf link carries the
+director channel. Every supervisor on the cluster (each team's supervisor
+role) joins the global tier; workers never do. Nothing in your supervisors
+changes until the shim's global mode ships; then it is three environment
+variables in each supervisor's cast.
 
 ## Before you start: a network path to the hub
 
@@ -165,10 +167,11 @@ forever; `approve` is the value that lets it run unattended.
 **Diagnostic.** If a marvel-managed agent appears on the roster as `director-seat`
 instead of its session name, the `env_vars` line is missing from its role.
 
-## 4. Casting a supervisor onto the global tier
+## 4. Casting the supervisors onto the global tier
 
-The shim's global mode is built (aae-orc-gvf6k). Cast your supervisor with
-three more environment variables and nothing else changes:
+The shim's global mode is built (aae-orc-gvf6k). Cast every supervisor on the
+cluster (each team's supervisor role) with three more environment variables,
+and nothing else changes:
 
 ```sh
 DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=mokuzai \
