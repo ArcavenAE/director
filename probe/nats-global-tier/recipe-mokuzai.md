@@ -5,6 +5,24 @@ supervisor keeps talking to your own local broker; the leaf link carries the
 director channel. Nothing in your supervisor changes until the shim's global
 mode ships; then it is three environment variables in the cast.
 
+## Before you start: a network path to the hub
+
+The joining host needs a routed path to the hub's leaf port. Being online is
+not enough. Check, before anything else, that the hub's address is on your
+own LAN (the same subnet) or on a network you have a route to, and that
+`nc -vz <hub-address> 7442` connects. A host on a different network sees the
+connection time out, which reads like a firewall or a down hub.
+
+Two things on the joining host can make a good path look broken:
+
+- A VPN client that claims all the private ranges (10/8, 172.16/12,
+  192.168/16) sends the hub's address into its tunnel unless the hub is on
+  your own LAN, where the on-link route is more specific and wins. If the VPN
+  reconnects on a timer, an off-LAN path can break again without warning.
+- On macOS, a terminal without the Local Network permission gets
+  `No route to host` for every LAN address. marvel's admin guide covers it
+  under "Host prerequisites", with keeping the host awake.
+
 ## 0. What you receive out of band
 
 One file from the operator, handed privately (never on GitHub, never on the
@@ -16,6 +34,13 @@ not a credential at any third party. This interim recipe reads the seed from tha
 file at each broker start (section 1); once your broker is marvel-supervised, the
 seed instead lives in the daemon Store and the daemon keeps no seed path on disk (the
 model in [bus-credential-enrollment.md](../../sim/design/bus-credential-enrollment.md)).
+
+On a marvel-supervised cluster, your host need not hold the seed at all. Once
+the hub's host is enrolled with your daemon, the hub operator pushes it from
+there (`marvel --cluster <name> credential put bus/leaf --value-file <seed-file>`),
+and pushes it again after every daemon stop, start or reexec. Declare the hub
+in your bus config before the daemon starts; marvel's admin guide ("Connecting
+to a shared hub") says why.
 
 ## 1. Broker config (local nats-server.conf)
 
