@@ -73,10 +73,11 @@ in the list. Detail on request, by number. Session 1's operator complaint was
 and that complaint is a requirement.
 
 When `$DIRECTOR_STATE/workstreams.jsonl` exists, take Blocked on you from the
-ledger: run `scripts/dws show --json` and list the rows with `blocked on =
-operator`, oldest last moved first, each as `<owner> - <workstream>: <next action>`
-with the owner in the session slot. The other blocks are unchanged. With no
-ledger, or no CLI, build the list from the board and the roster as above.
+ledger: run `scripts/dws show --json` and list the rows whose `blocked` is
+`operator`, oldest `last_moved` first, each as `<owner> - <workstream>: <next action>`,
+from the row's `owner`, `slug` and `next`, with the owner in the session slot.
+The other blocks are unchanged. With no ledger, or no CLI, build the list from
+the board and the roster as above.
 
 5. Update `board.md` with anything you concluded. It is authored, edited
    rather than overwritten, and it is what survives a context compression.
