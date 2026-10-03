@@ -171,8 +171,7 @@ instead of its session name, the `env_vars` line is missing from its role.
 
 The last three names carry the global tier (section 4). Without them a codex
 supervisor's shim never sees them and stays on the local tier, with no error.
-Listing a variable that is unset forwards nothing, so the same line is safe on
-a worker, provided its environment does not set them.
+Only a supervisor's role needs them; leave them off a worker's list.
 
 ## 4. Casting the supervisors onto the global tier
 
