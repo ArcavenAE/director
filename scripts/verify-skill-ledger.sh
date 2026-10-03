@@ -48,10 +48,11 @@ has() { grep -qF -- "$2" <<<"$1"; }
 
 # Step 4: where Blocked on you comes from, and the form of each line.
 has "$step4" 'scripts/dws show --json' && ok "step 4 reads the ledger with dws show --json" || bad "step 4 reads the ledger with dws show --json"
-has "$step4" 'blocked on = operator' && ok "step 4 takes Blocked on you from rows with blocked on = operator" || bad "step 4 takes Blocked on you from rows with blocked on = operator"
+has "$step4" 'rows whose `blocked` is `operator`' && ok "step 4 takes Blocked on you from rows whose blocked is operator" || bad "step 4 takes Blocked on you from rows whose blocked is operator"
 has "$step4" '<owner> - <workstream>: <next action>' && ok "step 4 states the line form" || bad "step 4 states the line form"
-has "$step4" 'oldest last moved first' && ok "step 4 orders Blocked on you oldest first" || bad "step 4 orders Blocked on you oldest first"
-has "$step4" 'no ledger' && ok "step 4 says what happens with no ledger" || bad "step 4 says what happens with no ledger"
+has "$step4" 'oldest `last_moved` first' && ok "step 4 orders Blocked on you by last_moved, oldest first" || bad "step 4 orders Blocked on you by last_moved, oldest first"
+has "$step4" "from the row's \`owner\`, \`slug\` and \`next\`" && ok "step 4 names the row fields the line is built from" || bad "step 4 names the row fields the line is built from"
+has "$step4" 'With no ledger, or no CLI, build the list from the board and the roster as above.' && ok "step 4 pins the no-ledger fallback" || bad "step 4 pins the no-ledger fallback"
 
 # Step 5: the additions, and the render that was already there.
 for c in 'dws open' 'dws stage' 'dws refresh'; do
@@ -72,6 +73,11 @@ export DIRECTOR_STATE="$root/state" DWS_TEST_CLOCK=1
 mkdir -p "$DIRECTOR_STATE"
 printf '# director board\n' >"$DIRECTOR_STATE/board.md"
 DWS_NOW=2030-12-31T10:00:00Z "$DWS" open w1 --title "one" --stage designed --owner architect --blocked operator --next "rule on X" >/dev/null
+# The row fields the skill names are the fields dws show --json emits.
+for f in blocked last_moved owner slug next; do
+  "$DWS" show --json | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin)["rows"][0] else 1)' "$f" \
+    && ok "dws show --json rows carry the $f field the skill names" || bad "dws show --json rows carry the $f field the skill names"
+done
 DWS_NOW=2030-12-31T12:00:00Z "$BOARD_HTML" >/dev/null 2>&1 || bad "the page renders the fixture"
 form="$(python3 - "$skill" <<'PY'
 import re, sys
