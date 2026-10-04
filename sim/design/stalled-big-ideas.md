@@ -40,7 +40,9 @@ Stranded (N)  [dead process, ask never answered]
 Running, not blocked: <names>
 Stalled ideas (N)  [research or design, no live forward pointer, quiet 14d+]
 9. <repo>/<path> - <title>  (quiet 23d; pointers all closed)
-10. ...  (+M more)
+10. <repo>/<path> - <title>  (quiet 19d; no pointer; as of 2026-09-28)
+11. <repo>/<path> - <title>  (quiet 16d; no pointer; as of 2026-09-21, remote unreachable)
+12. ...  (+M more)
 Unverified ideas: K  [bd: 4; remote unreachable: 2]
 Uncaptured: <one line each, or "none">
 ```
@@ -95,13 +97,28 @@ a credential prompt. For each repo it instead:
    clones). It runs with **no way to prompt**: `GIT_TERMINAL_PROMPT=0` for
    HTTPS, and, because every orc remote is SSH, `GIT_SSH_COMMAND="ssh -o
    BatchMode=yes -o ConnectTimeout=5"` for a passphrase or host-key prompt.
-   Each call is a child process killed after 10 seconds by the script's own
-   timer (`dbi` is Python, like `dws`: `subprocess.run(..., timeout=10)`;
-   stock macOS has no `timeout` command). The calls run 8 at a time, with
-   the whole remote step capped at 60 seconds; a repo not answered by then is
-   treated as unreachable. Measured by the reviewer, read-only across the
-   30 orc-root checkouts: 8-way took 5 seconds, against about 1.2 seconds a
-   repo serially, with no prompt and refs and `FETCH_HEAD` unchanged;
+   Each call runs in its own session and process group
+   (`subprocess.Popen(..., start_new_session=True, stdin=DEVNULL)`), so it
+   has no controlling terminal for ssh to open, and is bounded by the
+   script's own timers (`dbi` is Python, like `dws`; stock macOS has no
+   `timeout` command):
+   - **per call**, `CALL_TIMEOUT = 10` seconds: `communicate(timeout=10)`,
+     then `os.killpg(pgid, SIGKILL)`. The group kill is the point:
+     `subprocess.run(timeout=...)` kills git but not the ssh child git
+     started, and that child can keep the pipes open and hold the call;
+   - **for the pool**, `REMOTE_DEADLINE = 60` seconds from the start of the
+     step: the calls run 8 at a time (`ThreadPoolExecutor(max_workers=8)`),
+     and the step waits with `concurrent.futures.wait(futures,
+     timeout=<deadline remaining>)`. At the deadline every call still
+     running has its group killed, every call not yet started is cancelled,
+     and each of those repos takes the unreachable path (step 3). The
+     per-call timeout alone does not bound the step: 8-way at 10 seconds a
+     wave reaches 60 seconds only above 48 repos, so the deadline is a named
+     constant with its own test (7f), not a consequence of the per-call one.
+
+   Measured by the reviewer, read-only across the 30 orc-root checkouts:
+   8-way took 5 seconds, against about 1.2 seconds a repo serially, with no
+   prompt and refs and `FETCH_HEAD` unchanged;
 2. compares that commit with the local `refs/remotes/origin/<default>`.
    Equal: the repo is current. Different: the repo is **judged as of its
    local ref**, and each of its listed ideas carries `(as of <date>)`, the
@@ -167,7 +184,7 @@ file is the record.
 
 | # | Part | Depends on |
 |---|---|---|
-| S1 | `scripts/dbi` (director big ideas): reads `idea-roots.conf` and `ideas-parked.txt`, applies section 3, prints JSON rows `{path, title, quiet_days, reason, pointers}`. Read-only, no fetch: `git ls-remote --symref` (with no prompt and a timeout), then `git ls-tree`, `git show` and `git log` against the local `origin/<default>` (section 3), `bd sql` for open tickets citing a path or slug, `gh` for each PR or issue the artifact names. A source it cannot reach is reported in the output (`unread: bd`), and an idea that depends on it goes to the Unverified count, never read as "no pointer" | none |
+| S1 | `scripts/dbi` (director big ideas): reads `idea-roots.conf` and `ideas-parked.txt`, applies section 3, prints JSON rows `{path, title, quiet_days, reason, pointers, as_of, remote}`. `remote` is `current`, `stale` or `unreachable` (section 3, steps 2 and 3); `as_of` is the local ref's commit date (`YYYY-MM-DD`) when `remote` is not `current`, else `null`. `quiet_days` counts from the last commit touching the path on the local ref, so on a stale ref it can overstate quiet (a commit since then is not seen), which is why the tag travels with every row. S2 renders `as of <as_of>` for `stale` and `as of <as_of>, remote unreachable` for `unreachable`. Read-only, no fetch: `git ls-remote --symref` (with no prompt and a timeout), then `git ls-tree`, `git show` and `git log` against the local `origin/<default>` (section 3), `bd sql` for open tickets citing a path or slug, `gh` for each PR or issue the artifact names. A source it cannot reach is reported in the output (`unread: bd`), and an idea that depends on it goes to the Unverified count, never read as "no pointer" | none |
 | S2 | `SKILL.md`: the block in step 4's shape; step 4 runs `scripts/dbi --json` and renders at most five rows; the "park it" line in section 4; the installer (`scripts/director-install`) places `dbi` and the default `idea-roots.conf` (never overwriting an existing one) | S1 |
 | S3 | With a ledger: a row at stage `idea`, `defined` or `designed` with no `pr:` or `bd:` link that is open, quiet past the threshold, is listed in the same block as `<owner> - <slug>`. The ledger's own stage flags are unchanged | S1, ledger W1 |
 
@@ -205,11 +222,29 @@ file is the record.
    judged and marked `(as of <date>, remote unreachable)`. With no local
    default-branch ref, the repo is unread and its ideas count as Unverified
    (`remote unreachable`).
-7e. No prompt: with an SSH remote whose key needs a passphrase (an agent
-   with no keys, `SSH_AUTH_SOCK` unset) and with an unknown host key, the
-   call returns within 10 seconds without reading the terminal, and the repo
-   takes the unreachable path. Thirty repos, eight of them hanging, finish
-   within the 60-second cap.
+7e. No prompt. Host-key arm: an SSH remote whose host key is not in
+   `known_hosts` (a fixture `UserKnownHostsFile` that is empty): the call
+   returns within 10 seconds without reading the terminal, and the repo
+   takes the unreachable path. Passphrase arm: ssh asks for a passphrase only
+   after the server accepts the public key, so this arm proves nothing
+   unless the encrypted key is authorized at the remote. It runs only where
+   such a key is supplied (`DBI_TEST_ENCRYPTED_KEY`, `SSH_AUTH_SOCK` unset)
+   and is reported as skipped, never as passed, where it is not. Both arms
+   also assert the child's command line carries `BatchMode=yes` and that the
+   child has no controlling terminal (its session id differs from the
+   test's), which hold with or without a willing server.
+7f. The pool deadline binds. With the two constants overridden for the test
+   (`REMOTE_DEADLINE = 3`, `CALL_TIMEOUT = 2`, 8-way), and 40 fixture repos
+   whose remote is a fake `ssh` first on `PATH` that records its pid, starts
+   a child that records its own, and sleeps: the remote step returns within
+   the deadline plus one second, every unanswered repo takes the unreachable
+   path, calls never started are cancelled, and no recorded pid (the fake
+   ssh or its child) is alive afterwards. Run at the shipped constants with
+   49 hanging repos, the same holds at 60 seconds.
+7g. The tag reaches the output: for 7d's stale and unreachable repos,
+   `dbi --json` rows carry `remote` and `as_of` as section 5 states, a
+   current repo's row carries `remote: current` and `as_of: null`, and the
+   rendered block shows each tag as in the section 2 example.
 7b. A subrepo checkout on a feature branch whose working tree has an idea
    file that is not on `origin/<default>`: not read. A file on the default
    branch that the working tree has deleted: read.
