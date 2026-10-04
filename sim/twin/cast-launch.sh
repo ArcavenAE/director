@@ -230,7 +230,10 @@ mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_A
 
 cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_ROLE in team $DIRECTOR_TEAM, address agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID."
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
-cast_line+=" Your first act is to echo the last line of the spawn log (ruling 84)."
+# Resolved as wardrobe's slice.sh writes it (ruling 59), so the seat is told
+# where the log is and does not search for it.
+spawn_log="${WARDROBE_SPAWN_LOG:-$HOME/.local/state/wardrobe/spawn.log}"
+cast_line+=" Your first act is to echo the last line of the spawn log at $spawn_log (ruling 84)."
 
 # Exactly one system prompt (aae-orc-1vq6z). claude keeps only the LAST
 # --append-system-prompt, so any flag in "$@" would silently replace the slice.
