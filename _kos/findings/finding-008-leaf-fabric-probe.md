@@ -112,3 +112,7 @@ brokers, and P7 was added.
   rerun. Rollback step 2 now removes the sources as it parks.
 
 The plan these results support is brief 11 section 5.
+
+## Addendum 2026-10-04: the refusal-as-timeout also covers the local tier
+
+The refusal reaching the caller as a timeout (P3 above) was measured on the global send path. A second specimen is on the local tier (director#157, comment of 2026-10-03): a supervisor seat sent to another team's inbox on its own cluster, the broker logged a `Publish Violation` for the sending user, and the shim reported `context deadline exceeded`, the same text as a network timeout. On main (6815508) the shim registers no async error handler on either path, and the local send also goes through `js.PublishMsg` (`probe/nats-phase-0/director-mcp/bus.go:855`), so the fix finding-008 asks for would cover both. That last point is read from the code, not run. Related: R-109.

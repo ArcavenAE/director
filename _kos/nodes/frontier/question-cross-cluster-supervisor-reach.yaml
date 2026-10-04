@@ -66,9 +66,17 @@ content: |
   Prior in this graph: finding-009 (reloaded grant misses an open leaf;
   here a possible second layer), finding-008 (a refusal seen as a
   timeout), finding-006 (global tier has no per-agent address). Orc finding-178 (marvel leaf controls are reload-only).
+
+  Added 2026-10-04: finding-022 measured the opposite change. Removing a
+  user and reloading closes that user's live client connection at once, while
+  finding-009 found an added grant does not reach an open leaf. So revocation
+  takes effect on reload and a new grant waits for a reconnect; whether a
+  removed user's open leaf closes too is unmeasured.
 edges:
   - target: finding-009-hub-grant-reload-misses-existing-leaf
     type: derives
+  - target: finding-022-a-hub-reload-closes-a-removed-users-live-client-connection
+    type: supports
 provenance:
   created_by: agent
   session: 2026-09-28 cross-cluster supervisor reach, kinu arm (arcaven-research-supervisor-g5-0)
