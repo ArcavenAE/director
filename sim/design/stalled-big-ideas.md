@@ -41,7 +41,7 @@ Running, not blocked: <names>
 Stalled ideas (N)  [research or design, no live forward pointer, quiet 14d+]
 9. <repo>/<path> - <title>  (quiet 23d; pointers all closed)
 10. ...  (+M more)
-Unverified ideas: K  [bd: 4; stale ref: 2]
+Unverified ideas: K  [bd: 4; remote unreachable: 2]
 Uncaptured: <one line each, or "none">
 ```
 
@@ -56,10 +56,11 @@ Uncaptured: <one line each, or "none">
   answered`.
 - **Unverified ideas** are counted apart, never in N: an idea whose verdict
   depends on a source the scan could not read (bd down, `gh` failing, a
-  stale ref). The bracket names **kinds** of source, never repos, at most
-  four (`bd`, `gh`, `stale ref`, `remote unreachable`), each with its count of
-  ideas (`[bd: 4; stale ref: 2]`); which repos is detail on request
-  on request. It is omitted when K is 0.
+  repo with no local default-branch ref). The bracket names **kinds** of
+  source, never repos, at most three (`bd`, `gh`, `remote unreachable`),
+  each with its count of ideas (`[bd: 4; remote unreachable: 2]`); which
+  repos is detail on request. It is omitted when K is 0. A stale ref is not
+  a kind here: it dates a verdict (step 2), it does not withhold one.
 - **No action.** The sweep presents and stops, as it does for every block.
   The operator chooses per item: revive it (a seat files the ticket), park it,
   or drop it.
@@ -88,16 +89,33 @@ a fetch writes `refs/remotes/origin/*` and `FETCH_HEAD` in a checkout other
 sessions share, can start `gc --auto`, races their ref locks, and can hang on
 a credential prompt. For each repo it instead:
 
-1. asks the remote, read-only, with `GIT_TERMINAL_PROMPT=0` and a 10-second
-   timeout: `git -C <repo> ls-remote --symref origin HEAD`, which names the
-   default branch and its commit, whether or not the checkout has a local
-   `origin/HEAD` (an unset one is common in older clones);
-2. compares that commit with the local `refs/remotes/origin/<default>`. Equal:
-   the repo is read. Different, or the local ref is missing: the repo is
-   `stale ref`, its ideas are not judged, and they count as Unverified;
-3. if `ls-remote` fails or times out, falls back to a local `origin/HEAD`;
-   with none, the repo is unread. Either way its ideas count as Unverified
-   with the kind `remote unreachable`;
+1. asks the remote, read-only: `git -C <repo> ls-remote --symref origin
+   HEAD`, which names the default branch and its commit, whether or not the
+   checkout has a local `origin/HEAD` (an unset one is common in older
+   clones). It runs with **no way to prompt**: `GIT_TERMINAL_PROMPT=0` for
+   HTTPS, and, because every orc remote is SSH, `GIT_SSH_COMMAND="ssh -o
+   BatchMode=yes -o ConnectTimeout=5"` for a passphrase or host-key prompt.
+   Each call is a child process killed after 10 seconds by the script's own
+   timer (`dbi` is Python, like `dws`: `subprocess.run(..., timeout=10)`;
+   stock macOS has no `timeout` command). The calls run 8 at a time, with
+   the whole remote step capped at 60 seconds; a repo not answered by then is
+   treated as unreachable. Measured by the reviewer, read-only across the
+   30 orc-root checkouts: 8-way took 5 seconds, against about 1.2 seconds a
+   repo serially, with no prompt and refs and `FETCH_HEAD` unchanged;
+2. compares that commit with the local `refs/remotes/origin/<default>`.
+   Equal: the repo is current. Different: the repo is **judged as of its
+   local ref**, and each of its listed ideas carries `(as of <date>)`, the
+   local ref's commit date. A stale ref is the normal case, not the
+   exception: 14 of the 30 checkouts (8 of the 16 with `_kos/ideas/`) were
+   behind their remote on 2026-10-04. Sending half the ideas to Unverified
+   on a normal day would empty the block, so a stale ref dates the verdict
+   instead of withholding it. Bringing a checkout current is a fetch, which
+   is the checkout owner's act, never the scan's;
+3. if `ls-remote` fails or times out, the repo is still read from its local
+   `origin/<default>` (resolved from a local `origin/HEAD`), judged as of
+   that ref and marked `(as of <date>, remote unreachable)`. Only a repo with
+   no local default-branch ref at all is unread, and its ideas count as
+   Unverified (`remote unreachable`);
 4. lists matching paths with `git ls-tree -r --name-only
    origin/<default>`, and reads each file with `git show
    origin/<default>:<path>`. The root globs select repos and path
@@ -180,11 +198,18 @@ file is the record.
    and no other pointer, all three are listed (A and B with `successor
    cycle`, C with its own reason).
 7d. No fetch: the scan runs against a repo whose remote has moved past the
-   local `origin/<default>`. Its ideas count as Unverified (`stale ref`), and
-   the checkout's `refs/remotes/*`, `FETCH_HEAD` and reflog are byte-identical
-   before and after. With the remote unreachable and no local `origin/HEAD`,
-   the repo is unread, its ideas count as `remote unreachable`, and the scan
-   finishes within its timeout without prompting.
+   local `origin/<default>`. Its ideas are judged against the local ref and
+   each listed one carries `(as of <date>)`, and the checkout's
+   `refs/remotes/*`, `FETCH_HEAD` and reflog are byte-identical before and
+   after. With the remote unreachable but a local ref present, its ideas are
+   judged and marked `(as of <date>, remote unreachable)`. With no local
+   default-branch ref, the repo is unread and its ideas count as Unverified
+   (`remote unreachable`).
+7e. No prompt: with an SSH remote whose key needs a passphrase (an agent
+   with no keys, `SSH_AUTH_SOCK` unset) and with an unknown host key, the
+   call returns within 10 seconds without reading the terminal, and the repo
+   takes the unreachable path. Thirty repos, eight of them hanging, finish
+   within the 60-second cap.
 7b. A subrepo checkout on a feature branch whose working tree has an idea
    file that is not on `origin/<default>`: not read. A file on the default
    branch that the working tree has deleted: read.
