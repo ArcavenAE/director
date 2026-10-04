@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prove the director skill's sweep uses the workstream ledger the way the design
 # says (sim/design/board-workstream-ledger.md sections 7 and 11 item 5). Step 4
-# reads Blocked on you from ledger rows with blocked on = operator, in the form
+# reads Blocked on you from ledger rows whose blocked field is operator, in the form
 # `<owner> - <workstream>: <next action>`, and its printed fence does not change.
 # Step 5 gains: open a row for each new stream, move stages that changed, run
 # refresh. Without a ledger or the CLI the sweep runs as before. The commands the
