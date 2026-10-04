@@ -17,9 +17,9 @@ content: |
 
   ## What exists (counts and structure only)
 
-  Tracked counts were measured at director main 165900f. Counts derived
-  from the gitignored notes are research's, from its draft; files outside
-  git cannot be measured at a commit.
+  Tracked counts measured at director 165900f.
+  Untracked sim/notes counts (line totals, id schemes) are a research-time
+  snapshot from 2026-10-04, not tied to a commit.
 
   - Tracked, publishable (at 165900f):
     - `sim/requirements.md`, 2,255 lines, entries R-01 to R-179. The entry
@@ -39,9 +39,10 @@ content: |
     relay numbering collides with register R-ids. These files hold live
     operational detail; nothing from them is published without a clean
     rewrite.
-  - The register cites 59 distinct O-refs and 14 FR-refs into the ignored
-    notes (research's figure), so a public reader cannot follow most
-    "Earned by" lines.
+  - The register cites 22 distinct O base numbers (74 distinct suffixed O
+    tokens) and 13 date-form O ids, plus 15 FR ids, all resolving only
+    into gitignored notes. 47 of its 169 Earned-by lines cite at least one
+    of them (a line-level count).
 
   ## Prior art this probe must not duplicate
 
@@ -93,7 +94,7 @@ content: |
      chosen after looking: every 9th id from R-05 (R-05, R-14, R-23, R-32,
      R-41, R-50, R-59, R-68, R-77, R-86, R-95, R-104, R-113, R-122, R-131,
      R-140, R-149, R-158, R-167, R-176). Record whether each resolves to a
-     tracked source.
+     tracked source or depends only on notes.
   3. Diff the register's classes against the audit themes.
   4. Write a finding with the clean-rewrite list and a go or no-go for
      5e52j.
@@ -113,11 +114,12 @@ provenance:
     finding-138 (the vsdd layer mapping). Research's draft took its tracked
     counts at faed978; this brief re-measured them at 165900f. sim/design/
     holds 24 files at both commits (23 designs and a README; the draft said
-    22 briefs), and _kos/ideas/ went from 9 to 10. The notes-derived counts
-    are research's and were not re-measured.
+    22 briefs), and _kos/ideas/ went from 9 to 10. The O and FR citation
+    counts were re-measured by research at director origin/main after
+    review; the sim/notes line totals are research's 2026-10-04 snapshot.
 brief:
-  hypothesis: "The tracked corpus cannot yet stand alone as reverse-brief input: most register entries earn their place through evidence in the gitignored notes, so a director StRS drafted from tracked sources will have empty or untraceable sections until a public evidence ledger exists."
+  hypothesis: "About a quarter of the register's Earned-by evidence resolves only into gitignored notes. A tracked-only StRS will therefore have untraceable sections wherever those entries cluster, until a public evidence ledger exists."
   excluded_scope: "Quoting, summarizing or publishing anything from sim/notes/; editing the register or the audit; running the reverse brief itself (that is 5e52j)."
-  success_signal: "A finding with the StRS section map, the 20-chain sample (how many resolve publicly), the class-versus-theme diff, the clean-rewrite list, and a go or no-go for 5e52j. The hypothesis is disconfirmed if at least 11 of the 20 sampled chains resolve to a tracked source, and no StRS section the PRD needs is empty."
+  success_signal: "A finding with the StRS section map, the 20-chain sample (how many resolve publicly), the class-versus-theme diff, the clean-rewrite list, and a go or no-go for 5e52j. The hypothesis is disconfirmed if no more than 2 of the 20 sampled chains depend only on notes, and no StRS section the PRD needs is empty."
   timebox: "One working session for steps 1 to 3; the finding in the next."
-  predicted_confidence: 0.7
+  predicted_confidence: 0.6
