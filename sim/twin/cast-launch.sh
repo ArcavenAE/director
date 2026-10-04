@@ -83,6 +83,10 @@ slice_args=("$WARDROBE_ROOT" "$WROLE")
 [[ -n "$IDENTITY" ]] && slice_args+=("$IDENTITY")
 [[ "${ALLOW_PROPOSAL:-1}" == 1 ]] && slice_args+=(--allow-proposal)
 [[ "${ALLOW_DIRTY:-0}" == 1 ]] && slice_args+=(--allow-dirty)
+# Resolved once, as slice.sh would (ruling 59), and exported so slice.sh writes
+# exactly the path the cast line names to the seat.
+spawn_log="${WARDROBE_SPAWN_LOG:-$HOME/.local/state/wardrobe/spawn.log}"
+export WARDROBE_SPAWN_LOG="$spawn_log"
 slice="$("$slice_sh" "${slice_args[@]}")"
 
 # One source for the bus id (R-73). marvel's computed per-replica name until
@@ -227,9 +231,6 @@ mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_A
 
 cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_ROLE in team $DIRECTOR_TEAM, address agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID."
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
-# Resolved as wardrobe's slice.sh writes it (ruling 59), so the seat is told
-# where the log is and does not search for it.
-spawn_log="${WARDROBE_SPAWN_LOG:-$HOME/.local/state/wardrobe/spawn.log}"
 cast_line+=" Your first act is to echo the last line of the spawn log at $spawn_log (ruling 84)."
 
 # Exactly one system prompt (aae-orc-1vq6z). claude keeps only the LAST
