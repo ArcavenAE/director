@@ -73,10 +73,18 @@ export DIRECTOR_STATE="$root/state" DWS_TEST_CLOCK=1
 mkdir -p "$DIRECTOR_STATE"
 printf '# director board\n' >"$DIRECTOR_STATE/board.md"
 DWS_NOW=2030-12-31T10:00:00Z "$DWS" open w1 --title "one" --stage designed --owner architect --blocked operator --next "rule on X" >/dev/null
-# The row fields the skill names are the fields dws show --json emits.
-for f in blocked last_moved owner slug next; do
+# The row fields the skill names are the fields dws show --json emits. The list
+# is read from the skill's step 4 text (its backticked lower-case words, less the
+# value `operator`), so renaming a field there changes what is checked here.
+fields="$(python3 - <<'PY' "$step4"
+import re, sys
+print(" ".join(sorted({w for w in re.findall(r"`([a-z_]+)`", sys.argv[1]) if w != "operator"})))
+PY
+)"
+[[ "$fields" == "blocked last_moved next owner slug" ]] && ok "step 4 names the row fields blocked, last_moved, next, owner and slug" || bad "step 4 names the row fields blocked, last_moved, next, owner and slug" "read: $fields"
+for f in $fields; do
   "$DWS" show --json | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin)["rows"][0] else 1)' "$f" \
-    && ok "dws show --json rows carry the $f field the skill names" || bad "dws show --json rows carry the $f field the skill names"
+    && ok "dws show --json rows carry the $f field the skill names" || bad "dws show --json rows carry the $f field the skill names" 
 done
 DWS_NOW=2030-12-31T12:00:00Z "$BOARD_HTML" >/dev/null 2>&1 || bad "the page renders the fixture"
 form="$(python3 - "$skill" <<'PY'
@@ -92,6 +100,11 @@ if [[ -n "$form" ]] && grep -qF "<li>$want</li>" "$DIRECTOR_STATE/board.html"; t
 else
   bad "each Blocked on you line reads <owner> - <workstream>: <next action>, as the page renders it" "skill form: ${form:-none}"
 fi
+
+# The header comment states the contract in the skill's words, not the design's.
+if sed -n 1,12p "$here/scripts/verify-skill-ledger.sh" | grep -q 'blocked on = operator'; then
+  bad "the header names the blocked field as the skill does" "it still says 'blocked on = operator'"
+else ok "the header names the blocked field as the skill does"; fi
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
