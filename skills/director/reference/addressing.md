@@ -91,7 +91,7 @@ not consuming its inbox (O-28).
 ## Cluster geography
 
 `cluster name == hostname`. kinu = this laptop; mokuzai = skippy's host
-(192.168.100.196); desk = desk.local. From kinu, reach skippy's fleet with
+(hostname mokuzai); desk = desk.local. From kinu, reach skippy's fleet with
 `--cluster skippy`; ON skippy the same daemon is the local socket. Skippy's
 own marvel config names that cluster "mokuzai" (same fleet, two names).
 

@@ -45,7 +45,7 @@ session and collapse to one row. Match keys, in order:
 - **title / short ref** — last resort for ListAgents-only sessions.
 
 `cluster name == hostname` here: kinu = this laptop, mokuzai = skippy's host
-(192.168.100.196), desk = desk.local.
+(hostname mokuzai), desk = desk.local.
 
 ## 3. Reach-method precedence (record per session)
 
