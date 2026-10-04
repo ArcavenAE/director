@@ -79,10 +79,12 @@ three results:
 |---|---|---|
 | a row exists | the predecessor is live | the count of empty reads resets to 0 |
 | the read succeeds and finds no row | the predecessor looks gone | the count goes up by 1 |
-| the read fails (KV error, timeout, disconnect) | **unknown** | the count is left alone; unknown never counts toward the trigger |
+| the read fails (KV error, timeout, disconnect) | **unknown** | the count resets to 0; unknown never counts toward the trigger, and it breaks the run |
 
-Inheritance starts when the count reaches 3, three successful empty reads in
-a row, about 60 to 90 seconds. A predecessor whose shim restarts in place
+Inheritance starts when the count reaches 3: three successful empty reads in
+a row, with no row and no failed read between them, about 60 to 90 seconds.
+So empty, empty, failed, empty does not trigger, and the run starts again
+after the failure. A predecessor whose shim restarts in place
 writes its new instance's row within its own connect, well inside that span,
 so the restart resets the count and does not trigger. The same three-read rule
 applies when no row was ever seen (a predecessor that died before the
@@ -127,9 +129,15 @@ replay its own inbox once on its first restart onto the split durables of
 
 A durable's ack floor is the stream sequence at or below which it has acked
 everything it reads, so it is a safe floor for each subject it filters. One
-function, `subjectFloor(prefix, subject, live)`, replaces the identical-set
-test for the own-subject resume, the role-subject start (3a), and the
-inherited durable. Names gain a suffix after the instance ULID (`-role`,
+function, `subjectFloor`, replaces the identical-set test, with two scopes:
+
+| Caller | Durables scanned | Why |
+|---|---|---|
+| own-subject resume, inherited durable | one id's durables only (the prefix `mcp_<id>_` and the per-id guard below), departed only | an instance subject belongs to one id, and a live durable of the same id is the collision, not a floor |
+| role-subject start (3a) | **every** consumer on the stream whose filter set contains the role subject, any id, live or departed; no prefix and no per-id guard | the floor that matters is what any holder of the role has acked. A new id has no durable of its own, so the per-id scope finds nothing and replays all role mail, which is the S12-8 case |
+
+The role scope reads `consumer info` for every consumer on the stream; it
+runs once per role durable at connect, not per message. Names gain a suffix after the instance ULID (`-role`,
 `-inherit`). The parser takes the 26-character ULID after the prefix and then
 an optional known suffix, so the existing "skip a name with another `_`" guard
 against one id prefixing another (bus.go:315-317) still holds.
@@ -137,7 +145,7 @@ against one id prefixing another (bus.go:315-317) still holds.
 **The invariant this depends on.** A durable outlives its session: it is not
 deleted at exit, and it expires only after `InactiveThreshold`, 73h on both
 tiers (`localConsumerInactive`, bus.go:76; `globalConsumerInactive`,
-global.go:47). That is longer than the 72h `max_age` of AGENT_INBOX and the
+global.go:55). That is longer than the 72h `max_age` of AGENT_INBOX and the
 global streams, so while any of a departed seat's mail is still stored, its
 floor is still readable.
 
@@ -155,7 +163,7 @@ mailbox is the collision `session-identity-and-succession-options.md` option C
 warns about.
 
 **Stated limit.** Mail sent to the predecessor's id after it died is refused
-at send time today when no workspace is given (bus.go:527-558), so D1 reads
+at send time today when no workspace is given (bus.go:774, `pickWorkspace`), so D1 reads
 what was waiting at death plus what was sent with an explicit workspace. It
 does not redirect new mail. That stays with senders addressing `role://`,
 which already survives a generation (section 2).
@@ -176,7 +184,7 @@ intended. It is the mirror of D1, which is about reading too little.
 | Subject | Start | Why |
 |---|---|---|
 | The seat's own instance subject | all the stream holds (unchanged) | every message on it is addressed to this id, including any sent with an explicit workspace before it connected, so none is history to skip |
-| The role subject | one past the highest ack floor of any durable, live or departed, that filters the same role subject; all the stream holds when no such durable exists | mail at or below that floor was delivered to and acked by some holder of the role. Mail past it may be unread by every holder, so the new seat still reads it. That is "start at the tail of what the role has already handled", one step safer than the raw stream tail, which would drop role mail sent while no holder was reading |
+| The role subject | one past the highest ack floor of any durable on the stream, any id, live or departed, whose filter set contains the role subject (section 3, the role scope); all the stream holds when no such durable exists | mail at or below that floor was delivered to and acked by some holder of the role. Mail past it may be unread by every holder, so the new seat still reads it. That is "start at the tail of what the role has already handled", one step safer than the raw stream tail, which would drop role mail sent while no holder was reading |
 
 A durable has one start, so a seat holding a role gets two local durables,
 `mcp_<self>_<instance>` (own subject) and `mcp_<self>_<instance>-role` (role
@@ -187,7 +195,7 @@ role subject follows the same rule on its own durable.
 
 Role mail can wait for a holder only if it was sent with an explicit
 workspace: a role send with no live holder and no workspace hint is refused at
-send time (bus.go:590-595). So the "all the stream holds" start for a first
+send time (bus.go:596-597). So the "all the stream holds" start for a first
 holder reads only mail that a sender addressed to that role's mailbox on
 purpose.
 
@@ -298,8 +306,16 @@ most visible; U1 closes the loss.
 4a. U1 (section 3a): a new id with no departed durable and no
    `DIRECTOR_PREDECESSOR` connects holding role `supervisor`. The stream holds
    40 role messages, of which a live holder has acked through the 37th, and 2
-   messages on the new id's own subject. The seat receives exactly the 2 own
-   messages and role messages 38 to 40, not 1 to 37.
+   messages on the new id's own subject. The live holder's durable is
+   `mcp_sup-a_<ULID>` and the new id is `sup-b`, so no durable shares the new
+   id's prefix. The seat receives exactly the 2 own messages and role messages
+   38 to 40, not 1 to 37. Repeated with the holder departed and its durable
+   still stored: the same result.
+4d. U1, the parser: with ids `sup` and `sup_T1` both holding durables
+   (`mcp_sup_<ULID>`, `mcp_sup_T1_<ULID>`, `mcp_sup_T1_<ULID>-role`), the
+   own-subject floor for `sup` reads only `mcp_sup_<ULID>`, and the one for
+   `sup_T1` reads only its own two. A name whose text after the prefix is not
+   a 26-character ULID plus an optional known suffix is skipped.
 4b. U1: the same with no durable that ever filtered the role subject: all 40
    role messages are delivered (first holder).
 4c. U1: the same seat started with `DIRECTOR_PREDECESSOR` set takes D1's
