@@ -76,3 +76,10 @@ subjects (`nats consumer info AGENT_INBOX <name>`).
 - finding-012: a reply to a dead id; the adjacent addressing failure.
 - question-director-seat-startup, sub-question C (what carries across a
   restart).
+
+## Addendum 2026-10-04: two more sightings
+
+- The sideshow-builder seat reported that, on respawn, `wait_for_message` replayed 11 messages it had already handled (team harvest of 2026-10-04).
+- The arcaven builder seat saw the same on its own respawn on 2026-10-04: the first drain reported "local inbox has no earlier durable for this seat, so it reads everything the stream still holds; 18 message(s) waiting", and the retained messages included asks answered days earlier.
+
+Neither shim's revision was checked, so this still does not establish whether the resume fix was running (section 3 stands).
