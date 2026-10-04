@@ -54,3 +54,9 @@ a probe before it hardens.
   cutover on the ruled `agent.<cluster>.` root, with rollback, and a
   two-cluster probe (finding-008). Amends R-94, R-95, R-50, and R-109 (ruled
   2026-09-24). Candidate FAB-A to FAB-G.
+- `asks-die-unread.md` (design for review 2026-10-04): one class, three
+  paths by which an ask dies unread (expiry, mail orphaned on a dead
+  instance id, a successor reporting live before reading); inherited mail
+  from `DIRECTOR_PREDECESSOR`, a `catching-up` presence state, and FAB-C's
+  expiry notice on today's stream until brief 11's cutover. Issues #220,
+  #222; R-130, R-143, R-144, R-178.
