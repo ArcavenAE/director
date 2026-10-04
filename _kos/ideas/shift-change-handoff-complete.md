@@ -4,11 +4,20 @@ Status: idea (operator ruling on the B2 question, 2026-10-04). No design and no 
 
 ## The ruling, verbatim
 
-Operator, 2026-10-04: "we should do more research on how this handoff/shiftchange should be completed, possibly put elegable originals into a secondary guarentee/support role ready for questions for some period of time (if they are being rotated out for a non-critical or non-fault reason)"
+Operator, 2026-10-04, answering the B2 question. The text is quoted exactly, typos included, in a code block so nothing is reflowed (583 bytes):
+
+```
+R1 predecessor lineage comes from the launcher's environment, R2 it's not live until it's considered to have taken over for it's predecisor, the handoff is compelete; We don't have the details on that exactly, for now it's when the catch up is complete, but we should do more research on how this handoff/shiftchange should be completed, possibly put elegable originals into a secondary guarentee/support role ready for questions for some period of time (if they are being rotated out for a non-critical or non-fault reason) B2-R3 yes, definitely 72h and fix the stale 24h referneces
+```
+
+It carries three rulings:
+- **R1:** a successor's predecessor lineage comes from the launcher's environment.
+- **R2:** a successor is not live until it is considered to have taken over, the handoff being complete. The details are not known; for now that is when its catch-up is complete, and the handoff and shift change deserve more research, including a possible secondary support role for eligible originals rotated out for a non-fault reason.
+- **B2-R3:** 72 hours, and fix the stale 24 hour references. This is outside this idea.
 
 ## What is settled for now
 
-A successor is considered live when its catch-up is complete (ruled, B2-R2). The design for what catch-up consists of is director#223: inherited mail, a catching-up presence, and an expiry notice for asks that die unread.
+A successor is considered live when its catch-up is complete (ruled, B2-R2: "for now it's when the catch up is complete"). The design for what catch-up consists of is director#223: inherited mail, a catching-up presence, and an expiry notice for asks that die unread.
 
 ## The question
 
