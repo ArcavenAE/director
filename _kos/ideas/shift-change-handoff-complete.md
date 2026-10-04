@@ -26,5 +26,5 @@ Neither says what a support seat would be, and a support seat is a new role with
 ## Pointers
 
 - director#220, director#222, director#223
-- R-178 (a respawned supervisor reads its predecessor's replies before reporting live), once #219 is merged
+- R-178 (a respawned supervisor reads its predecessor's replies before reporting live)
 - finding-015 (a respawned seat replays its inbox and the successor cannot tell handled mail from new)
