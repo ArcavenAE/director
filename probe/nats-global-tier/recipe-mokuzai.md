@@ -27,6 +27,29 @@ Two things on the joining host can make a good path look broken:
   `No route to host` for every LAN address. marvel's admin guide covers it
   under "Host prerequisites", with keeping the host awake.
 
+## Naming and addresses: two rules from bring-up
+
+**Name your workspaces as kinu names them.** A joining cluster's workspaces
+take the names kinu already uses for the same teams. A name chosen to match the
+cluster (the obvious guess) works until the first seat needs to be found by
+workspace, and then every seat has to be removed and re-applied under the right
+name, with new instance ids and stale presence keys until they expire. Ask for
+the team-to-workspace list before you declare any team. One consequence to know
+about: with matching workspace names, a bd actor does not say which cluster
+wrote it, because it carries workspace, team, role, generation and index but not
+the cluster.
+
+**Use the hub's hostname, never a literal address.** The hub's address appears
+in four places on a joining cluster: the hub URL in the bus config, the bd host,
+the section header of the bd credentials file, and the local hub-address file.
+A hostname in all four means a network move changes nothing you have to touch:
+in one move, a leaf whose hub URL was a hostname reattached on its own, and one
+configured with a literal address did not. When an address does have to change,
+the hub URL is read only at daemon start, so the cost is a daemon restart and
+then a seed push from the hub operator (the restart drops the transient seed;
+the leaf shows `unenrolled` until it arrives), plus an edit to each of the other
+three places.
+
 ## 0. What you receive out of band
 
 One file from the operator, handed privately (never on GitHub, never on the
