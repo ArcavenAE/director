@@ -1,6 +1,6 @@
 # Joining the global tier from mokuzai (skippy's cluster)
 
-The hub runs on kinu, LAN address 192.168.100.110, leaf port 7442. Your
+The hub runs on kinu (kinu.local), leaf port 7442. Your
 supervisors keep talking to your own local broker; the leaf link carries the
 director channel. Every supervisor on the cluster joins the global tier: the
 supervisor and research-supervisor roles, both with
@@ -81,7 +81,7 @@ jetstream {
 }
 leafnodes {
   remotes: [
-    { urls: ["nats-leaf://192.168.100.110:7442"], nkey: $DIRECTOR_LEAF_NKEY }
+    { urls: ["nats-leaf://kinu.local:7442"], nkey: $DIRECTOR_LEAF_NKEY }
   ]
 }
 ```
