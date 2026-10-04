@@ -10,8 +10,9 @@ no code lands until this is reviewed.
   finding-015 (replay on reconnect), `continuous-custody-succession.md`
   (custody, not mail), `session-identity-and-succession-options.md` (options
   A to C).
-- Checked against director `origin/main` faed978 and the live kinu broker on
-  2026-10-04 at about 03:40Z.
+- Checked against director `origin/main` faed978, marvel `origin/main`
+  c99ce98, and the live kinu broker on 2026-10-04: the stream config at about
+  03:19Z, subjects and presence at 03:24Z, consumer floors at 03:26Z to 03:27Z.
 
 ## 1. One class, three paths
 
@@ -34,20 +35,23 @@ together.
 | A successor never reads its predecessor's instance mail | bus.go:223 (`seatAckFloor` over prefix `"mcp_"+self.AgentID+"_"`), resolveSubject bus.go:446-478 | The resume floor and the subject are both keyed to the agent id. Only mail sent to `role://` survives a generation change |
 | A seat reports live before reading | main.go:128-129 | `setPresence(ctx, "idle")` right after connect, "so a roster lists us immediately" |
 | No catching-up presence state exists | tools.go:83-89, bus.go:1212-1237 | state is free text with the hint `idle | busy | away`; nothing enforces it |
-| A lineage is already supplied on shifts | marvel `CLAUDE.md:215`, `docs/design/shift-trigger-list.md:169`; this seat's env | marvel sets `MARVEL_PREDECESSOR` (`<workspace>/<old seat key>`) on every shift successor, as it did for the architect seat that wrote this. The shim does not read it |
+| A lineage is supplied on some respawns | marvel `internal/team/controller.go:2209-2229` (c99ce98); this seat's env | marvel sets `MARVEL_PREDECESSOR` (`<workspace>/<old seat key>`) only in a shift's launch, and only when the predecessor is alive (`aliveSessions`, :2209). The successor launches **before** the drain (:2249-2259), so at its connect the predecessor is still live. A crash repair outside a shift gets no lineage; a single-replica role's repair reuses the same key, while a multi-replica role's crashed slot returns under a new index (marvel `CLAUDE.md`, Process Management). The shim reads none of it today |
 | How much mail is orphaned now | `nats stream subjects AGENT_INBOX`, `kv ls AGENT_STATE`, `consumer info` on each departed id's newest durable | 1306 of 3625 stored messages sit on 16 subjects (14 agent ids) with no live presence. Past each id's newest ack floor, **47 are unread**, spread over 7 ids (two builder replicas hold 20 and 21). `num_pending` on a durable that also filters its role subject counts role mail too, so 47 is an upper bound for instance mail |
 
 ## 2a. Relation to brief 11 (the leaf fabric)
 
-`leaf-fabric-one-address-space.md` (brief 11, amendments ruled 2026-09-24,
-nothing built) already rules the long-term answer to P1: FAB-C's per-cluster
-sweeper sends the sender an INFORM at 7 and 21 days unread, under a 28-day
-`max_age` backstop with `discard: new` (section 2.5). It arrives with a
-flag-day cutover off `AGENT_INBOX`. This design works on today's stream until
-then, and is shaped to converge:
+`leaf-fabric-one-address-space.md` (brief 11, nothing built) proposes the
+long-term answer to P1. Its ruled parts are the amendments to R-50, R-94,
+R-95 and R-109, the `agent.<cluster>.` subject root and the flag-day cutover
+(its status line). FAB-C ("an inbox never deletes unread mail without first
+notifying the sender", brief 11 section 7) is a **candidate** requirement, not
+in `requirements.md`, and its figures (a sender INFORM at 7 and 21 days under
+a 28-day `max_age` with `discard: new`, section 2.5) are **proposals** (its
+section 8). This design works on today's stream and is shaped to converge if
+FAB-C is accepted:
 
-- **D3 is FAB-C on today's stream**, with ages scaled to the 72h limit. When
-  FAB-C ships, its sweeper replaces U3 and U3 is deleted.
+- **D3 is FAB-C's notice on today's stream**, with ages scaled to the 72h
+  limit. If FAB-C is accepted and ships, its sweeper replaces U3.
 - **D1 and D2 are not in brief 11.** FAB-D and FAB-E key one durable and
   presence on the seat's address, which fixes replay on restart (`iejcx`) but
   says nothing about a successor with a new id. Inheritance and catching-up
@@ -63,8 +67,24 @@ maps marvel's `MARVEL_PREDECESSOR` (`<workspace>/<id>`) to it, the same way it
 maps the manifest role to `DIRECTOR_ROLE`. Without marvel, an operator sets it
 by hand or leaves it unset; unset means today's behavior.
 
-**The read.** At connect, when `DIRECTOR_PREDECESSOR` is set and that id has
-no live presence row, the shim creates one more durable,
+**When it starts.** The predecessor of a shift is still live when its
+successor connects (section 2), so inheritance is armed at connect and starts
+later, when the predecessor is gone. With `DIRECTOR_PREDECESSOR` set, the
+shim's existing 30s heartbeat (main.go:134-137) checks for any
+`presence.<team>.<predecessor>.*` row. The first tick that finds none, after
+at least one tick that found one or 90s after connect (the presence TTL),
+starts the read below. A predecessor that drains and exits during a shift is
+therefore inherited about 30 to 120 seconds after it leaves, at its final ack
+floor, so no message is read by both. The arm expires after the stream's
+`max_age`.
+
+**Crash repairs.** A single-replica role's repair reuses its key, so it reads
+its own floor today and needs nothing. A multi-replica slot that returns under
+a new index has no lineage. The fix is marvel's: set `MARVEL_PREDECESSOR` on a
+repair spawn to the crashed row it replaces (part U5, a marvel ticket). The
+shim does not guess.
+
+**The read.** Once started, the shim creates one more durable,
 `mcp_<self>_inherit_<instance>`, filtering only the predecessor's instance
 subject `agent.<ws>.<team>.<predecessor>.inbox`. It starts at the
 predecessor's ack floor plus one, computed by the existing `seatAckFloor`
@@ -96,7 +116,8 @@ which already survives a generation (section 2).
 At connect the shim writes presence state `catching-up`, not `idle`, and keeps
 writing it on its heartbeat until both hold:
 
-1. every source (local, inherited, global) has reported zero waiting once, and
+1. every source (local, inherited, global) has reported zero waiting once,
+   and an armed inheritance (section 3) has started and drained, and
 2. the seat has called `wait_for_message` at least once since connect.
 
 Then it writes `idle` and accepts the seat's own `set_presence` from then on.
@@ -105,13 +126,20 @@ Until then, a `set_presence` call from the seat is recorded but presence stays
 
 - **Sends still resolve.** resolveSubject reads any presence row, so mail to
   a catching-up seat is queued as today. Nothing is refused.
-- **Director counts it as not live** for routing and for "reports live"
-  (R-143, R-178). The roster shows `catching-up (N waiting)`.
+- **Proposed default, pending ruling B2-R2:** director counts it as not live
+  for routing and for "reports live" (R-143, R-178). The roster shows
+  `catching-up (N waiting)` either way.
 - **Compatibility.** An older director reading the new state sees one more
   free-text value and counts the row as live, which is today's behavior. No
   reader breaks.
-- **Stuck.** A seat that never drains stays `catching-up`. That is the
-  correct report, not a bug: it is the seat R-117's doorbell is for.
+- **Stuck with mail.** A seat that never drains stays `catching-up`. That is
+  the correct report: it is the seat R-117's doorbell is for.
+- **Stuck with nothing waiting.** A seat that connects with zero waiting and
+  never calls `wait_for_message` also stays `catching-up`, and no doorbell
+  fires, because nothing is unread. The presence row carries its connect time,
+  and the director sweep lists any seat `catching-up` for more than 10 minutes
+  with zero waiting as "connected, never polled" in its Uncaptured block. This
+  is the deaf-seat class (#66); the sweep surfaces it, it does not fix it.
 
 ## 5. D3: an expiry notice before the drop (closes P1)
 
@@ -124,7 +152,7 @@ address's oldest unread age from consumer ack floors.
   a threshold of `max_age` minus 24h (48h on today's 72h). This reminds and
   proposes; it decides nothing (ADR-007).
 - **What it sends.** For each message past the threshold: to the sender, one
-  FAILURE-free INFORM `unread at 50h, expires at 72h, to <address>`; to the
+  INFORM `unread at 50h, expires at 72h, to <address>`; to the
   recipient, one doorbell naming the count. Each notice once per message id,
   recorded in `$DIRECTOR_STATE` so a sweep does not repeat it.
 - **What it does not do.** It does not raise `max_age`, re-send, or move mail.
@@ -138,6 +166,7 @@ address's oldest unread age from consumer ack floors.
 | U1 | `DIRECTOR_PREDECESSOR` input, the inherited durable, `inherited_from`, its end rules; `cast-launch.sh` mapping | none | 1 |
 | U2 | `catching-up` presence and its exit rule; the roster's display and "not live" count | none | 2 |
 | U3 | sweep step: expiry notices from `unread --threshold`, once per id | #126 slice M on main | 3 |
+| U5 | marvel: set `MARVEL_PREDECESSOR` on a repair spawn that replaces a crashed row under a new index (a marvel ticket, not a director PR) | none | marvel |
 | U4 | fix the stale 24h in `verify-auth.sh:87`, `PROGRESS.md:11-12`, `probe/nats-global-tier/verify-global-tls.sh:247-250` and `verify-global-shim.sh:93-96`, and correct #222's title | none | 3 |
 
 Three PRs, not one: U1 and U2 touch different code paths and each can be
@@ -151,8 +180,13 @@ most visible; U1 closes the loss.
    `inherited_from`, and none of the predecessor's already-acked mail.
 2. U1: unset `DIRECTOR_PREDECESSOR` creates no inherited durable (today's
    behavior, a guard).
-3. U1: a predecessor with a live presence row is not inherited; the resume
-   note says why.
+3. U1, the shift order: the successor connects while the predecessor's
+   presence row is live; no inherited durable exists and nothing is read. The
+   predecessor acks 2 more and exits; within two heartbeat ticks after its row
+   expires (fake clock), the inherited durable starts at the new floor and
+   delivers only what is past it.
+3a. U1: a predecessor row that reappears after inheritance started stops the
+   inherited durable at once, and the resume note says why.
 4. U1: the inherited durable is deleted after it drains with the predecessor
    still absent.
 5. U2: right after connect, presence reads `catching-up`; with 2 waiting, a
@@ -160,6 +194,14 @@ most visible; U1 closes the loss.
 6. U2: after a drain to zero and one `wait_for_message`, presence reads `idle`
    and later `set_presence` calls apply.
 7. U2: a send to a `catching-up` seat resolves and is stored (no refusal).
+7a. U2: with an armed inheritance whose predecessor is still live, presence
+   stays `catching-up` after the seat drains its own inbox, and turns `idle`
+   only after the inherited mail drains.
+7b. Sweep: a seat `catching-up` for 11 minutes with zero waiting and no
+   `wait_for_message` is listed once as "connected, never polled".
+7c. U5 (marvel): a multi-replica role whose middle replica crashes respawns
+   under a new index with `MARVEL_PREDECESSOR` naming the crashed row; a
+   single-replica repair carries none (same key).
 8. U3: a message unread past the threshold produces one notice to its sender
    and one doorbell to its recipient; a second sweep produces none.
 
@@ -187,10 +229,11 @@ This changes the shim every seat runs, so it is a change to a live system.
 - **B2-R2, does catching-up hold routing?** Default: director does not count a
   catching-up seat as live, and does not route new asks to it, while mail to it
   still queues. Alternative: display only.
-- **B2-R3, max age.** Default: keep 72h and fix the stale 24h text (U4)
-  until brief 11's cutover brings its ruled 28-day backstop. Alternative:
-  raise today's stream to 28 days now; that delays the drop, closes nothing on
-  its own, and grows the replay a respawned seat reads (finding-015).
+- **B2-R3, max age.** Default: keep 72h and fix the stale 24h text (U4).
+  D3's notice is what closes P1; the age only sets when the drop happens.
+  Alternative: raise today's stream (brief 11 proposes 28 days for the fabric,
+  unruled); that delays the drop, closes nothing on its own, and grows the
+  replay a respawned seat reads (finding-015).
 
 Expiry: these defaults hold until U1's build starts; with no ruling by then,
 the builder builds the defaults.
