@@ -41,7 +41,7 @@ Running, not blocked: <names>
 Stalled ideas (N)  [research or design, no live forward pointer, quiet 14d+]
 9. <repo>/<path> - <title>  (quiet 23d; pointers all closed)
 10. ...  (+M more)
-Unverified ideas: K  [a source was unread: bd]
+Unverified ideas: K  [bd: 4; stale ref: 2]
 Uncaptured: <one line each, or "none">
 ```
 
@@ -56,7 +56,9 @@ Uncaptured: <one line each, or "none">
   answered`.
 - **Unverified ideas** are counted apart, never in N: an idea whose verdict
   depends on a source the scan could not read (bd down, `gh` failing, a
-  stale ref). The line shows only the count and the unread sources; detail
+  stale ref). The bracket names **kinds** of source, never repos, at most
+  four (`bd`, `gh`, `stale ref`, `remote unreachable`), each with its count of
+  ideas (`[bd: 4; stale ref: 2]`); which repos is detail on request
   on request. It is omitted when K is 0.
 - **No action.** The sweep presents and stops, as it does for every block.
   The operator chooses per item: revive it (a seat files the ticket), park it,
@@ -81,11 +83,24 @@ file the builder ships:
 Never `run/`, `forks/` or `contrib/` (the three-tier taxonomy: fleet recipes
 do not read them), and never a worktree directory (`*-wt-*`). An idea is
 read **by ref, from the default branch**, never from the working tree: a
-subrepo checkout often sits on a feature branch. For each repo the scan runs
-`git -C <repo> fetch --quiet origin` (skipped and noted as `stale ref` if it
-fails), resolves the default branch from `origin/HEAD`, lists matching paths
-with `git ls-tree -r --name-only origin/<default>`, and reads each file with
-`git show origin/<default>:<path>`. The root globs select repos and path
+subrepo checkout often sits on a feature branch. **The scan never fetches**:
+a fetch writes `refs/remotes/origin/*` and `FETCH_HEAD` in a checkout other
+sessions share, can start `gc --auto`, races their ref locks, and can hang on
+a credential prompt. For each repo it instead:
+
+1. asks the remote, read-only, with `GIT_TERMINAL_PROMPT=0` and a 10-second
+   timeout: `git -C <repo> ls-remote --symref origin HEAD`, which names the
+   default branch and its commit, whether or not the checkout has a local
+   `origin/HEAD` (an unset one is common in older clones);
+2. compares that commit with the local `refs/remotes/origin/<default>`. Equal:
+   the repo is read. Different, or the local ref is missing: the repo is
+   `stale ref`, its ideas are not judged, and they count as Unverified;
+3. if `ls-remote` fails or times out, falls back to a local `origin/HEAD`;
+   with none, the repo is unread. Either way its ideas count as Unverified
+   with the kind `remote unreachable`;
+4. lists matching paths with `git ls-tree -r --name-only
+   origin/<default>`, and reads each file with `git show
+   origin/<default>:<path>`. The root globs select repos and path
 patterns; they are never expanded against the working tree. A draft on a
 branch is not counted twice or counted before it lands.
 
@@ -95,9 +110,13 @@ branch is not counted twice or counted before it lands.
    number), found either in the artifact's text or in the ticket's or PR's
    own text citing the artifact's path or slug;
 2. a **successor artifact** named by `supersedes`, "became", or "superseded
-   by", which is not itself stalled. The successor walk keeps a visited set:
-   reaching an artifact already on the walk stops it, and every artifact on
-   the cycle is listed with the reason `successor cycle`;
+   by", which is not itself stalled. The successor walk keeps a visited set,
+   and reaching an artifact already on the walk stops it. The members of a
+   cycle are judged together, as one: the cycle is live when **any** member
+   has a live pointer outside the cycle (an open ticket or PR, a ruling
+   request, or a successor outside the cycle that is itself live), and then
+   no member is listed. Only a cycle with no such pointer lists every member,
+   with the reason `successor cycle`;
 3. a **ruling request** on the board that names the artifact and has not
    been answered.
 
@@ -130,7 +149,7 @@ file is the record.
 
 | # | Part | Depends on |
 |---|---|---|
-| S1 | `scripts/dbi` (director big ideas): reads `idea-roots.conf` and `ideas-parked.txt`, applies section 3, prints JSON rows `{path, title, quiet_days, reason, pointers}`. Read-only: `git fetch`, `git ls-tree`, `git show` and `git log` against `origin/<default>` (section 3), `bd sql` for open tickets citing a path or slug, `gh` for each PR or issue the artifact names. A source it cannot reach is reported in the output (`unread: bd`), and an idea that depends on it goes to the Unverified count, never read as "no pointer" | none |
+| S1 | `scripts/dbi` (director big ideas): reads `idea-roots.conf` and `ideas-parked.txt`, applies section 3, prints JSON rows `{path, title, quiet_days, reason, pointers}`. Read-only, no fetch: `git ls-remote --symref` (with no prompt and a timeout), then `git ls-tree`, `git show` and `git log` against the local `origin/<default>` (section 3), `bd sql` for open tickets citing a path or slug, `gh` for each PR or issue the artifact names. A source it cannot reach is reported in the output (`unread: bd`), and an idea that depends on it goes to the Unverified count, never read as "no pointer" | none |
 | S2 | `SKILL.md`: the block in step 4's shape; step 4 runs `scripts/dbi --json` and renders at most five rows; the "park it" line in section 4; the installer (`scripts/director-install`) places `dbi` and the default `idea-roots.conf` (never overwriting an existing one) | S1 |
 | S3 | With a ledger: a row at stage `idea`, `defined` or `designed` with no `pr:` or `bd:` link that is open, quiet past the threshold, is listed in the same block as `<owner> - <slug>`. The ledger's own stage flags are unchanged | S1, ledger W1 |
 
@@ -155,6 +174,17 @@ file is the record.
 7a. A cycle: A is superseded by B and B by A, both quiet with no other
    pointer. The scan terminates; both are listed with `successor cycle`. A
    three-artifact cycle (A, B, C) gives the same.
+7c. A cycle with a way out: A and B supersede each other, and B also
+   "became" C, which has an open ticket. Neither A nor B is listed. The
+   same when A itself has an open PR and C does not exist. With C stalled
+   and no other pointer, all three are listed (A and B with `successor
+   cycle`, C with its own reason).
+7d. No fetch: the scan runs against a repo whose remote has moved past the
+   local `origin/<default>`. Its ideas count as Unverified (`stale ref`), and
+   the checkout's `refs/remotes/*`, `FETCH_HEAD` and reflog are byte-identical
+   before and after. With the remote unreachable and no local `origin/HEAD`,
+   the repo is unread, its ideas count as `remote unreachable`, and the scan
+   finishes within its timeout without prompting.
 7b. A subrepo checkout on a feature branch whose working tree has an idea
    file that is not on `origin/<default>`: not read. A file on the default
    branch that the working tree has deleted: read.
