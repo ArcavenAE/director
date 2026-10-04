@@ -111,6 +111,42 @@ what was waiting at death plus what was sent with an explicit workspace. It
 does not redirect new mail. That stays with senders addressing `role://`,
 which already survives a generation (section 2).
 
+### 3a. The mirror case: a new instance with no lineage (S12-8)
+
+**What happens today.** A seat's one local durable filters its own instance
+subject and, when it holds a role, the role subject (bus.go:206-216,
+`selfSubjects` :244-250). A brand-new id has no departed durable of its own,
+so the durable starts with `DeliverAllPolicy` over both subjects and replays
+every role message the stream still holds, up to 72h of mail shared by every
+holder of that role. aae-orc#461 S12-8 saw it on a new supervisor in the
+corporate cluster. Director's judgment (not a ruling): that replay is not
+intended. It is the mirror of D1, which is about reading too little.
+
+**The two subjects get different starts.**
+
+| Subject | Start | Why |
+|---|---|---|
+| The seat's own instance subject | all the stream holds (unchanged) | every message on it is addressed to this id, including any sent with an explicit workspace before it connected, so none is history to skip |
+| The role subject | one past the highest ack floor of any durable, live or departed, that filters the same role subject; all the stream holds when no such durable exists | mail at or below that floor was delivered to and acked by some holder of the role. Mail past it may be unread by every holder, so the new seat still reads it. That is "start at the tail of what the role has already handled", one step safer than the raw stream tail, which would drop role mail sent while no holder was reading |
+
+A durable has one start, so a seat holding a role gets two local durables,
+`mcp_<self>_<instance>` (own subject) and `mcp_<self>_role_<instance>` (role
+subject), read as one source by `wait_for_message` and `inbox_summary`. The
+global tier's role subject follows the same rule on its own durable.
+
+**Telling "new, no lineage" from "successor not yet detected".** The shim
+decides by its input, never by timing. `DIRECTOR_PREDECESSOR` unset means no
+lineage: the start rule above applies at connect, and nothing waits on a
+presence row. Set means a successor: D1 arms, and the 90s window applies only
+then. A presence row is never read as evidence of lineage, so a new seat that
+happens to connect near another seat's death inherits nothing from it.
+
+**What this does not drop.** A successor launched without lineage (a crash
+repair under a new index, before U5) is treated as new. Its own subject is
+read in full, since nothing on a new id is history. Role mail its crashed
+predecessor never acked is past every holder's floor, so it is still read.
+What it misses is the crashed id's own instance mail, which is U5's case.
+
 ## 4. D2: a catching-up presence (closes P3)
 
 At connect the shim writes presence state `catching-up`, not `idle`, and keeps
@@ -163,7 +199,7 @@ address's oldest unread age from consumer ack floors.
 
 | Part | What | Depends on | PR |
 |---|---|---|---|
-| U1 | `DIRECTOR_PREDECESSOR` input, the inherited durable, `inherited_from`, its end rules; `cast-launch.sh` mapping | none | 1 |
+| U1 | `DIRECTOR_PREDECESSOR` input, the inherited durable, `inherited_from`, its end rules; `cast-launch.sh` mapping; the split role durable and its start rule (section 3a), local and global | none | 1 |
 | U2 | `catching-up` presence and its exit rule; the roster's display and "not live" count | none | 2 |
 | U3 | sweep step: expiry notices from `unread --threshold`, once per id | #126 slice M on main | 3 |
 | U5 | marvel: set `MARVEL_PREDECESSOR` on a repair spawn that replaces a crashed row under a new index (a marvel ticket, not a director PR) | none | marvel |
@@ -189,6 +225,16 @@ most visible; U1 closes the loss.
    inherited durable at once, and the resume note says why.
 4. U1: the inherited durable is deleted after it drains with the predecessor
    still absent.
+4a. U1 (section 3a): a new id with no departed durable and no
+   `DIRECTOR_PREDECESSOR` connects holding role `supervisor`. The stream holds
+   40 role messages, of which a live holder has acked through the 37th, and 2
+   messages on the new id's own subject. The seat receives exactly the 2 own
+   messages and role messages 38 to 40, not 1 to 37.
+4b. U1: the same with no durable that ever filtered the role subject: all 40
+   role messages are delivered (first holder).
+4c. U1: the same seat started with `DIRECTOR_PREDECESSOR` set takes D1's
+   path instead (test 3), and a departed sibling's presence row expiring
+   during its first 90s changes nothing for a seat without the variable.
 5. U2: right after connect, presence reads `catching-up`; with 2 waiting, a
    seat `set_presence idle` leaves it `catching-up` and the result names 2.
 6. U2: after a drain to zero and one `wait_for_message`, presence reads `idle`
