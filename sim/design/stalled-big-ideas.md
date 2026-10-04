@@ -25,7 +25,8 @@ What was checked, 2026-10-04:
 | The workstream ledger would not show them | `board-workstream-ledger.md` section 3 | `idea`, `accepted` and `parked` "never flag" (line 123), so an idea row can sit unmoved forever by design |
 | The ledger is not in use on kinu yet | `ls ~/.director/state/workstreams.jsonl` | absent; the sweep builds its blocks from the board and roster |
 | The board would not show them either | `wc -l ~/.director/state/board.md` | 2,557 lines, appended by time; an idea mentioned once scrolls away |
-| Ideas without any pointer exist | `grep -lE` over the orc's `_kos/ideas/*.md` for a bd id, a PR or issue number, "became", "superseded", a finding or a probe brief | 68 of 96 carry such text; 28 carry none. The 68 is an upper bound for a live forward pointer, since a citation of a finding points back, not forward. Calibrating it is the research audit's job |
+| Ideas without any pointer exist | at aae-orc 94b02e2: `git grep -lE 'aae-orc-[a-z0-9]{4,5}([^a-z0-9]\|$)\|#[0-9]{2,}\|[Bb]ecame\|[Ss]uperseded\|finding-[0-9]+\|probes/brief-' 94b02e2 -- '_kos/ideas/*.md' \| wc -l` | 68 of 96 carry **pointer text**; 28 carry none. Pointer text is an upper bound for a live forward pointer, since a citation of a finding points back, not forward |
+| How the counts move with the definition | the reviewer's pointer grep; research's audit (`.session/research/2026-10-04-operator-priorities/C-stalled-ideas.md` and `classes.tsv`, kinu-local, not in any repo) | reviewer: 70 with, 26 without (pointer text, a different pattern). Research: REALIZED 26, IN FLIGHT 5, STALLED 34, ORPHAN 31, so 65 with a resolved pointer and 31 without; research counts a background-only citation as no pointer. The spread is the definition, which is why section 3 fixes one |
 
 ## 2. The answer shape
 
@@ -40,6 +41,7 @@ Running, not blocked: <names>
 Stalled ideas (N)  [research or design, no live forward pointer, quiet 14d+]
 9. <repo>/<path> - <title>  (quiet 23d; pointers all closed)
 10. ...  (+M more)
+Unverified ideas: K  [a source was unread: bd]
 Uncaptured: <one line each, or "none">
 ```
 
@@ -49,8 +51,13 @@ Uncaptured: <one line each, or "none">
   for the other blocks.
 - **The same block** answers "what is the big picture", "show me the board"
   and "status": the sweep shape is the answer to all three.
-- **The reason** is one of four words or phrases: `no pointer`, `pointers all
-  closed`, `successor stalled`, `ruling asked, never answered`.
+- **The reason** is one of five words or phrases: `no pointer`, `pointers all
+  closed`, `successor stalled`, `successor cycle`, `ruling asked, never
+  answered`.
+- **Unverified ideas** are counted apart, never in N: an idea whose verdict
+  depends on a source the scan could not read (bd down, `gh` failing, a
+  stale ref). The line shows only the count and the unread sources; detail
+  on request. It is omitted when K is 0.
 - **No action.** The sweep presents and stops, as it does for every block.
   The operator chooses per item: revive it (a seat files the ticket), park it,
   or drop it.
@@ -72,9 +79,15 @@ file the builder ships:
 ```
 
 Never `run/`, `forks/` or `contrib/` (the three-tier taxonomy: fleet recipes
-do not read them), and never a worktree directory (`*-wt-*`): an idea is read
-from its repo's checkout of the default branch only, so a draft on a branch
-is not counted twice or counted before it lands.
+do not read them), and never a worktree directory (`*-wt-*`). An idea is
+read **by ref, from the default branch**, never from the working tree: a
+subrepo checkout often sits on a feature branch. For each repo the scan runs
+`git -C <repo> fetch --quiet origin` (skipped and noted as `stale ref` if it
+fails), resolves the default branch from `origin/HEAD`, lists matching paths
+with `git ls-tree -r --name-only origin/<default>`, and reads each file with
+`git show origin/<default>:<path>`. The root globs select repos and path
+patterns; they are never expanded against the working tree. A draft on a
+branch is not counted twice or counted before it lands.
 
 **A forward pointer** is live when it names one of:
 
@@ -82,7 +95,9 @@ is not counted twice or counted before it lands.
    number), found either in the artifact's text or in the ticket's or PR's
    own text citing the artifact's path or slug;
 2. a **successor artifact** named by `supersedes`, "became", or "superseded
-   by", which is not itself stalled;
+   by", which is not itself stalled. The successor walk keeps a visited set:
+   reaching an artifact already on the walk stops it, and every artifact on
+   the cycle is listed with the reason `successor cycle`;
 3. a **ruling request** on the board that names the artifact and has not
    been answered.
 
@@ -96,7 +111,7 @@ matter says `complete`, `done`, `graveyard`, `rejected`, `superseded` or
 `parked`, or when its path is in `$DIRECTOR_STATE/ideas-parked.txt` (below).
 
 **Quiet** is days since the artifact's last commit on the default branch
-(`git log -1 --format=%ct -- <path>`), or since a live pointer last moved,
+(`git log -1 --format=%ct origin/<default> -- <path>`), or since a live pointer last moved,
 whichever is later. The threshold is 14 days.
 
 **Stalled** is: not resolved, no live forward pointer, and quiet past the
@@ -115,7 +130,7 @@ file is the record.
 
 | # | Part | Depends on |
 |---|---|---|
-| S1 | `scripts/dbi` (director big ideas): reads `idea-roots.conf` and `ideas-parked.txt`, applies section 3, prints JSON rows `{path, title, quiet_days, reason, pointers}`. Read-only: `git log` and file reads on default-branch checkouts, `bd sql` for open tickets citing a path or slug, `gh` for each PR or issue the artifact names. A source it cannot reach is reported in the output (`unread: bd`), never read as "no pointer" | none |
+| S1 | `scripts/dbi` (director big ideas): reads `idea-roots.conf` and `ideas-parked.txt`, applies section 3, prints JSON rows `{path, title, quiet_days, reason, pointers}`. Read-only: `git fetch`, `git ls-tree`, `git show` and `git log` against `origin/<default>` (section 3), `bd sql` for open tickets citing a path or slug, `gh` for each PR or issue the artifact names. A source it cannot reach is reported in the output (`unread: bd`), and an idea that depends on it goes to the Unverified count, never read as "no pointer" | none |
 | S2 | `SKILL.md`: the block in step 4's shape; step 4 runs `scripts/dbi --json` and renders at most five rows; the "park it" line in section 4; the installer (`scripts/director-install`) places `dbi` and the default `idea-roots.conf` (never overwriting an existing one) | S1 |
 | S3 | With a ledger: a row at stage `idea`, `defined` or `designed` with no `pr:` or `bd:` link that is open, quiet past the threshold, is listed in the same block as `<owner> - <slug>`. The ledger's own stage flags are unchanged | S1, ledger W1 |
 
@@ -133,9 +148,16 @@ file is the record.
 5. An idea 10 days quiet with no pointer: not listed (under threshold).
 6. A file under `run/`, `forks/`, `contrib/` or a `*-wt-*` directory matching
    a root glob: never read (the scan logs the skip).
-7. With `bd` unreachable: the output carries `unread: bd`, and an idea whose
-   only pointer would be a bd citation is listed with reason `no pointer
-   (bd unread)`, so the gap is visible, not silent.
+7. With `bd` unreachable: the output carries `unread: bd`, an idea that
+   would otherwise be stalled is counted in `Unverified ideas: K` and not in
+   N, and an idea with a live non-bd pointer is unaffected. The gap is
+   visible, not silent, and never read as "no pointer".
+7a. A cycle: A is superseded by B and B by A, both quiet with no other
+   pointer. The scan terminates; both are listed with `successor cycle`. A
+   three-artifact cycle (A, B, C) gives the same.
+7b. A subrepo checkout on a feature branch whose working tree has an idea
+   file that is not on `origin/<default>`: not read. A file on the default
+   branch that the working tree has deleted: read.
 8. Eight stalled ideas: the rendered block shows five, oldest first, then
    `(+3 more)`.
 9. (S3) A ledger row at `designed` with only a merged `pr:` link, 15 days
