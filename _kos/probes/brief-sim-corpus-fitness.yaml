@@ -82,9 +82,10 @@ content: |
   5. vsdd fit. Can class-tagged register entries become L3
      behavioral-contract candidates directly, or must they pass through the
      StRS first (1aggf design section 6)? Where would verification
-     properties come from? Within sim/, only sim/twin/verify-cast-launch.sh
-     is executable (checks-2026-09-14.md is a record). The repo's 25
-     _test.go files test the shim, not the register.
+     properties come from? Within sim/, the only executable check is
+     sim/twin/verify-cast-launch.sh (cast-launch.sh beside it is an
+     executable launcher, not a check; checks-2026-09-14.md is a record).
+     The repo's 25 _test.go files test the shim, not the register.
   6. Product framing. Where does the missing product framing (users, value,
      who pays the cost today) come from, if the register states only what
      director must do?
@@ -117,7 +118,7 @@ provenance:
     counts at faed978; this brief re-measured them at 165900f. sim/design/
     holds 24 files at both commits (23 designs and a README; the draft said
     22 briefs), and _kos/ideas/ went from 9 to 10. The O and FR citation
-    counts were re-measured by research at director origin/main after
+    counts were re-measured by research at director 165900f after
     review; the sim/notes line totals are research's 2026-10-04 snapshot.
     0.6 because the notes-only base rate is measured (42 of 169 Earned-by
     lines cite notes ids only, 25%). At that rate, ≤2 of 20 sampled chains
