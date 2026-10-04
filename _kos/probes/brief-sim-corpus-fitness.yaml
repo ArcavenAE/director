@@ -40,8 +40,8 @@ content: |
     operational detail; nothing from them is published without a clean
     rewrite.
   - The register cites 22 distinct O base numbers (74 distinct suffixed O
-    tokens) and 13 date-form O ids, plus 15 FR ids, all resolving only
-    into gitignored notes. 47 of its 169 Earned-by lines cite at least one
+    tokens) and 13 date-form O ids, plus 14 FR ids (13 numbered, FR-3 to
+    FR-15, and one date-form), all resolving only into gitignored notes. 47 of its 169 Earned-by lines cite at least one
     of them (a line-level count).
 
   ## Prior art this probe must not duplicate
@@ -80,9 +80,10 @@ content: |
   5. vsdd fit. Can class-tagged register entries become L3
      behavioral-contract candidates directly, or must they pass through the
      StRS first (1aggf design section 6)? Where would verification
-     properties come from, when the only executable check today is
-     `sim/twin/verify-cast-launch.sh` (`sim/twin/checks-2026-09-14.md` is
-     a record of checks, not executable)?
+     properties come from, when the only executable check in `sim/twin/`
+     is `verify-cast-launch.sh` (`checks-2026-09-14.md` there is a record,
+     not executable), and the repo's 25 Go test files all sit in the shim
+     (`probe/nats-phase-0/director-mcp`)?
   6. Product framing. Where does the missing product framing (users, value,
      who pays the cost today) come from, if the register states only what
      director must do?
@@ -117,6 +118,10 @@ provenance:
     22 briefs), and _kos/ideas/ went from 9 to 10. The O and FR citation
     counts were re-measured by research at director origin/main after
     review; the sim/notes line totals are research's 2026-10-04 snapshot.
+    predicted_confidence 0.6: 47 of 169 Earned-by lines (about 28%) cite
+    notes-only evidence, which is measured, but how those entries cluster
+    across StRS sections is not, so the hypothesis could fail on clustering
+    even though the share holds.
 brief:
   hypothesis: "About a quarter of the register's Earned-by evidence resolves only into gitignored notes. A tracked-only StRS will therefore have untraceable sections wherever those entries cluster, until a public evidence ledger exists."
   excluded_scope: "Quoting, summarizing or publishing anything from sim/notes/; editing the register or the audit; running the reverse brief itself (that is 5e52j)."
