@@ -9,13 +9,14 @@ jetstream {
 }
 leafnodes {
   remotes: [
-    { urls: ["nats-leaf://192.168.100.110:7442"], nkey: $DIRECTOR_LEAF_NKEY }
+    { urls: ["nats-leaf://kinu.local:7442"], nkey: $DIRECTOR_LEAF_NKEY }
     # After the hub's TLS cutover (finding-001) the remote carries the hub CA.
     # Change the scheme to tls:// in the same edit: a config reload diffs
     # remotes by URL and ignores a tls block added to an unchanged URL (a
     # restart applies it either way). A remote with this block does not link
-    # to a plaintext hub, so add it in the cutover window, not before:
-    #   { urls: ["tls://192.168.100.110:7442"], nkey: $DIRECTOR_LEAF_NKEY,
+    # to a plaintext hub, so add it in the cutover window, not before. The hub
+    # certificate's SAN must name the host used in the URL:
+    #   { urls: ["tls://kinu.local:7442"], nkey: $DIRECTOR_LEAF_NKEY,
     #     tls { ca_file: "/path/to/hub-ca.pem" } }
   ]
 }
