@@ -1908,6 +1908,73 @@ blocker until the one-command check has run.
 *Earned by: O-30b, O 2026-10-02a.*
 *Source: OBSERVED. Cross-refs R-47, R-174.*
 
+**R-178 (OBSERVED) · a respawned supervisor drains and reads its predecessor's
+replies before it reports live.** On the 2026-10-03 product harvest, three
+successive instances of one supervisor role left asks unanswered for about four
+hours: each came up, reported live, and went on without reading what its
+predecessor had been sent. On 2026-10-04, respawned and limit-stalled
+supervisors came back to backlogs of more than 300 messages. A successor that
+reports live before it has drained and read the replies addressed to the role
+looks reachable and answers nothing. The successor's first act is to drain its
+inbox and its predecessor's replies, and director does not count it as live (R-143)
+until it has. Filed as director#220; the operator ruled it filed on 2026-10-04.
+*Earned by: the 2026-10-03 product harvest; O 2026-10-04 (backlogs on respawned and limit-stalled supervisors).*
+*Source: OBSERVED. Cross-refs R-143, R-144, R-169.*
+
+**R-179 (OBSERVED) · harvest runs on a clock or a count of new captures, not only
+when a session ends.** The skill says a standing session ends with a harvest, but
+the standing sessions here were long-running loops that never ended, so the
+trigger never fired. The register went six days (2026-09-28 to 2026-10-03)
+without a harvest while the notes grew, and the operator was the one who noticed
+it was stale. This is the second time the same shape appeared: in session 1 the
+notes piled up for six days and the register did not move. Director raises a
+harvest when a day has passed or a set number of new entries has accumulated,
+and says so, instead of waiting for an ending that long-running sessions do not
+reach. It proposes and reminds; running the harvest stays the director's act
+(SOUL section 8).
+*Earned by: O 2026-10-03f; the session-1 six-day gap recorded in the director skill's harvest mode.*
+*Source: OBSERVED. Cross-refs R-132.*
+
+### Harvest diff (2026-10-04)
+
+Covers the notes captured 2026-10-03 (e to o) and 2026-10-04 (a, b), and
+friction 2026-10-03b, after the 2026-10-03 harvest. The bar is the same: an item
+is promoted on two or more recorded instances.
+
+- **Promoted (2):** R-178 (a respawned supervisor reads its predecessor's replies
+  before it reports live; candidate 8, ruled filed), R-179 (harvest runs on a
+  clock or a count).
+- **Unchanged, new instances (6):**
+  - R-168: a live round-trip test reply came 7.5 minutes late because director
+    only looked on its next 15-minute tick; the cost is now measured (O 2026-10-03j).
+  - R-143 and R-08: four hours of "accepted" sends to four fresh seats that never
+    polled; accepted was reported as owned (O 2026-10-03i).
+  - R-174: a fallback offered to the operator on the strength of director's own
+    expired credentials rather than the seats' (O 2026-10-03h).
+  - R-04 and R-150: a one-off batch instruction cited as a standing merge rule
+    for a day, in memory and in each relay line (O 2026-10-03k).
+  - R-132: two asks rode in an hourly status footer for five hours and were never
+    surfaced, because a repeat was treated as already handled (O 2026-10-03m).
+  - R-93: a fleet-wide limit left eight seats unable to speak, and the loop
+    ticks reported "no change" (O 2026-10-03o). Kept as a new instance of
+    presence-is-not-liveness; a limit-state read is not yet a requirement.
+- **Kept as observations (5), one instance each:**
+  - A shared forge identity cannot attribute a merge to a seat or a person; it
+    took two rounds and six attestations (O 2026-10-03g). A second source for
+    this sits in the team harvest, not in a committed file.
+  - An operator's scope ruling had no path into the cast record, which a seat
+    reads only at cast; a hand edit and about fifteen minutes (O 2026-10-03l).
+  - Director invented a merge order the requester had not set (O 2026-10-03n).
+  - A report from one supervisor reached another only by hand copy (O 2026-10-04b).
+  - The cross-host enrollment checklist item from the last harvest has not
+    recurred (O 2026-10-03e).
+- **Rejected for the register (routed elsewhere):**
+  - Moving a whole cluster to another subscription as about thirty hand-driven
+    login flows: fleet controller graph, a bulk re-authentication feature
+    (O 2026-10-04a).
+  - A build in a git worktree stamping the wrong revision: already captured as
+    finding-018 in director's graph (friction 2026-10-03b).
+
 ### Harvest diff (2026-10-03)
 
 Covers the notes captured 2026-09-28 through 2026-10-03, after the 2026-09-27
