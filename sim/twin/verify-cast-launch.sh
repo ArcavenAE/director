@@ -635,5 +635,32 @@ for role in builder director; do
   fi
 done
 
+# --- the cast line names the spawn log it tells the seat to echo (ruling 84) ---
+# slice.sh writes ${WARDROBE_SPAWN_LOG:-$HOME/.local/state/wardrobe/spawn.log}
+# (ruling 59). A seat that has to guess where it is went looking elsewhere.
+if cast builder; then
+  want="$root/.local/state/wardrobe/spawn.log"
+  grep -qF "echo the last line of the spawn log at $want (ruling 84)" "$root/out/claude.args" \
+    && ok "spawn log unset: the cast line names the ruled default path" \
+    || bad "cast line default spawn log" "$(grep -o 'spawn log[^.]*' "$root/out/claude.args" | head -1)"
+else
+  bad "builder cast for the spawn log default" "$(cat "$root/out/stderr")"
+fi
+if cast builder WARDROBE_SPAWN_LOG="$root/elsewhere/spawn.log"; then
+  grep -qF "echo the last line of the spawn log at $root/elsewhere/spawn.log (ruling 84)" "$root/out/claude.args" \
+    && ok "WARDROBE_SPAWN_LOG set: the cast line names the override" \
+    || bad "cast line overridden spawn log" "$(grep -o 'spawn log[^.]*' "$root/out/claude.args" | head -1)"
+  grep -qF "$root/.local/state/wardrobe/spawn.log" "$root/out/claude.args" \
+    && bad "the cast line also names the default path although the override is set" \
+    || ok "WARDROBE_SPAWN_LOG set: the default path is not named"
+else
+  bad "builder cast with WARDROBE_SPAWN_LOG" "$(cat "$root/out/stderr")"
+fi
+if cast builder; then
+  grep -q '\.marvel' "$root/out/claude.args" \
+    && bad "the cast line references ~/.marvel" \
+    || ok "the cast line does not reference ~/.marvel"
+fi
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
