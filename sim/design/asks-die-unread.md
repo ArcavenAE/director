@@ -127,6 +127,19 @@ replay its own inbox once on its first restart onto the split durables of
 > the highest `AckFloor.Stream` among the matched, departed durables whose
 > filter set **contains** that subject.
 
+"Contains" is exact string membership: the subject appears verbatim in the
+consumer's `FilterSubject` or `FilterSubjects`. No wildcard matching, so a
+`agent.>` filter never counts as containing a role subject.
+
+**Which consumers count, in every scope.** Only a seat durable: a durable
+consumer (`Durable` set), with `AckPolicy` explicit, whose name parses as
+`mcp_<id>_<ULID>` with an optional `-role` or `-inherit` suffix. Anything
+else is skipped. That excludes the ephemeral `peek_<id>` consumers that
+`inbox_summary` creates (`peekWaiting`, drain.go:465-481): they copy a
+holder's filters, use `AckNone` and start at its floor plus one, so their ack
+floor moves with delivery, not with a read. Counted, a peek running while a
+new seat starts would hand it a floor past mail nobody acked.
+
 A durable's ack floor is the stream sequence at or below which it has acked
 everything it reads, so it is a safe floor for each subject it filters. One
 function, `subjectFloor`, replaces the identical-set test, with two scopes:
@@ -134,9 +147,9 @@ function, `subjectFloor`, replaces the identical-set test, with two scopes:
 | Caller | Durables scanned | Why |
 |---|---|---|
 | own-subject resume, inherited durable | one id's durables only (the prefix `mcp_<id>_` and the per-id guard below), departed only | an instance subject belongs to one id, and a live durable of the same id is the collision, not a floor |
-| role-subject start (3a) | **every** consumer on the stream whose filter set contains the role subject, any id, live or departed; no prefix and no per-id guard | the floor that matters is what any holder of the role has acked. A new id has no durable of its own, so the per-id scope finds nothing and replays all role mail, which is the S12-8 case |
+| role-subject start (3a) | **every seat durable** on the stream whose filter set contains the role subject, any id, live or departed; no prefix and no per-id guard | the floor that matters is what any holder of the role has acked. A new id has no durable of its own, so the per-id scope finds nothing and replays all role mail, which is the S12-8 case |
 
-The role scope reads `consumer info` for every consumer on the stream; it
+The role scope lists every consumer on the stream and reads `consumer info` for the seat durables; it
 runs once per role durable at connect, not per message. Names gain a suffix after the instance ULID (`-role`,
 `-inherit`). The parser takes the 26-character ULID after the prefix and then
 an optional known suffix, so the existing "skip a name with another `_`" guard
@@ -184,7 +197,7 @@ intended. It is the mirror of D1, which is about reading too little.
 | Subject | Start | Why |
 |---|---|---|
 | The seat's own instance subject | all the stream holds (unchanged) | every message on it is addressed to this id, including any sent with an explicit workspace before it connected, so none is history to skip |
-| The role subject | one past the highest ack floor of any durable on the stream, any id, live or departed, whose filter set contains the role subject (section 3, the role scope); all the stream holds when no such durable exists | mail at or below that floor was delivered to and acked by some holder of the role. Mail past it may be unread by every holder, so the new seat still reads it. That is "start at the tail of what the role has already handled", one step safer than the raw stream tail, which would drop role mail sent while no holder was reading |
+| The role subject | one past the highest ack floor of any seat durable on the stream, any id, live or departed, whose filter set contains the role subject (section 3, the role scope); all the stream holds when no such durable exists | mail at or below that floor was delivered to and acked by some holder of the role. Mail past it may be unread by every holder, so the new seat still reads it. That is "start at the tail of what the role has already handled", one step safer than the raw stream tail, which would drop role mail sent while no holder was reading |
 
 A durable has one start, so a seat holding a role gets two local durables,
 `mcp_<self>_<instance>` (own subject) and `mcp_<self>_<instance>-role` (role
@@ -316,6 +329,12 @@ most visible; U1 closes the loss.
    own-subject floor for `sup` reads only `mcp_sup_<ULID>`, and the one for
    `sup_T1` reads only its own two. A name whose text after the prefix is not
    a 26-character ULID plus an optional known suffix is skipped.
+4e. U1, a concurrent peek: the 4a stream, with the live holder acked through
+   37 and its `inbox_summary` peek (`peek_<id>`, `AckNone`, started at 38)
+   having delivered 38 to 40 when the new seat's role durable is created. The
+   new seat still receives role messages 38 to 40. A consumer named like a
+   seat durable but with `AckNone`, or with a filter `agent.>` only, is also
+   skipped.
 4b. U1: the same with no durable that ever filtered the role subject: all 40
    role messages are delivered (first holder).
 4c. U1: the same seat started with `DIRECTOR_PREDECESSOR` set takes D1's
