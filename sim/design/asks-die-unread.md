@@ -134,7 +134,7 @@ consumer's `FilterSubject` or `FilterSubjects`. No wildcard matching, so a
 **Which consumers count, in every scope.** Only a seat durable: a durable
 consumer (`Durable` set), with `AckPolicy` explicit, whose name parses as
 `mcp_<id>_<ULID>` with an optional `-role` or `-inherit` suffix. Anything
-else is skipped. That excludes the ephemeral `peek_<id>` consumers that
+else is skipped. That excludes the ephemeral `peek_<instance>` consumers (`"peek_" + newInstanceID()`, drain.go:469) that
 `inbox_summary` creates (`peekWaiting`, drain.go:465-481): they copy a
 holder's filters, use `AckNone` and start at its floor plus one, so their ack
 floor moves with delivery, not with a read. Counted, a peek running while a
@@ -151,9 +151,16 @@ function, `subjectFloor`, replaces the identical-set test, with two scopes:
 
 The role scope lists every consumer on the stream and reads `consumer info` for the seat durables; it
 runs once per role durable at connect, not per message. Names gain a suffix after the instance ULID (`-role`,
-`-inherit`). The parser takes the 26-character ULID after the prefix and then
-an optional known suffix, so the existing "skip a name with another `_`" guard
-against one id prefixing another (bus.go:315-317) still holds.
+`-inherit`). **The parse is right-anchored**, because the role scope has no
+prefix to split on and an id may itself contain `_`: strip an optional known
+suffix (`-role`, `-inherit`) from the right; the 26 characters before it must
+be a ULID and the character before those must be `_`; what remains must start
+with the tier's fixed head, `mcp_` on the local stream or `mcp_global_` on the
+hub stream (`globalDurable`, global.go:176-177), and the text between that
+head and the `_` is the id. Each stream is parsed with its own head, so a
+local id that begins `global_` is never read as a global durable. In the
+per-id scopes the id must also equal the caller's, which keeps the existing
+guard against one id prefixing another (bus.go:315-317).
 
 **The invariant this depends on.** A durable outlives its session: it is not
 deleted at exit, and it expires only after `InactiveThreshold`, 73h on both
@@ -329,14 +336,21 @@ most visible; U1 closes the loss.
    own-subject floor for `sup` reads only `mcp_sup_<ULID>`, and the one for
    `sup_T1` reads only its own two. A name whose text after the prefix is not
    a 26-character ULID plus an optional known suffix is skipped.
+4f. U1, the right-anchored parse in the role scope (no prefix): on the hub
+   stream, `mcp_global_sup_T1_<ULID>-role` parses as id `sup_T1`, instance
+   `<ULID>`, suffix `-role`; a left split on the first `_` after the head
+   would give id `sup` and fail. On the local stream, `mcp_sup_T1_<ULID>`
+   parses as id `sup_T1`, and `mcp_global_x_<ULID>` parses as local id
+   `global_x`, never as a global durable. `mcp_sup_<25 chars>` and
+   `mcp_sup_<ULID>-other` are skipped.
+4b. U1: the same with no durable that ever filtered the role subject: all 40
+   role messages are delivered (first holder).
 4e. U1, a concurrent peek: the 4a stream, with the live holder acked through
-   37 and its `inbox_summary` peek (`peek_<id>`, `AckNone`, started at 38)
+   37 and its `inbox_summary` peek (`peek_<instance>`, `AckNone`, started at 38)
    having delivered 38 to 40 when the new seat's role durable is created. The
    new seat still receives role messages 38 to 40. A consumer named like a
    seat durable but with `AckNone`, or with a filter `agent.>` only, is also
    skipped.
-4b. U1: the same with no durable that ever filtered the role subject: all 40
-   role messages are delivered (first holder).
 4c. U1: the same seat started with `DIRECTOR_PREDECESSOR` set takes D1's
    path instead (test 3), and a departed sibling's presence row expiring
    during its first three ticks changes nothing for a seat without the
