@@ -35,6 +35,7 @@ trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/wardrobe/contents/roles" "$root/wardrobe/scripts" "$root/bin" "$root/out"
 cat > "$root/wardrobe/scripts/slice.sh" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "${WARDROBE_SPAWN_LOG:-unset}" > "$(dirname "$0")/../../out/slice.spawnlog"
 printf '%s\n' "$@" > "$(dirname "$0")/../../out/slice.args"
 echo "stub slice for $2"
 STUB
@@ -671,6 +672,19 @@ if cast builder; then
   grep -q '\.marvel' "$root/out/claude.args" \
     && bad "the cast line references ~/.marvel" \
     || ok "the cast line does not reference ~/.marvel"
+fi
+
+# --- slice.sh is handed the very path the cast line names ---------------------
+# Resolved once in cast-launch.sh and exported, so the two cannot drift.
+if cast builder; then
+  [[ "$(cat "$root/out/slice.spawnlog")" == "$root/.local/state/wardrobe/spawn.log" ]] \
+    && ok "spawn log unset: slice.sh receives the ruled default the cast line names" \
+    || bad "slice.sh spawn log default" "$(cat "$root/out/slice.spawnlog")"
+fi
+if cast builder WARDROBE_SPAWN_LOG="$root/elsewhere/spawn.log"; then
+  [[ "$(cat "$root/out/slice.spawnlog")" == "$root/elsewhere/spawn.log" ]] \
+    && ok "WARDROBE_SPAWN_LOG set: slice.sh receives the override the cast line names" \
+    || bad "slice.sh spawn log override" "$(cat "$root/out/slice.spawnlog")"
 fi
 
 echo "$pass passed, $fail failed"
