@@ -19,6 +19,15 @@ content: |
      it reaches the model. A filter, not a boundary.
 
   Either must keep a real broadcast reaching every supervisor.
+
+  NOTE 2026-10-04 (finding-023 addendum). A second team's report on the
+  same cluster: drains of 182 (10-02) and 321 (10-04) held messages, none
+  for that seat, and every max=50 drain overflowed the tool-result limit at
+  86k to 109k characters. inbox_summary reads 200 by default, up to 500.
+  Judgment from that report, not observed design: with two supervisor
+  replicas, each ask reaches both seats and they split it by PROPOSE;
+  a seat-level or role-level singleton claim would settle it.
+
 edges:
   - target: finding-006-global-tier-has-no-per-agent-address
     type: derives
