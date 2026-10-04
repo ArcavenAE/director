@@ -17,26 +17,31 @@ content: |
 
   ## What exists (counts and structure only)
 
-  Measured at director main 165900f:
+  Tracked counts were measured at director main 165900f. Counts derived
+  from the gitignored notes are research's, from its draft; files outside
+  git cannot be measured at a commit.
 
-  - Tracked, publishable:
+  - Tracked, publishable (at 165900f):
     - `sim/requirements.md`, 2,255 lines, entries R-01 to R-179. The entry
       heading format changes after R-95. Each entry carries "Earned by" and
       a source class (OBSERVED, JUDGMENT, RULED or FORWARD). From about line
       979 it becomes an append log of harvest diffs.
     - `sim/specs/`: 2 documents, both dated 2026-09-10 and untouched since.
-    - `sim/design/`: 24 files, self-described as candidate designs.
+    - `sim/design/`: 24 files, 23 candidate designs and a README (the
+      same at faed978, where research's draft counted them).
     - `docs/use-cases.md` (UC1 to UC6, tied to R-ids) and
       `docs/architecture.md`.
     - `_kos/`: 23 findings and 10 ideas.
-  - Gitignored (`.gitignore:12`, `sim/notes/`): observations, the relay log,
+  - Gitignored (`.gitignore:12`, `sim/notes/`; research's figures, not
+    measured at a commit): observations, the relay log,
     friction and shortcuts, about 12,000 lines. Three inconsistent
     observation id schemes are in use, some O numbers are reused, and the
     relay numbering collides with register R-ids. These files hold live
     operational detail; nothing from them is published without a clean
     rewrite.
   - The register cites 59 distinct O-refs and 14 FR-refs into the ignored
-    notes, so a public reader cannot follow most "Earned by" lines.
+    notes (research's figure), so a public reader cannot follow most
+    "Earned by" lines.
 
   ## Prior art this probe must not duplicate
 
@@ -48,8 +53,9 @@ content: |
     `docs/design/reverse-brief-and-prd.md` in aae-orc, maps the brief to the
     ISO 29148 BRS and the PRD to the StRS, names director's register as a
     direct input, and maps the vsdd bridge in its section 6. Its step chain:
-    gbx9u, j0ori (spectacle reverse-prd; no brs or strs command yet), 5e52j
-    (run on director) and d5mk0.
+    fvaoj (closed; shipped in spectacle#4), gbx9u, j0ori (spectacle
+    reverse-prd; no brs or strs command yet), 5e52j (run on director) and
+    d5mk0.
   - question-director-requirements-audit-themes: an unreviewed audit with
     six themes, including a possible conflict between hold-by-default and
     refuse-before-publish, and a missing transport-security requirement.
@@ -73,8 +79,9 @@ content: |
   5. vsdd fit. Can class-tagged register entries become L3
      behavioral-contract candidates directly, or must they pass through the
      StRS first (1aggf design section 6)? Where would verification
-     properties come from, when only `sim/twin/checks` and
-     `verify-cast-launch.sh` are executable today?
+     properties come from, when the only executable check today is
+     `sim/twin/verify-cast-launch.sh` (`sim/twin/checks-2026-09-14.md` is
+     a record of checks, not executable)?
   6. Product framing. Where does the missing product framing (users, value,
      who pays the cost today) come from, if the register states only what
      director must do?
@@ -82,8 +89,11 @@ content: |
   ## Method (read-only)
 
   1. Map each 29148 StRS section to its tracked sources.
-  2. Sample 20 "Earned by" chains from across R-01 to R-179 and record
-     whether each resolves publicly.
+  2. Sample 20 "Earned by" chains, fixed in advance so the sample cannot be
+     chosen after looking: every 9th id from R-05 (R-05, R-14, R-23, R-32,
+     R-41, R-50, R-59, R-68, R-77, R-86, R-95, R-104, R-113, R-122, R-131,
+     R-140, R-149, R-158, R-167, R-176). Record whether each resolves to a
+     tracked source.
   3. Diff the register's classes against the audit themes.
   4. Write a finding with the clean-rewrite list and a go or no-go for
      5e52j.
@@ -100,13 +110,14 @@ provenance:
   notes: >
     The evidence-readiness check for bd aae-orc-5e52j, and an input to
     aae-orc-k0l75 and aae-orc-j0ori; no new ticket. Relates to the orc's
-    finding-138 (the vsdd layer mapping). The source draft's counts were
-    taken at faed978 and re-measured here at 165900f: sim/design/ holds 24
-    files at both commits (the draft said 22 briefs), and _kos/ideas/ went
-    from 9 to 10.
+    finding-138 (the vsdd layer mapping). Research's draft took its tracked
+    counts at faed978; this brief re-measured them at 165900f. sim/design/
+    holds 24 files at both commits (23 designs and a README; the draft said
+    22 briefs), and _kos/ideas/ went from 9 to 10. The notes-derived counts
+    are research's and were not re-measured.
 brief:
   hypothesis: "The tracked corpus cannot yet stand alone as reverse-brief input: most register entries earn their place through evidence in the gitignored notes, so a director StRS drafted from tracked sources will have empty or untraceable sections until a public evidence ledger exists."
   excluded_scope: "Quoting, summarizing or publishing anything from sim/notes/; editing the register or the audit; running the reverse brief itself (that is 5e52j)."
-  success_signal: "A finding with the StRS section map, the 20-chain sample (how many resolve publicly), the class-versus-theme diff, the clean-rewrite list, and a go or no-go for 5e52j. The hypothesis is disconfirmed if most sampled chains resolve from tracked sources and no StRS section 5e52j needs is empty."
+  success_signal: "A finding with the StRS section map, the 20-chain sample (how many resolve publicly), the class-versus-theme diff, the clean-rewrite list, and a go or no-go for 5e52j. The hypothesis is disconfirmed if at least 11 of the 20 sampled chains resolve to a tracked source, and no StRS section the PRD needs is empty."
   timebox: "One working session for steps 1 to 3; the finding in the next."
   predicted_confidence: 0.7
