@@ -135,7 +135,7 @@ consumer's `FilterSubject` or `FilterSubjects`. No wildcard matching, so a
 consumer (`Durable` set), with `AckPolicy` explicit, whose name parses as
 `mcp_<id>_<ULID>` with an optional `-role` or `-inherit` suffix. Anything
 else is skipped. That excludes the ephemeral `peek_<instance>` consumers (`"peek_" + newInstanceID()`, drain.go:469) that
-`inbox_summary` creates (`peekWaiting`, drain.go:465-481): they copy a
+`inbox_summary` creates (`peekWaiting`, drain.go:455-481): they copy a
 holder's filters, use `AckNone` and start at its floor plus one, so their ack
 floor moves with delivery, not with a read. Counted, a peek running while a
 new seat starts would hand it a floor past mail nobody acked.
@@ -331,11 +331,23 @@ most visible; U1 closes the loss.
    id's prefix. The seat receives exactly the 2 own messages and role messages
    38 to 40, not 1 to 37. Repeated with the holder departed and its durable
    still stored: the same result.
+4b. U1: the same with no durable that ever filtered the role subject: all 40
+   role messages are delivered (first holder).
+4c. U1: the same seat started with `DIRECTOR_PREDECESSOR` set takes D1's
+   path instead (test 3), and a departed sibling's presence row expiring
+   during its first three ticks changes nothing for a seat without the
+   variable.
 4d. U1, the parser: with ids `sup` and `sup_T1` both holding durables
    (`mcp_sup_<ULID>`, `mcp_sup_T1_<ULID>`, `mcp_sup_T1_<ULID>-role`), the
    own-subject floor for `sup` reads only `mcp_sup_<ULID>`, and the one for
    `sup_T1` reads only its own two. A name whose text after the prefix is not
    a 26-character ULID plus an optional known suffix is skipped.
+4e. U1, a concurrent peek: the 4a stream, with the live holder acked through
+   37 and its `inbox_summary` peek (`peek_<instance>`, `AckNone`, started at 38)
+   having delivered 38 to 40 when the new seat's role durable is created. The
+   new seat still receives role messages 38 to 40. A consumer named like a
+   seat durable but with `AckNone`, or with a filter `agent.>` only, is also
+   skipped.
 4f. U1, the right-anchored parse in the role scope (no prefix): on the hub
    stream, `mcp_global_sup_T1_<ULID>-role` parses as id `sup_T1`, instance
    `<ULID>`, suffix `-role`; a left split on the first `_` after the head
@@ -343,18 +355,6 @@ most visible; U1 closes the loss.
    parses as id `sup_T1`, and `mcp_global_x_<ULID>` parses as local id
    `global_x`, never as a global durable. `mcp_sup_<25 chars>` and
    `mcp_sup_<ULID>-other` are skipped.
-4b. U1: the same with no durable that ever filtered the role subject: all 40
-   role messages are delivered (first holder).
-4e. U1, a concurrent peek: the 4a stream, with the live holder acked through
-   37 and its `inbox_summary` peek (`peek_<instance>`, `AckNone`, started at 38)
-   having delivered 38 to 40 when the new seat's role durable is created. The
-   new seat still receives role messages 38 to 40. A consumer named like a
-   seat durable but with `AckNone`, or with a filter `agent.>` only, is also
-   skipped.
-4c. U1: the same seat started with `DIRECTOR_PREDECESSOR` set takes D1's
-   path instead (test 3), and a departed sibling's presence row expiring
-   during its first three ticks changes nothing for a seat without the
-   variable.
 5. U2: right after connect, presence reads `catching-up`; with 2 waiting, a
    seat `set_presence idle` leaves it `catching-up` and the result names 2.
 6. U2: after a drain to zero and one `wait_for_message`, presence reads `idle`
