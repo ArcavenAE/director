@@ -1,0 +1,112 @@
+id: brief-sim-corpus-fitness
+type: brief
+confidence: frontier
+title: "Probe: is director's simulation corpus fit input for the reverse brief (aae-orc-5e52j) toward a brief, PRD and architecture?"
+content: |
+  ## Why
+
+  director has run a hand-played supervisor simulation since 2026-09-10.
+  The output is large and partly structured. If it can feed a reverse-brief
+  pass, director gets a product brief, PRD and architecture grounded in
+  measured behavior instead of invention. If it cannot, the work stalls at
+  a publish boundary nobody has named.
+
+  This is not a parallel track. It is the evidence-readiness check for
+  aae-orc-5e52j (reverse brief step 4, run on director): it answers what
+  5e52j needs from the corpus before the reverse brief runs.
+
+  ## What exists (counts and structure only)
+
+  Measured at director main 165900f:
+
+  - Tracked, publishable:
+    - `sim/requirements.md`, 2,255 lines, entries R-01 to R-179. The entry
+      heading format changes after R-95. Each entry carries "Earned by" and
+      a source class (OBSERVED, JUDGMENT, RULED or FORWARD). From about line
+      979 it becomes an append log of harvest diffs.
+    - `sim/specs/`: 2 documents, both dated 2026-09-10 and untouched since.
+    - `sim/design/`: 24 files, self-described as candidate designs.
+    - `docs/use-cases.md` (UC1 to UC6, tied to R-ids) and
+      `docs/architecture.md`.
+    - `_kos/`: 23 findings and 10 ideas.
+  - Gitignored (`.gitignore:12`, `sim/notes/`): observations, the relay log,
+    friction and shortcuts, about 12,000 lines. Three inconsistent
+    observation id schemes are in use, some O numbers are reused, and the
+    relay numbering collides with register R-ids. These files hold live
+    operational detail; nothing from them is published without a clean
+    rewrite.
+  - The register cites 59 distinct O-refs and 14 FR-refs into the ignored
+    notes, so a public reader cannot follow most "Earned by" lines.
+
+  ## Prior art this probe must not duplicate
+
+  - aae-orc-k0l75 (open): mine the sim files and run bmad analysis toward
+    briefs and PRD outlines. Its five-step method overlaps this probe almost
+    one for one; this probe is its evidence check for director only.
+  - aae-orc-1aggf (closed 2026-10-03), the reverse-brief and PRD prototype,
+    merged as aae-orc#470 and #471. Its design,
+    `docs/design/reverse-brief-and-prd.md` in aae-orc, maps the brief to the
+    ISO 29148 BRS and the PRD to the StRS, names director's register as a
+    direct input, and maps the vsdd bridge in its section 6. Its step chain:
+    gbx9u, j0ori (spectacle reverse-prd; no brs or strs command yet), 5e52j
+    (run on director) and d5mk0.
+  - question-director-requirements-audit-themes: an unreviewed audit with
+    six themes, including a possible conflict between hold-by-default and
+    refuse-before-publish, and a missing transport-security requirement.
+  - spectacle has no product-brief or PRD template by design
+    (`grv-bmad-templates`). The fleet precedent for a brief, PRD and
+    architecture set is `marvel/docs/design/service-provider/`.
+
+  ## Questions
+
+  1. Tracked-only draft. Can a director BRS or StRS be drafted from tracked
+     sources alone? Which sections stay empty? The empty sections are the
+     clean-rewrite list.
+  2. Evidence ledger. What is the smallest public, de-identified evidence
+     ledger, with one stable id scheme, that keeps the cited O and FR
+     evidence traceable from "Earned by"?
+  3. Rulings first? Do the audit themes need operator rulings before a PRD
+     or StRS can be stable? The hold-versus-refuse conflict is the main one.
+  4. Product or practice. Which register entries are product requirements,
+     and which are practice under the director skill's admission test? Does
+     that split widen scope beyond director (k0l75 step 3)?
+  5. vsdd fit. Can class-tagged register entries become L3
+     behavioral-contract candidates directly, or must they pass through the
+     StRS first (1aggf design section 6)? Where would verification
+     properties come from, when only `sim/twin/checks` and
+     `verify-cast-launch.sh` are executable today?
+  6. Product framing. Where does the missing product framing (users, value,
+     who pays the cost today) come from, if the register states only what
+     director must do?
+
+  ## Method (read-only)
+
+  1. Map each 29148 StRS section to its tracked sources.
+  2. Sample 20 "Earned by" chains from across R-01 to R-179 and record
+     whether each resolves publicly.
+  3. Diff the register's classes against the audit themes.
+  4. Write a finding with the clean-rewrite list and a go or no-go for
+     5e52j.
+
+  Nothing from `sim/notes/` is quoted in any output. Counts and structure
+  only.
+edges:
+  - target: question-director-requirements-audit-themes
+    type: supports
+provenance:
+  created_by: agent
+  session: 2026-10-04 operator priorities, item B2 (research-supervisor seat; placed by the author seat)
+  created_at: "2026-10-04"
+  notes: >
+    The evidence-readiness check for bd aae-orc-5e52j, and an input to
+    aae-orc-k0l75 and aae-orc-j0ori; no new ticket. Relates to the orc's
+    finding-138 (the vsdd layer mapping). The source draft's counts were
+    taken at faed978 and re-measured here at 165900f: sim/design/ holds 24
+    files at both commits (the draft said 22 briefs), and _kos/ideas/ went
+    from 9 to 10.
+brief:
+  hypothesis: "The tracked corpus cannot yet stand alone as reverse-brief input: most register entries earn their place through evidence in the gitignored notes, so a director StRS drafted from tracked sources will have empty or untraceable sections until a public evidence ledger exists."
+  excluded_scope: "Quoting, summarizing or publishing anything from sim/notes/; editing the register or the audit; running the reverse brief itself (that is 5e52j)."
+  success_signal: "A finding with the StRS section map, the 20-chain sample (how many resolve publicly), the class-versus-theme diff, the clean-rewrite list, and a go or no-go for 5e52j. The hypothesis is disconfirmed if most sampled chains resolve from tracked sources and no StRS section 5e52j needs is empty."
+  timebox: "One working session for steps 1 to 3; the finding in the next."
+  predicted_confidence: 0.7
