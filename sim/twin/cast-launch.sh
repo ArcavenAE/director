@@ -81,6 +81,9 @@ slice_sh="$(dirname "$WARDROBE_ROOT")/scripts/slice.sh"
 # log write is a refusal inside slice.sh). ALLOW_PROPOSAL=0 to cast ratified only.
 slice_args=("$WARDROBE_ROOT" "$WROLE")
 [[ -n "$IDENTITY" ]] && slice_args+=("$IDENTITY")
+# The seat leads the spawn line (ruling 44). wardrobe's slice.sh must be the
+# version that takes --seat; an older install refuses it as an unknown flag.
+slice_args+=(--seat "$MARVEL_SESSION")
 [[ "${ALLOW_PROPOSAL:-1}" == 1 ]] && slice_args+=(--allow-proposal)
 [[ "${ALLOW_DIRTY:-0}" == 1 ]] && slice_args+=(--allow-dirty)
 slice="$("$slice_sh" "${slice_args[@]}")"
