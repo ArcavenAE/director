@@ -32,7 +32,7 @@ together.
 | Premise | Where | Result |
 |---|---|---|
 | The inbox max age is 24h (#222, t77rr) | `nats stream info AGENT_INBOX` on kinu | **False today: 72h** (`max_age` 259200s). The 24h figure survives in `probe/nats-phase-0/verify-auth.sh:87` and `PROGRESS.md:11-12`; docs and the shim's `localConsumerInactive` (bus.go:76) say 72h. Raising it again does not close P1: a seat that never reads loses mail at any age |
-| A successor never reads its predecessor's instance mail | bus.go:223 (`seatAckFloor` over prefix `"mcp_"+self.AgentID+"_"`), resolveSubject bus.go:446-478 | The resume floor and the subject are both keyed to the agent id. Only mail sent to `role://` survives a generation change |
+| A successor never reads its predecessor's instance mail | bus.go:223 (`seatAckFloor` over prefix `"mcp_"+self.AgentID+"_"`), resolveSubject bus.go:446-518 | The resume floor and the subject are both keyed to the agent id. Only mail sent to `role://` survives a generation change |
 | A seat reports live before reading | main.go:128-129 | `setPresence(ctx, "idle")` right after connect, "so a roster lists us immediately" |
 | No catching-up presence state exists | tools.go:83-89, bus.go:1212-1237 | state is free text with the hint `idle | busy | away`; nothing enforces it |
 | A lineage is supplied on some respawns | marvel `internal/team/controller.go:2209-2229` (c99ce98); this seat's env | marvel sets `MARVEL_PREDECESSOR` (`<workspace>/<old seat key>`) only in a shift's launch, and only when the predecessor is alive (`aliveSessions`, :2209). The successor launches **before** the drain (:2249-2259), so at its connect the predecessor is still live. A crash repair outside a shift gets no lineage; a single-replica role's repair reuses the same key, while a multi-replica role's crashed slot returns under a new index (marvel `CLAUDE.md`, Process Management). The shim reads none of it today |
@@ -135,7 +135,7 @@ consumer's `FilterSubject` or `FilterSubjects`. No wildcard matching, so a
 consumer (`Durable` set), with `AckPolicy` explicit, whose name parses as
 `mcp_<id>_<ULID>` with an optional `-role` or `-inherit` suffix. Anything
 else is skipped. That excludes the ephemeral `peek_<instance>` consumers (`"peek_" + newInstanceID()`, drain.go:469) that
-`inbox_summary` creates (`peekWaiting`, drain.go:455-481): they copy a
+`inbox_summary` creates (`peekWaiting`, drain.go:455-525): they copy a
 holder's filters, use `AckNone` and start at its floor plus one, so their ack
 floor moves with delivery, not with a read. Counted, a peek running while a
 new seat starts would hand it a floor past mail nobody acked.
