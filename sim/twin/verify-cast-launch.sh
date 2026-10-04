@@ -35,6 +35,7 @@ trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/wardrobe/contents/roles" "$root/wardrobe/scripts" "$root/bin" "$root/out"
 cat > "$root/wardrobe/scripts/slice.sh" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "$@" > "$(dirname "$0")/../../out/slice.args"
 echo "stub slice for $2"
 STUB
 # The shim stub records the environment the pre-flight really runs with.
@@ -634,6 +635,16 @@ for role in builder director; do
     bad "$role cast with levers" "$(cat "$root/out/stderr")"
   fi
 done
+
+# --- the seat reaches slice.sh, so the spawn line leads with it (ruling 44) ---
+if cast builder; then
+  args="$(tr '\n' ' ' < "$root/out/slice.args")"
+  [[ "$args" == *"--seat verify-builder-0 "* ]] \
+    && ok "slice.sh is handed --seat <MARVEL_SESSION>" \
+    || bad "slice.sh was not handed the seat" "$args"
+else
+  bad "builder cast for the seat argument" "$(cat "$root/out/stderr")"
+fi
 
 # --- the cast line names the spawn log it tells the seat to echo (ruling 84) ---
 # slice.sh writes ${WARDROBE_SPAWN_LOG:-$HOME/.local/state/wardrobe/spawn.log}
