@@ -69,14 +69,35 @@ by hand or leaves it unset; unset means today's behavior.
 
 **When it starts.** The predecessor of a shift is still live when its
 successor connects (section 2), so inheritance is armed at connect and starts
-later, when the predecessor is gone. With `DIRECTOR_PREDECESSOR` set, the
-shim's existing 30s heartbeat (main.go:134-137) checks for any
-`presence.<team>.<predecessor>.*` row. The first tick that finds none, after
-at least one tick that found one or 90s after connect (the presence TTL),
-starts the read below. A predecessor that drains and exits during a shift is
-therefore inherited about 30 to 120 seconds after it leaves, at its final ack
-floor, so no message is read by both. The arm expires after the stream's
-`max_age`.
+later, when the predecessor is gone. Presence is timing only, never the
+lineage source (ruling B2-R1, section 9). With `DIRECTOR_PREDECESSOR` set, the
+shim's existing 30s heartbeat (main.go:134-137) reads the
+`presence.<team>.<predecessor>.*` keys on each tick, and each read has one of
+three results:
+
+| Read | Means | Effect |
+|---|---|---|
+| a row exists | the predecessor is live | the count of empty reads resets to 0 |
+| the read succeeds and finds no row | the predecessor looks gone | the count goes up by 1 |
+| the read fails (KV error, timeout, disconnect) | **unknown** | the count is left alone; unknown never counts toward the trigger |
+
+Inheritance starts when the count reaches 3, three successful empty reads in
+a row, about 60 to 90 seconds. A predecessor whose shim restarts in place
+writes its new instance's row within its own connect, well inside that span,
+so the restart resets the count and does not trigger. The same three-read rule
+applies when no row was ever seen (a predecessor that died before the
+successor connected); there is no separate time-only fallback. The arm
+expires after the stream's `max_age`.
+
+**The delivery contract is at-least-once, not exactly-once.** A predecessor
+whose shim loses the broker for longer than three ticks looks gone and is
+inherited while it may still be alive, and it reads its own mail again when it
+reconnects. The design accepts that and states it instead of claiming
+otherwise. Every message carries its `message_id`. The inherited copy is
+marked `inherited_from`, so the successor checks its predecessor's handoff
+and replies before acting on it, which is R-144's "does not re-execute what
+its predecessor acknowledged". A predecessor row that reappears stops the
+inherited durable at once (below).
 
 **Crash repairs.** A single-replica role's repair reuses its key, so it reads
 its own floor today and needs nothing. A multi-replica slot that returns under
@@ -85,12 +106,40 @@ repair spawn to the crashed row it replaces (part U5, a marvel ticket). The
 shim does not guess.
 
 **The read.** Once started, the shim creates one more durable,
-`mcp_<self>_inherit_<instance>`, filtering only the predecessor's instance
+`mcp_<self>_<instance>-inherit`, filtering only the predecessor's instance
 subject `agent.<ws>.<team>.<predecessor>.inbox`. It starts at the
-predecessor's ack floor plus one, computed by the existing `seatAckFloor`
-with the predecessor's prefix. If the predecessor has no durable left, it
-starts at the beginning of what the stream holds, and the resume note says so,
-as the existing notes do (bus.go:268-276).
+predecessor's floor for that subject plus one, by the containment rule below.
+If the predecessor has no durable left, it starts at the beginning of what the
+stream holds, and the resume note says so, as the existing notes do
+(bus.go:268-276).
+
+**Floors by subject containment, not by identical filters.** Today
+`seatAckFloor` skips any durable whose filter set is not identical to the
+caller's (`sameSubjects`, bus.go:311 and :344). A role-holding predecessor on
+today's shim has one durable over [instance, role], so an instance-only
+durable would find floor 0 and replay all 72h of acked mail: the rollout case
+under section 8's one-seat pin. The same mismatch would make every seat
+replay its own inbox once on its first restart onto the split durables of
+3a. The floor for a subject is therefore:
+
+> the highest `AckFloor.Stream` among the matched, departed durables whose
+> filter set **contains** that subject.
+
+A durable's ack floor is the stream sequence at or below which it has acked
+everything it reads, so it is a safe floor for each subject it filters. One
+function, `subjectFloor(prefix, subject, live)`, replaces the identical-set
+test for the own-subject resume, the role-subject start (3a), and the
+inherited durable. Names gain a suffix after the instance ULID (`-role`,
+`-inherit`). The parser takes the 26-character ULID after the prefix and then
+an optional known suffix, so the existing "skip a name with another `_`" guard
+against one id prefixing another (bus.go:315-317) still holds.
+
+**The invariant this depends on.** A durable outlives its session: it is not
+deleted at exit, and it expires only after `InactiveThreshold`, 73h on both
+tiers (`localConsumerInactive`, bus.go:76; `globalConsumerInactive`,
+global.go:47). That is longer than the 72h `max_age` of AGENT_INBOX and the
+global streams, so while any of a departed seat's mail is still stored, its
+floor is still readable.
 
 **How it reads.** `wait_for_message` and `inbox_summary` treat the inherited
 durable as a third source after local and before global, and every message
@@ -130,15 +179,23 @@ intended. It is the mirror of D1, which is about reading too little.
 | The role subject | one past the highest ack floor of any durable, live or departed, that filters the same role subject; all the stream holds when no such durable exists | mail at or below that floor was delivered to and acked by some holder of the role. Mail past it may be unread by every holder, so the new seat still reads it. That is "start at the tail of what the role has already handled", one step safer than the raw stream tail, which would drop role mail sent while no holder was reading |
 
 A durable has one start, so a seat holding a role gets two local durables,
-`mcp_<self>_<instance>` (own subject) and `mcp_<self>_role_<instance>` (role
-subject), read as one source by `wait_for_message` and `inbox_summary`. The
-global tier's role subject follows the same rule on its own durable.
+`mcp_<self>_<instance>` (own subject) and `mcp_<self>_<instance>-role` (role
+subject), read as one source by `wait_for_message` and `inbox_summary`. Both
+floors come from the containment rule in section 3, so a combined durable left
+by today's shim still counts for each subject it filtered. The global tier's
+role subject follows the same rule on its own durable.
+
+Role mail can wait for a holder only if it was sent with an explicit
+workspace: a role send with no live holder and no workspace hint is refused at
+send time (bus.go:590-595). So the "all the stream holds" start for a first
+holder reads only mail that a sender addressed to that role's mailbox on
+purpose.
 
 **Telling "new, no lineage" from "successor not yet detected".** The shim
 decides by its input, never by timing. `DIRECTOR_PREDECESSOR` unset means no
 lineage: the start rule above applies at connect, and nothing waits on a
-presence row. Set means a successor: D1 arms, and the 90s window applies only
-then. A presence row is never read as evidence of lineage, so a new seat that
+presence row. Set means a successor: D1 arms, and the three-read trigger
+applies only then. A presence row is never read as evidence of lineage, so a new seat that
 happens to connect near another seat's death inherits nothing from it.
 
 **What this does not drop.** A successor launched without lineage (a crash
@@ -162,8 +219,8 @@ Until then, a `set_presence` call from the seat is recorded but presence stays
 
 - **Sends still resolve.** resolveSubject reads any presence row, so mail to
   a catching-up seat is queued as today. Nothing is refused.
-- **Proposed default, pending ruling B2-R2:** director counts it as not live
-  for routing and for "reports live" (R-143, R-178). The roster shows
+- **Ruled (B2-R2):** director counts it as not live for routing and for
+  "reports live" until its catch-up is complete (R-143, R-178). The roster shows
   `catching-up (N waiting)` either way.
 - **Compatibility.** An older director reading the new state sees one more
   free-text value and counts the row as live, which is today's behavior. No
@@ -199,7 +256,7 @@ address's oldest unread age from consumer ack floors.
 
 | Part | What | Depends on | PR |
 |---|---|---|---|
-| U1 | `DIRECTOR_PREDECESSOR` input, the inherited durable, `inherited_from`, its end rules; `cast-launch.sh` mapping; the split role durable and its start rule (section 3a), local and global | none | 1 |
+| U1 | `DIRECTOR_PREDECESSOR` input, the inherited durable, `inherited_from`, its end rules; `cast-launch.sh` mapping; the split role durable and its start rule (section 3a), local and global; `subjectFloor` by containment (section 3) | none | 1 |
 | U2 | `catching-up` presence and its exit rule; the roster's display and "not live" count | none | 2 |
 | U3 | sweep step: expiry notices from `unread --threshold`, once per id | #126 slice M on main | 3 |
 | U5 | marvel: set `MARVEL_PREDECESSOR` on a repair spawn that replaces a crashed row under a new index (a marvel ticket, not a director PR) | none | marvel |
@@ -218,9 +275,22 @@ most visible; U1 closes the loss.
    behavior, a guard).
 3. U1, the shift order: the successor connects while the predecessor's
    presence row is live; no inherited durable exists and nothing is read. The
-   predecessor acks 2 more and exits; within two heartbeat ticks after its row
-   expires (fake clock), the inherited durable starts at the new floor and
-   delivers only what is past it.
+   predecessor acks 2 more and exits; the inherited durable starts on the third
+   successful empty read after its row expires (fake clock), at the new floor,
+   and delivers only what is past it.
+3b. U1, unknown reads: with the KV read failing on every tick (stubbed), no
+   inherited durable is ever created; two empty reads, one failure and one
+   empty read do not trigger; three empty reads in a row do.
+3c. U1, in-place restart: the predecessor's shim restarts (old instance row
+   expires, new instance row written 10 seconds later); the empty-read count
+   reaches at most 1 and resets, and nothing is inherited.
+3d. U1, the rollout case: a role-holding predecessor on today's shim has one
+   combined [instance, role] durable acked through sequence 120; the
+   successor's instance-only inherited durable starts at 121, not 1.
+3e. U1, the first restart onto split durables: a seat whose departed durable
+   is a combined [instance, role] acked through 200 restarts on the new shim;
+   both its own durable and its `-role` durable start at 201, and nothing at
+   or below 200 is delivered again.
 3a. U1: a predecessor row that reappears after inheritance started stops the
    inherited durable at once, and the resume note says why.
 4. U1: the inherited durable is deleted after it drains with the predecessor
@@ -234,7 +304,8 @@ most visible; U1 closes the loss.
    role messages are delivered (first holder).
 4c. U1: the same seat started with `DIRECTOR_PREDECESSOR` set takes D1's
    path instead (test 3), and a departed sibling's presence row expiring
-   during its first 90s changes nothing for a seat without the variable.
+   during its first three ticks changes nothing for a seat without the
+   variable.
 5. U2: right after connect, presence reads `catching-up`; with 2 waiting, a
    seat `set_presence idle` leaves it `catching-up` and the result names 2.
 6. U2: after a drain to zero and one `wait_for_message`, presence reads `idle`
@@ -265,21 +336,31 @@ This changes the shim every seat runs, so it is a change to a live system.
   messages. U2's state is a free-text value that older shims never write.
   U3's notices are messages; stopping the sweep step stops them.
 
-## 9. Rulings needed (operator, via director)
+## 9. Rulings (operator, 2026-10-04, relayed by director)
 
-- **B2-R1, the lineage source.** Default: `DIRECTOR_PREDECESSOR`, set by the
-  launcher from marvel's `MARVEL_PREDECESSOR`, or by hand. Alternative: the
-  shim finds the predecessor itself from the newest departed presence row with
-  the same team and role. The alternative needs no launcher change but picks
-  wrongly when two replicas of a role die together.
-- **B2-R2, does catching-up hold routing?** Default: director does not count a
-  catching-up seat as live, and does not route new asks to it, while mail to it
-  still queues. Alternative: display only.
-- **B2-R3, max age.** Default: keep 72h and fix the stale 24h text (U4).
-  D3's notice is what closes P1; the age only sets when the drop happens.
-  Alternative: raise today's stream (brief 11 proposes 28 days for the fabric,
-  unruled); that delays the drop, closes nothing on its own, and grows the
-  replay a respawned seat reads (finding-015).
+Verbatim:
 
-Expiry: these defaults hold until U1's build starts; with no ruling by then,
-the builder builds the defaults.
+> "R1 predecessor lineage comes from the launcher's environment, R2 it's not
+> live until it's considered to have taken over for it's predecisor, the
+> handoff is compelete; We don't have the details on that exactly, for now
+> it's when the catch up is complete, but we should do more research on how
+> this handoff/shiftchange should be completed, possibly put elegable
+> originals into a secondary guarentee/support role ready for questions for
+> some period of time (if they are being rotated out for a non-critical or
+> non-fault reason) B2-R3 yes, definitely 72h and fix the stale 24h
+> referneces"
+
+What it settles in this design:
+
+- **B2-R1:** the lineage is `DIRECTOR_PREDECESSOR`, set by the launcher from
+  marvel's `MARVEL_PREDECESSOR`, or by hand. The presence-gone trigger
+  (section 3) is timing only, never a lineage source. U5, marvel setting
+  `MARVEL_PREDECESSOR` on a crash repair, is now load-bearing, and a marvel
+  ticket for it is being opened.
+- **B2-R2:** a seat is not live until it has taken over for its predecessor.
+  For now that means its catch-up is complete, which is section 4's exit rule.
+  How a handoff or shift change should finish, including keeping an eligible
+  predecessor on as a support seat for questions after a non-fault rotation,
+  is a research item for director's graph, filed as a kos idea by its writer.
+  This design cites it once it exists and does not design it.
+- **B2-R3:** 72h stays, and the stale 24h references are fixed (U4).
