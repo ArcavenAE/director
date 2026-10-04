@@ -107,7 +107,7 @@ clusters:
       url: nats://127.0.0.1:4222   # what sessions receive; defaults from listen
       store_dir: ~/.marvel/state/nats   # default; Layout.StateDir()/nats
       hub:
-        url: nats-leaf://192.168.100.110:7442   # optional; sets the leaf remote
+        url: nats-leaf://kinu.local:7442   # optional; sets the leaf remote
 ```
 
 Rules:
