@@ -102,7 +102,7 @@ inherited durable at once (below).
 **Crash repairs.** A single-replica role's repair reuses its key, so it reads
 its own floor today and needs nothing. A multi-replica slot that returns under
 a new index has no lineage. The fix is marvel's: set `MARVEL_PREDECESSOR` on a
-repair spawn to the crashed row it replaces (part U5, a marvel ticket). The
+repair spawn to the crashed row it replaces (part U5, marvel#541). The
 shim does not guess.
 
 **The read.** Once started, the shim creates one more durable,
@@ -259,7 +259,7 @@ address's oldest unread age from consumer ack floors.
 | U1 | `DIRECTOR_PREDECESSOR` input, the inherited durable, `inherited_from`, its end rules; `cast-launch.sh` mapping; the split role durable and its start rule (section 3a), local and global; `subjectFloor` by containment (section 3) | none | 1 |
 | U2 | `catching-up` presence and its exit rule; the roster's display and "not live" count | none | 2 |
 | U3 | sweep step: expiry notices from `unread --threshold`, once per id | #126 slice M on main | 3 |
-| U5 | marvel: set `MARVEL_PREDECESSOR` on a repair spawn that replaces a crashed row under a new index (a marvel ticket, not a director PR) | none | marvel |
+| U5 | marvel: set `MARVEL_PREDECESSOR` on a repair spawn that replaces a crashed row under a new index (marvel#541, not a director PR) | none | marvel |
 | U4 | fix the stale 24h in `verify-auth.sh:87`, `PROGRESS.md:11-12`, `probe/nats-global-tier/verify-global-tls.sh:247-250` and `verify-global-shim.sh:93-96`, and correct #222's title | none | 3 |
 
 Three PRs, not one: U1 and U2 touch different code paths and each can be
@@ -355,8 +355,8 @@ What it settles in this design:
 - **B2-R1:** the lineage is `DIRECTOR_PREDECESSOR`, set by the launcher from
   marvel's `MARVEL_PREDECESSOR`, or by hand. The presence-gone trigger
   (section 3) is timing only, never a lineage source. U5, marvel setting
-  `MARVEL_PREDECESSOR` on a crash repair, is now load-bearing, and a marvel
-  ticket for it is being opened.
+  `MARVEL_PREDECESSOR` on a crash repair, is now load-bearing, tracked as
+  marvel#541.
 - **B2-R2:** a seat is not live until it has taken over for its predecessor.
   For now that means its catch-up is complete, which is section 4's exit rule.
   How a handoff or shift change should finish, including keeping an eligible
