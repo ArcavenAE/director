@@ -1178,8 +1178,8 @@ in use Sep-20 and lapsed Sep-21).*
 
 **R-111 (OBSERVED) · a director dispatch carries its full brief in a durable
 store and injects only a short pointer to it, and any load-bearing pointer sits
-at the tail of the injected text.** This session a 1114-byte dispatch to the
-e98-architect delivered only its tail: the injection channel dropped the HEAD
+at the tail of the injected text.** This session a 1114-byte dispatch to
+a client team's architect delivered only its tail: the injection channel dropped the HEAD
 and kept the end, so the head, which held the framing and the ticket pointer,
 was lost and the architect asked for a resend. The recovery that worked was a
 574-byte resend with the ticket id at the very end. The truncation itself is a
@@ -1273,7 +1273,7 @@ doorbell.** Receive is a poll (R-56), and an idle seat never polls. On
 2026-09-25 skippy's reviewer supervisor had read nothing past global seq 54 while
 seqs 55 to 59 (seven review requests, a branch move, a quota rule) sat for about
 two hours; every other mokuzai supervisor stopped at 50 or 51. Locally,
-e98-builder held nine unread messages for about four hours, including two routed
+a client team's builder held nine unread messages for about four hours, including two routed
 builds. Every send had returned accepted-for-delivery. I found it only after the
 operator asked twice who was working the reviews, by reading hub consumer state
 by hand; one marvel inject telling each seat to drain its inbox cleared both.
@@ -1287,8 +1287,8 @@ a send to an address nothing consumes is refused before publish.** role:// sends
 published to `agent.<ws>.<team>.role.<role>.inbox`, and no session consumed that
 subject. Twenty dtu messages sat unread for about 21 hours, including two GATEs
 meant for director, while every send reported success. product-supervisor found
-them by reading the stream by hand. Role mail was also found unread on the e98
-and arcaven role subjects. The R-09 drop, entering through an address form rather
+them by reading the stream by hand. Role mail was also found unread on a client team's
+and arcaven's role subjects. The R-09 drop, entering through an address form rather
 than through transport.
 *Earned by: O role-mail-no-consumer; fix in flight as director#86.*
 *Source: OBSERVED. Cross-refs R-09, R-92.*
