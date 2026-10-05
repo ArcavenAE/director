@@ -40,3 +40,11 @@ What any answer must keep: a broadcast meant for every supervisor still has to r
 - Both measurements are from one cluster during one pause. I have no measurement from a cluster with one supervisor seat, where the fan-out costs nothing.
 - The relevance counts ("6 for ops", "about 20 relevant") are each seat's own judgement, not a field in the envelopes.
 - The 90k-character batch size comes from both reports and was not re-measured by me.
+
+## Addendum 2026-10-04: a second team's view, and what the tools cap
+
+**Observed by the errand team's report.** On the same cluster, that team's supervisor drained 182 held messages on 2026-10-02 and 321 on 2026-10-04, and none of them was addressed to that seat. Every drain at `max` 50 overflowed the tool-result limit, at 86k to 109k characters per batch. This is a third seat reporting the same fact as section 2: on a shared global supervisor address, most of what a supervisor reads is someone else's.
+
+**What the tools bound, checked at director origin/main 97dfcf9.** A `wait_for_message` batch is capped at 50 messages (`maxDrain`, `probe/nats-phase-0/director-mcp/drain.go:39`); the comment there sizes the worst case "at a few MiB". So at the batch limit the size is bounded by envelope count, not by the caller's tool-result limit, and three seats have now hit that limit at 50. `inbox_summary` reads 200 waiting messages by default (`summaryDefault`, `drain.go:42`), up to 500 when asked (`summaryMax`, `drain.go:43`, clamped at `tools.go:331-336`), and marks its result `partial` when it read fewer than the consumer reports waiting (`tools.go:349`). The errand team's report describes this as a cap at 200; it is the default, and a caller can raise it.
+
+**Judgment, not observed design.** The errand team runs its supervisor role with two replicas. Its report says every ask addressed `FOR` that team's supervisor reached both seats, and the two seats split the work by PROPOSE three times (local seqs 305, 722 and 1203). That is the same fan-out one level down, inside a team: the address names a role, and a role with two replicas has two holders. The report's view is that a seat-level or role-level singleton claim would settle it. I record that as the reporting team's judgment; I did not observe the split.
