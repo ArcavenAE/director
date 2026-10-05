@@ -1998,10 +1998,11 @@ director may attempt or request the relayed grant as a marvel inject that
 carries the grant to that seat. The inject includes a reference to the
 nonrepudiation message from director, which can be verified; marvel may require
 that reference before it accepts the request in future, as part of a future
-majordomo adjudication and authorization of the request. One plain, unchanged
-retry is allowed only after a denial with a named transient cause. R-181's rule
+majordomo adjudication and authorization of the request. One plain retry is
+allowed only after a named transient cause (rate limit, timeout). R-181's rule
 stands: director must not word a relay so that it passes a classifier.
 *Amendment: operator ruling 2026-10-05, item 8, "8 (a) 1 but amended that director may attempt/request the relayed grant as a marvel inject to carry the grant to the target seat when initially refused, includes a reference to the non-repudiation message from director which can be verified, may be required for marvel to accept the request in the future (future majordomo adjudication/authorization of request)"*
+*The retry sentence is clause 1 of option 8a (a) as put to the operator, quoted verbatim: "One plain retry is allowed only after a named transient cause (rate limit, timeout)". Clause 2 of that option ("after a policy denial, any retry is a bypass") is held for the operator (Q2) and is not recorded here.*
 *Earned by: the four relayed rulings denied at the receiving seat (R-181).*
 *Source: RULED 2026-10-05. Cross-refs R-181, R-05, R-95.*
 
