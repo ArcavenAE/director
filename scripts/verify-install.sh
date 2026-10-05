@@ -69,5 +69,20 @@ grep -qF 'only when the installed copy is missing' "$skill" && ok "skill states 
 bare="$(grep -n -E 'run `scripts/(dsi|dsx|dws|merge-guard)' "$skill" || true)"
 [[ -z "$bare" ]] && ok "no bare run of scripts/<name> remains" || bad "no bare run of scripts/<name> remains" "$bare"
 
+# A copy install runs from the bin home with no checkout beside it.
+cp_home="$root/copy"; mkdir -p "$cp_home"
+CLAUDE_HOME="$cp_home/claude" DIRECTOR_HOME="$cp_home/director" DIRECTOR_STATE="$cp_home/state" "$here/install.sh" --copy >"$cp_home/out" 2>&1 || true
+for n in dsi dsx dws merge-guard; do
+  [[ -f "$cp_home/director/bin/$n" && ! -L "$cp_home/director/bin/$n" && -x "$cp_home/director/bin/$n" ]] && ok "copy install puts a real executable $n in the bin home" || bad "copy install puts a real executable $n in the bin home"
+done
+set +e
+"$cp_home/director/bin/merge-guard" >"$cp_home/mg" 2>&1; rc=$?
+[[ $rc -eq 2 ]] && grep -q "merge-guard" "$cp_home/mg" && ok "installed merge-guard runs from the bin home and prints usage" || bad "installed merge-guard runs from the bin home and prints usage" "rc=$rc"
+DIRECTOR_STATE="$cp_home/state" "$cp_home/director/bin/dsx" >"$cp_home/dsx" 2>&1; rc=$?
+[[ $rc -eq 0 ]] && grep -q "no watch list" "$cp_home/dsx" && ok "installed dsx runs from the bin home" || bad "installed dsx runs from the bin home" "rc=$rc"
+mkdir -p "$cp_home/home"; HOME="$cp_home/home" DIRECTOR_STATE="$cp_home/state" "$cp_home/director/bin/dsi" >"$cp_home/dsi" 2>&1; rc=$?
+[[ $rc -eq 0 ]] && ok "installed dsi runs from the bin home" || bad "installed dsi runs from the bin home" "rc=$rc"
+set -e
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
