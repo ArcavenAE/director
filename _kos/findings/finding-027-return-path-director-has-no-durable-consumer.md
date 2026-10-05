@@ -1,4 +1,10 @@
-# finding-006: the cross-host return path fails because the director maintains no durable consumer on GLOBAL_TO_DIRECTOR
+# finding-027: the cross-host return path fails because the director maintains no durable consumer on GLOBAL_TO_DIRECTOR
+
+> **Renumbered 2026-10-05, 006 -> 027.** Filed as finding-006 and collided
+> with `finding-006-global-tier-has-no-per-agent-address.md`, merged earlier. `kos validate` fails on
+> duplicate finding numbers. This entry moved, the earlier one did not. References
+> to "finding-006" dated on or before 2026-10-05 in bd notes and PR bodies may
+> mean this document.
 
 > RESOLVED-VERIFIED 2026-09-22. Fix applied and proven: rebuilt director-mcp
 > clean from HEAD (b2cfa45, vcs.modified=false), reconnected the director MCP.
@@ -24,7 +30,7 @@
 
 Date: 2026-09-22. Subject: director (cross-host inbound mail, O-23). Status:
 root cause identified by direct hub read; fix is a clean rebuild + verify, not
-a code hunt. Completes and corrects finding-005-cross-host-return-path (which
+a code hunt. Completes and corrects finding-025-cross-host-return-path-consumer-side (which
 guessed consumer-side for the wrong reason and never read the hub).
 
 ## The method that settled it
@@ -122,7 +128,7 @@ multi-machine binaries with no release.
 
 ## Cross-refs
 
-- finding-005-cross-host-return-path (superseded; the consumer-side guess was
+- finding-025-cross-host-return-path-consumer-side (superseded; the consumer-side guess was
   right in substance, wrong in mechanism, and unproven)
 - O-23 (symptom), O-28 (idle seats do not consume), O-29 (request delivered not
   consumed), O-30 (handshake worked Sep 20 and lapsed), O-31 (version

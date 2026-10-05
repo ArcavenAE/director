@@ -1,4 +1,10 @@
-# finding-005: the instance ULID is not a session discriminator; two processes started together mint the same one 23.5% of the time
+# finding-026: the instance ULID is not a session discriminator; two processes started together mint the same one 23.5% of the time
+
+> **Renumbered 2026-10-05, 005 -> 026.** Filed as finding-005 and collided
+> with `finding-005-workforce-organization-model.md`, merged earlier. `kos validate` fails on
+> duplicate finding numbers. This entry moved, the earlier one did not. References
+> to "finding-005" dated on or before 2026-10-05 in bd notes and PR bodies may
+> mean this document.
 
 - **Date:** 2026-09-21
 - **Session:** migrated-marvel-builder-g1-1, mokuzai, building the aae-orc-2vwae round-trip harness

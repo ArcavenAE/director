@@ -1,4 +1,10 @@
-# finding-005: cross-host director mail fails on the consumer side, not the wire
+# finding-025: cross-host director mail fails on the consumer side, not the wire
+
+> **Renumbered 2026-10-05, 005 -> 025.** Filed as finding-005 and collided
+> with `finding-005-workforce-organization-model.md`, merged earlier. `kos validate` fails on
+> duplicate finding numbers. This entry moved, the earlier one did not. References
+> to "finding-005" dated on or before 2026-10-05 in bd notes and PR bodies may
+> mean this document.
 
 > SUPERSEDED 2026-09-22 by aae-orc-m517d (the migrated team's four-candidate
 > investigation) and by the kinu re-investigation opened this date. Do NOT

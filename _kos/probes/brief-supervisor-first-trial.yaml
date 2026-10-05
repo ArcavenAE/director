@@ -17,7 +17,7 @@ content: |
   Prior in this graph: finding-005-workforce-organization-model (staffing,
   span of control, and the director boundary this trial tests in practice),
   finding-006-global-tier-has-no-per-agent-address and
-  finding-006-return-path-director-has-no-durable-consumer (the reach and
+  finding-027-return-path-director-has-no-durable-consumer (the reach and
   return-path gaps a supervisor is likely to hit first),
   finding-007-deaf-session-reports-silence-as-normal (an idle seat that
   never polls looks healthy, which bears on the status beat).

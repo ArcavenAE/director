@@ -1069,16 +1069,16 @@ in the message body, or a marvel pane verb keyed `<workspace>/<agent-name>
 --cluster`. Both are workarounds for a missing capability: cross-host per-seat
 addressing. Cross-refs: R-97 (unique per-seat address), R-103 (fleet-state
 model, of which reachability is a field), bd q9mtd (ambiguous global role
-address), finding-005.
+address), finding-025.
 
 **R-105 (OBSERVED) · a send needs a per-message delivery/read receipt, not
 just an accept.** "Accepted for delivery" (R-08) reports only that the bus
-took the message. The cross-host return-path outage (O-23, finding-005) made
+took the message. The cross-host return-path outage (O-23, finding-025) made
 every reply from mokuzai fail silently while sends kept reporting success, so
 the director could not tell heard from lost. Director must surface delivered
 and read status per message, so a silent-drop condition is observable rather
 than inferred days later. Cross-refs: R-08 (accepted != delivered or read),
-O-23, finding-005.
+O-23, finding-025.
 
 ---
 
@@ -1087,14 +1087,14 @@ O-23, finding-005.
 Filed 2026-09-22 after O-23/29/30/31 resolved. The cross-host return-path outage
 that ran most of a day was not a transport break: the director seat's own receive
 was mis-provisioned, and the failure was invisible from both ends. These five
-refine R-105 (which named the symptom and cited the now-superseded finding-005)
+refine R-105 (which named the symptom and cited the now-superseded finding-025)
 with the mechanism, established by a direct hub read (`:8242/jsz`) while the seat
-was provably polling. Source classes are inline. finding-006 and finding-007 are
+was provably polling. Source classes are inline. finding-027 and finding-007 are
 the evidence; the general form of finding-188 is routed to the platform graph, not
 here (see the harvest diff at the end of this section).
 
 **R-106 (OBSERVED) · the director's own receive path maintains a durable consumer
-on its global inbox stream, never a bare core subscription.** finding-006: the
+on its global inbox stream, never a bare core subscription.** finding-027: the
 running director held only a NATS core subscription on `global.director.inbox`,
 which receives only what is published while it is actively subscribed and never
 replays the stream backlog; `wait_for_message` subscribes for the poll duration
@@ -1106,7 +1106,7 @@ it is the concrete mechanism under R-105's silent drop.
 *Earned by: hub read `http://127.0.0.1:8242/jsz` during an active director fetch,
 51 stranded messages, no `mcp_global_director` durable present; the committed shim
 code creates the durable, the running dirty build did not.*
-*Source: OBSERVED. Cross-refs R-50, R-105, finding-006.*
+*Source: OBSERVED. Cross-refs R-50, R-105, finding-027.*
 
 **R-107 (OBSERVED) · a poll that returns empty distinguishes an empty stream from
 a missing consumer; a starved consumer is loud, never reported as "silence, not
@@ -1128,7 +1128,7 @@ and the director seat's own hours-long instance of exactly this.*
 
 **R-108 (JUDGMENT, observed basis) · the director-mcp ships as a reproducible,
 version-pinned artifact, and a running seat's on-wire behavior is reconcilable
-with a committed ref.** O-31 and finding-006: the running director was
+with a committed ref.** O-31 and finding-027: the running director was
 `vcs.modified=true` (a dirty Sep-19 build at 0eade31, unreproducible from any
 commit) while kinu supervisors ran a different clean build (eb40aa3) from a
 different install path, and the mokuzai builds were unknown. A dirty, unpinned,
@@ -1139,8 +1139,8 @@ reconciled with the source of record. The software needs a build and release pat
 A released reproducible director is part of "director existing and working," so
 this passes the admission test rather than being general project hygiene.
 *Earned by: the version-provenance mapping in O-31; the dirty build that was
-finding-006's compounding cause.*
-*Source: JUDGMENT on an observed basis. Cross-refs O-31, finding-006, R-06.*
+finding-027's compounding cause.*
+*Source: JUDGMENT on an observed basis. Cross-refs O-31, finding-027, R-06.*
 
 **R-109 (OBSERVED; amended, RULED 2026-09-24) · a denied cross-team or
 cross-cluster publish fails loud as a named permission refusal, never as a
@@ -2325,7 +2325,7 @@ committed file.
 - **Promoted (5):** R-106 (director durable receive), R-107 (starvation is loud,
   not silence), R-108 (reproducible pinned build), R-109 (cross-cluster routes
   through director; loud authz), R-110 (reply_by + confirm-before-wait).
-- **Unchanged:** R-105 stands; its symptom framing is correct and its finding-005
+- **Unchanged:** R-105 stands; its symptom framing is correct and its finding-025
   citation is left as the historical record. R-106 supplies the mechanism it
   lacked. R-50, R-14, R-93, R-08, R-89 unchanged; the new entries cross-ref them
   rather than restating.

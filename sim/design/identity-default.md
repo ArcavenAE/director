@@ -21,7 +21,7 @@ the real director).
 |---|---|---|
 | the runtime defaults identity to `$USER` | `git grep -nE '\$USER\|user\.Current\|os.Getenv\("USER"\)'` over code | **false.** `director-mcp` has no default: it exits when `DIRECTOR_AGENT_ID` is empty (`main.go:56-64`) |
 | where the personal id comes from | read `~/.claude.json` (key names and agent id only) | a **local-scope Claude Code registration** for the orc directory, `director-mcp` with the personal `DIRECTOR_AGENT_ID` baked in, loaded by every Claude Code session started there. It is operator-local and in no git repo |
-| instance ids can collide | `git grep ulid` in director-mcp | fixed for instances: `bus.go:165` uses `crypto/rand` (finding-005's fix). Message ids at `tools.go:124` still use `ulid.Make()`; out of scope here, noted in section 7 |
+| instance ids can collide | `git grep ulid` in director-mcp | fixed for instances: `bus.go:165` uses `crypto/rand` (finding-026's fix). Message ids at `tools.go:124` still use `ulid.Make()`; out of scope here, noted in section 7 |
 | the seat wrapper has a shared fallback | read `probe/nats-phase-0/director-mcp-seat:69` on main | **true.** `DIRECTOR_AGENT_ID="${DIRECTOR_AGENT_ID:-${MARVEL_SESSION:-director-seat}}"`: with neither set, every such seat joins as the literal `director-seat`. mokuzai's seats run this wrapper today |
 | a launcher that assigns ids exists | `probe/nats-phase-0/id-a-demo/director-session.sh` | yes: it assigns a distinct id and passes `--strict-mcp-config`, so the baked registration is bypassed (ID-A) |
 
@@ -140,7 +140,7 @@ braces, not the only guard.
 ## 7. Not in scope, noted
 
 - Message ids at `tools.go:124` use `ulid.Make()`, the same seeding
-  finding-005 fixed for instances. Two shims sending in the same millisecond
+  finding-026 fixed for instances. Two shims sending in the same millisecond
   can mint equal message ids. Worth its own ticket.
 - ID-B and ID-C (a DID bound to the name) remain the trajectory for
   off-host or multi-operator identity. This design is ID-A made default.

@@ -9,7 +9,7 @@ builders follow review.
 
 A seat runs whatever director-mcp binary it was started with, and today
 nothing says which build that is or whether it matches a commit. During the
-cross-host return-path outage (finding-006) the running shim was a dirty,
+cross-host return-path outage (finding-027) the running shim was a dirty,
 unpinned build whose wire behavior matched no commit, and other seats ran
 different builds from different paths. The channel cue sharpened this: a cue
 seat needs a shim that has the cue, and in the C-0 trial seats spawned

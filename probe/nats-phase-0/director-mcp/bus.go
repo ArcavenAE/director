@@ -162,7 +162,7 @@ func preflight(ctx context.Context, url string, self Sender, gcfg *globalConfig)
 //
 // Staggering process starts also avoids the collision, and that is a
 // workaround rather than a fix: it depends on timing nobody controls. See
-// ArcavenAE/director#62 and finding-005-instance-ulid-collides-on-simultaneous-start.
+// ArcavenAE/director#62 and finding-026-instance-ulid-collides-on-simultaneous-start.
 var instanceEntropy = &ulid.LockedMonotonicReader{
 	MonotonicReader: ulid.Monotonic(crand.Reader, 0),
 }
