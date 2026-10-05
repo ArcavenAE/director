@@ -22,7 +22,7 @@ run_install() { # $1 = scratch home
 
 targets() { # every target install.sh places, relative to the scratch home
   printf '%s\n' claude/skills/director claude/skills/stansfield claude/commands/director.md \
-    director/bin/board-html director/bin/dws director/bin/director-install
+    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/director-install
 }
 
 # Positive control: a clean home installs everything and exits 0.
@@ -51,6 +51,23 @@ grep -q '${DIRECTOR_HOME:-$HOME/.director}/bin/board-html' "$skill" \
   && ok "skill names the renderer by its installed path" || bad "skill names the renderer by its installed path"
 grep -q 'run `scripts/board-html`' "$skill" \
   && bad "skill still runs a relative scripts/board-html" || ok "skill runs no relative renderer"
+
+# Every script the skill calls is installed, executable, and called from the bin home.
+# The list is the skill's: every scripts/<name> reference, plus the installed-path form.
+BINHOME='${DIRECTOR_HOME:-$HOME/.director}/bin'
+names="$(grep -o -E 'scripts/[A-Za-z0-9_-]+' "$skill" | sed 's#scripts/##' | sort -u | tr '\n' ' ')"
+for n in dsi dsx dws merge-guard; do
+  case " $names " in *" $n "*) ok "the skill references $n";; *) bad "the skill references $n" "list: $names";; esac
+done
+for n in dsi dsx dws merge-guard; do
+  [[ -x "$clean/director/bin/$n" ]] && ok "install puts $n in the bin home, executable" || bad "install puts $n in the bin home, executable"
+  grep -qF "$BINHOME/$n" "$skill" && ok "skill calls $n from the bin home" || bad "skill calls $n from the bin home"
+  [[ -x "$here/skills/director/scripts/$n" ]] && ok "the fallback scripts/$n exists in the checkout" || bad "the fallback scripts/$n exists in the checkout"
+done
+grep -qF 'only when the installed copy is missing' "$skill" && ok "skill states the fallback to scripts/ only when the installed copy is missing" || bad "skill states the fallback to scripts/ only when the installed copy is missing"
+# A bare "run `scripts/<name>`" call must be gone; scripts/<name> may appear only in the fallback sentence.
+bare="$(grep -n -E 'run `scripts/(dsi|dsx|dws|merge-guard)' "$skill" || true)"
+[[ -z "$bare" ]] && ok "no bare run of scripts/<name> remains" || bad "no bare run of scripts/<name> remains" "$bare"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

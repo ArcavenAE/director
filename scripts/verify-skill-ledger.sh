@@ -47,7 +47,7 @@ step5="$(part step5 | flat)"
 has() { grep -qF -- "$2" <<<"$1"; }
 
 # Step 4: where Blocked on you comes from, and the form of each line.
-has "$step4" 'scripts/dws show --json' && ok "step 4 reads the ledger with dws show --json" || bad "step 4 reads the ledger with dws show --json"
+has "$step4" 'bin/dws show --json' && ok "step 4 reads the ledger with dws show --json" || bad "step 4 reads the ledger with dws show --json"
 has "$step4" 'rows whose `blocked` is `operator`' && ok "step 4 takes Blocked on you from rows whose blocked is operator" || bad "step 4 takes Blocked on you from rows whose blocked is operator"
 has "$step4" '<owner> - <workstream>: <next action>' && ok "step 4 states the line form" || bad "step 4 states the line form"
 has "$step4" 'oldest `last_moved` first' && ok "step 4 orders Blocked on you by last_moved, oldest first" || bad "step 4 orders Blocked on you by last_moved, oldest first"
