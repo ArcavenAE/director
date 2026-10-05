@@ -219,13 +219,14 @@ by pattern.
 ### The admission test
 
 Before an observation earns a place in the requirements register, one line
-settles it: **would this still be true if director existed and worked?**
+settles it: **would a working director fix this?**
 
 If yes, it is a director requirement. Five messages dropped while every send
-returned success fails that test (director existing fixes it), so it stays.
-If no, it is general practice, not a director requirement; it belongs in the
-platform graph, not here. A premature published diagnosis passes the test
-(director existing changes nothing about it), so it goes elsewhere. In session
+returned success passes that test (director existing fixes it), so it stays.
+If no, the thing is still true with director working, so it is general
+practice, not a director requirement; it belongs in the platform graph, not
+here. A premature published diagnosis fails the test (director existing
+changes nothing about it), so it goes elsewhere. In session
 1 the channel had no admission test, and six of twenty-one observations were
 general work hygiene that drifted in because the notes file was the nearest
 place to write.
