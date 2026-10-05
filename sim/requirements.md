@@ -1940,17 +1940,17 @@ an open stacked child gets STOP, and the STOP text carries the safe procedure
 (merge without --delete-branch). STOP means stop, so each stack base since has
 gone through by hand or on the operator's word past the guard: on 2026-10-04 a
 hand-checked plain merge that the classifier then denied as a merge without
-review, and on 2026-10-05 midway#202, #204 and #210, each merged on the
+review, and on 2026-10-05 three stack bases in a client repo, each merged on the
 operator's word. Director needs a verdict such as `PROCEED-STACK-BASE @sha`,
 which runs every other check and then permits only the plain merge, so the
 safe path does not need a human to get past a control.
-*Earned by: O 2026-10-04g; relay-log 2026-10-05 (midway#202, #204, #210).*
+*Earned by: O 2026-10-04g; relay-log 2026-10-05 (three client stack-base merges).*
 *Source: OBSERVED. Cross-refs R-152.*
 
 **R-181 (OBSERVED) · an operator ruling reaches the receiving seat as a grant
 its policy can verify.** Text relayed by director carries no authority the
 receiving harness recognizes. Four operator rulings in two days were denied at
-the receiving seat: the Vantage#384 fold forwarded to a builder, the #491
+the receiving seat: a client PR's develop fold forwarded to a builder, the #491
 leased delete, the #531 push to an arcavenai branch, and the label writer
 chain. In each case the seat was right to stop, and each one went back to the
 operator's own hand. Director needs a way to turn a ruling into a scoped,
@@ -1962,7 +1962,7 @@ must not word a relay so that it passes a classifier (no-control-bypass).
 
 **R-182 (OBSERVED) · director resolves a seat or team name to one address, and
 each cluster has one name.** A host is `skippy` to marvel and `mokuzai` to the
-global bus; a workspace (`dtu`) is not a team (`product`); an envelope's
+global bus; a workspace name is not a team name; an envelope's
 sender carries a workspace but no team. In one stretch that produced three
 misaddresses, a fleet roll call that needed five sends after its first
 broadcast reached one seat, and a reply that needed two tool calls to find its
@@ -1995,7 +1995,7 @@ instances.
 - **Unchanged, new instances (3):**
   - R-117: three idle seats sat on mail on one day, product for 3h and then
     8h, and the corporate supervisor until a hand ring (O 2026-10-05b, d, e).
-    The design is marvel#580.
+    The idle-seat wake design is still open.
   - R-149: a dim composer suggestion read exactly like a pending operator
     ruling, and marvel capture has no escape mode to tell them apart
     (O 2026-10-04i, FR 2026-10-04f).
