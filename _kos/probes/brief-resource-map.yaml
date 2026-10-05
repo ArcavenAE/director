@@ -1,0 +1,263 @@
+id: brief-resource-map
+type: brief
+confidence: frontier
+title: "Probe: what should director and supervisors call the fleet resource map, which fields does it carry, and where does each field's data live today?"
+content: |
+  ## Why
+
+  Director and its supervisors oversee work across about 100 agent seats on
+  three clusters. To route well they need to know who works for them, what
+  each seat can do and is scoped to, what it is doing, how deep its queue
+  is, and who is free. R-103 (RULED 2026-09-20) already makes a live
+  fleet-state model a director function, yet today it is rebuilt by hand at
+  each roll call. This brief names the map, defines its fields from cited
+  practice, and ranks what to build first by what each item needs and where
+  that data already lives.
+
+  The map is diagnostic. No field on it gates a commit, merge, release or
+  dispatch unless a written decision ratifies that gate (orc ADR-007, SOUL
+  section 8, `diagnostic-not-gate.md`).
+
+  ## 1. What exists
+
+  **Specified in director (tracked):**
+  - R-103, `sim/requirements.md:1042-1061`: per-seat fields for agent id,
+    instance, cluster and host, workspace, team, role, generation, state and
+    health, context percent, tier visibility, global role, reach method,
+    cwd, and org ownership.
+  - R-115 to R-117, `:1243-1284`: a per-seat dispatch ledger, queue depth
+    and oldest wait per seat and per role, scope-before-availability
+    matching, and unread depth and age per seat.
+  - `_kos/findings/finding-005-workforce-organization-model.md`: span of
+    control, mission command, the viable system model, and "a role is a
+    function with declared capacity". It names per-role queue depth as the
+    first probe.
+  - `sim/research/supervisor-development/`: the earlier Army doctrine and
+    management study. It covers the readiness axis, tolerance bands per
+    decision class, and status bound to a receiver-produced progress
+    counter.
+  - `sim/design/board-workstream-ledger.md`: the workstream ledger (dws),
+    which holds focus at team level.
+
+  **Specified elsewhere (objects, not owners):**
+  - The orc ideas `workload-queue-depth-and-capacity.md` (four queues and
+    a 72-hour probe) and `fleet-delivery-velocity-metrics.md` (unmeasured).
+  - The wardrobe role files' `can_handle`, checked against
+    `ask-classes.yaml`, which form the capability vocabulary.
+  - The supervisor role's EMITS: mailbox depth, pressure with sample age,
+    and in-degree against a ceiling.
+  - marvel's resource model (ADR-003): session role, generation, health,
+    context percent, runtime and model. Its ActivityState is built but no
+    manifest sets `activity_timeout`.
+  - stagekeeper, the intended idle and stuck watcher, which has no code
+    yet.
+
+  **Data that exists today (counts as of 2026-10-05):**
+
+  | field | best source today | limit |
+  |---|---|---|
+  | who works for us | `marvel get sessions` per cluster: local 33, skippy 21, corporate 9 | must loop clusters; from a marvel-cast seat, `MARVEL_SOCKET` silently overrides `--cluster` |
+  | idle or busy now | `claude agents --json` (local, point in time); dsi `sessions.json` | no time series; dsi is one host and a day stale |
+  | capability | wardrobe `can_handle` (15 of 15 roles) | static, proposal status, not joined to live seats |
+  | scope | `SCOPE` strings in the cast script | a shell case statement; not queryable |
+  | focus | dws workstreams (26, team level) | no seat-level current item |
+  | queue depth | supervisor route ledgers | one team's ledger is well kept (604 routed, 485 acked); the arcaven ledger records depth as UNKNOWN on 790 of 793 values and rarely records closure; no shared schema |
+  | throughput | bd close events by actor and day; route done events | in-progress items mostly carry the human's name; agent actors are keyed by instance |
+  | duty cycle | none; nearest is handoff measurement M4 | nothing samples busy share over time |
+
+  The k0l75 lesson register (1,624 lessons) has 186 lessons touching these
+  fields: presence 56, idle 38, roster 37, queue 32, board 23, liveness 19.
+  None defines duty cycle, capacity or velocity.
+
+  ## 2. Terminology
+
+  Recommended name: **order of battle**. DoD defines it as "the
+  identification, strength, command structure, and disposition" of a
+  force [2]. Those four parts already answer who, how many, under whom,
+  and doing what. The neighbouring Army terms then fall into place:
+  - the common operational picture is the display of it [1, 3-57];
+  - the running estimate is the written judgment beside it [13];
+  - task organization is the per-mission grouping inside it [1, 3-41].
+
+  If martial vocabulary is unwanted in published text, **fleet roster** is
+  the plain substitute. Runner-ups:
+  - **task organization**, if the map is mainly about who supports whom for
+    a mission; it is weak on live status [1, 3-41];
+  - **agent registry**, the current vendor term for an inventory of each
+    agent's owner, purpose, platform and access scope [9]; it is weak on
+    load and focus.
+
+  Proposed fields, each borrowed from a source:
+
+  | field | meaning | from |
+  |---|---|---|
+  | identification | seat role, team, workspace, cluster | OB [2]; OTel `gen_ai.agent.*` [25] |
+  | owner | the human accountable for the seat | Backstage `spec.owner` [11]; ADP 6-0 1-43 [1] |
+  | relationship | supervised by, or supports | ADP 6-0 3-42 [1]; Team Topologies [12] |
+  | capabilities | ask classes the role can handle | TOE personnel lines [4]; wardrobe `can_handle` |
+  | area of responsibility | repos, components and labels in scope | ADP 6-0 boundaries [1] |
+  | lifecycle | staged, live, retiring | Backstage lifecycle [11] |
+  | disposition | current item and its start time | OB [2] |
+  | work in progress, work item age | started and not finished; age of each | Kanban Guide [14] |
+  | queue depth | assigned and not started | Little's law L [15] |
+  | throughput | items finished per period | Kanban Guide [14] |
+  | duty cycle | share of a period the seat was busy | utilization in Kingman [16] |
+  | available | ready for work, with the reason | section 3 |
+  | last report | when the entry was last confirmed | COP latency [1, 3-60] |
+  | assessment | the supervisor's short written judgment | running estimate [13] |
+
+  Avoid "velocity". In Scrum use it means story points, which SPACE warns
+  invites individual optimization [17]; use throughput instead.
+
+  ## 3. What the literature says
+
+  - **Utilization grows queues.** Mean wait rises with ρ/(1-ρ) as
+    utilization approaches 1 [16]. A fleet where every seat shows a high
+    duty cycle has long queues and slow response. Off the constraint,
+    spare capacity is by design (Goldratt step 3) [19]. So label a seat
+    "available" with its reason (no work, blocked, waiting on the operator),
+    never "idle" as a fault.
+  - **Little's law measures; it does not forecast.** L = λW holds exactly
+    after the fact [15]. Queue depth, throughput and age must agree with
+    each other, which makes them a consistency check on the map's own
+    data.
+  - **Work item age is the live signal.** It shows trouble while the item
+    is still open; cycle time only shows it after [14].
+  - **Do not make a number a target.** Goodhart as restated by Strathern
+    [21] says a measure that becomes a target stops measuring. DORA warns
+    against goals and cross-team comparison [23]. SPACE asks for at least
+    three dimensions, one perceptual, reported at team level [17]. GAO
+    found self-rated readiness "may have been overstated" [6].
+  - **Ask only for what decisions need.** Commanders "limit information
+    requests to that which is critical to decision making", and excessive
+    demands erode trust [1, 3-10]. The few fields the operator decides on
+    play the role of the friendly force information requirements; the rest
+    are optional.
+  - **Pair numbers with a written judgment.** Army lessons-learned writers
+    criticize running estimates that show raw data and bury the
+    conclusions [13]. Units must keep the picture by hand when systems
+    degrade [1, 4-93], which the stansfield roll call does today.
+  - **Set control by readiness.** ADP 6-0 calls for more control for new
+    or less-trusted teams and less for mature ones [1, 1-47]. This matches
+    the readiness axis in director's earlier study.
+  - **Agent-specific practice.** Delegations need an objective, an output
+    format, tool guidance and clear boundaries; tracing decision patterns
+    without reading content was needed to debug failures [24]. Keep one
+    registry, give every agent a distinct identity, and start with
+    audit-based monitoring before restrictions [9].
+
+  ## 4. Recommendations, ranked by value to director and supervisors
+
+  1. **Build the R-103 join as one collector, read-only.**
+     - Needs: per-cluster session lists, presence records, harness status.
+     - Lives today: `marvel get sessions` per cluster; presence KV
+       (`bus.go:1212`, `global.go:641`); `claude agents --json`.
+     - Key rows by role, team and cluster, never by instance. This replaces
+       the hand-run roll call.
+  2. **Give every supervisor one route-ledger schema that records closure.**
+     - Needs: routed, acked and done times and the queue depth at route.
+     - Lives today: the best-kept team ledger's `route-record@1` and
+       `route-event@1`. Adopt that as the shared shape.
+     - Queue depth, work item age and duty cycle all come from this, so it
+       unblocks R-115 and R-116.
+  3. **Ask the operator to name the decision fields** (the information
+     requirements).
+     - Needs: one operator answer listing which three to five fields change
+       a routing or staffing decision.
+     - Lives today: nowhere. Everything else stays optional, per
+       ADP 6-0 3-10.
+  4. **Add a three-line assessment per team at a fixed beat.**
+     - Needs: the supervisor's judgment, the numbers above, and a beat.
+     - Lives today: dws `next` per workstream and supervisor handoffs.
+       Model it on the running estimate. Show "available, because ...",
+       never a rank.
+  5. **Sample duty cycle before building a watcher.**
+     - Needs: idle or busy status every few minutes per seat.
+     - Lives today: `claude agents --json` and marvel ActivityState, which
+       needs `activity_timeout` set in manifests. stagekeeper can take this
+       over later.
+  6. **Make scope and capability queryable at dispatch** (R-116).
+     - Needs: the cast scope and `can_handle` per live seat.
+     - Lives today: the cast script's `SCOPE` and the wardrobe role files.
+       Record both in the cast record so a dispatch can check them.
+  7. **Use OTel GenAI agent attribute names for identity fields** [25].
+     This lets the map join to traces later. It costs a naming choice now.
+  8. **Run Little's law as a weekly consistency check**, not a forecast
+     [15].
+
+  ## First entry
+
+  A client team's review team, staged for the corporate cluster and not
+  yet applied:
+  - Seats: one supervisor and two reviewers, all on the claude runtime.
+  - Focus: static adversarial PR review, re-review, red/green checks, and
+    verifying issues against their bodies.
+  - Expected load: 3 to 10 reviews a weekday, bursts of about 15, at 15 to
+    40 minutes each.
+  - Reached through the corporate cluster's global supervisor address.
+
+  This entry exercises identification, relationship, lifecycle (staged),
+  capabilities, area of responsibility and expected throughput.
+
+  ## Sources
+
+  1. ADP 6-0, *Command and Control*. Headquarters, Department of the Army,
+     07 July 2026; supersedes the 31 July 2019 edition (cover and title
+     page verified). https://armypubs.army.mil/epubs/DR_pubs/DR_a/ARN47032-ADP_6-0-000-WEB-1.pdf
+  2. "Order of battle", DoD definition citing JP 2-01.3 (dictionary mirror).
+     https://www.militaryfactory.com/dictionary/military-terms-defined.php?term_id=3919
+  4. Zimmer, B. G. "TOE, MTOE, and TDA: What's the Difference?" army.mil,
+     2025. https://www.army.mil/article/284119/toe_mtoe_and_tda_whats_the_difference
+  6. GAO/NSIAD-95-29, *Military Readiness*. GAO, 1994.
+     https://www.govinfo.gov/content/pkg/GAOREPORTS-NSIAD-95-29/html/GAOREPORTS-NSIAD-95-29.htm
+  9. "Govern and secure AI agents across the organization." Microsoft
+     Learn, Cloud Adoption Framework, updated 2026-10-01.
+     https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ai-agents/governance-security-across-organization
+  11. "Descriptor Format of Catalog Entities." Backstage.
+      https://backstage.io/docs/features/software-catalog/descriptor-format/
+  12. "Key concepts." Team Topologies. https://teamtopologies.com/key-concepts
+  13. Villanueva, J., et al. "Staff Processes in LSCO Pt. 2: Running
+      Estimates." Center for Army Lessons Learned, 2024.
+      https://www.army.mil/article/279458/staff_processes_in_lsco_pt_2_running_estimates_crawling_when_we_need_to_run
+  14. Coleman, J., and D. Vacanti. *The Kanban Guide* (v2025.5).
+      https://kanbanguides.org/the-kanban-guide/
+  15. Little, J. D. C. "Little's Law as Viewed on Its 50th Anniversary."
+      *Operations Research* 59(3), 2011.
+      https://projectproduction.org/journal/reprint-littles-law-as-viewed-on-its-50th-anniversary/
+  16. "Kingman's formula" (Kingman 1961). https://en.wikipedia.org/wiki/Kingman%27s_formula
+  17. Forsgren, N., et al. "The SPACE of Developer Productivity." *CACM*
+      64(6), 2021.
+  19. Goldratt, E. M. *The 5 Focusing Steps of the Theory of Constraints*.
+      North River Press. https://northriverpress.com/wp-content/uploads/2018/01/Free-download-5FS.pdf
+  21. Strathern, M. "'Improving ratings': audit in the British University
+      system." *European Review* 5(3), 1997.
+  23. "DORA's software delivery metrics." https://dora.dev/guides/dora-metrics/
+  24. "How we built our multi-agent research system." Anthropic
+      Engineering, 2025. https://www.anthropic.com/engineering/multi-agent-research-system
+  25. "Semantic conventions for GenAI agent and framework spans."
+      OpenTelemetry (status Development).
+      https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md
+
+  Source numbers follow the research file, so gaps in the list are sources
+  that the research consulted and this brief does not cite.
+edges:
+  - target: question-director-requirements-audit-themes
+    type: supports
+provenance:
+  created_by: agent
+  session: 2026-10-05 resource-map research (research-supervisor seat; placed by a builder seat)
+  created_at: "2026-10-05"
+  notes: >
+    Filed in director by the subject test: R-103 rules the fleet-state
+    model a director function, and the map exists to serve director and
+    its supervisors. marvel, wardrobe, bd and the orc ideas are data
+    sources, not co-owners. Counts were taken 2026-10-05 from live sources
+    (route ledgers, marvel per cluster with MARVEL_SOCKET unset, bd
+    read-only) and are a snapshot. Web sources were read 2026-10-05; the
+    ADP 6-0 edition was verified from its cover page.
+brief:
+  hypothesis: "A map built only from data the fleet already writes (marvel sessions per cluster, presence, harness status, route ledgers, bd events) can supply every proposed field except duty cycle, once supervisors share one route-ledger schema that records closure."
+  excluded_scope: "Gating any dispatch, merge or release on a map field; ranking seats; reading message bodies or transcripts for content; building stagekeeper."
+  success_signal: "A one-shot read-only collector run that fills the proposed fields for every live seat on all three clusters, with each empty cell attributed to a named missing source. The hypothesis is disconfirmed if any field other than duty cycle cannot be filled from an existing source."
+  timebox: "One session for the collector run and the finding."
+  predicted_confidence: 0.55
