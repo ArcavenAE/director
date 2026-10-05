@@ -53,11 +53,14 @@ grep -q 'run `scripts/board-html`' "$skill" \
   && bad "skill still runs a relative scripts/board-html" || ok "skill runs no relative renderer"
 
 # Every script the skill calls is installed, executable, and called from the bin home.
-# The list is the skill's: every scripts/<name> reference, plus the installed-path form.
+# The list is the skill's: every installed-path call it makes. Each must exist in the checkout as the fallback.
 BINHOME='${DIRECTOR_HOME:-$HOME/.director}/bin'
-names="$(grep -o -E 'scripts/[A-Za-z0-9_-]+' "$skill" | sed 's#scripts/##' | sort -u | tr '\n' ' ')"
+names="$(grep -o -E '\.director\}/bin/[A-Za-z0-9_-]+' "$skill" | sed 's#.*/bin/##' | sort -u | tr '\n' ' ')"
 for n in dsi dsx dws merge-guard; do
   case " $names " in *" $n "*) ok "the skill references $n";; *) bad "the skill references $n" "list: $names";; esac
+done
+for n in $names; do
+  [[ -x "$here/skills/director/scripts/$n" || "$n" == board-html ]] && ok "every installed-path call resolves in the checkout: $n" || bad "every installed-path call resolves in the checkout: $n"
 done
 for n in dsi dsx dws merge-guard; do
   [[ -x "$clean/director/bin/$n" ]] && ok "install puts $n in the bin home, executable" || bad "install puts $n in the bin home, executable"

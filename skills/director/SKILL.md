@@ -47,11 +47,13 @@ when the notes have accumulated. Say which mode you are in, once, at the start.
 
 ## Mode: sweep
 
-1. Run `scripts/dsi`. It writes `$DIRECTOR_STATE/sessions.json` (props) and
+The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
+
+1. Run `${DIRECTOR_HOME:-$HOME/.director}/bin/dsi`. It writes `$DIRECTOR_STATE/sessions.json` (props) and
    `roster.md` (scenery). Defaults to `~/.director/state`, 4-day window.
 2. Read `$DIRECTOR_STATE/board.md` if it exists. That is the backdrop: your
    own prior judgment, authored, not regenerated. Read it before the roster.
-3. Optionally run `scripts/dsx` to verify the outside world (PRs, locks, repo
+3. Optionally run `${DIRECTOR_HOME:-$HOME/.director}/bin/dsx` to verify the outside world (PRs, locks, repo
    state). The board has no expiry; dsx is what makes its decay visible.
 4. Present, in this shape and no other:
 
@@ -73,7 +75,7 @@ in the list. Detail on request, by number. Session 1's operator complaint was
 and that complaint is a requirement.
 
 When `$DIRECTOR_STATE/workstreams.jsonl` exists, take Blocked on you from the
-ledger: run `scripts/dws show --json` and list the rows whose `blocked` is
+ledger: run `${DIRECTOR_HOME:-$HOME/.director}/bin/dws show --json` and list the rows whose `blocked` is
 `operator`, oldest `last_moved` first, each as `<owner> - <workstream>: <next action>`,
 from the row's `owner`, `slug` and `next`, with the owner in the session slot.
 The other blocks are unchanged. With no ledger, or no CLI, build the list from
@@ -81,9 +83,9 @@ the board and the roster as above.
 
 5. Update `board.md` with anything you concluded. It is authored, edited
    rather than overwritten, and it is what survives a context compression.
-   With a ledger, also keep it current: `scripts/dws open <slug> --title ...`
-   for each new stream of work, `scripts/dws stage <slug> <to> --from <current>`
-   for a stage that changed, and `scripts/dws refresh` to read last moved and
+   With a ledger, also keep it current: `${DIRECTOR_HOME:-$HOME/.director}/bin/dws open <slug> --title ...`
+   for each new stream of work, `${DIRECTOR_HOME:-$HOME/.director}/bin/dws stage <slug> <to> --from <current>`
+   for a stage that changed, and `${DIRECTOR_HOME:-$HOME/.director}/bin/dws refresh` to read last moved and
    the two factual stage moves from the PR, issue and bd links.
    If `$DIRECTOR_STATE/board.html` exists, run
    `${DIRECTOR_HOME:-$HOME/.director}/bin/board-html` after the edit so the
@@ -102,7 +104,7 @@ the board and the roster as above.
 
 ## Merging: the guard runs before every merge
 
-Before any merge you make or relay, run `scripts/merge-guard <owner/repo> <n>`
+Before any merge you make or relay, run `${DIRECTOR_HOME:-$HOME/.director}/bin/merge-guard <owner/repo> <n>`
 for that PR, and act only on its line:
 
 - `PROCEED ... @<sha>`: merge with `--match-head-commit <sha>`, so a push after
