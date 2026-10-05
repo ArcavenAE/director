@@ -256,12 +256,14 @@ file is the record.
 ## 7. Rulings needed
 
 1. **Threshold.** Default 14 days. Alternative: per root (ideas 30 days,
-   designs 7). This recommendation is valid until S1's build starts; it is
-   re-checked then, and no default applies without a ruling.
+   designs 7). This recommendation is valid until 2026-10-19 or S1's build start,
+   whichever comes first; the architect re-checks it then, and no default
+   applies without a ruling.
 2. **Cap.** Default five lines plus a count. Alternative: no cap, with the
    block folded behind its count (`Stalled ideas (23), detail on request`).
-   This recommendation is valid until S2's build starts; it is
-   re-checked then, and no default applies without a ruling.
+   This recommendation is valid until 2026-10-19 or S2's build start,
+   whichever comes first; the architect re-checks it then, and no default
+   applies without a ruling.
 3. **Roots.** Default the list in section 3, aae-orc and its subrepos only.
    Whether client orchestrators get their own roots file, kept on the host
    that holds them, is the operator's call; until then nothing outside
