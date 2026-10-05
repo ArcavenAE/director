@@ -13,8 +13,9 @@ Method is counterfactual replay, after the CHI 2026 hybrid Wizard-of-Oz work
 
 ## Procedure
 
-1. Inventory wide: `DSI_DAYS=90 DIRECTOR_STATE=/tmp/replay-inv scripts/dsi`.
-   Do not replay the whole corpus.
+1. Inventory wide: `DSI_DAYS=90 DIRECTOR_STATE=/tmp/replay-inv ${DIRECTOR_HOME:-$HOME/.director}/bin/dsi`
+   (fall back to the checkout's `skills/director/scripts/dsi` only when the
+   installed copy is missing). Do not replay the whole corpus.
 2. Stratify by the failure classes the register already names, and pick a few
    per class. Selector heuristics that worked on pilot 01:
    - died holding an ask: awaiting AND (dead process OR no address) AND age>12h
