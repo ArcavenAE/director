@@ -68,9 +68,15 @@ for n in dsi dsx dws merge-guard; do
   [[ -x "$here/skills/director/scripts/$n" ]] && ok "the fallback scripts/$n exists in the checkout" || bad "the fallback scripts/$n exists in the checkout"
 done
 grep -qF 'only when the installed copy is missing' "$skill" && ok "skill states the fallback to scripts/ only when the installed copy is missing" || bad "skill states the fallback to scripts/ only when the installed copy is missing"
-# A bare "run `scripts/<name>`" call must be gone; scripts/<name> may appear only in the fallback sentence.
-bare="$(grep -n -E 'run `scripts/(dsi|dsx|dws|merge-guard)' "$skill" || true)"
-[[ -z "$bare" ]] && ok "no bare run of scripts/<name> remains" || bad "no bare run of scripts/<name> remains" "$bare"
+# No document installed with the skill may call an installed script by a bare relative
+# scripts/<name> path (the replay reference was missed once, which read only SKILL.md).
+# The fallback sentence names skills/director/scripts/<name>, which this pattern skips.
+bare="$(grep -rn -E '(^|[^/A-Za-z])scripts/(dsi|dsx|dws|merge-guard)([^A-Za-z-]|$)' "$here/skills/director" "$here/commands" --include='*.md' || true)"
+[[ -z "$bare" ]] && ok "no installed document calls a bare scripts/<name>" || bad "no installed document calls a bare scripts/<name>" "$bare"
+# The widened check does catch a bare call: plant one in a scratch copy.
+plant="$root/plant.md"; printf 'run scripts/dsi now\n' >"$plant"
+grep -qE '(^|[^/A-Za-z])scripts/(dsi|dsx|dws|merge-guard)([^A-Za-z-]|$)' "$plant" && ok "the widened pattern flags a planted bare scripts/dsi" || bad "the widened pattern flags a planted bare scripts/dsi"
+grep -q 'replay.md' <(find "$here/skills/director" -name '*.md') && ok "replay.md is among the documents scanned" || bad "replay.md is among the documents scanned"
 
 # A copy install runs from the bin home with no checkout beside it.
 cp_home="$root/copy"; mkdir -p "$cp_home"
