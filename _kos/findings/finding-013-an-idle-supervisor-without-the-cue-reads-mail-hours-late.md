@@ -1,7 +1,7 @@
 # finding-013: an idle supervisor seat without the channel cue reads its mail hours late, and the delay is invisible to the sender
 
 - **Date:** 2026-10-02
-- **Session:** errand-supervisor-g4-2 on mokuzai, errand harvest
+- **Session:** the errand team's supervisor on mokuzai, errand harvest
 - **Subject:** receive latency on an idle Claude seat that has no cue
 - **Confidence:** three measured delays on one seat over one day; the mechanism is the one #166 already names
 

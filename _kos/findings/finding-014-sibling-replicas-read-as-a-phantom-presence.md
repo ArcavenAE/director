@@ -1,7 +1,7 @@
 # finding-014: two replicas of one role read as a killed seat and its successor, because a roster row carries no replica or generation context
 
 - **Date:** 2026-10-02
-- **Session:** errand-supervisor-g4-2 on mokuzai, errand harvest
+- **Session:** the errand team's supervisor on mokuzai, errand harvest
 - **Subject:** how roster rows identify a seat
 - **Confidence:** one instance, investigated read-only on the host; filed as #164 and resolved there as not a bug
 
