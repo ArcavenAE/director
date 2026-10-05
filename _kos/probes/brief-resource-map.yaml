@@ -106,8 +106,9 @@ content: |
   | last report | when the entry was last confirmed | COP latency [1, 3-60] |
   | assessment | the supervisor's short written judgment | running estimate [13] |
 
-  Avoid "velocity". In Scrum use it means story points, which SPACE warns
-  invites individual optimization [17]; use throughput instead.
+  Avoid "velocity". It is usually counted in story points, which SPACE
+  marks "use these metrics with (even more) caution", because they "can
+  proxy more things" [17]. Use throughput instead.
 
   ## 3. What the literature says
 
@@ -180,6 +181,9 @@ content: |
      - Needs: the cast scope and `can_handle` per live seat.
      - Lives today: the cast script's `SCOPE` and the wardrobe role files.
        Record both in the cast record so a dispatch can check them.
+     - This check is structural under ADR-007, not a vital sign. It asks
+       whether a route is well formed against the seat's declared scope,
+       as a schema check does, and never how busy or healthy the fleet is.
   7. **Use OTel GenAI agent attribute names for identity fields** [25].
      This lets the map join to traces later. It costs a naming choice now.
   8. **Run Little's law as a weekly consistency check**, not a forecast
