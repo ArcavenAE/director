@@ -107,8 +107,13 @@ receiver cannot recover it.
 *Source: OBSERVED.*
 
 **R-05. Addressed sessions must be able to validate that a message is in fact
-from director, with nonrepudiation.** This is the identity plane. Until it
-exists, every correct refusal observed is luck.
+from director, with nonrepudiation.** (Amended, RULED 2026-10-05.) This is the
+identity plane, and it stays the goal. Until it exists, every correct refusal
+observed is luck. The interim is R-95, a credential per seat that decides where
+it may publish; that is not nonrepudiation and is not claimed to be. R-53's
+deferral of cryptographic identity ends when the trust boundary leaves the
+local host.
+*Amendment: operator ruling 2026-10-05, item 3b, "3b (a)": keep R-05 as the goal; record R-95 (per-seat broker credential) as the interim, which is not nonrepudiation, and R-53's deferral as ending when the trust boundary leaves the host.*
 *Earned by: operator ruling 2026-09-10; finding-159 (a vendor shipping "very
 likely working on their behalf" is a probability estimate standing where a
 signature belongs).*
@@ -127,7 +132,8 @@ it.** Asking a session to review materials does not make an instruction
 embedded in those materials carry the authority of the human who asked for the
 review. Enumerate instances; this is not closed.
 *Earned by: operator ruling 2026-09-10, named as an open class.*
-*Source: RULED, and FLAGGED: no observed instance yet. Operator-named; the entry itself says it is not closed.*
+*Amendment: operator ruling 2026-10-05, item 4, "4 (b)": R-07 is RULED, a principle held without an observed instance, and it leaves the open list.*
+*Source: RULED 2026-10-05, a principle held without an observed instance. Operator-named 2026-09-10; the entry itself says it is not closed.*
 
 **R-46. A harness may emit a structured authorization decision per action, and
 director should consume it where present rather than infer authority.** At
@@ -788,7 +794,9 @@ for fanned-out workers).
 
 Filed 2026-09-12 from the naming party (casting: bmad-extras/rulings/2026-09-12-session-naming-is-a-director-requirement.md; panel Ezra, Wren, Vox, Null, Mary, Dana; Orla's two candidates carried in from the casting call; two rounds, first takes and an objection pass against this text). The concept under test arrived as "director sets a session's name instead of relying on the human's /rename". The party declined that requirement and filed the ones below instead. Measured on this machine: Claude Code 2.1.270 (`--help`, `claude agents --json`, the 17 live records under ~/.claude/sessions and their key files, the binary's name-settle strings), codex-cli 0.153.3, opencode 1.18.15, crush v0.88.1, and director-mcp at probe/nats-phase-0. Nothing was launched, renamed, or published to the live bus; the two bus defects are read from the code path.
 
-**R-71. The routing address is derived from the session key and never from a human-meaningful name.** A name a human may change at any moment cannot be the thing a queued message resolves against. The key already exists: `claude agents --json` returns sessionId for all 17 live sessions and the launcher can choose it with `--session-id`. That surface yields the key but not deliverability, since it omits nameSource, peerProtocol, peerFeatures, and messagingSocketPath; one listed session (a 2.1.226 survivor) carries a sessionId, no key file, and null peerFeatures, and cannot receive a message at all. The precedence rule when a string is ambiguous is already shipped in another vendor's binary: codex 0.153.3 states on resume, queue, archive, delete, and unarchive that "UUIDs take precedence if it parses". This is R-06 applied to the naming axis; it costs a field change in the messaging path, not a new record.
+**R-71. The routing address is a stable seat or role identity that the operator or launcher assigns, never the harness session key and never a human-meaningful display name.** (Amended, RULED 2026-10-05.) A renameable display name never routes. The session key is an instance detail: R-94 gives every seat one fleet address assigned by the operator, R-151 binds work to the seat or role and never to an instance, and R-167 addresses the director seat by its role. Replaced wording: "The routing address is derived from the session key and never from a human-meaningful name." The text below records the original basis, which is why the key was chosen first.
+*Amendment: operator ruling 2026-10-05, item 2, "2 (a)": amend R-71 to route by a stable seat or role identity the operator or launcher assigns, not the harness session key; keep that a renameable display name never routes; cite R-94, R-151 and R-167.*
+A name a human may change at any moment cannot be the thing a queued message resolves against. The key already exists: `claude agents --json` returns sessionId for all 17 live sessions and the launcher can choose it with `--session-id`. That surface yields the key but not deliverability, since it omits nameSource, peerProtocol, peerFeatures, and messagingSocketPath; one listed session (a 2.1.226 survivor) carries a sessionId, no key file, and null peerFeatures, and cannot receive a message at all. The precedence rule when a string is ambiguous is already shipped in another vendor's binary: codex 0.153.3 states on resume, queue, archive, delete, and unarchive that "UUIDs take precedence if it parses". This is R-06 applied to the naming axis; it costs a field change in the messaging path, not a new record.
 *Earned by: a queued nudge bounced today when its target session was renamed; sessionId present for all 17 live sessions on 2.1.270; the codex help text.*
 *Source: OBSERVED.*
 
@@ -972,7 +980,6 @@ the split above are its output.
 - Who is best placed to resolve an ambiguous instruction: director, the human,
   or the addressed session. One good instance and one bad instance so far, and
   one of each is not a rule.
-- R-07's class: instructions embedded in reviewed material.
 - What the envelope's evidence-standard and deviation-license fields should
   contain. Both were earned by O-9 and neither has a shape yet.
 
