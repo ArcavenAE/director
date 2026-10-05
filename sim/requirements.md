@@ -1935,6 +1935,92 @@ reach. It proposes and reminds; running the harvest stays the director's act
 *Earned by: O 2026-10-03f; the session-1 six-day gap recorded in the director skill's harvest mode.*
 *Source: OBSERVED. Cross-refs R-132.*
 
+**R-180 (OBSERVED) · the merge guard has a verdict for a stack base.** A PR with
+an open stacked child gets STOP, and the STOP text carries the safe procedure
+(merge without --delete-branch). STOP means stop, so each stack base since has
+gone through by hand or on the operator's word past the guard: on 2026-10-04 a
+hand-checked plain merge that the classifier then denied as a merge without
+review, and on 2026-10-05 three stack bases in a client repo, each merged on the
+operator's word. Director needs a verdict such as `PROCEED-STACK-BASE @sha`,
+which runs every other check and then permits only the plain merge, so the
+safe path does not need a human to get past a control.
+*Earned by: O 2026-10-04g; relay-log 2026-10-05 (three client stack-base merges).*
+*Source: OBSERVED. Cross-refs R-152.*
+
+**R-181 (OBSERVED) · an operator ruling reaches the receiving seat as a grant
+its policy can verify.** Text relayed by director carries no authority the
+receiving harness recognizes. Four operator rulings in two days were denied at
+the receiving seat: a client PR's develop fold forwarded to a builder, the #491
+leased delete, the #531 push to an arcavenai branch, and the label writer
+chain. In each case the seat was right to stop, and each one went back to the
+operator's own hand. Director needs a way to turn a ruling into a scoped,
+verifiable grant at the receiver: a signed envelope, a permission rule the
+operator issues, or a documented hand-off to the operator's pane. Director
+must not word a relay so that it passes a classifier (no-control-bypass).
+*Earned by: O 2026-10-04e, O 2026-10-05f.*
+*Source: OBSERVED. Cross-refs R-146, R-04.*
+
+**R-182 (OBSERVED) · director resolves a seat or team name to one address, and
+each cluster has one name.** A host is `skippy` to marvel and `mokuzai` to the
+global bus; a workspace name is not a team name; an envelope's
+sender carries a workspace but no team. In one stretch that produced three
+misaddresses, a fleet roll call that needed five sends after its first
+broadcast reached one seat, and a reply that needed two tool calls to find its
+address. Each was caught only by a refusal. Director resolves names from
+presence and marvel, replies from the envelope, and refuses an address that
+names a workspace as a team.
+*Earned by: O 2026-10-04d, O 2026-10-04k, O 2026-10-04l; FR 2026-10-03a, FR 2026-10-04b.*
+*Source: OBSERVED. Cross-refs R-92.*
+
+**R-183 (OBSERVED) · a cue names who is waiting on whom, with the message
+resolved.** cue.unanswered lists message ids with no sender, text or
+direction. Director misread it twice: once as messages waiting on director
+(two receipts sent that did nothing) and once by matching an id to its own
+send on timing (wrong id). Director resolves each cued id to its sender, text
+and the seat that owes the answer before anyone reasons about it, and an
+INFORM that needs no reply does not arm the cue.
+*Earned by: O 2026-10-04j (and its correction), O 2026-10-05a.*
+*Source: OBSERVED. Cross-refs R-168, R-169.*
+
+### Harvest diff (2026-10-05)
+
+Covers the observations O 2026-10-04c through O 2026-10-05f, friction
+2026-10-04a through 2026-10-05h, and the 2026-10-05 shortcut, after the
+2026-10-04 harvest. Same bar: an item is promoted on two or more recorded
+instances.
+
+- **Promoted (4):** R-180 (stack-base guard verdict), R-181 (a ruling arrives
+  as a verifiable grant), R-182 (one address per seat, one name per cluster),
+  R-183 (a cue resolves who waits on whom).
+- **Unchanged, new instances (3):**
+  - R-117: three idle seats sat on mail on one day, product for 3h and then
+    8h, and the corporate supervisor until a hand ring (O 2026-10-05b, d, e).
+    The idle-seat wake design is still open.
+  - R-149: a dim composer suggestion read exactly like a pending operator
+    ruling, and marvel capture has no escape mode to tell them apart
+    (O 2026-10-04i, FR 2026-10-04f).
+  - R-98: a large payload (a file in base64) went out as a hand-built envelope
+    over `nats pub` because the send path had no room for it (shortcut
+    2026-10-05).
+- **Kept as observations (5), one instance each:**
+  - The client lane's access recipe was inferred from the host rather than
+    read from the lane (O 2026-10-04c).
+  - Director picked a policy value from a design-doc example (O 2026-10-04f).
+  - Nine merges with no MERGED receipt to the requester (O 2026-10-04h).
+  - The expiry field does not say whose expiry it is (O 2026-10-05c). The
+    operator's ruling is in memory, not yet in a committed file.
+  - FR 2026-10-02f (a remote branch delete denied) is a further R-181
+    instance in substance, but it predates this window and was counted then.
+- **Rejected for the register (routed elsewhere):**
+  - The wardrobe install root half-applies on update (FR 2026-10-04d,
+    2026-10-05h): wardrobe's install tooling, two instances.
+  - A network or subnet change strands remote leaves (FR 2026-10-04e, g):
+    marvel and the platform graph.
+  - `brew pin marvel` resolves to a cask, and `marvel upgrade --version` is
+    ignored under Homebrew (FR 2026-10-04c, 2026-10-02g): homebrew-tap and marvel.
+  - The bd-archive skill commits to main with an em dash in its subject
+    (FR 2026-10-04a): the orc's skill.
+
 ### Harvest diff (2026-10-04)
 
 Covers the notes captured 2026-10-03 (e to o) and 2026-10-04 (a, b), and
