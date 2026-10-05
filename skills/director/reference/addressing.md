@@ -107,7 +107,7 @@ cross-host delivery.
 **2026-09-21: the mokuzai -> kinu return path is DOWN (O-23), cause OPEN.**
 Replies to `global://director` are accepted onto GLOBAL_TO_DIRECTOR but do not
 reach the director inbox. The earlier "consumer binds the local tier"
-conclusion (finding-005) is SUPERSEDED and untrustworthy; the cause is under
+conclusion (finding-025) is SUPERSEDED and untrustworthy; the cause is under
 active four-candidate diagnosis (aae-orc-m517d: subject/stream mismatch;
 aae-orc-7xrdo: presence resolver silently skips the director row and refuses
 falsely; build skew; nzh7c: delivered-not-answered). While it holds:

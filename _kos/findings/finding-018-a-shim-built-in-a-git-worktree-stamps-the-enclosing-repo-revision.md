@@ -41,7 +41,7 @@ answer, and `+dirty` follows that repository's state, not the shim's.
 LR-3 put `rev` in presence so a stale seat could be told from a current one
 (docs/shim-reference.md). A worktree-built shim defeats that: the roster
 shows a real-looking revision that belongs to a different repository.
-finding-006 was resolved by reading this stamp, and question-director-seat-
+finding-027 was resolved by reading this stamp, and question-director-seat-
 startup names stale builds as a rough spot. Both depend on the stamp being
 the shim's own.
 
@@ -57,6 +57,6 @@ the shim refuse to report a `rev` whose repository is not this one.
 
 ## Related
 
-- finding-006 (resolved by a clean rebuild, read from this stamp);
+- finding-027 (resolved by a clean rebuild, read from this stamp);
   finding-017 (the launcher's revision is not visible either);
   director#126 (unread age and shim revision in presence).

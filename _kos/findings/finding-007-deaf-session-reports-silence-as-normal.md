@@ -180,7 +180,7 @@ Three things block settling it:
   not absent. Reading that as absent is its own trap and I fell into it once
   already this session.
 - Neither the supervisor nor I holds a hub credential.
-- The instance-collision defect (finding-005, #62) cannot explain the
+- The instance-collision defect (finding-026, #62) cannot explain the
   discrepancy either, because a collision collapses a presence row and a
   consumer together and would leave the counts matching.
 
@@ -213,7 +213,7 @@ deafness outright.
 
 **The director's own instance was one step short of this family, and the step
 matters.** Its finding
-`finding-006-return-path-director-has-no-durable-consumer` records a core
+`finding-027-return-path-director-has-no-durable-consumer` records a core
 subscription with NO DURABLE BEHIND IT, rather than a durable that existed and
 was removed. Section 0 describes a durable that goes away; that is a consumer
 that was never there. Both produce the identical observable, non-error silence
@@ -272,9 +272,9 @@ main. And a branch whose PR had been SQUASH-merged read as unlanded to
 `git merge-base --is-ancestor`, because none of its commits is an ancestor of
 main even though all of their content shipped (the finding-175 class).
 
-Related: `finding-005-instance-ulid-collides-on-simultaneous-start`,
+Related: `finding-026-instance-ulid-collides-on-simultaneous-start`,
 `finding-006-global-tier-has-no-per-agent-address`,
-`finding-006-return-path-director-has-no-durable-consumer`, ArcavenAE/director
+`finding-027-return-path-director-has-no-durable-consumer`, ArcavenAE/director
 issues #62, #63 and #66.
 
 ## Addendum 2026-09-25: a live specimen after a real hub restart

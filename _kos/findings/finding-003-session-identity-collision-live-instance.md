@@ -38,7 +38,7 @@ I filed this in director's graph per the subject test, since the subject is dire
 
 ---
 
-## 6. Correction appended 2026-09-21 (finding-005): section 4's R-50 claim is conditional, and section 2's discriminator is not reliable
+## 6. Correction appended 2026-09-21 (finding-026): section 4's R-50 claim is conditional, and section 2's discriminator is not reliable
 
 Appended rather than rewritten, so the original reasoning stands as it was
 written and the change is visible.
@@ -46,7 +46,7 @@ written and the change is visible.
 **What does not hold.** Section 4 says "R-50's per-session durable name makes
 even a misconfigured duplicate id unable to steal another session's mail." That
 was always conditional on the instance being unique, and
-[finding-005](finding-005-instance-ulid-collides-on-simultaneous-start.md)
+[finding-026](finding-026-instance-ulid-collides-on-simultaneous-start.md)
 measures that it is not: two processes started in the same instant mint the same
 instance ULID in 47 of 200 simultaneous pairs, because `ulid.Make()` seeds
 `math/rand` from the wall clock at package init. The durable is
@@ -75,4 +75,4 @@ detector added in response to it is keyed on instance INEQUALITY:
 its own. Two sessions sharing both agent id and instance write ONE local presence
 key, so the loop finds a single row, its own, and returns empty. In the compound
 case, the detector built to catch this finding is silent. The fix in
-finding-005 section 5 closes that too.
+finding-026 section 5 closes that too.

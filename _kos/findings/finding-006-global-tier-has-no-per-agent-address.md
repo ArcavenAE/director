@@ -121,7 +121,7 @@ so this needs someone with a hub credential. Carried as an open lead.
 
 Layer 2 filed as ArcavenAE/director#63 (2026-09-21), on the supervisor's
 ruling: a GitHub issue rather than a bd slot, for the same reason as
-[finding-005]: bd would mean committing to close it on a timeframe, and whether
+[finding-026]: bd would mean committing to close it on a timeframe, and whether
 the director plane takes a change is the operator's call.
 
 ## Addendum (2026-09-27): a verdict to a seat with no global address was lost, not queued

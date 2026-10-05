@@ -110,7 +110,7 @@ content: |
   - 2026-09-25: the director ran about a day with no global tier. The
     registered MCP env lacked the global levers, so global://director
     refused every mokuzai reply and cross-cluster traffic ran one way. The
-    2026-09-22 fix (finding-006-return-path-director-has-no-durable-consumer)
+    2026-09-22 fix (finding-027-return-path-director-has-no-durable-consumer)
     set the levers for one start, and they did not survive a later start
     through the registration. This bears on where the global levers live
     and how a launcher knows they are required. R-119.

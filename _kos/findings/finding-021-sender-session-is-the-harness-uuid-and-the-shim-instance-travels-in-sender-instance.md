@@ -21,4 +21,4 @@ The earlier unread draft matched on `sender.session`, which names the harness se
 
 ## 3. Edges
 
-- derives: finding-003 (session identity collision, live instance), finding-005-instance-ulid-collides-on-simultaneous-start
+- derives: finding-003 (session identity collision, live instance), finding-026-instance-ulid-collides-on-simultaneous-start
