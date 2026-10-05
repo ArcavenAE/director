@@ -1,9 +1,54 @@
 # Joining the global tier from mokuzai (skippy's cluster)
 
-The hub runs on kinu, LAN address 192.168.100.110, leaf port 7442. Your
-supervisor keeps talking to your own local broker; the leaf link carries the
-director channel. Nothing in your supervisor changes until the shim's global
-mode ships; then it is three environment variables in the cast.
+The hub runs on kinu (kinu.local), leaf port 7442. Your
+supervisors keep talking to your own local broker; the leaf link carries the
+director channel. Every supervisor on the cluster joins the global tier: the
+supervisor and research-supervisor roles, both with
+`DIRECTOR_GLOBAL_ROLE=supervisor`. Workers never do; the director holds the
+one fleet address. Nothing in your supervisors
+changes until the shim's global mode ships; then it is three environment
+variables in each supervisor's cast.
+
+## Before you start: a network path to the hub
+
+The joining host needs a routed path to the hub's leaf port. Being online is
+not enough. Check, before anything else, that the hub's address is on your
+own LAN (the same subnet) or on a network you have a route to, and that
+`nc -vz <hub-address> 7442` connects. A host on a different network sees the
+connection time out, which reads like a firewall or a down hub.
+
+Two things on the joining host can make a good path look broken:
+
+- A VPN client that claims all the private ranges (10/8, 172.16/12,
+  192.168/16) sends the hub's address into its tunnel unless the hub is on
+  your own LAN, where the on-link route is more specific and wins. If the VPN
+  reconnects on a timer, an off-LAN path can break again without warning.
+- On macOS, a terminal without the Local Network permission gets
+  `No route to host` for every LAN address. marvel's admin guide covers it
+  under "Host prerequisites", with keeping the host awake.
+
+## Naming and addresses: two rules from bring-up
+
+**Name your workspaces as kinu names them.** A joining cluster's workspaces
+take the names kinu already uses for the same teams. A name chosen to match the
+cluster (the obvious guess) works until the first seat needs to be found by
+workspace, and then every seat has to be removed and re-applied under the right
+name, with new instance ids and stale presence keys until they expire. Ask for
+the team-to-workspace list before you declare any team. One consequence to know
+about: with matching workspace names, a bd actor does not say which cluster
+wrote it, because it carries workspace, team, role, generation and index but not
+the cluster.
+
+**Use the hub's hostname, never a literal address.** The hub's address appears
+in four places on a joining cluster: the hub URL in the bus config, the bd host,
+the section header of the bd credentials file, and the local hub-address file.
+A hostname in all four means a network move changes nothing you have to touch:
+in one move, a leaf whose hub URL was a hostname reattached on its own, and one
+configured with a literal address did not. When an address does have to change,
+the hub URL is read only at daemon start, so the cost is a daemon restart and
+then a seed push from the hub operator (the restart drops the transient seed;
+the leaf shows `unenrolled` until it arrives), plus an edit to each of the other
+three places.
 
 ## 0. What you receive out of band
 
@@ -17,6 +62,13 @@ file at each broker start (section 1); once your broker is marvel-supervised, th
 seed instead lives in the daemon Store and the daemon keeps no seed path on disk (the
 model in [bus-credential-enrollment.md](../../sim/design/bus-credential-enrollment.md)).
 
+On a marvel-supervised cluster, your host need not hold the seed at all. Once
+the hub's host is enrolled with your daemon, the hub operator pushes it from
+there (`marvel --cluster <name> credential put bus/leaf --value-file <seed-file>`),
+and pushes it again after every daemon stop, start or reexec. Declare the hub
+in your bus config before the daemon starts; marvel's admin guide ("Connecting
+to a shared hub") says why.
+
 ## 1. Broker config (local nats-server.conf)
 
 Your broker needs a JetStream domain and one leaf remote. Adding the domain
@@ -29,7 +81,7 @@ jetstream {
 }
 leafnodes {
   remotes: [
-    { urls: ["nats-leaf://192.168.100.110:7442"], nkey: $DIRECTOR_LEAF_NKEY }
+    { urls: ["nats-leaf://kinu.local:7442"], nkey: $DIRECTOR_LEAF_NKEY }
   ]
 }
 ```
@@ -126,7 +178,7 @@ runtime:
     - "-c"
     - 'mcp_servers.director.command="/path/to/director-mcp-seat"'
     - "-c"
-    - 'mcp_servers.director.env_vars=["MARVEL_SESSION","MARVEL_TEAM","MARVEL_WORKSPACE","DIRECTOR_NATS_USER","DIRECTOR_NATS_PASS","NATS_URL"]'
+    - 'mcp_servers.director.env_vars=["MARVEL_SESSION","MARVEL_TEAM","MARVEL_WORKSPACE","DIRECTOR_NATS_USER","DIRECTOR_NATS_PASS","NATS_URL","DIRECTOR_GLOBAL_DOMAIN","DIRECTOR_CLUSTER","DIRECTOR_GLOBAL_ROLE"]'
     - "-c"
     - 'mcp_servers.director.default_tools_approval_mode="approve"'
 ```
@@ -140,10 +192,21 @@ forever; `approve` is the value that lets it run unattended.
 **Diagnostic.** If a marvel-managed agent appears on the roster as `director-seat`
 instead of its session name, the `env_vars` line is missing from its role.
 
-## 4. Casting a supervisor onto the global tier
+The last three names carry the global tier (section 4). Without them a codex
+supervisor's shim never sees them and stays on the local tier, with no error.
+Only a supervisor's role needs them; leave them off a worker's list.
 
-The shim's global mode is built (aae-orc-gvf6k). Cast your supervisor with
-three more environment variables and nothing else changes:
+## 4. Casting the supervisors onto the global tier
+
+The shim's global mode is built (aae-orc-gvf6k). Cast every supervisor on the
+cluster (the supervisor and research-supervisor roles; both take
+`DIRECTOR_GLOBAL_ROLE=supervisor`) with three more environment variables, and
+nothing else changes. One caveat for a research-supervisor: marvel's broker
+renderer grants the global subjects only to a role literally named
+`supervisor` (`GlobalAddressRoles` in marvel's `internal/config/config.go`).
+So a research-supervisor reaches the global tier only through its team's
+broker user, when that team also has a `supervisor` role. marvel#518
+tracks this.
 
 ```sh
 DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=mokuzai \

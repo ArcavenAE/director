@@ -1,0 +1,44 @@
+id: question-global-supervisor-delivery-scope
+type: question
+confidence: frontier
+title: "Should the global tier deliver a cluster's supervisor traffic by team, or filter by FOR before delivery, so a supervisor stops reading every other supervisor's mail?"
+content: |
+  `global://<cluster>/supervisor` fans out to every supervisor seat on the
+  cluster (finding-006), and the FOR line is only a convention the receiver
+  reads after delivery. Measured twice during one pause on one cluster
+  (finding-023): one seat drained about 285 messages and 6 were for its
+  team; another held 300, of which 273 (91%) were for one other team's
+  supervisor or reviewer, and a drain at max 50 came to 552 KB over six
+  batches.
+
+  Options named, none chosen:
+
+  A. Team-addressed global subjects (`global://<cluster>/<team>/supervisor`),
+     an addressing change at the broker.
+  B. The shim drops or folds an envelope whose FOR names another team before
+     it reaches the model. A filter, not a boundary.
+
+  Either must keep a real broadcast reaching every supervisor.
+
+  NOTE 2026-10-04 (finding-023 addendum). A second team's report on the
+  same cluster: drains of 182 (10-02) and 321 (10-04) held messages, none
+  for that seat, and every max=50 drain overflowed the tool-result limit at
+  86k to 109k characters. inbox_summary reads 200 by default, up to 500.
+  Judgment from that report, not observed design: with two supervisor
+  replicas, each ask reaches both seats and they split it by PROPOSE;
+  a seat-level or role-level singleton claim would settle it.
+
+edges:
+  - target: finding-006-global-tier-has-no-per-agent-address
+    type: derives
+    note: "the fan-out mechanism this question prices"
+  - target: finding-023-every-supervisor-pays-to-read-every-other-supervisors-global-traffic
+    type: derives
+    note: "the two measurements of the cost"
+provenance:
+  created_by: agent
+  session: builder seat placing the ops team's 2026-10-04 harvest report, item 5
+  created_at: "2026-10-04"
+  evidence:
+    - the ops team's harvest report, item 5 (not committed)
+    - a second team supervisor seat's inbox measurement, 2026-10-02T04:37Z to 2026-10-03T19:11Z (not committed)

@@ -1,0 +1,41 @@
+id: question-shim-daemon-heartbeat-feed-contract
+type: question
+confidence: frontier
+title: "What is the contract by which a seat's shim feeds the marvel daemon a heartbeat, so a seat whose shim failed to connect never reports running?"
+tags: [director, marvel, shim, heartbeat]
+content: |
+  Opened 2026-10-03 from the team harvest. aae-orc-z63a4 (a twin seat whose
+  shim failed to connect must surface loudly and never report running,
+  finding-166) lists three shapes. Shape 1, a cast-launch pre-flight, is
+  merged (director#27). Shape 2, the durable one, is a shim-fed marvel
+  heartbeat, and its contract does not exist.
+
+  ## What exists
+
+  marvel carries a heartbeat token (MARVEL_HEARTBEAT_TOKEN, a third consumer
+  of the shim's timer) and an interim token lifetime design (marvel#414,
+  merged 2026-09-30) that holds until the session cert lands.
+
+  ## What is missing
+
+  The feed itself: what the shim sends, on what cadence, to which daemon
+  endpoint, what the daemon does on silence, and how a director-enabled role
+  declares it (retiring the statusline feed for those roles). Without it the
+  shim side and the daemon side cannot be built against the same text.
+
+  ## Why it is open, not decided
+
+  It is an architectural call. The operator ruled that the architect writes
+  the contract; the shim side then goes to the arcaven builder and the daemon
+  side to the marvel builder, and the operator edits the manifest. It queues
+  behind the architect's current designs.
+edges:
+  - target: finding-007-deaf-session-reports-silence-as-normal
+    type: supports
+provenance:
+  created_by: human
+  session: 2026-10-03-arcaven-builder-harvest
+  created_at: "2026-10-03"
+  notes: >
+    Placed from the 2026-10-03 team harvest (item D7). Related: bd
+    aae-orc-z63a4, finding-166 in the orchestrator graph, marvel#414.

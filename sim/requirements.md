@@ -1178,8 +1178,8 @@ in use Sep-20 and lapsed Sep-21).*
 
 **R-111 (OBSERVED) · a director dispatch carries its full brief in a durable
 store and injects only a short pointer to it, and any load-bearing pointer sits
-at the tail of the injected text.** This session a 1114-byte dispatch to the
-e98-architect delivered only its tail: the injection channel dropped the HEAD
+at the tail of the injected text.** This session a 1114-byte dispatch to
+a client team's architect delivered only its tail: the injection channel dropped the HEAD
 and kept the end, so the head, which held the framing and the ticket pointer,
 was lost and the architect asked for a resend. The recovery that worked was a
 574-byte resend with the ticket id at the very end. The truncation itself is a
@@ -1273,7 +1273,7 @@ doorbell.** Receive is a poll (R-56), and an idle seat never polls. On
 2026-09-25 skippy's reviewer supervisor had read nothing past global seq 54 while
 seqs 55 to 59 (seven review requests, a branch move, a quota rule) sat for about
 two hours; every other mokuzai supervisor stopped at 50 or 51. Locally,
-e98-builder held nine unread messages for about four hours, including two routed
+a client team's builder held nine unread messages for about four hours, including two routed
 builds. Every send had returned accepted-for-delivery. I found it only after the
 operator asked twice who was working the reviews, by reading hub consumer state
 by hand; one marvel inject telling each seat to drain its inbox cleared both.
@@ -1287,8 +1287,8 @@ a send to an address nothing consumes is refused before publish.** role:// sends
 published to `agent.<ws>.<team>.role.<role>.inbox`, and no session consumed that
 subject. Twenty dtu messages sat unread for about 21 hours, including two GATEs
 meant for director, while every send reported success. product-supervisor found
-them by reading the stream by hand. Role mail was also found unread on the e98
-and arcaven role subjects. The R-09 drop, entering through an address form rather
+them by reading the stream by hand. Role mail was also found unread on a client team's
+and arcaven's role subjects. The R-09 drop, entering through an address form rather
 than through transport.
 *Earned by: O role-mail-no-consumer; fix in flight as director#86.*
 *Source: OBSERVED. Cross-refs R-09, R-92.*
@@ -1780,6 +1780,292 @@ default, with the lease guard carried over.
 *Earned by: the operator's ruling 2026-09-27; aae-orc#435 review (no durable
 record found); review of this entry (G413).*
 *Source: RULED. Amends R-54; cross-refs R-08, R-94, R-95, R-140.*
+
+**R-168 (OBSERVED) · delivery to director does not wait for director's turn.**
+Nothing reaches the director seat until it reads the bus, so every forward,
+review request and decision waits on the operator typing a status. The
+operator named director-as-poller the central cog on 2026-09-30 and asked for
+an estimate (director#163); the opt-in cue that wakes an idle seat followed
+(director#171). Instances in one week: five review requests sat 27 hours
+while the seat was paused; trial interventions were forwarded 35 to 40
+minutes late three times in one afternoon and four times on another day; a
+reach test went unacknowledged 25 minutes; a supervisor's queued asks aged
+seven hours while director took no turn. A review request, trial
+intervention, reach test or outage decision addressed to director wakes the
+director seat on arrival, and anything it owes onward is acted on or
+escalated without an operator prompt.
+*Earned by: O-30a, O-30e, O-30g, O-30h, O-30p, O-31d, O-31j, O-31m, O-31o,
+O 2026-10-02g; director#163, director#171.*
+*Source: OBSERVED. Cross-refs R-113, R-124, R-162.*
+
+**R-169 (OBSERVED) · director keeps a per-message handled ledger across every
+inbound channel.** Three different cursors each lost mail. A read-through
+marker set from the highest sequence director had seen, not from a contiguous
+read, skipped one trial intervention for good. A recurring check scoped to one
+topic read only the global stream, and an outage decision sat 50 minutes in
+the local inbox while the service stayed down. Seven review requests arrived
+inside an INFORM bundled with news and were never forwarded, because the
+envelope said "inform". Each inbound message is marked handled, forwarded or
+parked by id, on every tier; an ask is recognized by its content whatever the
+performative; and an open outage outranks the topic a check was started for.
+*Earned by: O-28j, O-30k, O 2026-10-03d.*
+*Source: OBSERVED. Cross-refs R-107, R-123, R-162.*
+
+**R-170 (OBSERVED) · a review request is tracked from send to verdict and
+disposition.** One review request never reached the reviewer's inbox and sat
+six hours until an age sweep found it. Two verdicts were posted only to the
+forge, never on the bus, and nobody picked them up for six hours. A supervisor
+stopped draining for seven hours while director's status listed seven pull
+requests as "in review" on that supervisor's last word. Director records each
+forwarded review request with the recipient's receipt, the verdict wherever it
+lands (bus or forge), and the disposition, and flags any stage that ages past
+its bound.
+*Earned by: O-28t, O-30j, O 2026-10-02e.*
+*Source: OBSERVED. Cross-refs R-113, R-147, R-148.*
+
+**R-171 (OBSERVED) · a draft pull request is never put to the operator.**
+Director put drafts in front of the operator at least three times, each time
+relaying a seat's "merge-ready" label or a seat's decision list without
+reading the draft flag, and was corrected each time. The blocked-on-you list
+checks every named pull request at presentation time: a draft is dropped, and
+a decision held inside a draft goes up as decision text alone. This extends
+R-148 from merging to surfacing.
+*Earned by: O-28o, O-31b, O 2026-10-02i (the operator's corrections are
+recorded in the session notes only, so they are not cited here as a ruling).*
+*Source: OBSERVED. Extends R-148; cross-refs R-36.*
+
+**R-172 (OBSERVED) · the merge guard requires an approval newer than the head
+push.** Twice in one day a pull request merged on an approval of an earlier
+head. Once two mergers worked one queue and one skipped the approval-at-head
+check. Once a builder folded the base in with a fast-forward, the forge
+carried the earlier approval onto the new head, the review decision read
+APPROVED, and the guard merged two pull requests before their re-approvals
+landed. No harm came of either. The guard compares the approving review's time
+with the time the head reached the forge, and treats a carried-over approval as
+no approval.
+*Earned by: O-28h, O-28u.*
+*Source: OBSERVED. Cross-refs R-152.*
+
+**R-173 (OBSERVED) · a step counts as done only on an observed outcome.** A
+merge that deployed a client service was reported as working; the workload
+crash-looped for 2 hours 40 minutes while every deploy job read SUCCESS,
+because the job only commits the rendered manifests. "No traffic yet" was read
+as "probably fine" by three seats. Separately, a campaign was marked done on a
+merged change nothing had installed, and two waves were reported applied when
+no apply was ever seen. After a deploying merge, director reads workload health
+(restarts, readiness); a campaign moves only on an observed install or event.
+*Earned by: O 2026-10-02j, O 2026-10-02k, O 2026-10-03b.*
+*Source: OBSERVED. Extends R-154 and its later instances (a hub reload that did
+not reach an established leaf, a merged launcher change not live until the host
+checkout moved); cross-refs R-156.*
+
+**R-174 (OBSERVED) · director's claims carry the lookup they came from.**
+Director wrote an invented commit fragment into a relay, filed a public bug
+about a killed seat that was never killed, told the operator a pull request
+existed that was only an empty local branch, asserted a brief's content it had
+not read, and named the wrong supervisor as lacking global reach when the
+roster showed otherwise. Each was corrected within the hour, and each cost a
+round. Careful habit did not prevent any of the five. The relay surface fills
+commit ids, artifact links, seat lifecycle and reach from a lookup made at
+send time, attaches the source and its time to the claim, and marks any claim
+without one as unverified; an artifact it cannot resolve is reported as "not
+yet opened".
+*Earned by: O-28x, O-30f, O-30i, O-30l, O-31q.*
+*Source: OBSERVED. Cross-refs R-23, R-47, R-156.*
+
+**R-175 (OBSERVED) · a decision put to the operator carries its options'
+substance and the owning seat's own recommendation.** Director listed a
+credential decision as "default A; B now or later" without saying what A and B
+were, though the seat's message held them; the operator called it "lazy
+briefing". Another time director framed a pull request as a step to merge
+without saying the owning seat had recommended closing it, the operator agreed
+on that framing, and director then relayed the agreement as a ruling against
+the seat. Director also ranked an ask by its age over the operator's current
+goal. Each decision item states what every option does and costs, the seat's
+recommendation (including a contrary one), and how it bears on the operator's
+current goal. An approval given on director's framing is not a ruling against
+a view the operator never saw.
+*Earned by: O-31e, O 2026-10-02h, O 2026-10-02l.*
+*Source: OBSERVED. Extends R-126; cross-refs R-02, R-04, R-35.*
+
+**R-176 (OBSERVED) · director's own text bound for a public repo passes the same
+token scan as a seat's.** Director routed the client-token scan requirement to
+every seat, then wrote an employer tracker key into a public pull request it
+authored, and on another day proposed origin-org names for a public launcher
+row; a supervisor caught the second. Text director composes for a public
+destination runs through the same scan before it is sent or published.
+*Earned by: O-30q, O-31i.*
+*Source: OBSERVED. Cross-refs R-131.*
+
+**R-177 (OBSERVED) · a seat's limit or diagnosis reaches the operator with its
+source, or not as a blocker.** Director put a seat's refusal ("a builder can't
+write the role library") in front of the operator as fact; the scope rule did
+not exist. Director relayed an instance-keyed casting defect that one grep of
+the cast file disproved. When director relays a seat's self-reported limit or
+diagnosis, it attaches the rule or record the seat cited, or marks the claim
+unsourced; the blocked-on-you list does not present an unsourced claim as a
+blocker until the one-command check has run.
+*Earned by: O-30b, O 2026-10-02a.*
+*Source: OBSERVED. Cross-refs R-47, R-174.*
+
+**R-178 (OBSERVED) · a respawned supervisor drains and reads its predecessor's
+replies before it reports live.** On the 2026-10-03 product harvest, three
+successive instances of one supervisor role left asks unanswered for about four
+hours: each came up, reported live, and went on without reading what its
+predecessor had been sent. On 2026-10-04, respawned and limit-stalled
+supervisors came back to backlogs of more than 300 messages. A successor that
+reports live before it has drained and read the replies addressed to the role
+looks reachable and answers nothing. The successor's first act is to drain its
+inbox and its predecessor's replies, and director does not count it as live (R-143)
+until it has. Filed as director#220; the operator ruled it filed on 2026-10-04.
+*Earned by: the 2026-10-03 product harvest; O 2026-10-04 (backlogs on respawned and limit-stalled supervisors).*
+*Source: OBSERVED. Cross-refs R-143, R-144, R-169.*
+
+**R-179 (OBSERVED) · harvest runs on a clock or a count of new captures, not only
+when a session ends.** The skill says a standing session ends with a harvest, but
+the standing sessions here were long-running loops that never ended, so the
+trigger never fired. The register went six days (2026-09-28 to 2026-10-03)
+without a harvest while the notes grew, and the operator was the one who noticed
+it was stale. This is the second time the same shape appeared: in session 1 the
+notes piled up for six days and the register did not move. Director raises a
+harvest when a day has passed or a set number of new entries has accumulated,
+and says so, instead of waiting for an ending that long-running sessions do not
+reach. It proposes and reminds; running the harvest stays the director's act
+(SOUL section 8).
+*Earned by: O 2026-10-03f; the session-1 six-day gap recorded in the director skill's harvest mode.*
+*Source: OBSERVED. Cross-refs R-132.*
+
+### Harvest diff (2026-10-04)
+
+Covers the notes captured 2026-10-03 (e to o) and 2026-10-04 (a, b), and
+friction 2026-10-03b, after the 2026-10-03 harvest. The bar is the same: an item
+is promoted on two or more recorded instances.
+
+- **Promoted (2):** R-178 (a respawned supervisor reads its predecessor's replies
+  before it reports live; candidate 8, ruled filed), R-179 (harvest runs on a
+  clock or a count).
+- **Unchanged, new instances (6):**
+  - R-168: a live round-trip test reply came 7.5 minutes late because director
+    only looked on its next 15-minute tick; the cost is now measured (O 2026-10-03j).
+  - R-143 and R-08: four hours of "accepted" sends to four fresh seats that never
+    polled; accepted was reported as owned (O 2026-10-03i).
+  - R-174: a fallback offered to the operator on the strength of director's own
+    expired credentials rather than the seats' (O 2026-10-03h).
+  - R-04 and R-150: a one-off batch instruction cited as a standing merge rule
+    for a day, in memory and in each relay line (O 2026-10-03k).
+  - R-132: two asks rode in an hourly status footer for five hours and were never
+    surfaced, because a repeat was treated as already handled (O 2026-10-03m).
+  - R-93: a fleet-wide limit left eight seats unable to speak, and the loop
+    ticks reported "no change" (O 2026-10-03o). Kept as a new instance of
+    presence-is-not-liveness; a limit-state read is not yet a requirement.
+- **Kept as observations (5), one instance each:**
+  - A shared forge identity cannot attribute a merge to a seat or a person; it
+    took two rounds and six attestations (O 2026-10-03g). A second source for
+    this sits in the team harvest, not in a committed file.
+  - An operator's scope ruling had no path into the cast record, which a seat
+    reads only at cast; a hand edit and about fifteen minutes (O 2026-10-03l).
+  - Director invented a merge order the requester had not set (O 2026-10-03n).
+  - A report from one supervisor reached another only by hand copy (O 2026-10-04b).
+  - The cross-host enrollment checklist item from the last harvest has not
+    recurred (O 2026-10-03e).
+- **Rejected for the register (routed elsewhere):**
+  - Moving a whole cluster to another subscription as about thirty hand-driven
+    login flows: fleet controller graph, a bulk re-authentication feature
+    (O 2026-10-04a).
+  - A build in a git worktree stamping the wrong revision: already captured as
+    finding-018 in director's graph (friction 2026-10-03b).
+
+### Harvest diff (2026-10-03)
+
+Covers the notes captured 2026-09-28 through 2026-10-03, after the 2026-09-27
+harvest.
+
+**The bar this harvest applies:** an item is promoted on two or more recorded
+instances. A single instance stays an observation until it recurs, whatever
+its severity, and a quoted ruling counts only when it can be cited from a
+committed file.
+
+- **Promoted (10):** R-168 (delivery wakes director), R-169 (per-message
+  handled ledger), R-170 (review request tracked to verdict), R-171 (no draft
+  put to the operator), R-172 (approval newer than the head push), R-173 (done
+  only on an observed outcome), R-174 (claims carry their lookup), R-175
+  (decisions carry substance and the seat's view), R-176 (director's public
+  text is scanned), R-177 (a seat's limit reaches the operator with its
+  source).
+- **Unchanged, new instances (15):**
+  - R-36 and R-157: two resolved items presented as blocked on the operator,
+    and a merge asked for twice after the operator had already merged it
+    (O-28n, O-31f).
+  - R-04 and R-150: a director gloss read as the operator's ruling twice, once
+    to override a seat's own CANNOT, and once rewritten into new rule text from
+    an explanation (O-28p, O-28s, O 2026-10-02c).
+  - R-152: a batch merge loop continued past a STOP, and a guard read timeout
+    printed "OPEN null" (O 2026-10-02n; friction 2026-10-01).
+  - R-161: two more broadcasts reached no inbox, on both clusters; the tell is
+    that a broadcast send returns no stream sequence while a direct send does
+    (O-28k, O-28l).
+  - R-149 and R-89: a doorbell's wake line seen in a composer could not be told
+    from a harness suggestion (O-28r, O-28v).
+  - R-124: an idle seat did not wake on a bus message; approved drafts sat
+    until a pane inject (O-31k, O-31r).
+  - R-159: a same-cluster review request routed through director (O-31a).
+  - R-147: a paper approval and the merge guard's non-author rule cannot both
+    be satisfied for a bot-authored pull request (O-31c, O-31e).
+  - R-148: an envoy saw unreviewed drafts but its report went to the wrong
+    team and never escalated by age (O-28i).
+  - R-131: director edited launchers and manifests by hand again (O-31p).
+  - R-132 and R-103: an operator intent that existed only in conversation, a
+    "what stalled" question answered by hand, and a plan step reordered by
+    director's own ask (O-31g, O 2026-10-02f, O-31l).
+  - R-127: a ruling repeated five times regressed because a local note
+    contradicted the enforcing config (O-30o).
+  - R-09 and R-78: a publish violation reported as a timeout, a misleading
+    reach hint, a silent wrong-workspace doorbell, and a send that accepted a
+    dead address (friction 2026-09-28 to 2026-10-02).
+  - R-09: a send with a misnamed parameter failed as "unknown performative",
+    and the performative field is case-sensitive with no list of valid values
+    (friction 2026-09-30, 2026-10-02).
+  - R-94: the global cluster name and the fleet controller's cluster name
+    differ for one host (friction 2026-10-03a).
+- **Kept as observations (12), one instance each:**
+  - A bring-up pinned to a moving package channel stopped when director's own
+    merge cut a new release; a merge hold placed before the pin is offered
+    would have prevented it (O 2026-10-03a).
+  - Pane input carries no author: a seat took unattributed pane text as
+    approval, and confirming the operator had typed it took an hour. If it
+    recurs, its subject may be the fleet controller's pane surface rather than
+    director (O-30m).
+  - A cross-host operation started without its enrollment checklist (address,
+    client key grant, host key pin, read-only verify); the operator named the
+    missing grant, key and pin (O 2026-10-03e).
+  - A bare #N in a relay stalled a seat about 70 minutes on which repo was
+    meant (O 2026-10-02m).
+  - A ticket-only ask routed to a code builder while a filer seat sat idle,
+    because the relay named the team and not the role (O-30n).
+  - The classifier gave the same publish different verdicts by seat (O-28m);
+    a fan-out question's framing steered every reply toward greenfield
+    (O-28w); a misread ticket request (O-31h); checkout currency measured by
+    hand (O-31n); a relay that carried words and lost the operator's intent
+    to see the result (O-30r); an operator on a remote control surface needing
+    a grant path that lands on the right seat (O 2026-10-02b).
+- **Rejected for the register (routed elsewhere):**
+  - Applying an operator's statement about a data field's meaning that the
+    system's own register contradicted: claim verification, general hygiene
+    per the O-16 to O-21 precedent; platform graph (O 2026-10-03c).
+  - Every seat inheriting the daemon's stale working directory, and a role env
+    change that did not roll the role: fleet controller graph (O-30c,
+    O 2026-10-02d).
+  - A remote cluster with no seat holding the rights to run a rollout: fleet
+    controller graph (O-28q).
+  - Wrapped seats ignoring the project MCP config, and the package-manager
+    upgrade ignoring a version flag (already fixed upstream): fleet controller
+    graph.
+  - A Go build from a git worktree stamping the wrong revision: platform graph,
+    as a tooling finding.
+  - Classifier denials of branch deletes, restarts and an apply: the control
+    working as designed; dropped.
+  - A vendor MCP lacking a drift trigger, and BSD seq counting down: general
+    tooling; dropped.
 
 ### Harvest diff (2026-09-27)
 

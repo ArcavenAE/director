@@ -49,7 +49,7 @@ daemon; a launcher supplies the rest.
 |---|---|
 | `director-mcp` | serve MCP on stdin and stdout, log to stderr |
 | `director-mcp --preflight` | connect, verify the broker is provisioned (and the hub through the domain when global mode is on), print `preflight: ok`, exit. Creates no consumer, writes no presence. |
-| `director-mcp unread [--json]` | read-only report of unread mail per seat durable on `AGENT_INBOX` (see below). Needs only `NATS_URL`; no identity. Creates no consumer, acks nothing, writes no presence. Always exits 0. |
+| `director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <dur>]` | read-only report of unread mail per seat durable on `AGENT_INBOX`, or on the hub with `--global` (see below). Needs only `NATS_URL`; no identity. Creates no consumer, acks nothing, writes no presence. Always exits 0. |
 
 Any other argument is refused with exit 2, rather than ignored and a live
 shim started (director#75).
@@ -74,8 +74,34 @@ oldest unread first:
 
 `--json` prints the same as `{stream, read_at, durables: [...],
 warnings}`. A presence bucket or consumer listing it could not read is a
-warning, and the presence it did not read is not reported as absent. The
-global tier's durables are not covered yet (LR-3 slice M).
+warning, and the presence it did not read is not reported as absent.
+
+Slice M (`sim/design/unread-slice-m.md`):
+
+- **Live rows first.** The default view lists each address's live rows,
+  then one line for its dead durables: `dead durables: N, pending P in
+  total, oldest A (--all to list)`. `--all` lists every durable; `--json`
+  always carries every durable with `live` set.
+- **Named states for live rows.** `reading` (nothing pending), `behind`
+  (pending, the durable has delivered), `durable-idle` (pending, and nothing
+  delivered since the durable's `Created`, at least 10 minutes ago), and
+  `reads-outside-durable` (a `durable-idle` row whose session, under its own
+  `sender.instance`, answered a message still pending on it; not unread
+  mail). The reply scan reads at most 2,000 messages per stream per run,
+  newest first; a row whose window it did not reach stays `durable-idle`
+  with `scan_truncated`. The match rests on the sender's own claim: any process holding the agent's bus credentials can write any `sender.instance`, so the evidence carries a `basis` saying it is self-asserted and not verified, and the text views say so too. A sender with no `sender.instance` never counts; `sender.session` is the harness session UUID and is never read for this.
+- **`--older-than <dur>`** marks `behind` and `durable-idle` rows older than
+  the threshold (`!` in text, `over_threshold` in JSON) and counts them.
+  Exit stays 0.
+- **`--global`** reads every `mcp_global_` durable on each `GLOBAL_TO_*`
+  stream through the hub's domain (`DIRECTOR_GLOBAL_DOMAIN`, default
+  `global`), with presence from `GLOBAL_PRESENCE`, one section per stream.
+  With no hub reachable it prints the reason and exits 0. `--json` prints
+  `{domain, reports: [...], error}`.
+- **`--by-role`** prints one line per team and role: holders, total
+  pending, the oldest age among `behind` and `durable-idle` holders, and the
+  count in each state. The role comes from a `role.<role>.inbox` filter, or
+  else from the agent id with its replica suffix and team prefix removed.
 
 ## Startup behaviour
 
@@ -419,6 +445,13 @@ A new global durable resumes the way the local one does: after the highest
 ack floor among the seat's departed `mcp_global_<id>_` durables (filtered on
 the same inbox subject, no live hub presence row for the instance), or from
 the start of the stream when there are none.
+To find them it lists the hub stream's consumers first. A cluster credential
+may not list them (`CONSUMER.NAMES` and `CONSUMER.LIST` answer "no
+responders"), so on that error it takes the seat's instance ids from its
+local durables (`mcp_<id>_<instance>` on `AGENT_INBOX`, which every instance
+holds under the same instance id) and reads each departed instance's hub
+durable by name, which the credential may (aae-orc-2ro3e). Each lookup is
+bounded at 5 s, so a request with no reply cannot hold up attach.
 Every supervisor of a cluster filters on the same role inbox, so the name
 is what keeps one seat's position from moving another's. Agent ids may
 contain `_`, so the prefix `mcp_global_sup_` also matches `sup_T1`'s
@@ -428,7 +461,9 @@ message (fan-out, not a work queue).
 
 The first `wait_for_message` result after a start (or after the global tier
 attaches) carries `resumed`: one line per tier saying where the durable
-started and how many messages were waiting. It is reported once.
+started and how many messages were waiting. It is reported once. When the
+seat's earlier position could not be read, the line says so and why, so a
+replay is not reported as a seat with no earlier durable.
 
 When the hub no longer has a session's global durable, a pull does not say
 "consumer not found". On a single server it fails with no responders, the

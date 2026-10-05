@@ -81,8 +81,15 @@ slice_sh="$(dirname "$WARDROBE_ROOT")/scripts/slice.sh"
 # log write is a refusal inside slice.sh). ALLOW_PROPOSAL=0 to cast ratified only.
 slice_args=("$WARDROBE_ROOT" "$WROLE")
 [[ -n "$IDENTITY" ]] && slice_args+=("$IDENTITY")
+# The seat leads the spawn line (ruling 44). wardrobe's slice.sh must be the
+# version that takes --seat; an older install refuses it as an unknown flag.
+slice_args+=(--seat "$MARVEL_SESSION")
 [[ "${ALLOW_PROPOSAL:-1}" == 1 ]] && slice_args+=(--allow-proposal)
 [[ "${ALLOW_DIRTY:-0}" == 1 ]] && slice_args+=(--allow-dirty)
+# Resolved once, as slice.sh would (ruling 59), and exported so slice.sh writes
+# exactly the path the cast line names to the seat.
+spawn_log="${WARDROBE_SPAWN_LOG:-$HOME/.local/state/wardrobe/spawn.log}"
+export WARDROBE_SPAWN_LOG="$spawn_log"
 slice="$("$slice_sh" "${slice_args[@]}")"
 
 # One source for the bus id (R-73). marvel's computed per-replica name until
@@ -177,12 +184,57 @@ if [[ "${DIRECTOR_CUE:-}" == 1 ]]; then
   cue_note=", channel cue ON (DIRECTOR_CUE=1)"
 fi
 
+# A supervisor-type cast with no global address on a host whose broker IS
+# leafed to the global tier is the silent case director#180 names: the cast
+# succeeds, the seat never appears at global://<cluster>/supervisor, and mail
+# sent there waits unread. The tier stays optional (operator ruling), so this
+# warns and never refuses, and only when the local broker's monitor reports a
+# leaf remote up. The probe is loopback only with a 1s timeout, and every
+# failure (no curl, monitor port closed, timeout, unreadable reply) reads as
+# "not connected", so a host with no global tier casts exactly as before.
+global_tier_connected() {
+  local url="${DIRECTOR_NATS_MONITOR_URL:-}" hostport host body
+  if [[ -z "$url" ]]; then
+    hostport="${NATS_URL#*://}"; hostport="${hostport##*@}"
+    if [[ "$hostport" == \[* ]]; then host="${hostport%%]*}]"; else host="${hostport%%:*}"; fi
+    url="http://$host:8222"
+  fi
+  url="${url%/}"
+  # An exact match, not a prefix: curl connects to the host after any "@", so
+  # http://127.0.0.1:1@elsewhere would pass a prefix match and leave the box.
+  [[ "$url" =~ ^http://(127\.0\.0\.1|localhost|\[::1\]):[0-9]{1,5}$ ]] || return 1
+  command -v curl >/dev/null 2>&1 || return 1
+  # -q (first) skips ~/.curlrc and --noproxy skips every proxy variable, so
+  # neither can carry the probe off the loopback host.
+  body="$(curl -q -s --noproxy '*' -m 1 "$url/leafz" 2>/dev/null)" || return 1
+  [[ "$body" =~ \"leafnodes\":[[:space:]]*([0-9]+) ]] || return 1
+  (( BASH_REMATCH[1] > 0 ))
+}
+
+startup_note=""
+if [[ "$GROLE" == supervisor && -z "$GLOBAL_ADDR" ]] && global_tier_connected; then
+  echo "cast-launch: WARNING: the global tier is connected on this host (the local broker reports a leaf remote up), but this $WROLE cast carries no global levers (DIRECTOR_GLOBAL_DOMAIN, DIRECTOR_CLUSTER), so it holds no global address and mail to its global://<cluster>/supervisor address will wait unread. Set both on the marvel daemon and recast; casting anyway (director#180). This check reads the local broker's monitor port: a monitor port closed, a timeout or an unreadable reply reads as not connected and gives no warning." >&2
+  startup_note="Note from the launcher: the global tier is connected on this host, but you were cast with no global levers, so you hold no global address. Tell the operator through the director so you can be recast with DIRECTOR_GLOBAL_DOMAIN and DIRECTOR_CLUSTER set (director#180)."
+fi
+# A supervisor that does hold a global address proves its reach once at
+# startup. It is a duty, not a gate on routing. DIRECTOR_PEER_CLUSTER names
+# another cluster whose supervisor answers the test; without one, the test
+# goes to the director seat. Either way the result is reported to the director.
+if [[ "$GROLE" == supervisor && -n "$GLOBAL_ADDR" ]]; then
+  peer="${DIRECTOR_PEER_CLUSTER:-}"
+  if [[ -n "$peer" && ! "$peer" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "cast-launch: refusing DIRECTOR_PEER_CLUSTER '$peer'; the class is [A-Za-z0-9_-] (R-76)" >&2; exit 1
+  fi
+  if [[ -n "$peer" && "$peer" != "$DIRECTOR_CLUSTER" ]]; then reach="global://$peer/supervisor"; else reach="global://director"; fi
+  startup_note="After the ruling 84 echo, as a startup duty: send one reach test to $reach, note whether an ack came back and how long it took, and report both to global://director. It is a check, not a gate: route as usual whatever it shows (director#180)."
+fi
+
 mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_ROLE":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"%s%s}}}}' \
   "$SHIM_BIN" "$DIRECTOR_AGENT_ID" "$DIRECTOR_ROLE" "$DIRECTOR_TEAM" "$DIRECTOR_WORKSPACE" "$NATS_URL" "$global_env" "$cue_env")"
 
 cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_ROLE in team $DIRECTOR_TEAM, address agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID."
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
-cast_line+=" Your first act is to echo the last line of the spawn log (ruling 84)."
+cast_line+=" Your first act is to echo the last line of the spawn log at $spawn_log (ruling 84)."
 
 # Exactly one system prompt (aae-orc-1vq6z). claude keeps only the LAST
 # --append-system-prompt, so any flag in "$@" would silently replace the slice.
@@ -221,6 +273,8 @@ done
 for x in ${caller_extra[@]+"${caller_extra[@]}"}; do
   prompt+=$'\n\n'"$x"
 done
+# After the caller's text, so a wrapper-rendered cast carries it too.
+[[ -n "$startup_note" ]] && prompt+=$'\n\n'"$startup_note"
 set -- ${passthrough[@]+"${passthrough[@]}"}
 
 # The session's working directory must be one the harness already trusts on

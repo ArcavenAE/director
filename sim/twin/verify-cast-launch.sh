@@ -35,6 +35,8 @@ trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/wardrobe/contents/roles" "$root/wardrobe/scripts" "$root/bin" "$root/out"
 cat > "$root/wardrobe/scripts/slice.sh" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "${WARDROBE_SPAWN_LOG:-unset}" > "$(dirname "$0")/../../out/slice.spawnlog"
+printf '%s\n' "$@" > "$(dirname "$0")/../../out/slice.args"
 echo "stub slice for $2"
 STUB
 # The shim stub records the environment the pre-flight really runs with.
@@ -52,6 +54,17 @@ printf '%s\n' "\$@" > "$root/out/claude.args"
 exit 0
 STUB
 chmod +x "$root/wardrobe/scripts/slice.sh" "$root/bin/director-mcp" "$root/bin/claude"
+# The curl stub stands in for the local broker's monitor endpoint, so no case
+# reaches a real broker on the host running this script. It records its args
+# and prints $root/leafz.json when that file exists; otherwise it fails the way
+# a closed monitor port does.
+cat > "$root/bin/curl" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$root/out/curl.args"
+[[ -f "$root/leafz.json" ]] || exit 7
+cat "$root/leafz.json"
+STUB
+chmod +x "$root/bin/curl"
 
 # Run cast-launch.sh with a clean, fully controlled environment. `env -i` is the
 # point: it guarantees the only DIRECTOR_* values in play are the ones each case
@@ -473,6 +486,206 @@ for v in 0 true yes; do
     bad "builder cast, cue=$v" "$(cat "$root/out/stderr")"
   fi
 done
+
+# --- a supervisor cast without levers on a leafed host is loud, not refused --
+# director#180. The global tier stays optional: the launcher warns only when the
+# local broker's monitor reports a leaf remote up, and a closed monitor port, a
+# timeout or an unreadable reply all read as "not connected" (no warning).
+leafz() { rm -f "$root/leafz.json" "$root/out/curl.args"; [[ -n "${1:-}" ]] && printf '%s' "$1" > "$root/leafz.json"; return 0; }
+LEAF_UP='{"server_id":"x","now":"t","leafnodes":1,"leafs":[{"name":"hub"}]}'
+LEAF_NONE='{"server_id":"x","now":"t","leafnodes":0,"leafs":[]}'
+
+for role in supervisor research-supervisor; do
+  leafz "$LEAF_UP"
+  if cast "$role"; then
+    miss=""
+    grep -q "global tier is connected" "$root/out/stderr"        || miss+=" stderr-warning"
+    grep -q "monitor port closed" "$root/out/stderr"             || miss+=" stderr-closed-port-caveat"
+    grep -q "no global address" "$root/out/claude.args"          || miss+=" prompt-note"
+    has_mcp DIRECTOR_GLOBAL_ROLE                                 && miss+=" levers-appeared"
+    grep -qx "http://127.0.0.1:8222/leafz" "$root/out/curl.args" || miss+=" loopback-url"
+    [[ -z "$miss" ]] && ok "$role: no levers on a leafed host warns on stderr and in the prompt, and still casts" \
+                     || bad "$role lever warning" "missing:$miss"
+  else
+    bad "$role cast without levers on a leafed host was refused; it must warn only" "$(cat "$root/out/stderr")"
+  fi
+done
+
+leafz ""
+if cast supervisor; then
+  grep -q "global tier is connected" "$root/out/stderr" \
+    && bad "supervisor: a closed monitor port produced a warning" \
+    || ok "supervisor: a closed monitor port reads as not connected, no warning"
+else
+  bad "supervisor cast with the monitor closed" "$(cat "$root/out/stderr")"
+fi
+
+leafz "$LEAF_NONE"
+if cast supervisor; then
+  grep -q "global tier is connected" "$root/out/stderr" \
+    && bad "supervisor: zero leaf remotes produced a warning" \
+    || ok "supervisor: zero leaf remotes reads as not connected, no warning"
+else
+  bad "supervisor cast with zero leaf remotes" "$(cat "$root/out/stderr")"
+fi
+
+leafz "$LEAF_UP"
+if cast supervisor DIRECTOR_NATS_MONITOR_URL=http://127.0.0.1:9999; then
+  grep -qx "http://127.0.0.1:9999/leafz" "$root/out/curl.args" \
+    && ok "supervisor: DIRECTOR_NATS_MONITOR_URL moves the monitor endpoint" \
+    || bad "monitor URL override" "$(cat "$root/out/curl.args" 2>/dev/null)"
+else
+  bad "supervisor cast with a monitor override" "$(cat "$root/out/stderr")"
+fi
+
+leafz "$LEAF_UP"
+if cast supervisor DIRECTOR_NATS_MONITOR_URL=http://192.0.2.1:8222; then
+  if [[ -f "$root/out/curl.args" ]] || grep -q "global tier is connected" "$root/out/stderr"; then
+    bad "supervisor: a non-loopback monitor URL was queried"
+  else
+    ok "supervisor: a non-loopback monitor URL is never queried and reads as not connected"
+  fi
+else
+  bad "supervisor cast with a non-loopback monitor" "$(cat "$root/out/stderr")"
+fi
+
+# Userinfo and a path suffix must not steer the probe off the loopback host:
+# curl connects to the host after the "@", so a prefix match is not a guard.
+for url in 'http://127.0.0.1:1@example.invalid:8222' 'http://localhost:1@other.invalid:8222' 'http://127.0.0.1:8222/x'; do
+  leafz "$LEAF_UP"
+  if cast supervisor "DIRECTOR_NATS_MONITOR_URL=$url"; then
+    if [[ -f "$root/out/curl.args" ]] || grep -q "global tier is connected" "$root/out/stderr"; then
+      bad "supervisor: the monitor URL $url was queried"
+    else
+      ok "supervisor: the monitor URL $url is refused by the loopback guard and never queried"
+    fi
+  else
+    bad "supervisor cast with monitor $url" "$(cat "$root/out/stderr")"
+  fi
+done
+
+# A trailing slash on a loopback override is still the same endpoint.
+leafz "$LEAF_UP"
+if cast supervisor DIRECTOR_NATS_MONITOR_URL=http://127.0.0.1:9999/; then
+  grep -qx "http://127.0.0.1:9999/leafz" "$root/out/curl.args" && grep -q "global tier is connected" "$root/out/stderr" \
+    && ok "supervisor: a loopback override with a trailing slash is still queried" \
+    || bad "trailing-slash override" "$(cat "$root/out/curl.args" 2>/dev/null)"
+else
+  bad "supervisor cast with a trailing-slash monitor" "$(cat "$root/out/stderr")"
+fi
+
+# A proxy in the environment or in ~/.curlrc must not carry the probe off-box:
+# curl is told to skip .curlrc (-q, which must come first) and to use no proxy.
+leafz "$LEAF_UP"
+if cast supervisor http_proxy=http://127.0.0.1:18224; then
+  miss=""
+  [[ "$(head -1 "$root/out/curl.args" 2>/dev/null)" == "-q" ]] || miss+=" -q-first"
+  grep -qx -- "--noproxy" "$root/out/curl.args" 2>/dev/null   || miss+=" --noproxy"
+  [[ -z "$miss" ]] && ok "supervisor: the probe skips .curlrc and every proxy" \
+                   || bad "probe proxy isolation" "missing:$miss"
+else
+  bad "supervisor cast with a proxy set" "$(cat "$root/out/stderr")"
+fi
+
+leafz "$LEAF_UP"
+if cast builder; then
+  if [[ -f "$root/out/curl.args" ]] || grep -q "global tier is connected" "$root/out/stderr"; then
+    bad "builder: a worker cast probed the monitor or warned"
+  else
+    ok "builder: a worker cast on a leafed host never probes and never warns"
+  fi
+else
+  bad "builder cast on a leafed host" "$(cat "$root/out/stderr")"
+fi
+
+# --- a supervisor holding a global address tests its reach once at startup ---
+leafz ""
+if cast supervisor "${GLOBAL_ON[@]}"; then
+  miss=""
+  grep -q "send one reach test to global://director" "$root/out/claude.args"   || miss+=" reach-test"
+  grep -q "report .* to global://director" "$root/out/claude.args"            || miss+=" report-target"
+  [[ -f "$root/out/curl.args" ]]                                               && miss+=" probed-with-levers"
+  [[ -z "$miss" ]] && ok "supervisor with levers: a startup reach test to global://director, reported to the director" \
+                   || bad "supervisor reach test" "missing:$miss"
+else
+  bad "supervisor cast with levers" "$(cat "$root/out/stderr")"
+fi
+
+if cast supervisor "${GLOBAL_ON[@]}" DIRECTOR_PEER_CLUSTER=peerc; then
+  grep -q "send one reach test to global://peerc/supervisor" "$root/out/claude.args" \
+    && ok "supervisor with a peer cluster: the reach test goes to the peer's supervisor" \
+    || bad "peer reach test" "$(grep -o 'reach test[^.]*' "$root/out/claude.args")"
+else
+  bad "supervisor cast with a peer cluster" "$(cat "$root/out/stderr")"
+fi
+
+if cast supervisor "${GLOBAL_ON[@]}" 'DIRECTOR_PEER_CLUSTER=peer.c'; then
+  bad "a peer cluster outside the identity class was accepted"
+else
+  grep -q "DIRECTOR_PEER_CLUSTER" "$root/out/stderr" \
+    && ok "supervisor: a peer cluster outside [A-Za-z0-9_-] is refused before it becomes an address" \
+    || bad "peer cluster class refusal" "$(cat "$root/out/stderr")"
+fi
+
+for role in builder director; do
+  if cast "$role" "${GLOBAL_ON[@]}"; then
+    grep -q "reach test" "$root/out/claude.args" \
+      && bad "$role: carries a reach test it should not" \
+      || ok "$role: no supervisor reach test"
+  else
+    bad "$role cast with levers" "$(cat "$root/out/stderr")"
+  fi
+done
+
+# --- the seat reaches slice.sh, so the spawn line leads with it (ruling 44) ---
+if cast builder; then
+  args="$(tr '\n' ' ' < "$root/out/slice.args")"
+  [[ "$args" == *"--seat verify-builder-0 "* ]] \
+    && ok "slice.sh is handed --seat <MARVEL_SESSION>" \
+    || bad "slice.sh was not handed the seat" "$args"
+else
+  bad "builder cast for the seat argument" "$(cat "$root/out/stderr")"
+fi
+
+# --- the cast line names the spawn log it tells the seat to echo (ruling 84) ---
+# slice.sh writes ${WARDROBE_SPAWN_LOG:-$HOME/.local/state/wardrobe/spawn.log}
+# (ruling 59). A seat that has to guess where it is went looking elsewhere.
+if cast builder; then
+  want="$root/.local/state/wardrobe/spawn.log"
+  grep -qF "echo the last line of the spawn log at $want (ruling 84)" "$root/out/claude.args" \
+    && ok "spawn log unset: the cast line names the ruled default path" \
+    || bad "cast line default spawn log" "$(grep -o 'spawn log[^.]*' "$root/out/claude.args" | head -1)"
+else
+  bad "builder cast for the spawn log default" "$(cat "$root/out/stderr")"
+fi
+if cast builder WARDROBE_SPAWN_LOG="$root/elsewhere/spawn.log"; then
+  grep -qF "echo the last line of the spawn log at $root/elsewhere/spawn.log (ruling 84)" "$root/out/claude.args" \
+    && ok "WARDROBE_SPAWN_LOG set: the cast line names the override" \
+    || bad "cast line overridden spawn log" "$(grep -o 'spawn log[^.]*' "$root/out/claude.args" | head -1)"
+  grep -qF "$root/.local/state/wardrobe/spawn.log" "$root/out/claude.args" \
+    && bad "the cast line also names the default path although the override is set" \
+    || ok "WARDROBE_SPAWN_LOG set: the default path is not named"
+else
+  bad "builder cast with WARDROBE_SPAWN_LOG" "$(cat "$root/out/stderr")"
+fi
+if cast builder; then
+  grep -q '\.marvel' "$root/out/claude.args" \
+    && bad "the cast line references ~/.marvel" \
+    || ok "the cast line does not reference ~/.marvel"
+fi
+
+# --- slice.sh is handed the very path the cast line names ---------------------
+# Resolved once in cast-launch.sh and exported, so the two cannot drift.
+if cast builder; then
+  [[ "$(cat "$root/out/slice.spawnlog")" == "$root/.local/state/wardrobe/spawn.log" ]] \
+    && ok "spawn log unset: slice.sh receives the ruled default the cast line names" \
+    || bad "slice.sh spawn log default" "$(cat "$root/out/slice.spawnlog")"
+fi
+if cast builder WARDROBE_SPAWN_LOG="$root/elsewhere/spawn.log"; then
+  [[ "$(cat "$root/out/slice.spawnlog")" == "$root/elsewhere/spawn.log" ]] \
+    && ok "WARDROBE_SPAWN_LOG set: slice.sh receives the override the cast line names" \
+    || bad "slice.sh spawn log override" "$(cat "$root/out/slice.spawnlog")"
+fi
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

@@ -184,6 +184,12 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		return nil, fmt.Errorf("presence KV AGENT_STATE: %w (run the broker setup first)", err)
 	}
 	b := &Bus{nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), state: "idle", globalCfg: gcfg}
+	// Every envelope this session sends names its instance in sender.instance,
+	// so a reply is attributable to one session and not to every session of
+	// the agent (unread slice M, part E1, director#126). It is not
+	// sender.session: the canonical schema keeps that for the harness session
+	// UUID (director#196).
+	b.self.Instance = b.instance
 	// Durable per-SESSION consumer. The durable name includes the per-session
 	// instance, so two sessions sharing one agent id do not bind one durable
 	// and race each other's mail (R-50); each gets its own copy instead of a
@@ -214,7 +220,11 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		_, err := kv.Get(ctx, "presence."+self.Team+"."+self.AgentID+"."+instance)
 		return err == nil
 	}
-	floor, _ := seatAckFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", filters, liveLocal)
+	floor, ferr := seatAckFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", filters, liveLocal)
+	localWhy := ""
+	if ferr != nil && floor == 0 {
+		localWhy = "listing this seat's local durables failed: " + ferr.Error()
+	}
 	if floor > 0 {
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
 		cfg.OptStartSeq = floor + 1
@@ -225,7 +235,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		return nil, fmt.Errorf("durable consumer: %w", err)
 	}
 	b.consumer = cons
-	b.noteResumed("local", floor, cons)
+	b.noteResumed("local", floor, cons, localWhy)
 	return b, nil
 }
 
@@ -241,20 +251,28 @@ func (b *Bus) selfSubjects() []string {
 
 // noteResumed records where a new durable started and how much was waiting,
 // for the next wait_for_message result.
-func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer) {
+func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer, why string) {
 	var waiting uint64
 	if info := cons.CachedInfo(); info != nil {
 		waiting = info.NumPending
 	}
-	var msg string
-	if floor > 0 {
-		msg = fmt.Sprintf("%s inbox resumed after stream sequence %d, the seat's last ack, so mail already read is not replayed; %d message(s) waiting", tier, floor, waiting)
-	} else {
-		msg = fmt.Sprintf("%s inbox has no earlier durable for this seat, so it reads everything the stream still holds; %d message(s) waiting", tier, waiting)
-	}
+	msg := resumeNote(tier, floor, waiting, why)
 	b.resumedMu.Lock()
 	b.resumed = append(b.resumed, msg)
 	b.resumedMu.Unlock()
+}
+
+// resumeNote is the start note for one tier: where its new durable began and
+// what waits. why, when set, is the reason the seat's earlier position could
+// not be read.
+func resumeNote(tier string, floor, waiting uint64, why string) string {
+	if floor > 0 {
+		return fmt.Sprintf("%s inbox resumed after stream sequence %d, the seat's last ack, so mail already read is not replayed; %d message(s) waiting", tier, floor, waiting)
+	}
+	if why != "" {
+		return fmt.Sprintf("%s inbox could not read the seat's earlier position (%s), so it reads everything the stream still holds, a replay and never a loss; %d message(s) waiting", tier, why, waiting)
+	}
+	return fmt.Sprintf("%s inbox has no earlier durable for this seat, so it reads everything the stream still holds; %d message(s) waiting", tier, waiting)
 }
 
 // takeResumed returns the pending resume notes once, then clears them.
@@ -1011,7 +1029,7 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 		return nil, err
 	}
 	b.global = g
-	b.noteResumed("global", g.resumedFrom, g.consumer)
+	b.noteResumed("global", g.resumedFrom, g.consumer, g.floorWhy)
 	return g, nil
 }
 

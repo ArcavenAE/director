@@ -66,7 +66,7 @@ func main() {
 	// identity of its own and never registers one (LR-3).
 	if cli.mode == "unread" {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		code := runUnreadCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli.json, os.Stdout, os.Stderr)
+		code := runUnreadCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, env("DIRECTOR_GLOBAL_DOMAIN", "global"), os.Stdout, os.Stderr)
 		cancel()
 		os.Exit(code)
 	}

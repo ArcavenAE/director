@@ -34,7 +34,7 @@ set -euo pipefail
 CLUSTER="${DIRECTOR_CLUSTER:-mokuzai}"
 DOMAIN="${DIRECTOR_GLOBAL_DOMAIN:-global}"
 SEED_FILE="${DIRECTOR_LEAF_SEED:-$HOME/.director/nats/leaf-$CLUSTER.nk}"
-HUB_LEAF="${HUB_LEAF:-192.168.100.110:7442}"
+HUB_LEAF="${HUB_LEAF:-kinu.local:7442}"
 PORT="${VERIFY_PORT:-4272}"
 HUB_CA="${HUB_CA:-}"
 LEAF_TLS=""; [[ -n "$HUB_CA" ]] && LEAF_TLS=", tls { ca_file: \"$HUB_CA\" }"

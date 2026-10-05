@@ -1,0 +1,597 @@
+#!/usr/bin/env python3
+"""dws - director workstreams: the board's current-state ledger.
+
+One row per workstream (an issue, a design and its builds), folded on read
+from an append-only event file. Part W1 of the workstream ledger design
+(sim/design/board-workstream-ledger.md): the store, the fold, the lock, the
+CLI and the instance-id refusal; W2 adds refresh. The page (W3) comes later.
+
+  $DIRECTOR_STATE/workstreams.jsonl   append-only events
+  $DIRECTOR_STATE/workstreams.lock    one flock around fold, check, append
+
+  dws [--actor A] open <slug> --title T [--owner O] [--stage S] [--repos R..]
+                                       [--next N] [--blocked B] [--link L..]
+  dws [--actor A] stage <slug> <to> --from <current>
+  dws [--actor A] set <slug> [--owner O] [--next N] [--blocked B] [--repos R..]
+  dws [--actor A] link <slug> [--remove] <link>...
+  dws [--actor A] park <slug> --from <current>
+  dws refresh [<slug>...]
+  dws show [--json]
+
+Links are typed: pr:<owner>/<repo>#<n>, issue:<owner>/<repo>#<n>, bd:<id>
+and ask:<id>. refresh (W2) reads the first three; ask ids wait for W5, and an
+untyped link is shown but never read. refresh names every link it does not
+read on stderr, so nothing is skipped silently.
+
+The actor is a claim, not an identity: the writer table is an allowlist over
+--actor, and a caller that passes --actor refresh is believed (section 6).
+"""
+import argparse, datetime, fcntl, json, os, re, subprocess, sys, time, unicodedata
+
+HOME = os.path.expanduser("~")
+STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
+LEDGER = os.path.join(STATE, "workstreams.jsonl")
+LOCK = os.path.join(STATE, "workstreams.lock")
+LOCK_TIMEOUT = 5.0
+
+# Section 3. The order is the sort order; parked sorts last.
+STAGES = ["idea", "defined", "designed", "building", "in review", "merged",
+          "released", "deployed", "accepted", "parked"]
+
+# Section 6, the writer table. refresh may append observe events and the two
+# factual stage moves of section 5; anything not listed may append nothing.
+REFRESH_MOVES = {("building", "in review"), ("in review", "merged")}
+ACTORS = {"director", "refresh"}
+
+SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+# Section 2: a token like g9-9 anywhere in a value's match key is an instance
+# id. Instance ids change at every respawn; a role does not.
+INSTANCE_ID = re.compile(r"(^|[^a-z0-9])(g[0-9]+ ?- ?[0-9]+)")
+
+
+class Refused(Exception):
+    pass
+
+
+def now():
+    """The clock, as the ledger writes it. DWS_NOW overrides it only when
+    DWS_TEST_CLOCK=1 is also set (the verify scripts, which need a fixed now
+    on either side of their fixtures), so a stray DWS_NOW cannot pin the
+    ledger's timestamps."""
+    fixed = os.environ.get("DWS_NOW") if os.environ.get("DWS_TEST_CLOCK") == "1" else None
+    if fixed:
+        return fixed
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def stored_form(value):
+    """What dws writes (two-form rule, re-ruled 2026-10-02, director#195):
+    NFKC; every whitespace run, Cc whitespace included, to one space, trimmed;
+    the remaining Cc stripped. Nothing else is removed or mapped, so marks,
+    selectors, joiners and dashes in real text are stored as typed."""
+    v = unicodedata.normalize("NFKC", value)
+    v = re.sub(r"\s+", " ", v).strip()
+    return "".join(ch for ch in v if unicodedata.category(ch) != "Cc")
+
+
+def match_keys(stored):
+    """The keys the instance-id refusal matches on, computed from the stored
+    form and never stored. U+00AD is taken both ways, mapped to '-' and
+    removed, since either reading can be the one that hides an id; then
+    NFKD, so a mark composed onto a letter comes apart; Cf, Mn, Mc and Me
+    stripped; Pd and U+2212 to '-'; whitespace runs collapsed again, since a
+    stripped character between two spaces leaves two; lower case."""
+    keys = []
+    for shy in ("-", ""):
+        v = unicodedata.normalize("NFKD", stored.replace("\u00ad", shy))
+        v = "".join(ch for ch in v if unicodedata.category(ch) not in ("Cf", "Mn", "Mc", "Me"))
+        v = "".join("-" if unicodedata.category(ch) == "Pd" or ch == "\u2212" else ch for ch in v)
+        keys.append(re.sub(r"\s+", " ", v).lower())
+    return keys
+
+
+def checked(field, value):
+    """The stored form, or Refused when either match key carries an instance id."""
+    stored = stored_form(value)
+    for key in match_keys(stored):
+        m = INSTANCE_ID.search(key)
+        if m:
+            raise Refused(f"{field} {value!r} carries instance id {m.group(2)!r}; "
+                          "name the seat or role, never an instance id (they change at "
+                          "every respawn). Reword the value if the token is not an id.")
+    return stored
+
+
+def fold(path=LEDGER):
+    """Rows by slug, and how many lines could not be read. A torn line is
+    skipped and counted, never repaired."""
+    rows, torn = {}, 0
+    try:
+        f = open(path, encoding="utf-8")
+    except FileNotFoundError:
+        return rows, 0
+    with f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                torn += 1
+                continue
+            if not isinstance(e, dict):
+                torn += 1
+                continue
+            apply(rows, e)
+    return rows, torn
+
+
+def apply(rows, e):
+    slug, ev, ts = e.get("ws"), e.get("event"), e.get("ts", "")
+    if ev == "open":
+        rows[slug] = {
+            "slug": slug, "title": e.get("title", ""), "repos": e.get("repos", []),
+            "owner": e.get("owner", ""), "stage": e.get("stage", "idea"),
+            "last_moved": ts, "next": e.get("next", ""), "blocked": e.get("blocked", ""),
+            "links": list(e.get("links", [])), "opened": ts,
+            "hints": [], "observed": {}, "facts": [],
+        }
+        return
+    r = rows.get(slug)
+    if r is None:
+        return
+    if ev in ("stage", "park"):
+        r["stage"] = e.get("to", "parked" if ev == "park" else r["stage"])
+        r["last_moved"] = max(r["last_moved"], ts)
+        if e.get("actor") == "refresh" and e.get("fact"):
+            r["facts"].append(e["fact"])
+    elif ev == "set":
+        for k in ("owner", "next", "blocked", "repos"):
+            if k in e:
+                r[k] = e[k]
+    elif ev == "link":
+        for link in e.get("add", []):
+            if link not in r["links"]:
+                r["links"].append(link)
+        r["links"] = [x for x in r["links"] if x not in e.get("remove", [])]
+    elif ev == "observe":
+        # refresh records what it saw; a linked artifact that moved moves the
+        # row's last-moved time (section 5). A row-level observe (no link)
+        # carries the hints from that refresh.
+        if e.get("moved_at"):
+            r["last_moved"] = max(r["last_moved"], e["moved_at"])
+        if e.get("link"):
+            r["observed"][e["link"]] = {"seen": e.get("seen", {}), "checked_at": e.get("checked_at", ts)}
+        elif "hints" in e:
+            r["hints"] = list(e["hints"])
+
+
+def sorted_rows(rows):
+    return sorted(rows.values(), key=lambda r: (STAGES.index(r["stage"]) if r["stage"] in STAGES else len(STAGES), r["last_moved"], r["slug"]))
+
+
+class Locked:
+    """One exclusive flock around fold, check and append. A holder that does
+    not let go within LOCK_TIMEOUT is a loud failure, not a wait forever."""
+
+    def __enter__(self):
+        os.makedirs(STATE, exist_ok=True)
+        self.f = open(LOCK, "a")
+        deadline = time.monotonic() + LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(self.f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    self.f.close()
+                    raise Refused(f"ledger lock {LOCK} held for more than {LOCK_TIMEOUT:.0f}s; nothing written")
+                time.sleep(0.05)
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+
+
+def append(event):
+    """Append one whole line. A torn last line is left as it is; the new event
+    starts on its own line so it is not glued to the torn one."""
+    line = json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+    with open(LEDGER, "ab") as f:
+        if f.tell() > 0:
+            with open(LEDGER, "rb") as r:
+                r.seek(-1, os.SEEK_END)
+                if r.read(1) != b"\n":
+                    line = "\n" + line
+        f.write(line.encode("utf-8"))
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def allowed(actor, event):
+    if actor not in ACTORS:
+        raise Refused(f"actor {actor!r} may append nothing; writers are {sorted(ACTORS)} (section 6)")
+    if actor == "refresh":
+        ev = event["event"]
+        if ev == "observe":
+            return
+        if ev == "stage" and (event.get("from"), event.get("to")) in REFRESH_MOVES:
+            return
+        raise Refused("refresh may append observe events and the two factual stage moves only "
+                      "(building to in review, in review to merged); director makes every other move")
+
+
+def write(actor, event, check):
+    """Fold, check, append under the lock. check(rows) raises Refused."""
+    event = {"ts": now(), "actor": actor, **event}
+    allowed(actor, event)
+    with Locked():
+        rows, _ = fold()
+        check(rows)
+        append(event)
+    rerender()
+
+
+def write_many(actor, plan):
+    """Fold, then let plan(rows) return the events to append, all under one
+    lock, so the stage each move is checked against is the current one."""
+    with Locked():
+        rows, _ = fold()
+        events = [{"ts": now(), "actor": actor, **e} for e in plan(rows)]
+        for e in events:
+            allowed(actor, e)
+        for e in events:
+            append(e)
+    if events:
+        rerender()
+    return events
+
+
+def rerender():
+    """After a write, re-render the page when board.html exists (opt-in by
+    existence, the rule the renderer already follows)."""
+    if not os.path.exists(os.path.join(STATE, "board.html")):
+        return
+    renderer = os.path.join(os.path.dirname(os.path.abspath(__file__)), "board-html")
+    try:
+        subprocess.run([renderer], check=True, capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as err:
+        print(f"dws: written; board-html re-render failed: {err}", file=sys.stderr)
+
+
+def need(rows, slug):
+    if slug not in rows:
+        raise Refused(f"no workstream {slug!r}; open it first")
+    return rows[slug]
+
+
+def stage_name(s):
+    if s not in STAGES:
+        raise Refused(f"unknown stage {s!r}; stages are: {', '.join(STAGES)}")
+    return s
+
+
+def cmd_open(a):
+    if not SLUG.match(a.slug):
+        raise Refused(f"slug {a.slug!r} must be lower case letters, digits, '.', '_' or '-'")
+    ev = {"event": "open", "ws": a.slug, "title": a.title, "stage": stage_name(a.stage)}
+    for field in ("owner", "next", "blocked"):
+        v = getattr(a, field)
+        if v is not None:
+            ev[field] = checked(field, v)
+    if a.repos:
+        ev["repos"] = a.repos
+    if a.link:
+        ev["links"] = a.link
+
+    def check(rows):
+        if a.slug in rows:
+            raise Refused(f"workstream {a.slug!r} is already open; use set, stage or link")
+    write(a.actor, ev, check)
+
+
+def move(a, event, to):
+    ev = {"event": event, "ws": a.slug, "from": stage_name(a.from_), "to": stage_name(to)}
+
+    def check(rows):
+        cur = need(rows, a.slug)["stage"]
+        if cur != a.from_:
+            raise Refused(f"stale move: {a.slug!r} is in {cur!r}, not {a.from_!r}; re-read and retry")
+    write(a.actor, ev, check)
+
+
+def cmd_stage(a):
+    move(a, "stage", a.to)
+
+
+def cmd_park(a):
+    move(a, "park", "parked")
+
+
+def cmd_set(a):
+    ev = {"event": "set", "ws": a.slug}
+    for field in ("owner", "next", "blocked"):
+        v = getattr(a, field)
+        if v is not None:
+            ev[field] = checked(field, v)
+    if a.repos is not None:
+        ev["repos"] = a.repos
+    if len(ev) == 2:
+        raise Refused("set needs at least one of --owner, --next, --blocked, --repos")
+    write(a.actor, ev, lambda rows: need(rows, a.slug))
+
+
+def cmd_link(a):
+    ev = {"event": "link", "ws": a.slug, ("remove" if a.remove else "add"): a.links}
+    write(a.actor, ev, lambda rows: need(rows, a.slug))
+
+
+# The links refresh reads. A bd id must start with a letter or digit, so it can
+# never reach bd as an option. ask: is typed but not read until W5; any other
+# link is untyped. refresh names every link it does not read.
+LINK = re.compile(r"^(pr|issue):([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)$|^(bd):([A-Za-z0-9][A-Za-z0-9._-]*)$")
+ASK = re.compile(r"^ask:\S+$")
+
+
+def refresh_skip():
+    return float(os.environ.get("DWS_REFRESH_SKIP_SECONDS", "600"))
+
+
+def parse_ts(ts):
+    try:
+        return datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def run_json(cmd):
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if out.returncode != 0:
+        raise RuntimeError((out.stderr or out.stdout).strip() or f"exit {out.returncode}")
+    return out.stdout
+
+
+def pr_state(d):
+    if d.get("mergedAt") or d.get("state") == "MERGED":
+        return "merged"
+    if d.get("state") == "CLOSED":
+        return "closed"
+    return "draft" if d.get("isDraft") else "ready"
+
+
+def release_containing(repo, commit):
+    """The latest stable release tag of repo (GitHub's releases/latest, which
+    leaves out drafts and pre-releases) when its history contains commit, or
+    None. A repo with no stable release answers 404, which is None, not a
+    failure. A hint only: refresh never moves a row to released (section 5)."""
+    if not commit:
+        return None
+    try:
+        tag = run_json(["gh", "api", f"repos/{repo}/releases/latest", "--jq", ".tag_name"]).strip()
+    except RuntimeError as err:
+        if "HTTP 404" in str(err):
+            return None
+        raise
+    if not tag:
+        return None
+    status = run_json(["gh", "api", f"repos/{repo}/compare/{commit}...{tag}", "--jq", ".status"]).strip()
+    return tag if status in ("ahead", "identical") else None
+
+
+def pr_moved_at(d):
+    """When the PR last moved in the sense of the section 5 table: its latest
+    commit, review or merge. A comment changes updatedAt and is not a move. A
+    ready event carries no time here; refresh dates it by the state change."""
+    times = [c.get("committedDate") for c in d.get("commits") or []]
+    times += [r.get("submittedAt") for r in d.get("reviews") or []]
+    times.append(d.get("mergedAt"))
+    times = [t for t in times if t]
+    return max(times) if times else None
+
+
+def fetch(link, last_seen=None):
+    """What the source says now: (seen, moved_at). Reads only."""
+    m = LINK.match(link)
+    kind = m.group(1) or m.group(4)
+    if kind == "pr":
+        repo, num = m.group(2), m.group(3)
+        d = json.loads(run_json(["gh", "pr", "view", num, "-R", repo, "--json",
+                                 "state,isDraft,reviewDecision,updatedAt,mergedAt,mergeCommit,commits,reviews"]))
+        seen = {"kind": "pr", "state": pr_state(d)}
+        moved = pr_moved_at(d)
+        if last_seen and last_seen.get("state") and last_seen["state"] != seen["state"]:
+            moved = max(filter(None, [moved, now()]))  # ready, merge or close seen now
+        if seen["state"] == "merged":
+            # A hint only (section 5): a release check that fails is a hint
+            # too, and never costs the PR its observation or its move.
+            commit = (d.get("mergeCommit") or {}).get("oid")
+            try:
+                tag = release_containing(repo, commit)
+            except (RuntimeError, ValueError, OSError, subprocess.SubprocessError, KeyError) as err:
+                seen["release_error"] = str(err).splitlines()[0][:200] if str(err) else type(err).__name__
+            else:
+                if tag:
+                    seen["release"] = tag
+        return seen, moved
+    if kind == "issue":
+        repo, num = m.group(2), m.group(3)
+        d = json.loads(run_json(["gh", "issue", "view", num, "-R", repo, "--json", "state,updatedAt"]))
+        return {"kind": "issue", "state": d.get("state", "").lower()}, d.get("updatedAt")
+    d = json.loads(run_json(["bd", "show", m.group(5), "--json"]))
+    d = d[0] if isinstance(d, list) and d else d
+    moved = d.get("updated_at")
+    if moved and not moved.endswith("Z"):
+        t = datetime.datetime.fromisoformat(moved)
+        moved = t.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"kind": "bd", "state": d.get("status", "")}, moved
+
+
+def decide(row, seen_by_link):
+    """The factual moves and the hints for one row (section 5). A PR closed
+    unmerged is left out of the agreement and shown. A fact is the set of the
+    row's PRs with their states, never a time; a fact already recorded on an
+    earlier refresh move is never applied again, so a revert holds until a PR
+    reaches a state not acted on before."""
+    prs = sorted((link, s["state"]) for link, s in seen_by_link.items() if s.get("kind") == "pr")
+    hints = [f"PR {link[3:]} closed unmerged" for link, st in prs if st == "closed"]
+    active = [(link, st) for link, st in prs if st != "closed"]
+    for link, s in seen_by_link.items():
+        if s.get("release"):
+            hints.append(f"release {s['release']} contains {link[3:]}; moving to released is director's call")
+        if s.get("release_error"):
+            hints.append(f"release check for {link[3:]} failed ({s['release_error']}); no release hint")
+    if not active:
+        return [], hints
+    fact = ", ".join(f"{link[3:]} {st}" for link, st in prs)
+    states = {st for _, st in active}
+    moves, stage = [], row["stage"]
+    if fact not in row["facts"]:
+        if stage == "building" and states <= {"ready", "merged"}:
+            moves.append(("building", "in review"))
+            stage = "in review"
+        if stage == "in review" and states == {"merged"}:
+            moves.append(("in review", "merged"))
+            stage = "merged"
+    if not moves and stage in ("building", "in review") and len(states) > 1:
+        hints.append("linked PRs disagree (" + ", ".join(f"{link[3:]} {st}" for link, st in active) + "); stage left as is")
+    return [{"event": "stage", "ws": row["slug"], "from": f, "to": t, "fact": fact} for f, t in moves], hints
+
+
+def cmd_refresh(a):
+    """Read each row's linked sources and record what they say (W2). Network
+    reads happen outside the lock; the moves are decided under it, against
+    the stage as it is then. Appends as actor refresh whatever --actor says."""
+    rows, _ = fold()
+    slugs = a.slugs or [r["slug"] for r in sorted_rows(rows)]
+    for slug in slugs:
+        need(rows, slug)
+    t_now = parse_ts(now())
+    observed, warnings = {}, []
+    for slug in slugs:
+        row = rows[slug]
+        for link in row["links"]:
+            if not LINK.match(link):
+                why = "ask ids are read in W5" if ASK.match(link) else "untyped; use pr:, issue: or bd:<id>"
+                warnings.append(f"{slug}: {link} not read ({why})")
+                continue
+            last = row["observed"].get(link)
+            checked = parse_ts(last["checked_at"]) if last else None
+            if checked and (t_now - checked).total_seconds() < refresh_skip():
+                continue
+            try:
+                seen, moved = fetch(link, last["seen"] if last else None)
+            except (RuntimeError, ValueError, OSError, subprocess.SubprocessError, KeyError) as err:
+                warnings.append(f"{slug}: {link} unreadable: {err}")
+                continue
+            observed[(slug, link)] = (seen, moved)
+
+    def plan(current):
+        events = []
+        for slug in slugs:
+            row = current.get(slug)
+            if row is None:
+                continue
+            seen_by_link = {link: v["seen"] for link, v in row["observed"].items() if link in row["links"]}
+            for (s, link), (seen, moved) in observed.items():
+                if s != slug:
+                    continue
+                ev = {"event": "observe", "ws": slug, "link": link, "seen": seen, "checked_at": now()}
+                if moved:
+                    # A source time ahead of now (a skewed or forged commit
+                    # date) would sort as freshest forever; clamp it.
+                    ev["moved_at"] = min(moved, now())
+                events.append(ev)
+                seen_by_link[link] = seen
+            moves, hints = decide(row, seen_by_link)
+            events.extend(moves)
+            if hints != row["hints"]:
+                events.append({"event": "observe", "ws": slug, "hints": hints, "checked_at": now()})
+        return events
+
+    events = write_many("refresh", plan)
+    for e in events:
+        if e["event"] == "stage":
+            print(f"{e['ws']}: {e['from']} -> {e['to']} ({e['fact']})")
+        elif "hints" in e:
+            for h in e["hints"]:
+                print(f"{e['ws']}: hint: {h}")
+    for w in warnings:
+        print(f"dws refresh: {w}", file=sys.stderr)
+
+
+def cmd_show(a):
+    rows, torn = fold()
+    ordered = sorted_rows(rows)
+    if a.json:
+        json.dump({"ledger": LEDGER, "torn": torn, "rows": ordered}, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        cols = ("stage", "workstream", "owner", "last moved", "blocked on", "next action", "links")
+        table = [cols] + [(r["stage"], r["slug"], r["owner"], r["last_moved"], r["blocked"], r["next"], " ".join(r["links"])) for r in ordered]
+        widths = [max(len(str(row[i])) for row in table) for i in range(len(cols))]
+        for row in table:
+            print("  ".join(str(c).ljust(w) for c, w in zip(row, widths)).rstrip())
+    if torn:
+        print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
+
+
+def main(argv):
+    p = argparse.ArgumentParser(prog="dws", description="director workstream ledger (W1)")
+    p.add_argument("--actor", default="director", help="the writer, a claim checked against the writer table")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    o = sub.add_parser("open")
+    o.add_argument("slug")
+    o.add_argument("--title", required=True)
+    o.add_argument("--owner")
+    o.add_argument("--stage", default="idea")
+    o.add_argument("--repos", nargs="+")
+    o.add_argument("--next")
+    o.add_argument("--blocked")
+    o.add_argument("--link", nargs="+")
+    o.set_defaults(fn=cmd_open)
+
+    s = sub.add_parser("stage")
+    s.add_argument("slug")
+    s.add_argument("to")
+    s.add_argument("--from", dest="from_", required=True)
+    s.set_defaults(fn=cmd_stage)
+
+    k = sub.add_parser("park")
+    k.add_argument("slug")
+    k.add_argument("--from", dest="from_", required=True)
+    k.set_defaults(fn=cmd_park)
+
+    t = sub.add_parser("set")
+    t.add_argument("slug")
+    t.add_argument("--owner")
+    t.add_argument("--next")
+    t.add_argument("--blocked")
+    t.add_argument("--repos", nargs="+")
+    t.set_defaults(fn=cmd_set)
+
+    n = sub.add_parser("link")
+    n.add_argument("slug")
+    n.add_argument("--remove", action="store_true")
+    n.add_argument("links", nargs="+")
+    n.set_defaults(fn=cmd_link)
+
+    f = sub.add_parser("refresh")
+    f.add_argument("slugs", nargs="*")
+    f.set_defaults(fn=cmd_refresh)
+
+    w = sub.add_parser("show")
+    w.add_argument("--json", action="store_true")
+    w.set_defaults(fn=cmd_show)
+
+    a = p.parse_args(argv)
+    try:
+        a.fn(a)
+    except Refused as err:
+        print(f"dws: refused: {err}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

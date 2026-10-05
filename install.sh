@@ -60,6 +60,14 @@ install_one "$SRC/commands/director.md" "$TARGET/commands/director.md"
 DIRECTOR_HOME="${DIRECTOR_HOME:-$HOME/.director}"
 mkdir -p "$DIRECTOR_HOME/bin"
 install_one "$SRC/skills/director/scripts/board-html" "$DIRECTOR_HOME/bin/board-html"
+# board-html runs dws from beside itself (the board's workstream ledger), so a
+# copy install needs dws in the same directory.
+install_one "$SRC/skills/director/scripts/dws" "$DIRECTOR_HOME/bin/dws"
+# The skill's other scripts. SKILL.md calls every one of them from this bin home
+# and falls back to the checkout's scripts/ only when the installed copy is missing.
+install_one "$SRC/skills/director/scripts/dsi" "$DIRECTOR_HOME/bin/dsi"
+install_one "$SRC/skills/director/scripts/dsx" "$DIRECTOR_HOME/bin/dsx"
+install_one "$SRC/skills/director/scripts/merge-guard" "$DIRECTOR_HOME/bin/merge-guard"
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"

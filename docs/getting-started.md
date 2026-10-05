@@ -368,6 +368,11 @@ operator hands you privately; `probe/nats-global-tier/recipe-mokuzai.md`
 walks it host by host, and `probe/nats-global-tier/verify-global-shim.sh`
 proves the path against the running hub with a throwaway leaf, 14 of 14.
 
+Every host on the global tier must stay awake while it carries seats. A host
+that idle-sleeps drops its leaf link and its sessions, and the other tier sees
+silence, not an error. marvel's admin guide (`docs/admin-guide.md`, "Host
+prerequisites", in its repository) gives the ways to keep a host awake.
+
 ## Cleanup and cautions
 
 - Remove a project-registered shim with `claude mcp remove director-mcp

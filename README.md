@@ -75,7 +75,9 @@ skills/director/     the skill: role, modes, output contract, capture triggers
   scripts/dsi        session inventory across all four adapters
   scripts/dsx        external state verification (the board has no expiry)
   scripts/board-html render board.md as a self-contained local page (search,
-                     filters, collapsible sections, auto-refresh); no network
+                     filters, collapsible sections, auto-refresh); no network;
+                     with a ledger, the ledger sections above the history
+  scripts/dws        the workstream ledger: one row per stream, stage, last moved
 skills/stansfield/   full fleet roll call: enumerate every session across the
                      bus, marvel clusters and SendMessage, deduped to one
                      identity each, then optionally relay an action
@@ -122,9 +124,30 @@ into the platform's knowledge graph.
 /director standing    # adopt the role for the session
 ```
 
-That installs the skill and the command, links `board-html` into
-`~/.director/bin` (override with `DIRECTOR_HOME`), and creates the state root.
-It is the whole of what `install.sh` does.
+That installs the director and stansfield skills and the command, creates
+`~/.director/bin` (override with `DIRECTOR_HOME`), links `board-html`, `dws`
+and `director-install` into it, and creates the state root. It is the whole
+of what `install.sh` does.
+
+### What installs what
+
+Three tools, each with its own scope:
+
+- **`install.sh`** (above): the skills, the command, `board-html`, `dws`,
+  `director-install`, and the state root.
+- **By hand** (next section): the bus seat, `director-mcp` and
+  `director-mcp-seat`. No tool installs these yet.
+- **`director-install`**: `cast-launch` only, the launcher marvel runs for
+  wardrobe-cast seats. It does not install `director-mcp` or
+  `director-mcp-seat`.
+
+A host that runs wardrobe-cast seats installs the launcher from a commit,
+with no checkout needed:
+
+```sh
+director-install cast-launch --ref origin/main
+director-install --status    # what is installed and how far behind main
+```
 
 ### The board as a page
 
@@ -143,9 +166,9 @@ position, search and open sections.
 ### The bus seat, by hand
 
 The skill alone does not let a seat send a message. Sending runs over the
-director MCP server, and nothing in `install.sh` puts it in place, creates
-`~/.director/bin`, or mentions a broker. On this fleet that gap is closed by
-hand. It is honest to say what this is: Phase 0 probe material being run in
+director MCP server, and nothing in `install.sh` puts it in place or
+mentions a broker (`install.sh` does create `~/.director/bin`, where it goes).
+On this fleet that gap is closed by hand. It is honest to say what this is: Phase 0 probe material being run in
 anger, not a packaged install. Writing the installer is a separate job.
 
 Two files, both under `probe/nats-phase-0/`:

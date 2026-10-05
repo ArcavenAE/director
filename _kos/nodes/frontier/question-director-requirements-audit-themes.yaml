@@ -1,0 +1,43 @@
+id: question-director-requirements-audit-themes
+type: question
+confidence: frontier
+title: "Which of the requirements audit's themes become amendments to the register, and in which pull requests?"
+tags: [director, requirements]
+content: |
+  Opened 2026-10-04 from the team harvest. The research seat's read-only
+  audit of director's requirements register (2026-10-03, against main at
+  3290ba2) found the register itself whole (R-1 to R-177, no gaps, no
+  duplicate numbers, no dead R cross-references) and the fragmentation
+  around it. It names six themes and four proposed pull requests. Nobody has
+  reviewed it yet.
+
+  ## The themes, in one line each
+
+  1. The 2026-09-24 amendment (every seat holds exactly one fleet address)
+     did not reach R-100, brief 8, the leaf-attach doc or finding-006.
+  2. Hold-by-default for absent recipients (R-96, R-141) against refuse
+     before publish (R-92, R-118, R-142): a boundary to state, or a ruling.
+  3. Global-tier transport security has no requirement entry.
+  4. Ambiguous ids: bare finding numbers cited from the register, the
+     relay log's R-1 to R-9, and unqualified PR numbers.
+  5. Install and distribution (R-108) has evidence everywhere and
+     backpointers nowhere.
+  6. Candidate tags from design briefs that were never harvested or rejected.
+
+  ## Why it is open, not decided
+
+  Theme 2 may be a real contradiction that needs the operator, and the
+  others are edits to the register that its owner should accept or reject.
+  The audit is a proposal, not a ruling.
+
+  The audit itself is in the research seat's session notes, not committed.
+edges:
+  - target: finding-006-global-tier-has-no-per-agent-address
+    type: supports
+provenance:
+  created_by: human
+  session: 2026-10-04-arcaven-builder-harvest
+  created_at: "2026-10-04"
+  notes: >
+    Placed from the 2026-10-04 team harvest (DQ1). Only the themes are
+    recorded here; the audit's full lists are not summarized.

@@ -114,13 +114,30 @@ and `GLOBAL_PRESENCE` exist) and the local broker holds this cluster's leaf
 link. Both are brief 8's; a bare hub is the finding-166 failure at the global
 tier, and the pre-flight names the missing stream.
 
+A supervisor or research-supervisor cast with no levers on a host whose broker
+is leafed to the hub still casts, with a warning on stderr and a note in the
+seat's prompt (director#180). The launcher learns "leafed" from the local
+broker's monitor, `GET <monitor>/leafz`, loopback only (an exact
+`http://127.0.0.1|localhost|[::1]:<port>` match, no `.curlrc`, no proxy), 1s
+timeout; the monitor
+defaults to the `NATS_URL` host on port 8222 and `DIRECTOR_NATS_MONITOR_URL`
+moves it. A closed monitor port, a timeout or an unreadable reply reads as not
+connected and gives no warning, so a host without the tier casts as before.
+
+A supervisor that does hold a global address gets one startup duty after the
+ruling 84 echo: a reach test to `global://<DIRECTOR_PEER_CLUSTER>/supervisor`,
+or to `global://director` when no peer is set, with the result reported to
+`global://director`. It never gates routing. A `DIRECTOR_PEER_CLUSTER` outside
+`[A-Za-z0-9_-]` is refused like the other levers (R-76); that is the one
+refusal this adds, and it applies only to a supervisor cast that holds levers.
+
 ## Cast preconditions (wardrobe `recommended-shape.md` 4.12), state at S0
 
 | # | precondition | state | who |
 |---|---|---|---|
 | 1 | `validate` and `index --check` clean at the tagged commit the launcher reads | wardrobe main 8b3d247 validates; NO TAG EXISTS yet | operator tags (`v1.0.0-s0` or the sha) |
-| 2 | helper refuses a dirty tree, a writable root, a path outside, a marker | slice.sh does; the install root must be a separate read-only checkout (`test -w contents/` false) | build-lead makes the checkout: `git clone --branch <tag> ... ~/.local/share/wardrobe && chmod -R a-w ~/.local/share/wardrobe/contents` |
-| 3 | spawn log writable, line appended before exec | slice.sh appends to `${WARDROBE_SPAWN_LOG:-~/.local/state/wardrobe/spawn.log}` | build-lead confirms the path is writable by the daemon's uid |
+| 2 | helper refuses a dirty tree, a writable root, a path outside, a marker | slice.sh does; the install root must be a separate read-only checkout (`test -w contents/` false) | the operator or any seat with wardrobe in scope makes the checkout: `git clone --branch <tag> ... ~/.local/share/wardrobe && chmod -R a-w ~/.local/share/wardrobe/contents` |
+| 3 | spawn log writable, line appended before exec | slice.sh appends to `${WARDROBE_SPAWN_LOG:-~/.local/state/wardrobe/spawn.log}` | the operator or any seat with wardrobe in scope confirms the path is writable by the daemon's uid |
 | 4 | ruleset on main with `validate` required | human repo setting; PRs #2 to #9 went through review | operator confirms |
 | 5 | stale-reader grep over `repos.yaml` checkouts empty | not run today | build-lead runs it before the first cast |
 | 6 | the broker is provisioned, not bare: `AGENT_INBOX`, `AGENT_AUDIT`, and the `AGENT_STATE` bucket exist before `marvel work` | pre-existed on the origin host from phase 0; absent on a fresh broker (skippy, aae-orc#327, finding-166) | build-lead runs the block below and the verify line before the first cast |

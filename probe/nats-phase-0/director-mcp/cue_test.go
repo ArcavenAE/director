@@ -58,6 +58,38 @@ func (r *cueRig) started() {
 
 func (r *cueRig) step(d time.Duration) { r.now = r.now.Add(d); r.c.tick(context.Background()) }
 
+// selfTests counts the self-test notices sent so far.
+func (r *cueRig) selfTests() int {
+	n := 0
+	for _, p := range r.cues {
+		if m, ok := p["meta"].(map[string]any); ok && m["kind"] == "self-test" {
+			n++
+		}
+	}
+	return n
+}
+
+// mailCues are the cues sent for inbox mail, without self-test notices,
+// which an unverified seat may resend while a watcher test runs (director#188).
+func (r *cueRig) mailCues() []map[string]any {
+	var out []map[string]any
+	for _, p := range r.cues {
+		if m, ok := p["meta"].(map[string]any); !ok || m["kind"] != "self-test" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// unanswered ticks at the real poll interval until every self-test resend has
+// gone out and the last one's window has closed (sends at 0, 10, 30 and 70 s,
+// then 120 s), with no echo.
+func (r *cueRig) unanswered() {
+	for i := 0; i < 100; i++ {
+		r.step(2 * time.Second)
+	}
+}
+
 func meta(t *testing.T, p map[string]any) map[string]any {
 	t.Helper()
 	m, ok := p["meta"].(map[string]any)
@@ -222,12 +254,12 @@ func TestAReconnectCuesOnceIfAnythingIsWaiting(t *testing.T) {
 	r.step(10 * time.Second) // nothing new
 	r.c.reconnected()
 	r.step(2 * time.Second)
-	if len(r.cues) != 1 {
-		t.Fatalf("after reconnect with mail waiting, one cue: %v", r.cues)
+	if len(r.mailCues()) != 1 {
+		t.Fatalf("after reconnect with mail waiting, one cue: %v", r.mailCues())
 	}
 	r.step(10 * time.Second)
-	if len(r.cues) != 1 {
-		t.Fatalf("only once: %v", r.cues)
+	if len(r.mailCues()) != 1 {
+		t.Fatalf("only once: %v", r.mailCues())
 	}
 }
 
@@ -244,19 +276,19 @@ func TestAnUnansweredCueWarnsRecuesOnceThenStops(t *testing.T) {
 		t.Fatalf("no warning inside W: %v", r.warns)
 	}
 	r.step(2 * time.Second)
-	if len(r.warns) != 1 || len(r.cues) != 2 {
-		t.Fatalf("after W: want 1 warning and 1 re-cue, got %v / %d cues", r.warns, len(r.cues))
+	if len(r.warns) != 1 || len(r.mailCues()) != 2 {
+		t.Fatalf("after W: want 1 warning and 1 re-cue, got %v / %d cues", r.warns, len(r.mailCues()))
 	}
 	if !strings.HasPrefix(r.warns[0], "m1 ") {
 		t.Fatalf("the warning names the message: %q", r.warns[0])
 	}
 	r.step(301 * time.Second)
-	if len(r.warns) != 2 || len(r.cues) != 2 {
-		t.Fatalf("after a second W: a second warning and no third cue, got %v / %d cues", r.warns, len(r.cues))
+	if len(r.warns) != 2 || len(r.mailCues()) != 2 {
+		t.Fatalf("after a second W: a second warning and no third cue, got %v / %d cues", r.warns, len(r.mailCues()))
 	}
 	r.step(900 * time.Second)
-	if len(r.warns) != 2 || len(r.cues) != 2 {
-		t.Fatalf("then it stops: %v / %d cues", r.warns, len(r.cues))
+	if len(r.warns) != 2 || len(r.mailCues()) != 2 {
+		t.Fatalf("then it stops: %v / %d cues", r.warns, len(r.mailCues()))
 	}
 }
 
@@ -270,8 +302,8 @@ func TestADrainInsideTheWindowEmitsNothing(t *testing.T) {
 	r.src.n = 0 // the cued message left the durable
 	r.step(2 * time.Second)
 	r.step(600 * time.Second)
-	if len(r.warns) != 0 || len(r.cues) != 1 {
-		t.Fatalf("a drained cue is answered: %v / %d cues", r.warns, len(r.cues))
+	if len(r.warns) != 0 || len(r.mailCues()) != 1 {
+		t.Fatalf("a drained cue is answered: %v / %d cues", r.warns, len(r.mailCues()))
 	}
 }
 
@@ -322,12 +354,134 @@ func TestAWrongOrPreviousNonceLeavesItUnverified(t *testing.T) {
 	}
 }
 
-func TestNoEchoInsideTheSelfTestWindowNamesTheReason(t *testing.T) {
+func TestNoEchoAfterTheLastResendNamesTheReason(t *testing.T) {
 	r := newCueRig(t)
 	r.started()
-	r.step(121 * time.Second)
+	r.unanswered()
 	if st := r.c.status(); st["state"] != "unverified" || st["reason"] != "no nonce echo after self-test" {
 		t.Fatalf("status: %v", st)
+	}
+}
+
+// ---- director#188: a self-test the harness drops is sent again ------------
+
+// The first notice can go out before Claude Code registers the channel, and
+// then nothing receives it (finding-016, C-0 item 5). A resend reaches it.
+func TestALostFirstSelfTestIsResentAndItsEchoMakesTheCueLive(t *testing.T) {
+	r := newCueRig(t)
+	r.started() // the first notice is lost: nothing will echo it
+	r.step(8 * time.Second)
+	if r.selfTests() != 1 {
+		t.Fatalf("no resend before the first backoff, got %d self-tests", r.selfTests())
+	}
+	r.step(2 * time.Second) // 10 s
+	if r.selfTests() != 2 {
+		t.Fatalf("one resend at 10 s, got %d self-tests", r.selfTests())
+	}
+	m := meta(t, r.cues[len(r.cues)-1])
+	if m["kind"] != "self-test" || m["nonce"] != "nonce1" {
+		t.Fatalf("the resend is this start's self-test: %v", m)
+	}
+	if r.c.status()["state"] != "unverified" {
+		t.Fatalf("a resend proves nothing by itself: %v", r.c.status())
+	}
+	r.c.ack("nonce1")
+	if r.c.status()["state"] != "live" {
+		t.Fatalf("the echo of the resend makes it live: %v", r.c.status())
+	}
+}
+
+// The resend goes out before the inbox read, so a watcher read failure cannot
+// hold it back (director#200). Moving the emit after the read, or skipping it
+// when the read fails, passes every other case; this one pins the order.
+func TestASelfTestResendGoesOutWhileTheInboxReadFails(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.src.err = fmt.Errorf("boom")
+	r.step(10 * time.Second) // the first backoff, with the read failing
+	if r.selfTests() != 2 {
+		t.Fatalf("a failing inbox read held back the resend, got %d self-tests", r.selfTests())
+	}
+	r.step(20 * time.Second) // the doubled backoff, still failing
+	if r.selfTests() != 3 {
+		t.Fatalf("a failing inbox read held back the second resend, got %d self-tests", r.selfTests())
+	}
+}
+
+func TestSelfTestResendsBackOffAndStopAtTheLimit(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	var at []int
+	seen := r.selfTests()
+	for s := 2; s <= 400; s += 2 {
+		r.step(2 * time.Second)
+		if n := r.selfTests(); n != seen {
+			at, seen = append(at, s), n
+		}
+	}
+	if fmt.Sprint(at) != "[10 30 70]" || seen != 4 {
+		t.Fatalf("resends at 10, 30 and 70 s, four sends in all; got %v and %d", at, seen)
+	}
+	if r.c.status()["state"] != "unverified" {
+		t.Fatalf("never live without an echo: %v", r.c.status())
+	}
+}
+
+func TestTheReasonWaitsForTheLastResendWindow(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	for s := 2; s <= 190; s += 2 {
+		r.step(2 * time.Second)
+		if st := r.c.status(); st["reason"] != "" || st["state"] != "unverified" {
+			t.Fatalf("at %d s, before the last resend's window closes (190 s): %v", s, st)
+		}
+	}
+	r.step(2 * time.Second) // 192 s
+	if st := r.c.status(); st["reason"] != "no nonce echo after self-test" {
+		t.Fatalf("after the last window: %v", st)
+	}
+}
+
+// With more tries, a backoff outgrows the window (sends at 0, 10, 30, 70, 150
+// and 310 s): the reason still waits for the last try.
+func TestTheReasonWaitsForEveryTryWhenABackoffOutgrowsTheWindow(t *testing.T) {
+	r := newCueRig(t)
+	r.c.cfg.SelfTestRetries = 5
+	r.started()
+	for s := 2; s < 310; s += 2 {
+		r.step(2 * time.Second)
+		if st := r.c.status(); st["reason"] != "" {
+			t.Fatalf("at %d s, with a try still to come: %v", s, st)
+		}
+	}
+	r.step(2 * time.Second) // 310 s: the sixth and last send
+	if r.selfTests() != 6 {
+		t.Fatalf("six sends in all, got %d", r.selfTests())
+	}
+	for i := 0; i < 61; i++ {
+		r.step(2 * time.Second)
+	}
+	if st := r.c.status(); st["reason"] != "no nonce echo after self-test" {
+		t.Fatalf("after the last window: %v", st)
+	}
+}
+
+func TestAnEchoStopsTheResends(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.c.ack("nonce1")
+	r.unanswered()
+	if r.selfTests() != 1 {
+		t.Fatalf("an echoed self-test is not resent, got %d", r.selfTests())
+	}
+}
+
+func TestOneLateTickResendsRatherThanNamingTheReason(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.step(121 * time.Second) // one tick, long after the first backoff
+	if st := r.c.status(); st["reason"] != "" || r.selfTests() != 2 {
+		t.Fatalf("a late tick sends the next try and names nothing yet: %v, %d self-tests", st, r.selfTests())
 	}
 }
 
@@ -450,7 +604,7 @@ func TestAFailedInboxReadIsShownOnceAndClearsOnTheNextGoodRead(t *testing.T) {
 func TestAWatcherReasonDoesNotEraseTheSelfTestReason(t *testing.T) {
 	r := newCueRig(t)
 	r.started()
-	r.step(121 * time.Second) // no echo: the self-test reason is set
+	r.unanswered() // no echo: the self-test reason is set
 	r.src.err = fmt.Errorf("boom")
 	r.step(2 * time.Second)
 	r.src.err = nil
