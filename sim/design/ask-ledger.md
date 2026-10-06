@@ -232,7 +232,8 @@ the work. Closure stays a human or seat act (SOUL section 8).
 ## 6. The reader
 
 - **A named long-running reader.** `director-mcp ask-reader` is a loop. It
-  runs a pass at least every 30s, and each pass reads new stream sequences,
+  runs a pass at least every 30s (it sleeps to the next 30s tick, not for
+  30s after a pass, so a slow pass does not stretch the gap), and each pass reads new stream sequences,
   copies presence and durable filters into the id table, and updates rows.
   It writes only its own store (`ASK_LEDGER` and the JSON file). `director-mcp
   asks` (section 7) is a separate on-demand read of that store and runs no
@@ -252,7 +253,7 @@ the work. Closure stays a human or seat act (SOUL section 8).
   REQUEST and every reply its seats sent, whichever tier carried it, and the
   reader does not read `AGENT_INBOX`, `GLOBAL_TO_DIRECTOR` or
   `GLOBAL_TO_<cluster>` at all. Its max age is 720h (`README.md:224`;
-  marvel `internal/bus/declared.go:113-114`), ten times kinu's
+  marvel `internal/bus/declared.go:120`), ten times kinu's
   `AGENT_INBOX`. Refused sends are on the same subject with
   `Director-Outcome: refused` (`bus.go:932-952`); they open no row.
   Rows from each broker's reader merge by `message_id`.
@@ -262,7 +263,12 @@ the work. Closure stays a human or seat act (SOUL section 8).
   audit stream. A missing REQUEST surfaces when its reply arrives, as an
   orphan reply (section 5); a missing reply leaves its row open. The read
   output counts orphans per broker under gaps, and that count, not a claim
-  of completeness, is how a reader knows the ledger missed traffic.
+  of completeness, is how a reader knows the ledger missed traffic. The
+  count covers one more case: when a hub ack times out after the hub stored
+  the message, the shim records the send as refused (`Director-Outcome:
+  refused`, `bus.go:932-952`), so the ledger opens no row for it, and the
+  owner's reply then shows as an orphan reply. That is an ack timeout, not
+  lost mail, and the `asks` help text says so.
 - **What the audit stream cannot vouch for.** Any team's broker user may
   publish `agent.audit` (marvel `declared.go:208`), so a record's sender
   fields are what its publisher wrote. The ledger is a diagnostic surface
@@ -270,8 +276,11 @@ the work. Closure stays a human or seat act (SOUL section 8).
 - **Its own store:** an `ASK_LEDGER` key-value bucket on the local broker,
   plus a JSON file it rewrites atomically after each pass. Closed rows are
   kept 30 days, then dropped from the bucket. That matches `AGENT_AUDIT`'s
-  720h, so a row's thread can still be re-read from the stream for as long
-  as the row is kept.
+  720h, so a closed row's thread can be re-read from the stream while the
+  row is kept. An open row can outlast the stream's earliest messages: a
+  long-open row's first messages can age out of the 720h stream before the
+  row is dropped, so its thread is complete only for what the stream still
+  holds.
 - **Open rows are bounded too, never silently.** An open row with no message
   for 72h, the inbox's own max age, leaves the alarm list and is counted
   under `stale` in gaps (oldest age shown; `--all` lists them). A stale row

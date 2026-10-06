@@ -50,6 +50,8 @@ daemon; a launcher supplies the rest.
 | `director-mcp` | serve MCP on stdin and stdout, log to stderr |
 | `director-mcp --preflight` | connect, verify the broker is provisioned (and the hub through the domain when global mode is on), print `preflight: ok`, exit. Creates no consumer, writes no presence. |
 | `director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <dur>]` | read-only report of unread mail per seat durable on `AGENT_INBOX`, or on the hub with `--global` (see below). Needs only `NATS_URL`; no identity. Creates no consumer, acks nothing, writes no presence. Always exits 0. |
+| `director-mcp ask-reader [--once] [--file <path>] [--interval <dur up to 30s>]` | the ask ledger's reader (`sim/design/ask-ledger.md`, part A1): a pass at least every 30s over `AGENT_AUDIT`, read by sequence. Creates no consumer. Writes only the `ASK_LEDGER` bucket and a JSON file it rewrites atomically (default `~/.director/ask-ledger.json`, or `DIRECTOR_ASK_LEDGER_FILE`). Runs under director's own user and names every stream it could not read. |
+| `director-mcp asks [--json] [--all] [--help]` | on-demand read of the ledger's store: alarms, blocked-on chains, rollups per owner and asker role, gaps. Runs no pass of its own. Always exits 0. |
 
 Any other argument is refused with exit 2, rather than ignored and a live
 shim started (director#75).
