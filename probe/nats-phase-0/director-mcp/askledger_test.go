@@ -526,6 +526,19 @@ func TestTheStreamTimestampDecidesNotTheSendersClaimedSentAt(t *testing.T) {
 	}
 }
 
+func TestTheOwnerSideUsesTheStreamTimestampPastTheMarginToo(t *testing.T) {
+	t3 := t0.Add(5 * time.Minute)
+	l, _ := expiryLedger(t, nil)
+	l.Ingest(rec(t3.Add(resolveMargin+time.Minute), "m2", "REQUEST", "sup-1", owner1, "y", claimedSent(t0.Format(time.RFC3339))))
+	now := t3.Add(11 * time.Minute)
+	l.NotePass(now)
+	l.ObserveIDs(now, []idObs{{Agent: "builder-1", Team: "ops", Role: "reviewer"}})
+	l.Resolve(now)
+	if got := rowOf(t, l, "m2").Owner.Role; got != "reviewer" {
+		t.Fatalf("owner role = %q, want reviewer (stream time is past the margin)", got)
+	}
+}
+
 func TestTheExpiredEntrysLastSeenSurvivesItsDropFromTheIdTable(t *testing.T) {
 	l, t3 := expiryLedger(t, map[string]time.Time{"t2": t0.Add(2 * time.Minute)})
 	now := t3.Add(11 * time.Minute)
@@ -665,5 +678,68 @@ func TestTheDesignDocSaysAHubAckTimeoutShowsItsReplyAsAnOrphan(t *testing.T) {
 	d := designDoc(t)
 	if !strings.Contains(d, "ack timeout") || !strings.Contains(d, "orphan") {
 		t.Fatal("the design doc does not name the ack timeout case")
+	}
+}
+
+// The same boundary on the asker side: the sender's team comes from the id
+// table too, so resolveAsker has its own lookup call and needs its own tests.
+
+func askerExpiryLedger(asks map[string]time.Time) *askLedger {
+	l := newAskLedger()
+	a := idObs{Agent: "sup-9", Team: "ops", Role: "supervisor"}
+	b := idObs{Agent: "sup-9", Team: "ops", Role: "reviewer"}
+	for id, at := range asks {
+		l.Ingest(rec(at, id, "REQUEST", "sup-9", owner1, id))
+	}
+	t1 := t0.Add(time.Minute)
+	t3 := t0.Add(5 * time.Minute)
+	for _, p := range []struct {
+		at  time.Time
+		obs []idObs
+	}{{t0, []idObs{a}}, {t1, []idObs{a, b}}, {t3, []idObs{a, b}}} {
+		l.NotePass(p.at)
+		l.ObserveIDs(p.at, p.obs)
+	}
+	return l
+}
+
+func TestOnlyAnAskSentAfterTheExpiredEntrysLastSeenPlusMarginResolvesTheAskerToTheSurvivor(t *testing.T) {
+	t3 := t0.Add(5 * time.Minute)
+	boundary := t3.Add(resolveMargin)
+	asks := map[string]time.Time{
+		"t2":       t0.Add(2 * time.Minute),
+		"atT3":     t3,
+		"onEdge":   boundary,
+		"justPast": boundary.Add(time.Nanosecond),
+		"t4":       t3.Add(10 * time.Minute),
+	}
+	l := askerExpiryLedger(asks)
+	now := t3.Add(11 * time.Minute)
+	l.NotePass(now)
+	l.ObserveIDs(now, []idObs{{Agent: "sup-9", Team: "ops", Role: "reviewer"}}) // the supervisor entry has expired
+	l.Resolve(now)
+	want := map[string]string{"t2": roleAmbiguous, "atT3": roleAmbiguous, "onEdge": roleAmbiguous, "justPast": "reviewer", "t4": "reviewer"}
+	for id, w := range want {
+		if got := rowOf(t, l, id).Asker.Role; got != w {
+			t.Errorf("ask %s: asker role = %q, want %q", id, got, w)
+		}
+	}
+}
+
+func TestTheAskerSideAlsoUsesTheStreamTimestampNotTheClaimedSentAt(t *testing.T) {
+	t3 := t0.Add(5 * time.Minute)
+	l := askerExpiryLedger(nil)
+	l.Ingest(rec(t3.Add(time.Minute), "m1", "REQUEST", "sup-9", owner1, "x", claimedSent(t3.Add(time.Hour).Format(time.RFC3339))))
+	// And the reverse: the stream saw it after the margin, the sender claims it long before.
+	l.Ingest(rec(t3.Add(resolveMargin+time.Minute), "m2", "REQUEST", "sup-9", owner1, "y", claimedSent(t0.Format(time.RFC3339))))
+	now := t3.Add(11 * time.Minute)
+	l.NotePass(now)
+	l.ObserveIDs(now, []idObs{{Agent: "sup-9", Team: "ops", Role: "reviewer"}})
+	l.Resolve(now)
+	if got := rowOf(t, l, "m1").Asker.Role; got != roleAmbiguous {
+		t.Fatalf("asker role = %q, want ambiguous (stream time is inside the margin)", got)
+	}
+	if got := rowOf(t, l, "m2").Asker.Role; got != "reviewer" {
+		t.Fatalf("asker role = %q, want reviewer (stream time is past the margin)", got)
 	}
 }

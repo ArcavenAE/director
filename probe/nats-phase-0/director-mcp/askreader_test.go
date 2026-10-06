@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,9 @@ func TestParseArgsAcceptsTheAskModesAndRefusesTheRest(t *testing.T) {
 		{[]string{"asks", "--bogus"}, "", true},
 		{[]string{"ask-reader"}, "ask-reader", false},
 		{[]string{"ask-reader", "--once", "--file", "/x/y.json", "--interval", "10s"}, "ask-reader", false},
+		{[]string{"ask-reader", "--interval", "30s"}, "ask-reader", false}, // the edge itself is accepted
+		{[]string{"ask-reader", "--interval", "30.001s"}, "", true},
+		{[]string{"ask-reader", "--interval", "31s"}, "", true},
 		{[]string{"ask-reader", "--interval", "45s"}, "", true}, // slower than the 30s the design requires
 		{[]string{"ask-reader", "--interval", "0s"}, "", true},
 		{[]string{"ask-reader", "--bogus"}, "", true},
@@ -77,6 +81,22 @@ func envFor(id, perf, from, to, data string, opts ...envOpt) Envelope {
 	return rec(time.Now(), id, perf, from, to, data, opts...).Env
 }
 
+// streamState is the stream's message count, sequence range and byte size, so a
+// publish, a delete or a purge by the reader shows.
+func streamState(t *testing.T, ctx context.Context, js jetstream.JetStream, name string) string {
+	t.Helper()
+	s, err := js.Stream(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := s.Info(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := info.State
+	return fmt.Sprintf("msgs=%d bytes=%d first=%d last=%d deleted=%d", st.Msgs, st.Bytes, st.FirstSeq, st.LastSeq, st.NumDeleted)
+}
+
 func consumerCount(t *testing.T, ctx context.Context, js jetstream.JetStream, stream string) int {
 	t.Helper()
 	s, err := js.Stream(ctx, stream)
@@ -105,8 +125,12 @@ func TestTheReaderCreatesNoConsumerAndASecondPassChangesNoRow(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "ask-ledger.json")
 	r := newAskReader(js, askReaderCfg{Broker: "local", File: file})
 	before := consumerCount(t, ctx, js, "AGENT_AUDIT") + consumerCount(t, ctx, js, "AGENT_INBOX")
+	stateBefore := streamState(t, ctx, js, "AGENT_AUDIT")
 	if err := r.Pass(ctx, time.Now()); err != nil {
 		t.Fatal(err)
+	}
+	if got := streamState(t, ctx, js, "AGENT_AUDIT"); got != stateBefore {
+		t.Fatalf("AGENT_AUDIT state changed across a pass:\n%s\n%s", stateBefore, got)
 	}
 	if got := consumerCount(t, ctx, js, "AGENT_AUDIT") + consumerCount(t, ctx, js, "AGENT_INBOX"); got != before {
 		t.Fatalf("consumers %d -> %d: the reader created one", before, got)
