@@ -60,3 +60,9 @@ a probe before it hardens.
   from `DIRECTOR_PREDECESSOR`, a `catching-up` presence state, and FAB-C's
   expiry notice on today's stream until brief 11's cutover. Issues #220,
   #222; R-130, R-143, R-144, R-178.
+- `ask-ledger.md` (design for review 2026-10-06): one row per REQUEST,
+  derived read-only from bus traffic, with states from existing
+  performatives plus an optional status message, an unacked alarm, a
+  blocked-on chain, and a per-role rollup that marvel's QUEUE column and
+  the board's W5 read. Says how it differs from #168. Issue #246; R-08,
+  R-105, R-110, R-115, R-117, R-183.
