@@ -134,22 +134,37 @@ on the row:
 
 1. **The wire.** The recipient address carries its team
    (`agent://<team>/<id>`, `role://<team>/<role>`), and a `role://` address
-   carries its role. `sender.role` gives the sender's role when set.
-2. **The reader's id table.** On every pass, which runs at most every 30s
-   (inside the 90s TTL), the reader copies each live presence key
-   (`presence.<team>.<id>.<instance>`) and its role into an `ids` table in
-   `ASK_LEDGER`. An agent id seen live once resolves for as long as the table
-   keeps it, which is 30 days after it was last seen.
-3. **A later message.** A reply from the owner carries its own `sender.role`;
-   an unresolved row is completed from it.
+   carries its role. `sender.role` gives the sender's role only when set: it
+   comes from `DIRECTOR_ROLE`, which is empty by default (`main.go:75`), and
+   an empty role is omitted. A `global://` address carries no team, so a
+   global party starts at step 2.
+2. **The reader's id table.** The ask reader (section 6) runs a pass at
+   least every 30s, inside the 90s TTL. Each pass copies every live presence
+   key (`presence.<team>.<id>.<instance>`) and its role into an `ids` table
+   in `ASK_LEDGER`, and each local durable's filter subjects, read the way
+   `teamAndRole` already reads them (`unread.go:511`). Durables outlive
+   presence (the inactive threshold is 73h, `bus.go:76`), so this covers a
+   seat that exited before the reader first saw it live. Only the
+   filter-derived team and role are used; `teamAndRole`'s last step, which
+   strips the replica suffix from the agent id to guess a role, is not,
+   because instance ids are not identity. An entry is kept 30 days after its
+   id was last seen.
+3. **A later reply from the same party.** A reply whose `sender.agent_id`
+   equals the owner's agent id, and whose `sender.role` is set, completes the
+   owner's role. A reply from any other agent id is never used, so a third
+   party who answers cannot stamp its own role on the owner.
 4. **Otherwise `unresolved`.** The row keeps the address as sent, the rollup
    counts it under the key `unresolved`, and the read output lists it under
-   gaps with the reason ("no presence seen for this id"). The reader never
-   falls back to the agent id as a rollup key.
+   gaps with the reason. Two reasons exist: `no record of this id`, and
+   `ambiguous`, when the id table holds more than one (team, role) for the
+   same agent id. An ambiguous id is never resolved by picking one. The
+   reader never falls back to the agent id as a rollup key.
 
 Resolution happens on the first pass that reads the REQUEST, and is retried
-on each pass while any part is unresolved. A reader started after a seat
-has exited cannot resolve that seat's old asks from presence, and says so.
+on each pass while any part is unresolved. A resolved value is frozen only
+when it came from step 1, from step 2 with a single (team, role), or from
+step 3. A reader started after a seat has exited and its durable has
+expired cannot resolve that seat's old asks, and says so.
 
 ## 5. States
 
@@ -175,6 +190,16 @@ the work. Closure stays a human or seat act (SOUL section 8).
 
 ## 6. The reader
 
+- **A named long-running reader.** `director-mcp ask-reader` is a loop. It
+  runs a pass at least every 30s, and each pass reads new stream sequences,
+  copies presence and durable filters into the id table, and updates rows.
+  It writes only its own store (`ASK_LEDGER` and the JSON file). `director-mcp
+  asks` (section 7) is a separate on-demand read of that store and runs no
+  pass of its own.
+- **Its own downtime is a gap.** Each pass records its start time. When two
+  passes are more than 90s apart, the presence TTL, the read output lists
+  `reader down <from> to <to>` under gaps: a seat that came and went inside
+  that span, with its durable gone, may show as unresolved.
 - **Read-only on the bus.** It reads messages by sequence (`stream get`),
   keeps its own last sequence per stream, and creates no consumer, so it can
   never move anyone's ack floor. The `unread` reader already works this way
@@ -236,7 +261,7 @@ unmoved thresholds do, so the operator changes it in one place.
 
 | part | what | depends on |
 |---|---|---|
-| A1 | reader over `AGENT_INBOX`, states from existing performatives (D1 a), the bucket and JSON file, `asks` read output | none |
+| A1 | `ask-reader` loop over `AGENT_INBOX` with the id table (presence and durable filters), states from existing performatives (D1 a), the bucket and JSON file, and the `asks` read output | none |
 | A2 | the global tier streams | A1 |
 | A3 | the status message (D1 b): a `report_status` tool in the shim, and the skill line that tells seats to use it | A1 |
 | A4 | `delivered_at` from the #126 reader | A1, #126 slice M |
@@ -263,7 +288,19 @@ From recorded envelopes, no broker:
 - a `role://` recipient resolves team and role from the address alone, with
   no presence;
 - an open row with no message for 72h leaves the alarms and is counted as
-  stale.
+  stale; 30 days later it is dropped from the bucket, and that pass's gaps
+  count one drop;
+- a reply to an unresolved ask from a different agent id than the owner, with
+  `sender.role` set, leaves the owner unresolved; the same reply from the
+  owner's own agent id resolves it; a reply with no `sender.role` resolves
+  nothing;
+- an agent id with two (team, role) entries in the id table rolls up as
+  `unresolved: ambiguous`, never as either entry;
+- an owner with no presence but a live durable whose filters name its team
+  and role resolves from the durable, and an agent id with only a replica
+  suffix to go on does not;
+- a `global://` party with no id-table entry is `unresolved`;
+- two passes 5 minutes apart list `reader down` under gaps.
 
 With a scratch broker: the reader creates no consumer (`consumer ls` is
 unchanged across a pass), and a second pass over the same sequences changes
