@@ -1564,7 +1564,8 @@ director#89/#90 arcavenai-authored.*
 *Source: RULED. Cross-refs R-02 (authority is explicit).*
 
 **R-148 (RULED) · director never merges on a draft GATE, and keeps a drafts lane.**
-Operator ruling 2026-09-26, adopting the draft-first PR flow for the employer
+(Amended, RULED 2026-10-06.) "Non-author" below means a reviewer role that did
+not write the change; the same GitHub identity qualifies. Operator ruling 2026-09-26, adopting the draft-first PR flow for the employer
 org's shared repos. Builders open drafts; the GATE line carries a stage (draft or
 ready); the author marks ready only after a non-author GitHub review. Director
 treats a draft GATE as not merge-ready, keeps a board lane for in-scope drafts,
@@ -1572,6 +1573,7 @@ and runs a sweep that lists drafts unreviewed for 24 hours and fleet PRs merged
 with zero reviews. The sweep is diagnostic: it never promotes, merges or closes.
 *Earned by: six PRs on the product merged unreviewed by an admin teammate (a later three
 the same way); the draft-first study (four-round party, 2026-09-26).*
+*Amendment: operator ruling 2026-10-06, Q1, "Q1 yes a reviewer qualifies"; the meaning above is director's mapping of that answer.*
 *Source: RULED. Cross-refs R-147, ADR-007 (automation boundary).*
 
 **R-149 (OBSERVED) · director reads a seat's composer state before acting on
@@ -1999,10 +2001,12 @@ carries the grant to that seat. The inject includes a reference to the
 nonrepudiation message from director, which can be verified; marvel may require
 that reference before it accepts the request in future, as part of a future
 majordomo adjudication and authorization of the request. One plain retry is
-allowed only after a named transient cause (rate limit, timeout). R-181's rule
+allowed only after a named transient cause (rate limit, timeout); after a policy
+denial, any retry is a bypass. R-181's rule
 stands: director must not word a relay so that it passes a classifier.
 *Amendment: operator ruling 2026-10-05, item 8, "8 (a) 1 but amended that director may attempt/request the relayed grant as a marvel inject to carry the grant to the target seat when initially refused, includes a reference to the non-repudiation message from director which can be verified, may be required for marvel to accept the request in the future (future majordomo adjudication/authorization of request)"*
-*The retry sentence is clause 1 of option 8a (a) as put to the operator, quoted verbatim: "One plain retry is allowed only after a named transient cause (rate limit, timeout)". Clause 2 of that option ("after a policy denial, any retry is a bypass") is held for the operator (Q2) and is not recorded here.*
+*The retry sentence is clause 1 of option 8a (a) as put to the operator, quoted verbatim: "One plain retry is allowed only after a named transient cause (rate limit, timeout)". Clause 2 of that option ("after a policy denial, any retry is a bypass") is recorded on the operator's later answer, 2026-10-06, to Q2: "Q2 okay yeah, wahtever just get it moving". Reading that answer as accepting clause 2 is director's mapping, not the operator's words.*
+*Note, 2026-10-06, on item 8b (who may issue an act-worthy emergency verdict): the operator answered "Q3 A and majordomo and director (c)". Director reads this as supervisor-scoped (A), plus majordomo, plus the director (C). The reading is director's and is not recorded as a rule here.*
 *Earned by: the four relayed rulings denied at the receiving seat (R-181).*
 *Source: RULED 2026-10-05. Cross-refs R-181, R-05, R-95.*
 
