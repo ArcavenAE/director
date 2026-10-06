@@ -73,7 +73,7 @@ depends on a seat cooperating to show that an ask is unacked.
 | | option | gives | costs |
 |---|---|---|---|
 | a | in each shim, for its own asks | no new principal | no fleet view; a seat sees only what it sent |
-| b | one read-only reader per broker | the fleet view, from the same streams every seat uses | a principal that can read every inbox subject (section 6) |
+| b | one read-only reader per broker | the fleet view, from each broker's `AGENT_AUDIT` (section 6) | a principal that can read every inbox subject (section 6) |
 | c | in director's shim only | director's view | seat-to-seat asks are visible only where director can read them |
 
 **Recommended: (b).** The commission asks for seat-to-seat coverage, which
@@ -237,15 +237,33 @@ the work. Closure stays a human or seat act (SOUL section 8).
   keeps its own last sequence per stream, and creates no consumer, so it can
   never move anyone's ack floor. The `unread` reader already works this way
   for consumer state.
-- **Streams:** `AGENT_INBOX` on each local broker, and `GLOBAL_TO_DIRECTOR`
-  and `GLOBAL_TO_<cluster>` through the hub domain, as `global.go` reaches
-  them.
+- **Its source is `AGENT_AUDIT`, read on each local broker.** Every send
+  the shim makes is mirrored there, local and global alike: a global send is
+  mirrored on the sender's own local broker, not the hub
+  (`bus.go:866`, `bus.go:870-884`). So one stream per broker carries every
+  REQUEST and every reply its seats sent, whichever tier carried it, and the
+  reader does not read `AGENT_INBOX`, `GLOBAL_TO_DIRECTOR` or
+  `GLOBAL_TO_<cluster>` at all. Its max age is 720h (`README.md:224`;
+  marvel `internal/bus/declared.go:113-114`), ten times kinu's
+  `AGENT_INBOX`. Refused sends are on the same subject with
+  `Director-Outcome: refused` (`bus.go:932-952`); they open no row.
+  Rows from each broker's reader merge by `message_id`.
+- **The mirror is best effort, so the orphan count is the gap counter.**
+  `auditMirror` discards its publish error (`bus.go:887-893`; filed as
+  #248), so a send the recipient's inbox accepted can be missing from the
+  audit stream. A missing REQUEST surfaces when its reply arrives, as an
+  orphan reply (section 5); a missing reply leaves its row open. The read
+  output counts orphans per broker under gaps, and that count, not a claim
+  of completeness, is how a reader knows the ledger missed traffic.
+- **What the audit stream cannot vouch for.** Any team's broker user may
+  publish `agent.audit` (marvel `declared.go:208`), so a record's sender
+  fields are what its publisher wrote. The ledger is a diagnostic surface
+  and treats them as claims, as it treats every line (D3).
 - **Its own store:** an `ASK_LEDGER` key-value bucket on the local broker,
-  plus a JSON file it rewrites atomically after each pass. Rows must outlive
-  the streams, whose max age is 72h on kinu's `AGENT_INBOX`
-  (`asks-die-unread.md` section 2) and 24h on marvel-managed streams
-  (marvel `internal/bus/declared.go:107`). Closed rows are kept 30 days, then
-  dropped from the bucket.
+  plus a JSON file it rewrites atomically after each pass. Closed rows are
+  kept 30 days, then dropped from the bucket. That matches `AGENT_AUDIT`'s
+  720h, so a row's thread can still be re-read from the stream for as long
+  as the row is kept.
 - **Open rows are bounded too, never silently.** An open row with no message
   for 72h, the inbox's own max age, leaves the alarm list and is counted
   under `stale` in gaps (oldest age shown; `--all` lists them). A stale row
@@ -258,7 +276,9 @@ the work. Closure stays a human or seat act (SOUL section 8).
   the streams and write-only to `ASK_LEDGER`. The grant is wider than it
   sounds: reading by sequence is the stream-level `$JS.API.STREAM.MSG.GET`
   (or `DIRECT.GET`) permission on a stream, which cannot be narrowed by
-  subject, so it reads every seat's inbox on that stream, bodies included.
+  subject. Reading `AGENT_AUDIT` alone narrows the grant to one stream, not
+  the exposure: that stream holds every sent envelope on the broker, bodies
+  included.
   The reader keeps only D3's capped line, but the principal can read
   everything. Until it exists, the
   reader runs under director's own user and sees only what that user can
@@ -281,7 +301,8 @@ the work. Closure stays a human or seat act (SOUL section 8).
    rows that address owns, printed as a chain and stopped at a repeat, which
    is reported as a cycle.
 3. **Rollup** per owner role: open, unacked, blocked, oldest open age.
-4. **Gaps:** streams not read, orphan replies, REQUESTs without `reply_by`.
+4. **Gaps:** streams not read, orphan replies per broker, REQUESTs without
+   `reply_by`.
 
 The JSON form carries every row and the rollup. That is the interface
 marvel's QUEUE column and team rollup read, and the board's W5 reads. This
@@ -294,8 +315,8 @@ unmoved thresholds do, so the operator changes it in one place.
 
 | part | what | depends on |
 |---|---|---|
-| A1 | `ask-reader` loop over `AGENT_INBOX` with the id table (presence and durable filters), states from existing performatives (D1 a), the bucket and JSON file, and the `asks` read output | none |
-| A2 | the global tier streams, and `GLOBAL_PRESENCE` in step 2, with the cluster standing in for the team as `teamAndRole` does | A1 |
+| A1 | `ask-reader` loop over the local broker's `AGENT_AUDIT` with the id table (presence and durable filters), states from existing performatives (D1 a), the orphan gap counter, the bucket and JSON file, and the `asks` read output | none |
+| A2 | rows merged from each cluster's reader, and `GLOBAL_PRESENCE` in step 2, with the cluster standing in for the team as `teamAndRole` does | A1 |
 | A3 | the status message (D1 b): a `report_status` tool in the shim, and the skill line that tells seats to use it | A1 |
 | A4 | `delivered_at` from the #126 reader | A1, #126 slice M |
 | A5 | the reader's own principal | the operator's grant (section 6) |
@@ -310,7 +331,12 @@ From recorded envelopes, no broker:
   answered;
 - `blocked-on` an address whose own open row is blocked on the first prints
   a cycle;
-- a reply to an unknown ask is an orphan, and opens no row;
+- a reply to an unknown ask is an orphan, opens no row, and is counted under
+  gaps for its broker; a REQUEST whose audit copy is missing and whose reply
+  is present counts one orphan;
+- a refused send on the audit stream (`Director-Outcome: refused`) opens no
+  row;
+- the same `message_id` read from two brokers' readers makes one row;
 - a follow-up REQUEST joins its row;
 - a REQUEST with no `reply_by` is listed under gaps;
 - a stream the reader cannot read is listed under gaps, and the rollup says
