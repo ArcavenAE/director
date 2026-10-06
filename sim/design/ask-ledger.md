@@ -170,10 +170,13 @@ Seats launched through `cast-launch.sh` set it, and their envelopes carry it
 (the arcaven supervisor's do). A seat marvel spawns directly does not:
 marvel passes the role only as `MARVEL_ROLE` (marvel `adapter.go:381-402`
 at 4fc4637), which is the pending SB-4 in marvel's
-`docs/design/handoff-missing-delivery.md:24-30`. Until SB-4 lands:
+`docs/design/handoff-missing-delivery.md:25-30`. Until SB-4 lands:
 
-- **the team rollup works for every seat,** since the team comes from the
-  address or the presence key;
+- **the team rollup works for every local seat,** since the team comes
+  from the address or the local presence key. A `global://` party stays
+  `unresolved` until part A2, because its presence lives in the hub's
+  `GLOBAL_PRESENCE` (keyed `presence.<cluster>.<role>.`, `global.go:153-160`),
+  which step 2 does not read;
 - **the role rollup works for wrapped seats only.** An unwrapped seat's asks
   roll up under its team with the role `unresolved: no role declared`, and
   gaps names SB-4 as the fix.
@@ -188,8 +191,13 @@ on each pass while any part is unresolved. A value from step 1 or step 3 is
 frozen. A value from step 2 is frozen only while its id has a single
 (team, role): if a second entry appears later, every row resolved from that
 id's step-2 entry becomes `unresolved: ambiguous` again, since the reader
-can no longer tell which entry was right. A reader started after a seat has exited and its durable has
-expired cannot resolve that seat's old asks, and says so.
+can no longer tell which entry was right. When the ambiguity clears
+because one entry expires, a row is re-resolved to the surviving entry only
+if its ask was sent after that entry was first seen; an older ask stays
+`unresolved: ambiguous`, since it may have been made under the expired
+(team, role). The id table keeps each entry's first-seen time for this. A
+reader started after a seat has exited and its durable has expired cannot
+resolve that seat's old asks, and says so.
 
 ## 5. States
 
@@ -287,7 +295,7 @@ unmoved thresholds do, so the operator changes it in one place.
 | part | what | depends on |
 |---|---|---|
 | A1 | `ask-reader` loop over `AGENT_INBOX` with the id table (presence and durable filters), states from existing performatives (D1 a), the bucket and JSON file, and the `asks` read output | none |
-| A2 | the global tier streams | A1 |
+| A2 | the global tier streams, and `GLOBAL_PRESENCE` in step 2, with the cluster standing in for the team as `teamAndRole` does | A1 |
 | A3 | the status message (D1 b): a `report_status` tool in the shim, and the skill line that tells seats to use it | A1 |
 | A4 | `delivered_at` from the #126 reader | A1, #126 slice M |
 | A5 | the reader's own principal | the operator's grant (section 6) |
@@ -332,6 +340,8 @@ From recorded envelopes, no broker:
 - a row resolved from a single step-2 entry becomes `unresolved: ambiguous`
   when a second (team, role) for that id appears, and a row resolved from
   step 1 does not;
+- when one of two entries expires, an ask sent after the surviving entry was
+  first seen resolves to it, and an ask sent before stays ambiguous;
 - two passes 5 minutes apart list `reader down` under gaps.
 
 With a scratch broker: the reader creates no consumer (`consumer ls` is
