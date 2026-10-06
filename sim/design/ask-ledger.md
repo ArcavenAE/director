@@ -194,11 +194,16 @@ frozen. A value from step 2 is frozen only while its id has a single
 id's step-2 entry becomes `unresolved: ambiguous` again, since the reader
 can no longer tell which entry was right. When the ambiguity clears
 because one entry expires, a row is re-resolved to the surviving entry only
-if its ask was sent after that entry was first seen by the reader; an older ask stays
+if its ask was sent after the expired entry was last seen by the reader. An
+ask sent while both entries were live, or before, stays
 `unresolved: ambiguous`, since it may have been made under the expired
-(team, role). The id table keeps the time the reader first saw each entry
-for this; a seat's own start time is not known to the reader and is not
-used. A
+(team, role). The surviving entry's first-seen time is not enough: with A
+live from t0 to t3 and B first seen at t1, an ask at t2 was sent after B
+appeared but while A was still live. For this the id table keeps the times
+the reader first and last saw each entry, and when it drops an expired
+entry it keeps that entry's last-seen time, with its agent id, for as long
+as any row resolved through that id is kept. A seat's own start time is not
+known to the reader and is not used. A
 reader started after a seat has exited and its durable has expired cannot
 resolve that seat's old asks, and says so.
 
@@ -369,8 +374,12 @@ From recorded envelopes, no broker:
 - a row resolved from a single step-2 entry becomes `unresolved: ambiguous`
   when a second (team, role) for that id appears, and a row resolved from
   step 1 does not;
-- when one of two entries expires, an ask sent after the surviving entry was
-  first seen resolves to it, and an ask sent before stays ambiguous;
+- when one of two entries expires, only an ask sent after the expired
+  entry's last-seen time resolves to the survivor: with A live t0 to t3 and
+  B from t1, after A expires an ask at t2 stays ambiguous, and an ask at t4
+  resolves to B;
+- the expired entry's last-seen time survives its drop from the id table,
+  so the t2 ask is still ambiguous on the next pass;
 - two passes 5 minutes apart list `reader down` under gaps.
 
 With a scratch broker: the reader creates no consumer (`consumer ls` is
