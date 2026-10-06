@@ -232,7 +232,8 @@ the work. Closure stays a human or seat act (SOUL section 8).
 ## 6. The reader
 
 - **A named long-running reader.** `director-mcp ask-reader` is a loop. It
-  runs a pass at least every 30s, and each pass reads new stream sequences,
+  runs a pass at least every 30s (it sleeps to the next 30s tick, not for
+  30s after a pass, so a slow pass does not stretch the gap), and each pass reads new stream sequences,
   copies presence and durable filters into the id table, and updates rows.
   It writes only its own store (`ASK_LEDGER` and the JSON file). `director-mcp
   asks` (section 7) is a separate on-demand read of that store and runs no

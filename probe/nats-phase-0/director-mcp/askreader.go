@@ -317,10 +317,11 @@ func (r *askReader) writeFile(now time.Time) error {
 	}
 	name := tmp.Name()
 	_, werr := tmp.Write(append(b, '\n'))
+	serr := tmp.Sync() // the bytes are on disk before the rename makes them the file
 	cerr := tmp.Close()
-	if werr != nil || cerr != nil {
+	if werr != nil || serr != nil || cerr != nil {
 		_ = os.Remove(name)
-		return errors.Join(werr, cerr)
+		return errors.Join(werr, serr, cerr)
 	}
 	if err := os.Rename(name, r.cfg.File); err != nil {
 		_ = os.Remove(name)
@@ -474,7 +475,8 @@ func runAskReaderCmd(ctx context.Context, url string, cli cliArgs, errw io.Write
 	}
 	r := newAskReader(js, askReaderCfg{Broker: "local", File: file})
 	for {
-		if err := r.Pass(ctx, time.Now()); err != nil {
+		started := time.Now()
+		if err := r.Pass(ctx, started); err != nil {
 			_, _ = fmt.Fprintf(errw, "director-mcp ask-reader: pass: %v\n", err)
 		}
 		for _, n := range r.NotRead {
@@ -483,10 +485,16 @@ func runAskReaderCmd(ctx context.Context, url string, cli cliArgs, errw io.Write
 		if cli.once {
 			return 0
 		}
+		// Sleep to the next tick, not for a full interval after the pass, so a
+		// slow pass does not stretch the gap the resolution margin assumes.
+		wait := every - time.Since(started)
+		if wait < 0 {
+			wait = 0
+		}
 		select {
 		case <-ctx.Done():
 			return 0
-		case <-time.After(every):
+		case <-time.After(wait):
 		}
 	}
 }
