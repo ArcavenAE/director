@@ -104,8 +104,8 @@ One row per REQUEST, keyed by its `message_id`.
 | field | from |
 |---|---|
 | `ask` | the REQUEST's `message_id` |
-| `asker` | the sender's address, and its team and role |
-| `owner` | the recipient address as sent, and its team and role resolved from presence at send time |
+| `asker` | the sender's agent id and workspace, and its team and role (section 4a) |
+| `owner` | the recipient address as sent, and its team and role (section 4a) |
 | `sent_at` | the REQUEST's `sent_at` |
 | `sell_by` | the REQUEST's `reply_by`, or `none`. A REQUEST with no `reply_by` is itself listed, since R-110 asks director's REQUESTs to carry one |
 | `line` | D3 (b) |
@@ -119,6 +119,37 @@ Rollups are by **role and team**, never by instance id: open asks, unacked
 asks, and the oldest open age, per owner role and per asker role. Instance
 ids change at every respawn; a rollup keyed on them would scatter one
 seat's queue across its generations.
+
+### 4a. Resolving team and role
+
+Presence cannot be the only source. It lives in `AGENT_STATE` with a 90s
+TTL (`docs/shim-reference.md:412`), so a REQUEST read more than about 90s
+after it was sent, or after its seat exited, finds no row. And the envelope
+does not carry everything: `sender.role` is `omitempty`, and `sender.Team`
+is `json:"-"` (`envelope.go:15,20`), so the sender's team is never on the
+wire.
+
+The reader resolves each party once, in this order, and freezes the result
+on the row:
+
+1. **The wire.** The recipient address carries its team
+   (`agent://<team>/<id>`, `role://<team>/<role>`), and a `role://` address
+   carries its role. `sender.role` gives the sender's role when set.
+2. **The reader's id table.** On every pass, which runs at most every 30s
+   (inside the 90s TTL), the reader copies each live presence key
+   (`presence.<team>.<id>.<instance>`) and its role into an `ids` table in
+   `ASK_LEDGER`. An agent id seen live once resolves for as long as the table
+   keeps it, which is 30 days after it was last seen.
+3. **A later message.** A reply from the owner carries its own `sender.role`;
+   an unresolved row is completed from it.
+4. **Otherwise `unresolved`.** The row keeps the address as sent, the rollup
+   counts it under the key `unresolved`, and the read output lists it under
+   gaps with the reason ("no presence seen for this id"). The reader never
+   falls back to the agent id as a rollup key.
+
+Resolution happens on the first pass that reads the REQUEST, and is retried
+on each pass while any part is unresolved. A reader started after a seat
+has exited cannot resolve that seat's old asks from presence, and says so.
 
 ## 5. States
 
@@ -157,16 +188,27 @@ the work. Closure stays a human or seat act (SOUL section 8).
   (`asks-die-unread.md` section 2) and 24h on marvel-managed streams
   (marvel `internal/bus/declared.go:107`). Closed rows are kept 30 days, then
   dropped from the bucket.
+- **Open rows are bounded too, never silently.** An open row with no message
+  for 72h, the inbox's own max age, leaves the alarm list and is counted
+  under `stale` in gaps (oldest age shown; `--all` lists them). A stale row
+  is dropped 30 days later, and each drop is counted in that pass's gaps.
+  Anyone can close a row by replying to it, which takes it off every list.
 - **Its principal is the open decision.** Reading every inbox subject needs
   a broker user that today's per-team users do not grant. Under R-95 the
   credential decides what a principal may reach, and the operator sets that
   policy, so this user is the operator's to grant. It would be read-only on
-  the streams and write-only to `ASK_LEDGER`. Until it exists, the
+  the streams and write-only to `ASK_LEDGER`. The grant is wider than it
+  sounds: reading by sequence is the stream-level `$JS.API.STREAM.MSG.GET`
+  (or `DIRECT.GET`) permission on a stream, which cannot be narrowed by
+  subject, so it reads every seat's inbox on that stream, bodies included.
+  The reader keeps only D3's capped line, but the principal can read
+  everything. Until it exists, the
   reader runs under director's own user and sees only what that user can
   read. The read output says which streams it could not read, so a partial
   view is never shown as the fleet.
 - **Without marvel:** it needs only NATS and the director binary (ADR-005).
-  Owner roles come from presence; marvel is not consulted.
+  Team and role come from the wire and presence (section 4a); marvel is
+  not consulted.
 
 ## 7. What it reports
 
@@ -214,7 +256,14 @@ From recorded envelopes, no broker:
 - a follow-up REQUEST joins its row;
 - a REQUEST with no `reply_by` is listed under gaps;
 - a stream the reader cannot read is listed under gaps, and the rollup says
-  partial.
+  partial;
+- an owner whose presence has expired, and who is not in the id table,
+  rolls up under `unresolved`, is listed under gaps, and is never keyed by
+  its agent id; the same REQUEST with the owner in the id table resolves;
+- a `role://` recipient resolves team and role from the address alone, with
+  no presence;
+- an open row with no message for 72h leaves the alarms and is counted as
+  stale.
 
 With a scratch broker: the reader creates no consumer (`consumer ls` is
 unchanged across a pass), and a second pass over the same sequences changes
