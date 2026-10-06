@@ -33,15 +33,18 @@ The ledger is diagnostic. Its counts and its alarm are surfaces. Nothing
 blocks a send, a merge or a dispatch on them (SOUL section 8, ADR-007,
 `diagnostic-not-gate.md`).
 
-## 2. Not the item ledger the operator declined
+## 2. Not the item ledger #168 designed
 
 #168 designed an item ledger with ask states and an alarm timer, rendered as
-a board panel. The operator saw it rendered and declined it on 2026-10-01,
-and `board-workstream-ledger.md` section 9 dropped it in favour of one row
-per workstream. Today's commission asks again for one row per ask, so the
-difference has to be plain:
+a board panel. It was declined 2026-10-01 per the design record, and
+`board-workstream-ledger.md` section 9 dropped it in favour of one row per
+workstream. The operator does not recall ruling it: "I don't recall ruling
+on this", in their words, quoted in R-2228 of director's relay log. The
+operator's approval of this design on 2026-10-06, the interim-principal
+approval, supersedes that record either way. The difference from #168 is
+still worth stating plainly:
 
-| | #168 (declined) | this design |
+| | #168 (declined per the record) | this design |
 |---|---|---|
 | what it is | a board panel director curates by hand | a record derived from bus traffic, with no hand entry |
 | scope | director's own asks | every seat-to-seat REQUEST on the bus |
@@ -50,9 +53,7 @@ difference has to be plain:
 
 The workstream ledger stays the board's unit. The ask ledger feeds it: W5
 ("ask-id refresh from bus history") reads its rows rather than re-scanning
-the streams. **For the reviewer and the operator:** if the 2026-10-01 decline
-was of the unit itself, and not of the hand-kept panel, this design is the
-wrong shape and should stop here.
+the streams.
 
 ## 3. Three choices, with a recommendation each
 
