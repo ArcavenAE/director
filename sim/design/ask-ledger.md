@@ -155,15 +155,40 @@ on the row:
    party who answers cannot stamp its own role on the owner.
 4. **Otherwise `unresolved`.** The row keeps the address as sent, the rollup
    counts it under the key `unresolved`, and the read output lists it under
-   gaps with the reason. Two reasons exist: `no record of this id`, and
+   gaps with the reason: `no record of this id`, or
    `ambiguous`, when the id table holds more than one (team, role) for the
    same agent id. An ambiguous id is never resolved by picking one. The
-   reader never falls back to the agent id as a rollup key.
+   reader never falls back to the agent id as a rollup key. A third reason,
+   `no role declared`, covers a seat whose team is known but which never
+   declared a role anywhere (below).
+
+**Where roles come from today, and SB-4.** Every role source above exists
+only when the seat's shim was started with `DIRECTOR_ROLE`: presence carries
+`role` only then (`bus.go:1225-1226`), the role inbox filter exists only then
+(`bus.go:245-247`), and `sender.role` is empty by default (`main.go:75`).
+Seats launched through `cast-launch.sh` set it, and their envelopes carry it
+(the arcaven supervisor's do). A seat marvel spawns directly does not:
+marvel passes the role only as `MARVEL_ROLE` (marvel `adapter.go:381-402`
+at 4fc4637), which is the pending SB-4 in marvel's
+`docs/design/handoff-missing-delivery.md:24-30`. Until SB-4 lands:
+
+- **the team rollup works for every seat,** since the team comes from the
+  address or the presence key;
+- **the role rollup works for wrapped seats only.** An unwrapped seat's asks
+  roll up under its team with the role `unresolved: no role declared`, and
+  gaps names SB-4 as the fix.
+
+The reader does not guess a role from the agent id, for example by stripping
+a replica suffix. Instance ids are not identity, and a guessed role would
+look like a declared one. The fix belongs where the role is known: marvel
+passing it to the shim.
 
 Resolution happens on the first pass that reads the REQUEST, and is retried
-on each pass while any part is unresolved. A resolved value is frozen only
-when it came from step 1, from step 2 with a single (team, role), or from
-step 3. A reader started after a seat has exited and its durable has
+on each pass while any part is unresolved. A value from step 1 or step 3 is
+frozen. A value from step 2 is frozen only while its id has a single
+(team, role): if a second entry appears later, every row resolved from that
+id's step-2 entry becomes `unresolved: ambiguous` again, since the reader
+can no longer tell which entry was right. A reader started after a seat has exited and its durable has
 expired cannot resolve that seat's old asks, and says so.
 
 ## 5. States
@@ -300,6 +325,13 @@ From recorded envelopes, no broker:
   and role resolves from the durable, and an agent id with only a replica
   suffix to go on does not;
 - a `global://` party with no id-table entry is `unresolved`;
+- a seat whose presence and durable carry a team but no role, and whose
+  replies carry no `sender.role`, rolls up under its team with role
+  `unresolved: no role declared`, gaps names SB-4, and no role is derived
+  from its agent id;
+- a row resolved from a single step-2 entry becomes `unresolved: ambiguous`
+  when a second (team, role) for that id appears, and a row resolved from
+  step 1 does not;
 - two passes 5 minutes apart list `reader down` under gaps.
 
 With a scratch broker: the reader creates no consumer (`consumer ls` is
