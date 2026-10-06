@@ -347,7 +347,7 @@ func TestARoleAddressResolvesTeamAndRoleFromTheAddressAlone(t *testing.T) {
 }
 
 func TestAGlobalPartyWithNoIdTableEntryIsUnresolved(t *testing.T) {
-	l := ledgerWith(rec(t0, "m1", "REQUEST", "sup-1", "global://mokuzai/supervisor", "x"))
+	l := ledgerWith(rec(t0, "m1", "REQUEST", "sup-1", "global://cluster-b/supervisor", "x"))
 	resolved(l, t0.Add(time.Minute), builderObs())
 	rep := l.Report(t0.Add(time.Minute), nil, false)
 	if keyAt(t, rep.ByOwner, 0) != "unresolved" {

@@ -74,6 +74,8 @@ type cliArgs struct {
 	help      bool          // asks: print the help text
 }
 
+const askReaderUsage = "director-mcp ask-reader [--once] [--file <path>] [--interval <duration up to 30s>]"
+
 const unreadUsage = "director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <duration>]"
 
 func parseArgs(args []string) (cliArgs, error) {
@@ -82,6 +84,57 @@ func parseArgs(args []string) (cliArgs, error) {
 		return cliArgs{mode: "serve"}, nil
 	case len(args) == 1 && (args[0] == "--preflight" || args[0] == "-preflight"):
 		return cliArgs{mode: "preflight"}, nil
+	case args[0] == "asks":
+		out := cliArgs{mode: "asks"}
+		for _, a := range args[1:] {
+			switch a {
+			case "--json":
+				out.json = true
+			case "--all":
+				out.all = true
+			case "--help", "-h":
+				out.help = true
+			default:
+				return cliArgs{}, fmt.Errorf("asks: unknown argument %q (usage: %s)", a, asksUsage)
+			}
+		}
+		return out, nil
+	case args[0] == "ask-reader":
+		out := cliArgs{mode: "ask-reader"}
+		rest := args[1:]
+		for i := 0; i < len(rest); i++ {
+			a := rest[i]
+			value := func() (string, error) {
+				if i+1 >= len(rest) {
+					return "", fmt.Errorf("ask-reader: %s needs a value (usage: %s)", a, askReaderUsage)
+				}
+				i++
+				return rest[i], nil
+			}
+			switch a {
+			case "--once":
+				out.once = true
+			case "--file":
+				v, err := value()
+				if err != nil {
+					return cliArgs{}, err
+				}
+				out.file = v
+			case "--interval":
+				v, err := value()
+				if err != nil {
+					return cliArgs{}, err
+				}
+				d, err := time.ParseDuration(v)
+				if err != nil || d <= 0 || d > askPassInterval {
+					return cliArgs{}, fmt.Errorf("ask-reader: --interval %q must be a positive duration of at most %s, since a pass is due at least that often (usage: %s)", v, askPassInterval, askReaderUsage)
+				}
+				out.interval = d
+			default:
+				return cliArgs{}, fmt.Errorf("ask-reader: unknown argument %q (usage: %s)", a, askReaderUsage)
+			}
+		}
+		return out, nil
 	case args[0] == "unread":
 		out := cliArgs{mode: "unread"}
 		rest := args[1:]
@@ -116,7 +169,7 @@ func parseArgs(args []string) (cliArgs, error) {
 		}
 		return out, nil
 	}
-	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage)
+	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage)
 }
 
 type unreadPresence struct {

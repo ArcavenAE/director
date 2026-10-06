@@ -29,6 +29,13 @@
 //
 //	NATS_URL=nats://127.0.0.1:4222 director-mcp unread [--json]
 //
+// The ask ledger (sim/design/ask-ledger.md, part A1): a long-running reader
+// that keeps one row per REQUEST from the local AGENT_AUDIT, and an on-demand
+// read of its store:
+//
+//	NATS_URL=nats://127.0.0.1:4222 director-mcp ask-reader [--once] [--file F] [--interval D]
+//	NATS_URL=nats://127.0.0.1:4222 director-mcp asks [--json] [--all] [--help]
+//
 // Any other argument is refused (director#75).
 //
 // Logs go to stderr so stdout stays clean JSON-RPC.
@@ -68,6 +75,20 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		code := runUnreadCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, env("DIRECTOR_GLOBAL_DOMAIN", "global"), os.Stdout, os.Stderr)
 		cancel()
+		os.Exit(code)
+	}
+	// asks is a read of the ask ledger's store; ask-reader keeps it. Neither
+	// needs an identity of its own.
+	if cli.mode == "asks" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		code := runAsksCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, os.Stdout, os.Stderr)
+		cancel()
+		os.Exit(code)
+	}
+	if cli.mode == "ask-reader" {
+		ctx, stop := askReaderContext()
+		code := runAskReaderCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, os.Stderr)
+		stop()
 		os.Exit(code)
 	}
 	self := Sender{

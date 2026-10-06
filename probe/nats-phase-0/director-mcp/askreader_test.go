@@ -211,8 +211,10 @@ func TestAsksReadsTheStoreAndRunsNoPassOfItsOwn(t *testing.T) {
 	}
 	out.Reset()
 	_ = runAsksCmd(ctx, url, cliArgs{mode: "asks"}, &out, &out)
-	if !strings.Contains(out.String(), "please build x") {
-		t.Fatalf("text output lacks the ask line:\n%s", out.String())
+	for _, w := range []string{"1 rows", "1. alarms", "2. blocked on whom", "3. rollup per owner role", "unacked 1", "4. gaps"} {
+		if !strings.Contains(out.String(), w) {
+			t.Fatalf("text output lacks %q:\n%s", w, out.String())
+		}
 	}
 }
 
