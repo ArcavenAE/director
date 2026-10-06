@@ -62,12 +62,16 @@ func revisionFrom(settings []debug.BuildSetting) string {
 // cliArgs is what the command line asked for. Anything not listed here is
 // refused, rather than ignored and a live shim started (director#75).
 type cliArgs struct {
-	mode      string // serve, preflight, unread
+	mode      string // serve, preflight, unread, ask-reader, asks
 	json      bool
 	all       bool          // unread: one row per durable, dead ones included (M1)
 	global    bool          // unread: the hub streams instead of AGENT_INBOX (M3)
 	byRole    bool          // unread: one line per team and role (M5)
 	olderThan time.Duration // unread: mark rows older than this; 0 is unset (M4)
+	once      bool          // ask-reader: run one pass and exit
+	interval  time.Duration // ask-reader: the pass interval; 0 means the 30s default
+	file      string        // ask-reader: the JSON file it rewrites after each pass
+	help      bool          // asks: print the help text
 }
 
 const unreadUsage = "director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <duration>]"
