@@ -194,9 +194,11 @@ frozen. A value from step 2 is frozen only while its id has a single
 id's step-2 entry becomes `unresolved: ambiguous` again, since the reader
 can no longer tell which entry was right. When the ambiguity clears
 because one entry expires, a row is re-resolved to the surviving entry only
-if its ask was sent after that entry was first seen; an older ask stays
+if its ask was sent after that entry was first seen by the reader; an older ask stays
 `unresolved: ambiguous`, since it may have been made under the expired
-(team, role). The id table keeps each entry's first-seen time for this. A
+(team, role). The id table keeps the time the reader first saw each entry
+for this; a seat's own start time is not known to the reader and is not
+used. A
 reader started after a seat has exited and its durable has expired cannot
 resolve that seat's old asks, and says so.
 
