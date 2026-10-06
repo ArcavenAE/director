@@ -1026,9 +1026,11 @@ be a designed property, not the thing that happened to survive.
 refuse or warn when its role lacks it, rather than run silently hobbled.** This
 seat launched with no global levers; `list_roster` showed local only and every
 `global://` send refused, with no signal that the seat was mis-provisioned. The
-OFF case is valid for a worker (workers hold no global address) but a
+OFF case is valid for a worker (a worker holds a fleet address, R-94, and its
+credential limits where it may publish, R-95) but a
 director-role seat with the global tier off cannot do its job. Tracked bd
 aae-orc-anwnh.
+*Amendment: RULED 2026-10-05, item 6, "6 (a)": the parenthetical used to say workers hold no global address, which R-94's amendment struck.*
 
 **R-101 (OBSERVED) · a director seat's identity, global role, and working
 context are assigned PER-SEAT at spawn, never drawn from a config shared by other
@@ -1553,7 +1555,11 @@ no-route replies from arcaven-marvel-builder and arcaven-supervisor.*
 *Source: JUDGMENT. Extends R-116.*
 
 **R-147 (RULED) · paper approvals are routed to the operator, never counted as
-merge-ready.** Operator ruling 2026-09-26. Reviews run cross-account (arcavenai on
+merge-ready.** (Amended, RULED 2026-10-05.) The fleet's review verdict is the
+merge recommendation: a reviewer role that did not write the change, approving
+in GitHub when the identity allows. GitHub's merge requirements are a separate
+check, and the two are kept separate for now; they are not always the same.
+Operator ruling 2026-09-26. Reviews run cross-account (arcavenai on
 arcaven-authored PRs and the reverse) even when the review cannot enable a merge.
 When an approval will not count on GitHub (the reviewer's identity authored the
 PR, or the repo requires a code owner or team the reviewer is not in, as a pull
@@ -1562,10 +1568,12 @@ counting") and director hands it to the operator instead of attempting a merge.
 *Earned by: an employer-repo pull request blocked REVIEW_REQUIRED under an
 arcavenai approval;
 director#89/#90 arcavenai-authored.*
+*Amendment: operator ruling 2026-10-05, item 5: "5 confuses gh approval to merge with the concept of recommendation to merge. we accept that they are not always the same. the reality is that we always have a second reviewer, even when the same gh identity is involved, the reviewer role is not used to code. multi-model reviewing is coming. do not mix up our review/recommended for merging (including approving in gh when possible) with the gh requirements to merge in this context, for now"*
 *Source: RULED. Cross-refs R-02 (authority is explicit).*
 
 **R-148 (RULED) · director never merges on a draft GATE, and keeps a drafts lane.**
-Operator ruling 2026-09-26, adopting the draft-first PR flow for the employer
+(Amended, RULED 2026-10-06.) "Non-author" below means a reviewer role that did
+not write the change; the same GitHub identity qualifies. Operator ruling 2026-09-26, adopting the draft-first PR flow for the employer
 org's shared repos. Builders open drafts; the GATE line carries a stage (draft or
 ready); the author marks ready only after a non-author GitHub review. Director
 treats a draft GATE as not merge-ready, keeps a board lane for in-scope drafts,
@@ -1573,6 +1581,7 @@ and runs a sweep that lists drafts unreviewed for 24 hours and fleet PRs merged
 with zero reviews. The sweep is diagnostic: it never promotes, merges or closes.
 *Earned by: six PRs on the product merged unreviewed by an admin teammate (a later three
 the same way); the draft-first study (four-round party, 2026-09-26).*
+*Amendment: operator ruling 2026-10-06, Q1, "Q1 yes a reviewer qualifies"; the meaning above is director's mapping of that answer.*
 *Source: RULED. Cross-refs R-147, ADR-007 (automation boundary).*
 
 **R-149 (OBSERVED) · director reads a seat's composer state before acting on
@@ -1965,8 +1974,10 @@ operator's own hand. Director needs a way to turn a ruling into a scoped,
 verifiable grant at the receiver: a signed envelope, a permission rule the
 operator issues, or a documented hand-off to the operator's pane. Director
 must not word a relay so that it passes a classifier (no-control-bypass).
+R-184 (RULED 2026-10-05) records what director may do when a relayed grant is
+refused at the target seat.
 *Earned by: O 2026-10-04e, O 2026-10-05f.*
-*Source: OBSERVED. Cross-refs R-146, R-04.*
+*Source: OBSERVED. Cross-refs R-146, R-04, R-184.*
 
 **R-182 (OBSERVED) · director resolves a seat or team name to one address, and
 each cluster has one name.** A host is `skippy` to marvel and `mokuzai` to the
@@ -1989,6 +2000,23 @@ and the seat that owes the answer before anyone reasons about it, and an
 INFORM that needs no reply does not arm the cue.
 *Earned by: O 2026-10-04j (and its correction), O 2026-10-05a.*
 *Source: OBSERVED. Cross-refs R-168, R-169.*
+
+**R-184 (RULED) · a relayed operator grant refused at the target seat may be
+carried by a marvel inject that references director's verifiable message.**
+RULED 2026-10-05. When a relayed operator grant is refused at the target seat,
+director may attempt or request the relayed grant as a marvel inject that
+carries the grant to that seat. The inject includes a reference to the
+nonrepudiation message from director, which can be verified; marvel may require
+that reference before it accepts the request in future, as part of a future
+majordomo adjudication and authorization of the request. One plain retry is
+allowed only after a named transient cause (rate limit, timeout); after a policy
+denial, any retry is a bypass. R-181's rule
+stands: director must not word a relay so that it passes a classifier.
+*Amendment: operator ruling 2026-10-05, item 8, "8 (a) 1 but amended that director may attempt/request the relayed grant as a marvel inject to carry the grant to the target seat when initially refused, includes a reference to the non-repudiation message from director which can be verified, may be required for marvel to accept the request in the future (future majordomo adjudication/authorization of request)"*
+*The retry sentence is clause 1 of option 8a (a) as put to the operator, quoted verbatim: "One plain retry is allowed only after a named transient cause (rate limit, timeout)". Clause 2 of that option ("after a policy denial, any retry is a bypass") is recorded on the operator's later answer, 2026-10-06, to Q2: "Q2 okay yeah, wahtever just get it moving". Reading that answer as accepting clause 2 is director's mapping, not the operator's words.*
+*Note, 2026-10-06, on item 8b (who may issue an act-worthy emergency verdict): the operator answered "Q3 A and majordomo and director (c)". Director reads this as supervisor-scoped (A), plus majordomo, plus the director (C). The reading is director's and is not recorded as a rule here.*
+*Earned by: the four relayed rulings denied at the receiving seat (R-181).*
+*Source: RULED 2026-10-05. Cross-refs R-181, R-05, R-95.*
 
 ### Harvest diff (2026-10-05)
 
@@ -2104,7 +2132,8 @@ committed file.
     until a pane inject (O-31k, O-31r).
   - R-159: a same-cluster review request routed through director (O-31a).
   - R-147: a paper approval and the merge guard's non-author rule cannot both
-    be satisfied for a bot-authored pull request (O-31c, O-31e).
+    be satisfied for a bot-authored pull request (O-31c, O-31e). Ruled
+    2026-10-05, see R-147.
   - R-148: an envoy saw unreviewed drafts but its report went to the wrong
     team and never escalated by age (O-28i).
   - R-131: director edited launchers and manifests by hand again (O-31p).
@@ -2333,6 +2362,9 @@ committed file.
 - **Promoted (5):** R-106 (director durable receive), R-107 (starvation is loud,
   not silence), R-108 (reproducible pinned build), R-109 (cross-cluster routes
   through director; loud authz), R-110 (reply_by + confirm-before-wait).
+  Amended, RULED 2026-10-05, item 6, "6 (a)": R-109's amendment (RULED
+  2026-09-24) removed the director as a mandatory cross-cluster relay; read the
+  routing wording in this line as history.
 - **Unchanged:** R-105 stands; its symptom framing is correct and its finding-025
   citation is left as the historical record. R-106 supplies the mechanism it
   lacked. R-50, R-14, R-93, R-08, R-89 unchanged; the new entries cross-ref them
