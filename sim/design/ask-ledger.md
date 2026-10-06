@@ -23,7 +23,7 @@ no code lands until this is reviewed.
 Nobody can say who is waiting on whom without reading transcripts. A send
 returns "accepted for delivery" and nothing more (R-08), so an ask that was
 never picked up and an ask being worked look the same to the sender. The
-specimen the operator named is an e98 ask that sat unacknowledged for 2h46m
+specimen the operator named is a client team's ask that sat unacknowledged for 2h46m
 from 08:39Z; that figure was reported through director and is not
 re-measured here. R-115 asks for queue depth and oldest wait per seat; R-183
 asks for "who is waiting on whom, with the message resolved". Both need one
