@@ -74,7 +74,7 @@ depends on a seat cooperating to show that an ask is unacked.
 | | option | gives | costs |
 |---|---|---|---|
 | a | in each shim, for its own asks | no new principal | no fleet view; a seat sees only what it sent |
-| b | one read-only reader per broker | the fleet view, from each broker's `AGENT_AUDIT` (section 6) | a principal that can read every inbox subject (section 6) |
+| b | one read-only reader per broker | the fleet view, from each broker's `AGENT_AUDIT` (section 6) | a principal that can read every envelope sent on the broker (section 6) |
 | c | in director's shim only | director's view | seat-to-seat asks are visible only where director can read them |
 
 **Recommended: (b).** The commission asks for seat-to-seat coverage, which
