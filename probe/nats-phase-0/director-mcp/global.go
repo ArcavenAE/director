@@ -90,6 +90,35 @@ func loadGlobalConfig() (*globalConfig, error) {
 	return cfg, nil
 }
 
+// globalOffWarning is the start-up warning for a seat that holds the director
+// role with the global tier off. DIRECTOR_GLOBAL_DOMAIN unset is a valid off
+// case, and the right one for a worker (R-94), so the shim stays silent for
+// every seat but this one. For a director it is a seat whose whole job is
+// cross-cluster coordination running local-only without a word: list_roster
+// shows local seats only and a global:// send is refused (aae-orc-d408k). The
+// role is read from either lever, since a seat can be launched with either set
+// and the domain missing. It warns and does not refuse: whether a director seat
+// may start local-only is the operator's call, not the shim's. It returns ""
+// when the tier is on or the seat is not a director.
+func globalOffWarning(cfg *globalConfig, globalRole, role string) string {
+	if cfg != nil {
+		return ""
+	}
+	var trigger string
+	switch {
+	case globalRole == roleDirector:
+		trigger = "DIRECTOR_GLOBAL_ROLE=" + roleDirector
+	case role == roleDirector:
+		trigger = "DIRECTOR_ROLE=" + roleDirector
+	default:
+		return ""
+	}
+	return "this seat holds the director role (" + trigger + ") but DIRECTOR_GLOBAL_DOMAIN is unset, so the global tier is off: " +
+		"it reaches no hub, list_roster shows local seats only, and a global:// send is refused. " +
+		"Local mail and agent:// sends to local seats still work. " +
+		"To turn the tier on set DIRECTOR_GLOBAL_DOMAIN, DIRECTOR_CLUSTER and DIRECTOR_GLOBAL_ROLE=director (R-86, R-94)"
+}
+
 // validate checks the three levers before any subject is built. The domain and
 // the cluster both become subject tokens ("$JS.<domain>.API.>",
 // "global.<cluster>.>"), so both take the identity class check; the role is a

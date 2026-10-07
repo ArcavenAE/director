@@ -120,6 +120,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	if w := globalOffWarning(gcfg, os.Getenv("DIRECTOR_GLOBAL_ROLE"), self.Role); w != "" {
+		fmt.Fprintf(os.Stderr, "director-mcp: WARNING: %s\n", w)
+	}
+
 	if preflightMode {
 		if err := preflight(context.Background(), url, self, gcfg); err != nil {
 			fmt.Fprintf(os.Stderr, "director-mcp preflight: %v\n", err)
