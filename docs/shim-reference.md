@@ -234,7 +234,7 @@ delivered once more later.
 {
   "messages": [ { "message": { "...": "..." }, "tier": "local", "sequence": 431 } ],
   "count": 1,
-  "order": "oldest first within each tier; local before global; the budget is shared between tiers",
+  "order": "listed local first, then global; each tier oldest first; the budget is split by turn between the tiers, so the list order is not a delivery priority",
   "remaining": { "local": 0, "global": 0 }
 }
 ```

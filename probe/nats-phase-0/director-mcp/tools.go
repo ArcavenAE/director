@@ -31,7 +31,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 	if gcfg != nil {
 		toDesc += ", or across hosts global://director and global://{cluster}/supervisor. A global send is refused before publish when nobody is live at that address."
 		sendDesc += " This session is " + gcfg.selfAddress() + " at the global tier: reply to a global message with global://director, and name a cluster (list_roster shows them) to reach its supervisor."
-		waitDesc += " It polls the local inbox and this session's global inbox, and the result names the tier the message came from. A batch lists local messages first, then global; sequence numbers order messages within a tier only."
+		waitDesc += " It polls the local inbox and this session's global inbox, and the result names the tier the message came from. A batch is listed local first, then global, each tier oldest first, and its budget is split by turn between the tiers, so the list order is not a delivery priority; sequence numbers order messages within a tier only."
 		summaryDesc += " Covers both the local inbox and this session's global inbox."
 		rosterDesc += " Rows from both tiers are merged and carry a tier column; global rows carry the cluster and role that address them."
 	}
@@ -310,7 +310,7 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 	out := map[string]any{
 		"messages": items,
 		"count":    len(items),
-		"order":    "oldest first within each tier; local before global; the budget is shared between tiers",
+		"order":    batchOrderNote,
 	}
 	if len(items) == 0 {
 		out["note"] = "no message within the window; this is silence, not failure"
@@ -534,3 +534,8 @@ func noBroadcastRecipientsErr(ws, team string, scan presenceScan) error {
 	}
 	return fmt.Errorf("no live presence in %s other than the sender (%d presence key(s) read, %d in scope); no session would receive this broadcast, so it is refused before publish (R-92)", scope, scan.Keys, scan.Matched)
 }
+
+// batchOrderNote says what a batch result's order means. The list is grouped
+// local first, then global; the budget is split by turn (drain.go), so the
+// order of the list is not a priority (director#260).
+const batchOrderNote = "listed local first, then global; each tier oldest first; the budget is split by turn between the tiers, so the list order is not a delivery priority"
