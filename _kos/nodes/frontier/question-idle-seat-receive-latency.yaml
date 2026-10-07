@@ -1,0 +1,61 @@
+id: question-idle-seat-receive-latency
+type: question
+confidence: frontier
+title: "How does mail reach an idle seat that nothing wakes, and how does the sender learn it has not?"
+tags: [director, delivery, cue]
+content: |
+  Opened 2026-10-07 to place finding-013, which no node cited.
+
+  `wait_for_message` is a poll, and a Claude seat that has finished its turn
+  makes no calls until a user turn or a scheduled prompt arrives. On one idle
+  supervisor seat without the channel cue, three messages waited 4h18m, about
+  21h and about 15h between 2026-10-01 and 2026-10-02. Nothing was lost: all
+  three were waiting, in order, when the seat drained. The delay was set by the
+  next unrelated wake (a timer once, the operator typing twice), not by the bus
+  (finding-013).
+
+  The P1 channel cue (#166, built in #171 and #175) exists for this case, but it
+  is opt-in at cast time through `DIRECTOR_CUE=1`. On 2026-10-02, 0 of 18 running
+  shims on that host set it (finding-013, checked per process). Whether that is
+  still the count is not established here.
+
+  The sender side is the second half. Each send returned "accepted for
+  delivery", and R-08 already says accepted is not delivered or read, yet
+  "routed" was read as "in hand" (finding-013).
+
+  ## The question
+
+  A. Should the cue be on by default for supervisor seats, or for every seat
+     that dispatches work and waits on a reply?
+  B. What tells the sender that a message is still unread: the cue design's
+     `cue.unanswered` receipt surfaced to the sender, a per-recipient "oldest
+     unread" age from `inbox_summary`, or something else? finding-013 names
+     both as candidates. Neither reaches the sender today: `cue.unanswered`
+     goes to the director (cue.go), and `director-mcp unread` reports each
+     seat's oldest unread age to an operator (#137).
+  C. Until A is settled, is a supervisor's own scheduled check for when
+     dispatched work is due the practice, as finding-013 recommends, and where
+     is it written down?
+
+  ## Not established
+
+  None of A to C is decided. The measurement is one seat over one day; the
+  mechanism is the one #166 already names.
+edges:
+  - target: finding-013-an-idle-supervisor-without-the-cue-reads-mail-hours-late
+    type: derives
+  - target: finding-016-the-channel-cue-on-one-seat-c0-results
+    type: supports
+    note: "on opted-in seats the cue's idle wake works (C-0), with small samples: the measurement A would build on"
+  - target: question-director-seat-startup
+    type: supports
+    note: "whether the cue is set is a cast-time choice, so A lands on the start path"
+provenance:
+  created_by: agent
+  session: 2026-10-07 harvest integration, team arcaven author seat
+  created_at: "2026-10-07"
+  notes: >
+    Placed from the 2026-10-07 harvest. Every statement is drawn from
+    finding-013 or finding-016, except the sentence in B on where
+    `cue.unanswered` and `director-mcp unread` report today, which was read
+    from the code on main at e7c26c1 (cue.go:453, unread.go:192).

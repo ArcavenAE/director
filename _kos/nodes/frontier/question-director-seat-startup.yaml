@@ -188,6 +188,15 @@ edges:
     type: supports
   - target: question-agent-identity-authority
     type: supports
+  - target: finding-014-sibling-replicas-read-as-a-phantom-presence
+    type: supports
+    note: "sub-question F: a roster row names an agent id and an instance but not that the id is one of N replicas of a role, so a healthy replica was read as the dead seat it had not replaced"
+  - target: finding-026-instance-ulid-collides-on-simultaneous-start
+    type: derives
+    note: "sub-question C (same instance ULID or a new one on restart), beside finding-003: the instance ULID is not a session discriminator; two processes started together minted the same one in 23.5% of 200 simultaneous pairs on one host, a figure the finding says is not a constant"
+  - target: finding-025-cross-host-return-path-consumer-side
+    type: discovered_from
+    note: "the return-path diagnosis that finding-027 and the content above build on; superseded 2026-09-22, so read its banner before its conclusion"
 provenance:
   created_by: human
   session: 2026-09-19-director-seat-quickstart
