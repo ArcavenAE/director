@@ -2110,6 +2110,145 @@ director writes is stamped by the clock when it is written.
 *Earned by: O 2026-10-05q, O 2026-10-06h (addendum).*
 *Source: OBSERVED. Cross-refs R-174.*
 
+**R-193 (OBSERVED) · an operator step arrives as one runnable script whose
+author has already run its check.** Director forwarded a path to an 89-line
+prose runbook of about 30 commands with checks to compare by eye, and the
+operator asked how they were supposed to run it; earlier the same night the
+operator said they would not type commands by hand. The scripts that replaced
+prose then failed in three ways. One was sourced instead of executed and exited
+the operator's shell. One edited a YAML file, showed a diff, never parsed the
+result, and committed an invalid file. One reached the operator without its
+author running its read-only check, and stopped at a pre-check that misread a
+table. Director delivers an operator step as one script in a fixed place on the
+target host, with the exact invocation; the script refuses to be sourced, has
+coded PASS and STOP checks, and parses any structured file it edits before it
+commits. The author's own check output, from the target host, travels with it,
+and director does not forward a script without that output.
+*Earned by: O-2029, O-2040, O-2044, FR 2026-10-07 (script sourced in zsh).*
+*Source: OBSERVED. Extends R-191.*
+
+**R-194 (OBSERVED) · a doorbell is a checked action: read the pane before
+pressing, confirm the turn after.** Director's doorbell (text then Enter) landed
+while a harness setup menu was on screen; the Enter opened a setup wizard, the
+message was lost, and the seat sat in the wizard for about 45 minutes while its
+silence was read as the host going dark. A doorbell meant to clear a staged
+draft was refused because the composer held only a suggestion, and a
+turn-start check matched on one spinner text and reported four working seats
+as not started. Before a doorbell, director reads the pane's state: a menu or
+dialog (and its text), a wizard, a staged draft, a harness suggestion, or an
+empty composer. It answers a known menu with its known safe choice or stops,
+never presses Enter onto a menu, and after the doorbell confirms from the
+harness, not from pane text, that a turn started.
+*Earned by: O-2032, FR 2026-10-07 (inject clear refused on an empty composer),
+FR 2026-10-07 (turn-start check missed a spinner).*
+*Source: OBSERVED. Extends R-149; cross-refs R-89, R-117.*
+
+**R-195 (OBSERVED) · each seat has an activity state: working, idle, or held at
+a dialog with the dialog's text.** Asked who was busy, director captured 63
+panes on three clusters and classified them with text patterns; the first pass
+read two approval prompts as working, and seven seats turned out to be held at
+dialogs with no column anywhere saying so. The roster's CPU and rate columns
+did not separate a working seat from an idle one. A day earlier free and busy
+were again built by hand from snapshots and fan-out asks. The fleet state model
+carries a per-seat activity state from the harness, with the dialog text when a
+seat is held, so "who is not busy" and "who is stuck" are reads, not surveys.
+*Earned by: O-2042, O-06s, FR 2026-10-07 (turn-start check missed a spinner).*
+*Source: OBSERVED. Sharpens R-103; promotes R-136 from judgment to observed.*
+
+**R-196 (OBSERVED) · director's own read covers every tier and surfaces each
+request addressed to it as it arrives.** A supervisor's per-builder report, a
+step owner, two operator questions and a scope request went to director on the
+global tier one night, while director read one local subject by hand. None was
+seen for about half an hour, until the supervisor resent locally; meanwhile
+director told the operator that supervisor had not replied. Director's consumers
+held 1,338 unacknowledged messages across both tiers, three days old at the
+floor, because hand reads never acknowledge. On another night, ticks that read
+only the global stream left an outage decision in the local inbox for 50
+minutes. Director drains its own inbox on both tiers through one path that
+acknowledges, and surfaces every REQUEST and QUERY to director on arrival,
+whichever tier carried it; a hand read of one subject is never reported as a
+sweep.
+*Earned by: O-2045, O-2026-10-03d.*
+*Source: OBSERVED. Applies R-123 and R-129 to director itself; cross-refs R-185.*
+
+**R-197 (OBSERVED) · the workstream ledger's age and blocked state follow
+events, including director's own updates.** A row stayed "blocked on the
+operator" for 45 minutes after its pull request merged, and director put it in
+front of the operator. Rows director had just updated read six to nine hours
+stale, because the age counted only link events. A merge or close on a linked
+pull request clears an operator block, and an authored update counts as
+movement.
+*Earned by: O-2041, O-2042 (ledger age).*
+*Source: OBSERVED. Cross-refs R-115, R-185.*
+
+**R-198 (RULED) · director brings a pull request to the operator as "merge
+recommended", never as a request for an approval.** The fleet's review is the
+recommendation; GitHub's approval mechanics are a separate step that review
+supports. Operator, 2026-10-05: "the review/fix and the recommendation are the
+meaningful parts, STOP WORRYING about the gh approval block, it does NOT mean
+we don't review/approve. It just means that there is another step and this work
+supports that step." Operator, 2026-10-07, after director listed a pull request
+as "operator approves or grants": "if it's recommended for merge, say so. They
+had better be ready, reviewed, fixed and not in draft". Director checks the
+pull request's state first (that one had already merged) and presents only
+ready, reviewed, fixed, non-draft pull requests, each as merge recommended.
+*Earned by: the two operator corrections quoted above.*
+*Source: RULED 2026-10-05 and 2026-10-07. Extends R-147 and R-171.*
+
+**R-199 (OBSERVED) · a sender's identity survives a shared transport login.**
+Three agents on two hosts post to one tracking issue under one GitHub login,
+with the host named only in each body's first line. Director keyed host on the
+login and reported for several ticks that one host had not joined while it had
+been posting, and later a by-author read reported a busy host as quiet again.
+Director attributes a post or message by a signed or structured sender identity,
+or by the byline marker when that is all there is, never by the transport login.
+*Earned by: O-06u, O-2027.*
+*Source: OBSERVED. Cross-refs R-82, R-52.*
+
+### Harvest diff (2026-10-07)
+
+Covers the 2026-10-06 named observations not taken by the last harvest, O-2027
+through O-2032 and O-2040 through O-2045, and friction from FR 2026-10-06
+scan-then-post-again through the 2026-10-07 entries. Same bar: an item is
+promoted on two or more recorded instances, or on an operator ruling.
+
+- **Promoted (7):** R-193 (operator steps as checked scripts), R-194 (a doorbell
+  is a checked action), R-195 (per-seat activity state), R-196 (director reads
+  every tier and surfaces requests on arrival), R-197 (ledger age and blocked
+  state follow events), R-198 (merge recommended, never an approval request),
+  R-199 (identity survives a shared login).
+- **Unchanged, new instances (6):**
+  - R-117: three supervisors sat idle at empty prompts for about 20 minutes
+    with routes waiting, because the routes went with no doorbell (O-2043).
+  - R-169: a supervisor's "ready for replace" request was received and never
+    acted on for about five hours (O-2045).
+  - R-177: a seat's mechanism for a fix ("a console action") reached the
+    operator as fact and was wrong (O-2031).
+  - R-186: director wrote its own proposal as "a team rule, effective now"
+    when the operator had only asked for a look (O 2026-10-06 invented team
+    rule).
+  - R-176: a scan and a post ran in one command a second time (FR 2026-10-06
+    scan-then-post-again).
+  - R-185: the same night, director reported a supervisor as silent when its
+    replies were waiting on the other tier (O-2045).
+- **Kept as observations (4), one instance each:** a ready pull request with no
+  review for four and a half hours, found by the operator (O-2030); rotated
+  successor seats that never took a first turn (O-2028); a reminder event and a
+  seat that dismisses it, looping with neither side converging (O 2026-10-06
+  cue unanswered); a pull request number given without its repository
+  (O-2031).
+- **Rejected for the register (routed elsewhere):**
+  - Synthetic CPU load orphaned to pid 1 after a parent shell died, invisible
+    to the roster (O 2026-10-06 orphaned load generators): a fleet diagnostic
+    for the stagekeeper patterns and marvel, not director.
+  - An idle opencode seat holding memory with no baseline to flag it
+    (O 2026-10-06 opencode idle memory): the same home.
+  - A successor seat spawned with no first prompt: marvel (a kickoff prompt on
+    successor spawn); director's half is the liveness check kept above.
+  - Folder trust for codex seats as a per-role setting, ruled 2026-10-07
+    ("codex != reviewer it is only sometimes the case"): marvel, where it is
+    filed.
+
 ### Harvest diff (2026-10-06)
 
 Covers the observations O 2026-10-05g through the 2026-10-06 entries (O-06p
