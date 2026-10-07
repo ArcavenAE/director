@@ -71,6 +71,20 @@ for d in plain claudeonly reposonly; do
   [[ "$err" == *"refusing"* ]] || miss "$d: refusal does not say it refused: $err"
 done
 
+# A symlink into a subdirectory of the orc: the logical path has no root above
+# it, the physical one does. The refusal names the root, as it does for a plain
+# subdirectory.
+ln -s "$orc/sub" "$work/linksub"
+run "$work/linksub" X=1
+[[ $rc -ne 0 && -z "$ran" ]] || miss "symlink to a subdirectory: rc=$rc ran='$ran'"
+[[ "$err" == *"$orc"* ]] || miss "symlink to a subdirectory: refusal does not name the root $orc: $err"
+
+# A symlink to the orc root itself holds both markers through the link, so it is
+# a launch from the root, as for aq and ax.
+ln -s "$orc" "$work/linkroot"
+run "$work/linkroot" X=1
+[[ $rc -eq 0 && -n "$ran" ]] || miss "symlink to the root: rc=$rc ran='$ran' err=$err"
+
 # ORC_ROOT does not rescue a wrong cwd: the seat's context comes from cwd.
 run "$work/plain" ORC_ROOT="$orc"
 [[ $rc -ne 0 && -z "$ran" ]] || miss "ORC_ROOT set, wrong cwd: rc=$rc ran='$ran'"

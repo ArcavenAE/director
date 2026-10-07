@@ -60,7 +60,7 @@ fi
 # IS the cwd. aq honours ORC_ROOT; this does not, because a seat's context comes
 # from where claude starts.
 find_orc_root() {
-  local dir="$PWD"
+  local dir="${1:-$PWD}"
   while [[ "$dir" != "/" ]]; do
     if [[ -f "$dir/CLAUDE.md" && -f "$dir/repos.yaml" ]]; then
       printf '%s\n' "$dir"
@@ -77,6 +77,14 @@ if root="$(find_orc_root)"; then
     exit 1
   fi
 else
+  # The logical path has no root above it. A symlink into the orc can still
+  # resolve to one, so retry on the physical path to name the root to cd to.
+  phys="$(pwd -P)"
+  if [[ "$phys" != "$PWD" ]] && root="$(find_orc_root "$phys")"; then
+    echo "director-session: refusing to launch from '$PWD'; it resolves to '$phys', below the orc root, so the seat would start without the orc's skills and settings and limited to that subtree" >&2
+    echo "director-session: cd '$root' and run it again; the launch directory must be the orc root, the one holding CLAUDE.md and repos.yaml" >&2
+    exit 1
+  fi
   echo "director-session: refusing to launch from '$PWD'; it is not inside an orc root, so the seat would start without the orc context" >&2
   echo "director-session: cd to the orc checkout and run it again; the launch directory must be the orc root, the one holding CLAUDE.md and repos.yaml" >&2
   exit 1
