@@ -97,7 +97,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 					"to":          str("the address of whoever sent the ask"),
 					"in_reply_to": str("the message_id of the ask"),
 					"status":      str("working | blocked-on"),
-					"on":          str("for blocked-on only: the agent:// or role:// address, or the ref (pr:, bd:, finding:), you are waiting on"),
+					"on":          str("for blocked-on only: the agent://, role:// or global:// address, or the ref (pr:, bd:, finding:), you are waiting on, as written on the ask"),
 				},
 				"required": []string{"to", "in_reply_to", "status"},
 			},

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ func statusEnv(t *testing.T, args string) *Envelope {
 	return e
 }
 
-func TestReportStatusIsInCatalogAndDispatches(t *testing.T) {
+func TestReportStatusIsInCatalog(t *testing.T) {
 	found := false
 	for _, td := range toolCatalog(nil, false) {
 		if td.Name == "report_status" {
@@ -97,5 +98,33 @@ func TestReportStatusEnvelopeMovesTheRow(t *testing.T) {
 	r := rowOf(t, l, "m1")
 	if r.State != askBlocked || r.BlockedOn != "agent://ops/architect-1" {
 		t.Fatalf("row = %s blocked_on %q, want blocked on the architect", r.State, r.BlockedOn)
+	}
+}
+
+// The catalog lists the tool, but a seat only gets an answer if dispatchTool
+// routes the name. This goes through dispatchTool on a scratch broker and
+// reads the INFORM back from the asker's inbox.
+func TestReportStatusDispatchesAndReachesTheAsker(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	provision(t, ctx, url)
+	asker := roleBus(t, ctx, url, "sup-1", "supervisor")
+	worker := roleBus(t, ctx, url, "builder-1", "builder")
+
+	raw := json.RawMessage(`{"to":"agent://ops/sup-1","in_reply_to":"m1","status":"blocked-on","on":"global://director"}`)
+	out, err := dispatchTool(ctx, worker, "report_status", raw)
+	if err != nil {
+		t.Fatalf("dispatchTool report_status: %v", err)
+	}
+	if res, _ := out.(map[string]any); res["message_id"] == nil {
+		t.Fatalf("result has no message_id: %v", out)
+	}
+	e, _, err := asker.receive(ctx, 3*time.Second)
+	if err != nil || e == nil {
+		t.Fatalf("asker got %v, %v; want the status INFORM", e, err)
+	}
+	if e.Performative != "INFORM" || e.Content.Type != "signal" || e.Content.Data != "blocked-on global://director" || e.InReplyTo != "m1" {
+		t.Fatalf("asker got %s %s %q in_reply_to %q", e.Performative, e.Content.Type, e.Content.Data, e.InReplyTo)
 	}
 }

@@ -330,7 +330,7 @@ regardless.
 | `to` | yes | the address of whoever sent the ask |
 | `in_reply_to` | yes | the `message_id` of the ask |
 | `status` | yes | `working` or `blocked-on` |
-| `on` | for `blocked-on` | the `agent://` or `role://` address, or the ref (`pr:`, `bd:`, `finding:`), you are waiting on; refused with `working` |
+| `on` | for `blocked-on` | the `agent://`, `role://` or `global://` address, or the ref (`pr:`, `bd:`, `finding:`), you are waiting on; refused with `working` |
 
 Sends one INFORM with `content.type` `signal` in reply to the ask, with data
 `working` or `blocked-on <on>`. The ask reader reads it and moves the ask's
