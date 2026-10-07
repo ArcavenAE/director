@@ -2,7 +2,7 @@
 
 The shim is a Go program in `probe/nats-phase-0/director-mcp/`. A harness
 launches one per session as an MCP stdio server; the shim connects to a NATS
-broker and exposes six tools that carry director envelopes. It is the Phase
+broker and exposes seven tools that carry director envelopes. It is the Phase
 0 probe cut, kept small on purpose: it proves the transport and the receive
 shape. It is not the director software.
 
@@ -131,7 +131,7 @@ Slice M (`sim/design/unread-slice-m.md`):
 5. Log `connected to <url> as agent://<team>/<id> instance <ulid> in
    workspace <ws>`, then serve.
 
-## The six tools
+## The seven tools
 
 Every tool is request and response. `wait_for_message` is the long poll
 that stands in for a push the transport cannot make.
@@ -322,6 +322,23 @@ from both tiers are merged with a `tier` column, and global rows carry
 Result: `{ "status": "presence recorded", "state": "busy" }`. The state is
 the last value the model set; the timestamp is renewed by the shim's timer
 regardless.
+
+### `report_status`
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `to` | yes | the address of whoever sent the ask |
+| `in_reply_to` | yes | the `message_id` of the ask |
+| `status` | yes | `working` or `blocked-on` |
+| `on` | for `blocked-on` | the `agent://`, `role://` or `global://` address, or the ref (`pr:`, `bd:`, `finding:`), you are waiting on; refused with `working` |
+
+Sends one INFORM with `content.type` `signal` in reply to the ask, with data
+`working` or `blocked-on <on>`. The ask reader reads it and moves the ask's
+row to working or blocked, and a chain of `blocked-on` addresses that loops
+back prints as a cycle. Use it when you start on a request and again when you
+stop on someone else; without it the row stays at sent or acked and reads as
+silence. The result has the same shape as `send_message`, and accepted is
+still not read (R-08).
 
 ### `broadcast`
 

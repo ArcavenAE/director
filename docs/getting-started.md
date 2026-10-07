@@ -26,7 +26,7 @@ flowchart LR
 
 Each session gets its own shim process, launched by the harness as an MCP
 stdio server. The shim holds one connection to the broker, a durable inbox
-consumer, and a presence heartbeat. The harness sees six tools.
+consumer, and a presence heartbeat. The harness sees seven tools.
 
 ## Prerequisites
 
@@ -189,8 +189,8 @@ The worked script is `probe/nats-phase-0/cross-harness-demo.sh`.
 
 ## 6. Send and receive
 
-From inside a session the six tools are `send_message`, `wait_for_message`,
-`inbox_summary`, `list_roster`, `set_presence`, and `broadcast`. A first exchange, as the
+From inside a session the seven tools are `send_message`, `wait_for_message`,
+`inbox_summary`, `list_roster`, `set_presence`, `broadcast`, and `report_status`. A first exchange, as the
 model calls them:
 
 ```
