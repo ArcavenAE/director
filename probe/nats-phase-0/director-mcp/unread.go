@@ -565,6 +565,10 @@ var instanceSuffix = regexp.MustCompile(`-g\d+-\d+$`)
 // the cluster stands in for the team), the role from a role.<role>.inbox
 // filter. A durable with no role filter takes its role from the agent id, the
 // replica suffix and a leading "<team>-" removed (M5).
+// The unread view has the exposure the ask ledger closes in rollupKey: a local
+// team named "global", or a cluster named like a local team, shares a key with
+// the global party. It is left as it is here; the ledger is the one that rolls
+// parties up across tiers.
 func teamAndRole(agent string, filters []string) (team, role string) {
 	for _, f := range filters {
 		p := strings.Split(f, ".")
@@ -576,7 +580,7 @@ func teamAndRole(agent string, filters []string) (team, role string) {
 		case len(p) == 4 && p[0] == "global":
 			team, role = p[1], p[2]
 		case len(p) == 3 && p[0] == "global" && p[1] == roleDirector:
-			team, role = "global", roleDirector
+			team, role = globalTeam, roleDirector
 		}
 	}
 	if role == "" {

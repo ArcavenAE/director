@@ -120,6 +120,7 @@ type globalEntry struct {
 }
 
 // globalTeam stands in for the team of the director, which has no cluster.
+// unread.go teamAndRole uses it for the same subject.
 const globalTeam = "global"
 
 type readerGap struct {
@@ -792,6 +793,12 @@ func rollupKey(p askParty) string {
 		return roleAmbiguous
 	case p.Role == roleUnresolved || p.Team == teamUnresolved:
 		return "unresolved"
+	}
+	// A party reached by a global:// address rolls up apart from a local one:
+	// validToken accepts "global" as a team, and a cluster can carry the name
+	// of a local team, so team and role alone would merge the two.
+	if strings.HasPrefix(p.Address, "global://") {
+		return "global:" + p.Team + "/" + p.Role
 	}
 	return p.Team + "/" + p.Role
 }
