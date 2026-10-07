@@ -743,3 +743,89 @@ func TestTheAskerSideAlsoUsesTheStreamTimestampNotTheClaimedSentAt(t *testing.T)
 		t.Fatalf("asker role = %q, want reviewer (stream time is past the margin)", got)
 	}
 }
+
+// Part A2: GLOBAL_PRESENCE in step 2 (design sections 4a and 8). A global
+// party names a cluster and a role in its address; the reader resolves it
+// when the hub's presence shows that principal, with the cluster standing in
+// for the team as teamAndRole does.
+
+func TestAGlobalSupervisorWithAGlobalPresenceEntryResolvesWithTheClusterAsTeam(t *testing.T) {
+	l := ledgerWith(rec(t0, "m1", "REQUEST", "sup-1", "global://cluster-b/supervisor", "x"))
+	l.NotePass(t0.Add(time.Minute))
+	l.ObserveIDs(t0.Add(time.Minute), builderObs())
+	l.ObserveGlobal(t0.Add(time.Minute), []globalObs{{Cluster: "cluster-b", Role: "supervisor"}})
+	l.Resolve(t0.Add(time.Minute))
+	o := rowOf(t, l, "m1").Owner
+	if o.Team != "cluster-b" || o.Role != "supervisor" {
+		t.Fatalf("owner = %+v, want cluster-b/supervisor", o)
+	}
+	rep := l.Report(t0.Add(time.Minute), nil, false)
+	if keyAt(t, rep.ByOwner, 0) != "cluster-b/supervisor" {
+		t.Fatalf("by owner = %+v", rep.ByOwner)
+	}
+}
+
+func TestTheGlobalDirectorResolvesFromItsPresenceWithNoCluster(t *testing.T) {
+	l := ledgerWith(rec(t0, "m1", "REQUEST", "sup-1", "global://director", "x"))
+	l.NotePass(t0.Add(time.Minute))
+	l.ObserveGlobal(t0.Add(time.Minute), []globalObs{{Cluster: "", Role: "director"}})
+	l.Resolve(t0.Add(time.Minute))
+	o := rowOf(t, l, "m1").Owner
+	if o.Team != globalTeam || o.Role != "director" {
+		t.Fatalf("owner = %+v, want %s/director", o, globalTeam)
+	}
+}
+
+func TestAGlobalPartyWithoutAGlobalPresenceEntryStaysUnresolved(t *testing.T) {
+	l := ledgerWith(rec(t0, "m1", "REQUEST", "sup-1", "global://cluster-b/supervisor", "x"))
+	l.NotePass(t0.Add(time.Minute))
+	// A different cluster's supervisor, and the director, are present; cluster-b's is not.
+	l.ObserveGlobal(t0.Add(time.Minute), []globalObs{{Cluster: "cluster-c", Role: "supervisor"}, {Role: "director"}})
+	l.Resolve(t0.Add(time.Minute))
+	o := rowOf(t, l, "m1").Owner
+	if o.Team != teamUnresolved || o.Role != roleUnresolved {
+		t.Fatalf("owner = %+v, want unresolved", o)
+	}
+}
+
+func TestAnUnroutableGlobalAddressStaysUnresolvedEvenWithPresence(t *testing.T) {
+	l := ledgerWith(rec(t0, "m1", "REQUEST", "sup-1", "global://cluster-b/worker", "x"))
+	l.ObserveGlobal(t0, []globalObs{{Cluster: "cluster-b", Role: "worker"}, {Cluster: "cluster-b", Role: "supervisor"}})
+	l.Resolve(t0)
+	if o := rowOf(t, l, "m1").Owner; o.Role != roleUnresolved {
+		t.Fatalf("owner = %+v, want unresolved", o)
+	}
+}
+
+func TestAGlobalPartyStaysResolvedAfterItsPresenceEntryExpiresWhileTheRowIsKept(t *testing.T) {
+	l := ledgerWith(rec(t0, "m1", "REQUEST", "sup-1", "global://cluster-b/supervisor", "x"))
+	l.ObserveGlobal(t0, []globalObs{{Cluster: "cluster-b", Role: "supervisor"}})
+	l.Resolve(t0)
+	later := t0.Add(idKeep + time.Hour)
+	l.ObserveGlobal(later, nil)
+	l.Sweep(later)
+	l.Resolve(later)
+	if o := rowOf(t, l, "m1").Owner; o.Team != "cluster-b" || o.Role != "supervisor" {
+		t.Fatalf("owner = %+v, want it kept while the row is kept", o)
+	}
+}
+
+func TestAGlobalPresenceKeyIsReadForItsClusterAndRole(t *testing.T) {
+	for _, c := range []struct {
+		key  string
+		want globalObs
+		ok   bool
+	}{
+		{"presence.cluster-b.supervisor.01ABC", globalObs{Cluster: "cluster-b", Role: "supervisor"}, true},
+		{"presence.director.01ABC", globalObs{Role: "director"}, true},
+		{"presence.cluster-b.worker.01ABC", globalObs{}, false}, // not a global role
+		{"presence.cluster-b.supervisor", globalObs{}, false},   // no instance
+		{"other.cluster-b.supervisor.01ABC", globalObs{}, false},
+		{"presence.cluster-b.supervisor.01ABC.extra", globalObs{}, false},
+	} {
+		got, ok := globalObsFromKey(c.key)
+		if ok != c.ok || got != c.want {
+			t.Errorf("%s: got %+v, %v; want %+v, %v", c.key, got, ok, c.want, c.ok)
+		}
+	}
+}

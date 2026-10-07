@@ -103,6 +103,25 @@ type idObs struct {
 	Role  string
 }
 
+// globalObs is one live principal in the hub's GLOBAL_PRESENCE: a cluster's
+// supervisor, or the director (no cluster).
+type globalObs struct {
+	Cluster string
+	Role    string
+}
+
+// globalEntry is a hub principal the reader saw, kept like an id table entry.
+type globalEntry struct {
+	Cluster   string    `json:"cluster"`
+	Role      string    `json:"role"`
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `json:"last_seen"`
+	Live      bool      `json:"live"`
+}
+
+// globalTeam stands in for the team of the director, which has no cluster.
+const globalTeam = "global"
+
 type readerGap struct {
 	From time.Time `json:"from"`
 	To   time.Time `json:"to"`
@@ -110,10 +129,11 @@ type readerGap struct {
 
 type askLedger struct {
 	Rows     map[string]*askRow   `json:"rows"`
-	Seen     map[string]time.Time `json:"seen"`    // message ids seen on the audit stream
-	IDs      []idEntry            `json:"ids"`     // the id table, with expired entries kept 30 days
-	Tombs    []idEntry            `json:"tombs"`   // dropped entries, kept while a row resolved through the id is kept
-	Orphans  map[string]int       `json:"orphans"` // per broker
+	Seen     map[string]time.Time `json:"seen"`       // message ids seen on the audit stream
+	IDs      []idEntry            `json:"ids"`        // the id table, with expired entries kept 30 days
+	Tombs    []idEntry            `json:"tombs"`      // dropped entries, kept while a row resolved through the id is kept
+	GlobalID []globalEntry        `json:"global_ids"` // hub principals seen in GLOBAL_PRESENCE (part A2)
+	Orphans  map[string]int       `json:"orphans"`    // per broker
 	LastSeq  map[string]uint64    `json:"last_seq"`
 	LastPass time.Time            `json:"last_pass"`
 	Down     []readerGap          `json:"down"`
@@ -395,6 +415,49 @@ func (l *askLedger) ObserveIDs(now time.Time, live []idObs) {
 	}
 }
 
+// ObserveGlobal records one pass's live GLOBAL_PRESENCE principals at now
+// (step 2 at the hub tier, part A2). A global address names a cluster and a
+// role and no agent id, so the entry is the principal, not an id.
+func (l *askLedger) ObserveGlobal(now time.Time, live []globalObs) {
+	for i := range l.GlobalID {
+		l.GlobalID[i].Live = false
+	}
+	for _, o := range live {
+		matched := false
+		for i := range l.GlobalID {
+			e := &l.GlobalID[i]
+			if e.Cluster == o.Cluster && e.Role == o.Role {
+				e.LastSeen, e.Live, matched = now, true, true
+				break
+			}
+		}
+		if !matched {
+			l.GlobalID = append(l.GlobalID, globalEntry{Cluster: o.Cluster, Role: o.Role, FirstSeen: now, LastSeen: now, Live: true})
+		}
+	}
+}
+
+// globalObsFromKey reads a GLOBAL_PRESENCE key: presence.director.<instance>
+// for the director, presence.<cluster>.supervisor.<instance> for a cluster's
+// supervisor (global.go globalPresencePrefix). Anything else is not a global
+// principal.
+func globalObsFromKey(key string) (globalObs, bool) {
+	p := strings.Split(key, ".")
+	if len(p) < 3 || p[0] != "presence" {
+		return globalObs{}, false
+	}
+	if p[1] == roleDirector {
+		if len(p) != 3 {
+			return globalObs{}, false
+		}
+		return globalObs{Role: roleDirector}, true
+	}
+	if len(p) != 4 || p[2] != roleSupervisor {
+		return globalObs{}, false
+	}
+	return globalObs{Cluster: p[1], Role: roleSupervisor}, true
+}
+
 // NotePass records that a pass started at now, listing a gap when the last
 // pass was more than the presence TTL ago.
 func (l *askLedger) NotePass(now time.Time) {
@@ -474,7 +537,23 @@ func (l *askLedger) resolveOwner(r *askRow) {
 	case "agent":
 		p.AgentID = rest
 		p.Team = team
-	default: // global, broadcast: no team on the wire; A2 reads the hub's presence
+	case "global":
+		p.Team, p.Role = teamUnresolved, roleUnresolved
+		cluster, role, err := parseGlobalAddress(p.Address)
+		if err != nil {
+			return
+		}
+		for _, g := range l.GlobalID {
+			if g.Cluster == cluster && g.Role == role {
+				p.Team, p.Role = cluster, role
+				if cluster == "" {
+					p.Team = globalTeam
+				}
+				return
+			}
+		}
+		return
+	default: // broadcast: no team on the wire, and nothing to read it from
 		p.Team, p.Role = teamUnresolved, roleUnresolved
 		return
 	}
@@ -558,6 +637,22 @@ func (l *askLedger) Sweep(now time.Time) {
 		}
 	}
 	l.Tombs = tk
+	// A hub principal is kept while it is live, or recently seen, or while a
+	// kept row's owner names it (so a resolved row does not flap to
+	// unresolved when the presence entry expires).
+	named := map[string]bool{}
+	for _, r := range l.Rows {
+		if c, ro, err := parseGlobalAddress(r.Owner.Address); err == nil {
+			named[c+"/"+ro] = true
+		}
+	}
+	gk := l.GlobalID[:0]
+	for _, g := range l.GlobalID {
+		if g.Live || now.Sub(g.LastSeen) <= idKeep || named[g.Cluster+"/"+g.Role] {
+			gk = append(gk, g)
+		}
+	}
+	l.GlobalID = gk
 	for id, at := range l.Seen {
 		if now.Sub(at) > staleAfter {
 			delete(l.Seen, id)
