@@ -62,8 +62,16 @@ func TestShimStartWarnsAGlobalOffDirectorAndNotAWorker(t *testing.T) {
 		}
 		return errb.String()
 	}
-	if out := run("DIRECTOR_GLOBAL_ROLE=director"); !strings.Contains(out, "WARNING") || !strings.Contains(out, "DIRECTOR_GLOBAL_DOMAIN") {
-		t.Errorf("director with the tier off: no warning on stderr: %q", out)
+	if out := run("DIRECTOR_GLOBAL_ROLE=director"); !strings.Contains(out, "WARNING") || !strings.Contains(out, "DIRECTOR_GLOBAL_DOMAIN") || !strings.Contains(out, "(DIRECTOR_GLOBAL_ROLE=director)") {
+		t.Errorf("director with the tier off: no warning naming its lever on stderr: %q", out)
+	}
+	// The local role lever alone: the warning names that lever, not the other.
+	if out := run("DIRECTOR_ROLE=director"); !strings.Contains(out, "WARNING") || !strings.Contains(out, "(DIRECTOR_ROLE=director)") || strings.Contains(out, "(DIRECTOR_GLOBAL_ROLE=director)") {
+		t.Errorf("director by DIRECTOR_ROLE only: want a warning naming DIRECTOR_ROLE=director alone: %q", out)
+	}
+	// A director with the tier on prints no WARNING, whichever lever names it.
+	if out := run("DIRECTOR_GLOBAL_DOMAIN=global", "DIRECTOR_CLUSTER=c", "DIRECTOR_GLOBAL_ROLE=director", "DIRECTOR_ROLE=director"); strings.Contains(out, "WARNING") {
+		t.Errorf("director with the tier on: warned: %q", out)
 	}
 	if out := run("DIRECTOR_ROLE=builder"); strings.Contains(out, "WARNING") {
 		t.Errorf("worker: warned: %q", out)
