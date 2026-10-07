@@ -251,3 +251,50 @@ func TestAsksHelpPrintsTheOrphanNoteAndExitsZero(t *testing.T) {
 		t.Fatalf("help = %q", out.String())
 	}
 }
+
+func TestTheReaderResolvesAGlobalOwnerFromTheHubsPresenceAndNamesAnUnreadableHub(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, js := provisionAudit(t, ctx, url)
+	gjs, err := jetstream.NewWithDomain(nc, "global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gkv, _ := gjs.KeyValue(ctx, globalPresenceBucket)
+	_, _ = gkv.Put(ctx, "presence.cluster-b.supervisor.01ABC", []byte(`{"cluster":"cluster-b","role":"supervisor","agent_id":"sup-b","state":"idle"}`))
+	auditPublish(t, ctx, js, envFor("m1", "REQUEST", "sup-1", "global://cluster-b/supervisor", "x"), false)
+	auditPublish(t, ctx, js, envFor("m2", "REQUEST", "sup-1", "global://cluster-c/supervisor", "y"), false)
+
+	r := newAskReader(js, askReaderCfg{Broker: "local", File: filepath.Join(t.TempDir(), "a.json"), Hub: gjs})
+	if err := r.Pass(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if o := r.ledger.Rows["m1"].Owner; o.Team != "cluster-b" || o.Role != "supervisor" {
+		t.Fatalf("m1 owner = %+v, want cluster-b/supervisor", o)
+	}
+	if o := r.ledger.Rows["m2"].Owner; o.Role != roleUnresolved {
+		t.Fatalf("m2 owner = %+v, want unresolved (no presence for cluster-c)", o)
+	}
+	if len(r.NotRead) != 0 {
+		t.Fatalf("not read = %v, want none", r.NotRead)
+	}
+
+	// A hub that cannot be read is named, and does not mark every global entry expired.
+	bad, _ := jetstream.NewWithDomain(nc, "nohub")
+	r2 := newAskReader(js, askReaderCfg{Broker: "local", File: filepath.Join(t.TempDir(), "b.json"), Hub: bad})
+	short, c2 := context.WithTimeout(ctx, 5*time.Second)
+	defer c2()
+	if err := r2.Pass(short, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, n := range r2.NotRead {
+		if strings.Contains(n, globalPresenceBucket) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("not read = %v, want %s named", r2.NotRead, globalPresenceBucket)
+	}
+}

@@ -87,7 +87,7 @@ func main() {
 	}
 	if cli.mode == "ask-reader" {
 		ctx, stop := askReaderContext()
-		code := runAskReaderCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, os.Stderr)
+		code := runAskReaderCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, env("DIRECTOR_GLOBAL_DOMAIN", "global"), os.Stderr)
 		stop()
 		os.Exit(code)
 	}

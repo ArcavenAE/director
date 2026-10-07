@@ -41,6 +41,10 @@ const (
 type askReaderCfg struct {
 	Broker string
 	File   string
+	// Hub is the hub's JetStream domain over the leaf, read for GLOBAL_PRESENCE
+	// (part A2). Nil leaves global parties unresolved and names nothing as
+	// unread, since no hub was asked for.
+	Hub jetstream.JetStream
 }
 
 type askReader struct {
@@ -194,6 +198,32 @@ func (r *askReader) gatherIDs(ctx context.Context) (obs []idObs, ok bool) {
 	return obs, ok
 }
 
+// gatherGlobal copies every live principal in the hub's GLOBAL_PRESENCE. ok is
+// false when the hub or the bucket could not be read: the table is then left
+// alone, since a missing source would otherwise mark every entry expired. With
+// no hub configured it returns ok false and says nothing.
+func (r *askReader) gatherGlobal(ctx context.Context) (obs []globalObs, ok bool) {
+	if r.cfg.Hub == nil {
+		return nil, false
+	}
+	kv, err := r.cfg.Hub.KeyValue(ctx, globalPresenceBucket)
+	if err != nil {
+		r.NotRead = append(r.NotRead, globalPresenceBucket+": "+err.Error())
+		return nil, false
+	}
+	keys, err := kv.Keys(ctx)
+	if err != nil && !errors.Is(err, jetstream.ErrNoKeysFound) {
+		r.NotRead = append(r.NotRead, globalPresenceBucket+" keys: "+err.Error())
+		return nil, false
+	}
+	for _, k := range keys {
+		if o, good := globalObsFromKey(k); good {
+			obs = append(obs, o)
+		}
+	}
+	return obs, true
+}
+
 // readAudit reads new sequences of AGENT_AUDIT, by sequence, and feeds them to
 // the ledger. It keeps its own last sequence per broker.
 func (r *askReader) readAudit(ctx context.Context) {
@@ -248,6 +278,9 @@ func (r *askReader) Pass(ctx context.Context, now time.Time) error {
 	r.ledger.NotePass(now)
 	if obs, ok := r.gatherIDs(ctx); ok {
 		r.ledger.ObserveIDs(now, obs)
+	}
+	if g, ok := r.gatherGlobal(ctx); ok {
+		r.ledger.ObserveGlobal(now, g)
 	}
 	r.readAudit(ctx)
 	r.ledger.Resolve(now)
@@ -447,7 +480,7 @@ func runAsksCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Write
 
 // runAskReaderCmd is the long-running loop: a pass at least every 30s until a
 // signal arrives, or one pass with --once.
-func runAskReaderCmd(ctx context.Context, url string, cli cliArgs, errw io.Writer) int {
+func runAskReaderCmd(ctx context.Context, url string, cli cliArgs, domain string, errw io.Writer) int {
 	nc, js, err := dial(url, Sender{AgentID: "ask-reader"})
 	if err != nil {
 		_, _ = fmt.Fprintf(errw, "director-mcp ask-reader: connect %s: %v\n", url, err)
@@ -473,7 +506,16 @@ func runAskReaderCmd(ctx context.Context, url string, cli cliArgs, errw io.Write
 	if every <= 0 {
 		every = defaultPass
 	}
-	r := newAskReader(js, askReaderCfg{Broker: "local", File: file})
+	cfg := askReaderCfg{Broker: "local", File: file}
+	if domain != "" {
+		hub, err := jetstream.NewWithDomain(nc, domain)
+		if err != nil {
+			_, _ = fmt.Fprintf(errw, "director-mcp ask-reader: global domain %q: %v (global parties stay unresolved)\n", domain, err)
+		} else {
+			cfg.Hub = hub
+		}
+	}
+	r := newAskReader(js, cfg)
 	for {
 		started := time.Now()
 		if err := r.Pass(ctx, started); err != nil {
