@@ -53,6 +53,21 @@ daemon; a launcher supplies the rest.
 | `director-mcp ask-reader [--once] [--file <path>] [--interval <dur up to 30s>]` | the ask ledger's reader (`sim/design/ask-ledger.md`, part A1): a pass at least every 30s over `AGENT_AUDIT`, read by sequence. Creates no consumer. Writes only the `ASK_LEDGER` bucket and a JSON file it rewrites atomically (default `~/.director/ask-ledger.json`, or `DIRECTOR_ASK_LEDGER_FILE`). Runs under director's own user and names every stream it could not read. |
 | `director-mcp asks [--json] [--all] [--help]` | on-demand read of the ledger's store: alarms, blocked-on chains, rollups per owner and asker role, gaps. Runs no pass of its own. Always exits 0. |
 
+**Rollup keys.** Each row of `rollup_by_owner` and `rollup_by_asker` in the
+ask ledger's JSON carries a `key`. The forms, which a consumer may rely on:
+
+| Key | Meaning |
+|---|---|
+| `<team>/<role>` | a local party, for example `ops/builder` |
+| `global:<cluster>/<role>` | a party reached by a `global://` address, for example `global:cluster-b/supervisor`; the director has no cluster and rolls up as `global:global/director` |
+| `unresolved` | the team or role could not be resolved |
+| `unresolved: ambiguous` | the id table holds more than one team and role for the same agent id |
+| `<team>/unresolved: no role declared` | the seat has a team and declares no role |
+
+The `global:` prefix keeps a global party apart from a local one with the same
+team and role. It is set from the party's address, and an asker row carries no
+address, so only owner keys carry it today.
+
 Any other argument is refused with exit 2, rather than ignored and a live
 shim started (director#75).
 
