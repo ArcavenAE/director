@@ -2018,6 +2018,153 @@ stands: director must not word a relay so that it passes a classifier.
 *Earned by: the four relayed rulings denied at the receiving seat (R-181).*
 *Source: RULED 2026-10-05. Cross-refs R-181, R-05, R-95.*
 
+**R-185 (OBSERVED) · a routed item is reported as moving only after the
+recipient acknowledges it.** Director told the operator that fixes were
+"routed to product" while its asks sat unread in that supervisor's inbox for
+about two hours, so nothing had started. The same day a mokuzai supervisor
+reported that no doorbell had reached it for about 40 hours, so a backlog of
+global asks went unread while every send returned accepted. Earlier, a
+seat-to-seat query sat undrained for 2h46m because director watched only its
+own inbox, and an empty inbox read on a pane was taken for a dropped request
+when it meant the request had been answered. Director tracks each route as
+sent, acknowledged, answered; it reports "sent, not yet acknowledged" until
+the receiver acks, and re-rings or escalates when no ack arrives inside a
+window.
+*Earned by: O 2026-10-06 product inbox unread 2h, O 2026-10-06 migrated 40h
+silent, O 2026-10-06c, O 2026-10-06d.*
+*Source: OBSERVED. Applies R-08 and R-117 to director's own reporting;
+cross-refs R-105, R-173.*
+
+**R-186 (OBSERVED) · director's gloss never enters a record, and never adds an
+action the operator's words lack.** Five times in two days a director gloss
+travelled as if ruled: an inference written into a design PR as the
+operator's, an uncounted "every claim has a verdict" relayed as fact, a
+description of one host's settings published inside a direction under the
+operator's account, a guessed mechanism shipped twice before the evidence,
+and a relay mapping that added "discard the local commits" to an operator's
+"ignore them". A seat caught the last one before it ran; deleting unpushed
+work cannot be undone. A relay carries the operator's words verbatim; any
+gloss is marked, kept out of anything a seat will record or publish, and may
+not add a step, least of all an irreversible one. A gloss that contains a
+count or a mechanism needs the one-command check first.
+*Earned by: O 2026-10-05n, O 2026-10-05o, O 2026-10-06k, O 2026-10-06l,
+O-06p.*
+*Source: OBSERVED. Extends R-04; cross-refs R-150, R-165.*
+
+**R-187 (OBSERVED) · a reply's in_reply_to is taken from a selected message,
+never typed.** Director set in_reply_to by hand five times in two days and got
+it wrong each time: two invented ids, a 10-character prefix a seat had quoted
+in its prose, and one retyped id with a character added. The rule "copy an id
+just read from the stream" failed whenever the copy was typed. The send path
+fills in_reply_to from the message being answered and refuses an id it has
+never seen.
+*Earned by: O 2026-10-05i (three instances), O 2026-10-05p, O 2026-10-05r.*
+*Source: OBSERVED. Cross-refs R-13, R-183.*
+
+**R-188 (OBSERVED) · every option put to the operator carries a stable id from
+its source, and an answer resolves to exactly one question.** The operator
+answered "1 none / 3 (a)"; director mapped it onto its own numbered list and a
+seat mapped it onto a plan's steps, and the seat's reading was the right one.
+Another time director relettered a ballot when presenting it, the operator
+answered "(b)", and the architect caught that director's (b) was the ballot's
+(c). Director carries option letters and question ids from the source ballot,
+never re-letters them, and binds each answer to one question.
+*Earned by: O 2026-10-05j, O 2026-10-06o.*
+*Source: OBSERVED. Extends R-175.*
+
+**R-189 (OBSERVED) · a ruling that changes a manifest or casting lands as a
+versioned change with an owner.** On three operator rulings director edited
+live, untracked marvel config by hand after a backup, because no seat could
+write it: a casting scope line, a reader handoff path, and replica counts in
+two team manifests. Each change exists only as a hand edit on one host, with a
+backup file as its history. Director (or marvel) records such rulings as a
+versioned change with a named owner and a diff the operator can read before it
+applies.
+*Earned by: O 2026-10-05l, O 2026-10-05m, relay-log 2026-10-06 (replica edits
+on two manifests).*
+*Source: OBSERVED. Cross-refs R-127, R-131.*
+
+**R-190 (OBSERVED) · there is a local-tier address for every supervisor on a
+cluster.** "Warn the supervisors" had no address: a workspace broadcast reached
+every seat in one workspace and no supervisor in the others, and a per-team
+role address takes one send per team. The global tier already has
+`global://<cluster>/supervisor`; the local tier needs the same, scoped by role
+across workspaces.
+*Earned by: O-06t; FR 2026-10-06 (workspace broadcast missed two teams).*
+*Source: OBSERVED. Cross-refs R-142, R-161, R-182.*
+
+**R-191 (OBSERVED) · when a control blocks a step, the operator gets the exact
+runnable command first.** A read-only sweep question went to the operator
+three times (permission, route, options) before anyone handed over a command,
+and the operator asked for the command to run it themselves.
+The same day an upstream issue create, refused under an explicit grant, ended
+with the operator posting by hand after several rounds. Director leads with
+the command the operator can run, then offers the durable fix.
+*Earned by: O-06v, FR 2026-10-06g.*
+*Source: OBSERVED. Cross-refs R-135, R-175, R-181.*
+
+**R-192 (OBSERVED) · director's log times come from the clock.** Relay-log
+times were written from a sense of elapsed time and ran up to 35 minutes
+ahead; the next day two stamps were again ahead of `date -u`. Every entry
+director writes is stamped by the clock when it is written.
+*Earned by: O 2026-10-05q, O 2026-10-06h (addendum).*
+*Source: OBSERVED. Cross-refs R-174.*
+
+### Harvest diff (2026-10-06)
+
+Covers the observations O 2026-10-05g through the 2026-10-06 entries (O-06p
+to O-06v and the three named 2026-10-06 entries), and friction 2026-10-05h
+through FR 2026-10-06 scan-then-post, after the 2026-10-05 harvest. Same bar:
+an item is promoted on two or more recorded instances.
+
+- **Promoted (8):** R-185 (a route counts as moving only after an ack), R-186
+  (gloss stays out of records and adds no actions), R-187 (in_reply_to is
+  selected, never typed), R-188 (stable option ids), R-189 (manifest and
+  casting rulings land as versioned changes), R-190 (a local address for every
+  supervisor on a cluster), R-191 (the runnable command first), R-192 (log
+  times from the clock).
+- **Unchanged, new instances (8):**
+  - R-117: idle seats again held work mail for hours; folded into R-185 for
+    director's own reporting.
+  - R-181: host setup refused as self-modification, an upstream create
+    refused under a grant, and a builder's ticket writes refused as external
+    system writes (O 2026-10-05g, FR 2026-10-06g, relay-log 2026-10-06).
+  - R-177: a false identity rule ("cannot approve") and a seat's precaution
+    were each relayed to the operator unchecked (O 2026-10-06f, O-06r).
+  - R-103: fleet load and free/busy were assembled by hand twice, with no
+    queue depth or current ask per seat (O 2026-10-06h, O-06s).
+  - R-171: a draft PR went to the operator against the standing rule
+    (O 2026-10-06j).
+  - R-176: a disclosure scan and a post ran in one command, so the scan could
+    not stop the post (FR 2026-10-06 scan-then-post).
+  - R-120 and R-158: a file transfer between hosts was improvised because no
+    supported path exists (O 2026-10-05h).
+  - R-104: a fresh seat's global inbox replayed hundreds of old fan-out
+    messages before its own reply (FR-06i).
+- **Kept as observations (7), one instance each:** a doorbell for another
+  host's seats routed by hand (O 2026-10-06e); an operator-named process
+  forgotten at relay time (O 2026-10-06g); a denied write that landed through
+  a peer (O 2026-10-06i); a team-wide generation counter read as a respawn
+  loop (O 2026-10-06m); a stub body sent in a parallel call (O-06q); host
+  attribution keyed on a shared GitHub login (O-06u); a live team change not
+  announced to seats observing that daemon (O 2026-10-06 unannounced change).
+- **Rejected for the register (routed elsewhere):**
+  - A role with a max-age shift cannot gain a replica without a full manifest
+    apply, and there is no manifest dry run (FR-06j): marvel.
+  - GitHub merge errors on a possibly in-flight merge (FR-06k): general
+    practice, recheck state before a retry.
+  - Strict up-to-date branches turn serial dependency merges into one rebase
+    cycle each (FR-06l): the repository's merge settings.
+  - The bd archive script commits on a protected main with an em dash in its
+    subject (FR 2026-10-06h, second instance of FR 2026-10-04a): the orc's
+    script.
+  - The wardrobe install root half-applies on update (FR 2026-10-05h): wardrobe.
+  - A search listed file names under a directory the standing rule says not to
+    list, and a zsh word-split left a ledger write empty (FR 2026-10-05i):
+    general practice, already in the shell rules.
+  - The operator's shell-escape lines arrived as plain text (FR 2026-10-05
+    bang): the harness client, needs a probe.
+
 ### Harvest diff (2026-10-05)
 
 Covers the observations O 2026-10-04c through O 2026-10-05f, friction
