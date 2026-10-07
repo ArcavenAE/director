@@ -9,6 +9,10 @@
 # durable (R-50), two sessions launched this way get two distinct addresses,
 # two distinct inboxes, and two distinct presence keys, so mail is never raced.
 #
+# Run it from the orc checkout or a directory below it: claude starts in the
+# cwd, and the launcher refuses a cwd with no orc root above it (aae-orc-skw0b).
+# Check: probe/nats-phase-0/id-a-demo/verify-director-session.sh
+#
 # Usage:
 #   ./director-session.sh <distinct-agent-id> [extra claude args...]
 # Example (two terminals):
@@ -40,6 +44,29 @@ shift || true
 # enforces at spawn. Fail early with a clear message rather than at connect.
 if [[ ! "$id" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo "director-session: refusing agent id '$id'; the class is [A-Za-z0-9_-] (R-76)" >&2
+  exit 1
+fi
+
+# claude is exec'd in the inherited cwd, and a seat launched from a directory
+# outside the orc comes up without the orc's CLAUDE.md, rules, skills, bd or
+# aq and ax: it runs, looks healthy, and is context-broken (aae-orc-skw0b). So
+# refuse, on the operator's own terms, rather than move them somewhere they did
+# not ask to be. An orc root is an ancestor of the cwd holding both CLAUDE.md
+# and repos.yaml: the test aq and ax use to decide orc mode (find_orc_root in
+# tools/aq and tools/ax). It is repeated here because the launcher cannot ask
+# aq, which answers in repo mode inside any git checkout. It reads the cwd only:
+# aq honours ORC_ROOT, but a seat's context comes from where claude starts.
+in_orc_root() {
+  local dir="$PWD"
+  while [[ "$dir" != "/" ]]; do
+    [[ -f "$dir/CLAUDE.md" && -f "$dir/repos.yaml" ]] && return 0
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+if ! in_orc_root; then
+  echo "director-session: refusing to launch from '$PWD'; it is not inside an orc root, so the seat would start without the orc context" >&2
+  echo "director-session: run it from the orc checkout or any directory below it: an ancestor holding both CLAUDE.md and repos.yaml" >&2
   exit 1
 fi
 
