@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Prove director-session.sh refuses to launch claude from a directory that is
-# not inside an orc root, and launches from one (aae-orc-skw0b, shape b). An
-# orc root is an ancestor of the cwd holding both CLAUDE.md and repos.yaml, the
-# test aq and ax use to decide orc mode.
+# Prove director-session.sh launches claude only from an orc root, and refuses
+# every other directory (aae-orc-skw0b, shape b). The orc root is the nearest
+# ancestor of the cwd, the cwd included, holding both CLAUDE.md and repos.yaml,
+# the walk aq and ax use to decide orc mode; a launch below it is refused too.
 #
 # Broker-free: claude and the shim are stubs, nothing connects. A refusal must
 # exit nonzero, must not run claude, and must say what is wrong and what is
@@ -49,11 +49,18 @@ mkdir -p "$orc/sub/deeper" "$work/plain" "$work/claudeonly" "$work/reposonly"
 : >"$work/claudeonly/CLAUDE.md"
 : >"$work/reposonly/repos.yaml"
 
-# Positive controls: the orc root, and a subdirectory of it, launch.
+# Positive control: the orc root launches.
 run "$orc" X=1
 [[ $rc -eq 0 && -n "$ran" ]] || miss "orc root: rc=$rc ran='$ran' err=$err"
-run "$orc/sub/deeper" X=1
-[[ $rc -eq 0 && -n "$ran" ]] || miss "orc subdirectory: rc=$rc ran='$ran' err=$err"
+
+# A subdirectory of the orc is refused: a seat started there does not load the
+# orc's skills or settings and is limited to the subtree. The refusal names the
+# root to cd to.
+for sub in "$orc/sub" "$orc/sub/deeper"; do
+  run "$sub" X=1
+  [[ $rc -ne 0 && -z "$ran" ]] || miss "orc subdirectory $sub: rc=$rc ran='$ran'"
+  [[ "$err" == *"$orc"* ]] || miss "orc subdirectory $sub: refusal does not name the root $orc: $err"
+done
 
 # Refusals: no marker, one marker, the other marker.
 for d in plain claudeonly reposonly; do
@@ -69,4 +76,4 @@ run "$work/plain" ORC_ROOT="$orc"
 [[ $rc -ne 0 && -z "$ran" ]] || miss "ORC_ROOT set, wrong cwd: rc=$rc ran='$ran'"
 
 if [[ $fail -ne 0 ]]; then echo "FAIL"; exit 1; fi
-echo "ok: director-session.sh refuses a non-orc cwd and launches from an orc root"
+echo "ok: director-session.sh launches from an orc root and refuses every other directory"
