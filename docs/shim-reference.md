@@ -39,6 +39,14 @@ two are required. The role is one of exactly two words.
 | `DIRECTOR_CLUSTER` | this cluster's subject token (for example `kinu`, `mokuzai`) |
 | `DIRECTOR_GLOBAL_ROLE` | `supervisor` or `director` |
 
+With `DIRECTOR_GLOBAL_DOMAIN` unset the global tier is off, which is correct for
+a worker. A seat that holds the director role (`DIRECTOR_GLOBAL_ROLE=director`
+or `DIRECTOR_ROLE=director`) with the tier off gets a `WARNING` on stderr at
+start naming what is missing and what still works: it reaches no hub, shows
+local seats only, and refuses `global://` sends, while local mail is
+unaffected. The shim warns and does not refuse; a worker or any other role
+starts silently.
+
 Under marvel, `DIRECTOR_AGENT_ID`, `NATS_URL`, `DIRECTOR_NATS_USER`, and
 `DIRECTOR_NATS_PASS` are stamped into the session environment by the
 daemon; a launcher supplies the rest.
