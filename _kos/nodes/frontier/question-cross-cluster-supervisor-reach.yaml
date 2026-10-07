@@ -77,6 +77,9 @@ edges:
     type: derives
   - target: finding-022-a-hub-reload-closes-a-removed-users-live-client-connection
     type: supports
+  - target: finding-024-a-leaf-seat-sees-two-global-outages-the-same-way-and-loses-no-sends
+    type: supports
+    note: "the leaf side of reach during an outage: an announced and an unannounced hub outage showed the same two errors, the local tier kept working, and the send refused while the hub was down published nothing"
 provenance:
   created_by: agent
   session: 2026-09-28 cross-cluster supervisor reach, kinu arm (arcaven-research-supervisor-g5-0)
