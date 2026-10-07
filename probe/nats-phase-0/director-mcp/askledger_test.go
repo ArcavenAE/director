@@ -760,7 +760,7 @@ func TestAGlobalSupervisorWithAGlobalPresenceEntryResolvesWithTheClusterAsTeam(t
 		t.Fatalf("owner = %+v, want cluster-b/supervisor", o)
 	}
 	rep := l.Report(t0.Add(time.Minute), nil, false)
-	if keyAt(t, rep.ByOwner, 0) != "cluster-b/supervisor" {
+	if keyAt(t, rep.ByOwner, 0) != "global:cluster-b/supervisor" {
 		t.Fatalf("by owner = %+v", rep.ByOwner)
 	}
 }
