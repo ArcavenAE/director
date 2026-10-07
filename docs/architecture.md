@@ -186,7 +186,7 @@ flowchart LR
   end
   subgraph director["director (per session)"]
     SHIM["director-mcp shim<br/>reads exactly those variables"]
-    PROTO["envelope v1, presence, six tools"]
+    PROTO["envelope v1, presence, seven tools"]
   end
   ENV --> SHIM
   N <--> SHIM

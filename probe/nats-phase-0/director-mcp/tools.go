@@ -89,6 +89,20 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 			},
 		},
 		{
+			Name:        "report_status",
+			Description: "Tell the sender of an ask that you are working on it, or blocked on someone. One INFORM signal in reply to the ask, so the ask ledger can show working and blocked-on instead of silence. Send it when you start work on a request and again if you stop on someone else.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"to":          str("the address of whoever sent the ask"),
+					"in_reply_to": str("the message_id of the ask"),
+					"status":      str("working | blocked-on"),
+					"on":          str("for blocked-on only: the agent:// or role:// address, or the ref (pr:, bd:, finding:), you are waiting on"),
+				},
+				"required": []string{"to", "in_reply_to", "status"},
+			},
+		},
+		{
 			Name:        "broadcast",
 			Description: "Send an INFORM to every seat live in the workspace or a team: one durable send per seat found in presence, excluding you. Returns recipients:N and refuses when N is 0. A seat that joins after the call is not included.",
 			InputSchema: map[string]any{
@@ -128,6 +142,8 @@ func dispatchTool(ctx context.Context, bus *Bus, name string, rawArgs json.RawMe
 		return toolPresence(ctx, bus, rawArgs)
 	case "broadcast":
 		return toolBroadcast(ctx, bus, rawArgs)
+	case "report_status":
+		return toolReportStatus(ctx, bus, rawArgs)
 	}
 	return nil, errors.New("unknown tool: " + name)
 }
