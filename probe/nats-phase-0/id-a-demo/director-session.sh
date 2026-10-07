@@ -9,6 +9,10 @@
 # durable (R-50), two sessions launched this way get two distinct addresses,
 # two distinct inboxes, and two distinct presence keys, so mail is never raced.
 #
+# Run it from the orc root: claude starts in the cwd, and the launcher refuses
+# any other directory, naming the root to cd to (aae-orc-skw0b).
+# Check: probe/nats-phase-0/id-a-demo/verify-director-session.sh
+#
 # Usage:
 #   ./director-session.sh <distinct-agent-id> [extra claude args...]
 # Example (two terminals):
@@ -40,6 +44,41 @@ shift || true
 # enforces at spawn. Fail early with a clear message rather than at connect.
 if [[ ! "$id" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo "director-session: refusing agent id '$id'; the class is [A-Za-z0-9_-] (R-76)" >&2
+  exit 1
+fi
+
+# claude is exec'd in the inherited cwd, and a seat launched from a directory
+# that is not the orc root comes up without the orc's skills and settings, and
+# limited to that subtree; from outside the orc it also loses CLAUDE.md, the
+# rules, bd, aq and ax. It runs, looks healthy, and is context-broken
+# (aae-orc-skw0b). So refuse, on the operator's own terms, rather than move
+# them somewhere they did not ask to be. The orc root is found the way aq and
+# ax find it: the nearest ancestor of the cwd, the cwd included, holding both
+# CLAUDE.md and repos.yaml (find_orc_root in tools/aq and tools/ax). The walk
+# is repeated here because the launcher cannot ask aq, which answers in repo
+# mode inside any git checkout. The launch is allowed only when the root found
+# IS the cwd. aq honours ORC_ROOT; this does not, because a seat's context comes
+# from where claude starts.
+find_orc_root() {
+  local dir="$PWD"
+  while [[ "$dir" != "/" ]]; do
+    if [[ -f "$dir/CLAUDE.md" && -f "$dir/repos.yaml" ]]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+if root="$(find_orc_root)"; then
+  if [[ "$root" != "$PWD" ]]; then
+    echo "director-session: refusing to launch from '$PWD'; it is below the orc root, so the seat would start without the orc's skills and settings and limited to this subtree" >&2
+    echo "director-session: cd '$root' and run it again; the launch directory must be the orc root, the one holding CLAUDE.md and repos.yaml" >&2
+    exit 1
+  fi
+else
+  echo "director-session: refusing to launch from '$PWD'; it is not inside an orc root, so the seat would start without the orc context" >&2
+  echo "director-session: cd to the orc checkout and run it again; the launch directory must be the orc root, the one holding CLAUDE.md and repos.yaml" >&2
   exit 1
 fi
 
