@@ -30,7 +30,9 @@ content: |
   B. What tells the sender that a message is still unread: the cue design's
      `cue.unanswered` receipt surfaced to the sender, a per-recipient "oldest
      unread" age from `inbox_summary`, or something else? finding-013 names
-     both as candidates; neither is built.
+     both as candidates. Neither reaches the sender today: `cue.unanswered`
+     goes to the director (cue.go), and `director-mcp unread` reports each
+     seat's oldest unread age to an operator (#137).
   C. Until A is settled, is a supervisor's own scheduled check for when
      dispatched work is due the practice, as finding-013 recommends, and where
      is it written down?
@@ -54,4 +56,6 @@ provenance:
   created_at: "2026-10-07"
   notes: >
     Placed from the 2026-10-07 harvest. Every statement is drawn from
-    finding-013; nothing here is new evidence.
+    finding-013 or finding-016, except the sentence in B on where
+    `cue.unanswered` and `director-mcp unread` report today, which was read
+    from the code on main at e7c26c1 (cue.go:453, unread.go:192).
