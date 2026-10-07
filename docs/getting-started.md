@@ -147,6 +147,16 @@ with the same id, so use it for one standing seat (the human's own) and
 never for a fleet. Remove it with `claude mcp remove director-mcp --scope
 local`.
 
+**A dialog can block a fresh seat.** A new Claude Code session may show a
+"Teach auto mode about your environment?" menu under the prompt, with "1. Yes"
+preselected. While it is up, text injected into the pane does not reach the
+model, and the seat still looks healthy to marvel and to presence. Pressing
+Enter picks Yes and opens the setup wizard. Capture the pane before you inject;
+if the menu is showing, move to "2. Not now" with the arrow keys, press Enter,
+and capture again to confirm it is gone. Escape is the fallback. Do not choose
+"Yes" or "Don't show again". This was found on the third cluster's bring-up
+(friction S12-9).
+
 Both forms produce the same result: `claude mcp list` reports the server
 connected, and the shim's presence record appears in the bucket:
 
