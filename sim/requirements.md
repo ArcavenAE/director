@@ -2192,7 +2192,10 @@ as "operator approves or grants": "if it's recommended for merge, say so. They
 had better be ready, reviewed, fixed and not in draft". Director checks the
 pull request's state first (that one had already merged) and presents only
 ready, reviewed, fixed, non-draft pull requests, each as merge recommended.
-*Earned by: the two operator corrections quoted above.*
+*Earned by: the two operator corrections quoted above. The 2026-10-05 line
+reached the fleet as director's relay; its copy on the bus is message
+01M469DDSTB3A1V631N9KSWEWG. The 2026-10-07 line is director relay R-2308,
+bus message 01M4A456CWYJJYRXVAXGXGC026.*
 *Source: RULED 2026-10-05 and 2026-10-07. Extends R-147 and R-171.*
 
 **R-199 (OBSERVED) · a sender's identity survives a shared transport login.**
