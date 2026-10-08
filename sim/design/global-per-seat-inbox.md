@@ -189,7 +189,9 @@ window opens, the operator checks it:
 nats --js-domain global kv ls FABRIC_CUTOVER
 ```
 
-The listed keys must equal the set of clusters past step 6. A listed cluster
+The listed keys must equal the set of clusters past step 7. `kv ls` opens a
+consumer, so the check runs under the operator credential, not a leaf user,
+whose grants are read-only. A listed cluster
 without fabric presence, or an unlisted cluster with fabric presence, is a
 stop.
 
@@ -212,16 +214,35 @@ traffic until it stops.
 The other direction needs no forwarder, and it is keyed on cutover state,
 never on presence. The cutover plan keeps a **cutover record**: a hub
 key-value bucket, `FABRIC_CUTOVER`, with no TTL and one key per cut cluster.
-The operator writes a cluster's key once its window's step 6 has created
-`INBOX` with its sources, so from then on other clusters' sends wait in
-`OUTBOX` or `INBOX` rather than taking the legacy publish. Two stated checks
-bound the window around it. At step 1, after the cluster's shims stop, the
-operator confirms no `presence.<cluster>.*` row remains in `GLOBAL_PRESENCE`
-(rows expire after 90s, `probe/nats-global-tier/hub/provision.sh:24`, so a
-killed shim's row can outlive it); until then a legacy send could still find
-a row and strand on the legacy stream. A step-7 abort deletes the key. In a
-rollback the key is deleted first, before brief 11 section 5.4 step 1 stops
-the new shims. A cut
+The operator writes a cluster's key after its window's step 7 count matches
+and before step 8 starts the new shims. Writing it earlier would lose mail:
+`OUTBOX` is work-queue, so once the key sends other clusters' mail to the
+fabric, sourcing moves each message into this cluster's `INBOX` and removes
+it from the sender's `OUTBOX`, and a step-7 abort deletes that `INBOX`
+(brief 11 section 5.3 step 7) after the senders were told it was accepted.
+With the key written after the count, a step-7 abort has no key to undo and
+no sourced mail to lose.
+
+Before the write, other clusters' sends take the legacy publish and are
+refused loudly, because nothing reads the legacy subject any more. That
+depends on one stated check at step 1: after the cluster's shims stop, the
+operator confirms no legacy presence row for the cluster remains. Rows expire
+after 90s (`probe/nats-global-tier/hub/provision.sh:24`), so a killed shim's
+row can outlive it, and while one remains a legacy send passes the liveness
+check and strands on the legacy stream. Legacy keys have four tokens
+(`presence.<cluster>.supervisor.<instance>`), so the check matches
+`presence.<cluster>.>`, under the operator credential:
+
+```
+nats --js-domain global kv ls GLOBAL_PRESENCE > presence.txt; echo rc=$?
+grep -c 'presence\.director\.' presence.txt
+grep 'presence\.<cluster>\.' presence.txt
+```
+
+Pass: `rc=0`, the director's row is counted at least once (a positive control
+that the listing holds keys at all, in whatever layout the CLI prints), and
+the last line prints nothing. A failed or empty listing is not a clean one. In a rollback the key is deleted first, before brief 11
+section 5.4 step 1 stops the new shims. A cut
 kinu seat sending to `global://mokuzai/supervisor` reads the record:
 
 - **mokuzai not listed** (the gap): the send takes the legacy publish
@@ -236,7 +257,8 @@ kinu seat sending to `global://mokuzai/supervisor` reads the record:
   legacy row outlived its session, stranded on `GLOBAL_TO_mokuzai` with no
   reader.
 - **the record cannot be read**: the send is refused, naming the error. A
-  failed read is never taken as absence.
+  failed read is never taken as absence. A key-not-found answer, including
+  from an empty bucket, means "not listed"; any other error refuses.
 
 Alias resolution never reads legacy presence, in either direction. The
 fallback is chosen by the cutover record alone, never by a legacy row or by
