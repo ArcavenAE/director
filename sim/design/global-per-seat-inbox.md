@@ -148,13 +148,24 @@ Brief 11 section 5, with nothing reordered:
 1. Builds ready and pinned: the new shim with section 3's changes, the
    migration tool, and the current shim pinned as the rollback build.
 2. `DIRECTOR_INBOX` created on the hub first, and the empty `FABRIC_CUTOVER`
-   record beside it (section 5.3).
+   record beside it (section 5.3). The hub's leaf allow-list grants
+   `GLOBAL_PRESENCE` by name (`probe/nats-global-tier/hub/nats-server.conf:56-62`),
+   so the same step adds read grants for the record to each cluster's leaf
+   user: `$JS.<domain>.API.STREAM.INFO.KV_FABRIC_CUTOVER`,
+   `$JS.<domain>.API.DIRECT.GET.KV_FABRIC_CUTOVER.>` and
+   `$JS.<domain>.API.STREAM.MSG.GET.KV_FABRIC_CUTOVER`. Read only: no leaf
+   gets a write grant, because only the operator writes the record. Without
+   the grants every read answers no responders and every gap send is refused,
+   so the step's check is one read of the record from each cluster's leaf.
 3. The kinu window (brief 11 section 5.3, steps 1 to 10). Before step 8,
    `cast-launch.sh` on kinu carries the cast-role change, so every seat starts
    on its own address.
 4. The mokuzai window, in the same session if possible.
 5. `GLOBAL_TO_*` retire after the last cluster is cut and their pending counts
-   read zero.
+   read zero. That rule also catches unread mail already on
+   `GLOBAL_TO_mokuzai` at the last window, which has no reader afterwards: a
+   nonzero pending count holds the retirement until it is carried across or
+   reported.
 
 The cutover plan goes to director before any of it is scheduled. No window
 opens on this note.
@@ -169,6 +180,18 @@ opens on this note.
   supervisor. It is refused before publish, and the refusal names the
   candidates.
 - A second shim binding a live seat's address is refused at the broker.
+
+The cutover record is one operator write per cluster, and a wrong or missing
+write misroutes mail. So at each window's step 8, and again before the next
+window opens, the operator checks it:
+
+```
+nats --js-domain global kv ls FABRIC_CUTOVER
+```
+
+The listed keys must equal the set of clusters past step 6. A listed cluster
+without fabric presence, or an unlisted cluster with fabric presence, is a
+stop.
 
 ### 5.3 The gap between windows, and the forwarding seat
 
@@ -189,9 +212,16 @@ traffic until it stops.
 The other direction needs no forwarder, and it is keyed on cutover state,
 never on presence. The cutover plan keeps a **cutover record**: a hub
 key-value bucket, `FABRIC_CUTOVER`, with no TTL and one key per cut cluster.
-The operator writes a cluster's key at its window's step 8, once its new
-shims are up, and deletes it first in that cluster's rollback, before
-brief 11 section 5.4 step 1 stops the new shims. A cut
+The operator writes a cluster's key once its window's step 6 has created
+`INBOX` with its sources, so from then on other clusters' sends wait in
+`OUTBOX` or `INBOX` rather than taking the legacy publish. Two stated checks
+bound the window around it. At step 1, after the cluster's shims stop, the
+operator confirms no `presence.<cluster>.*` row remains in `GLOBAL_PRESENCE`
+(rows expire after 90s, `probe/nats-global-tier/hub/provision.sh:24`, so a
+killed shim's row can outlive it); until then a legacy send could still find
+a row and strand on the legacy stream. A step-7 abort deletes the key. In a
+rollback the key is deleted first, before brief 11 section 5.4 step 1 stops
+the new shims. A cut
 kinu seat sending to `global://mokuzai/supervisor` reads the record:
 
 - **mokuzai not listed** (the gap): the send takes the legacy publish
