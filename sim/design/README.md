@@ -66,3 +66,10 @@ a probe before it hardens.
   blocked-on chain, and a per-role rollup that marvel's QUEUE column and
   the board's W5 read. Says how it differs from #168. Issue #246; R-08,
   R-105, R-110, R-115, R-117, R-183.
+- `global-per-seat-inbox.md` (design for review 2026-10-07): the operator's
+  ruling B on two supervisor-role seats sharing one global address, delivered
+  on brief 11's fabric. A seat's fabric role is its cast role, a role address
+  is a one-taker queue, the legacy cluster-wide supervisor alias refuses when
+  ambiguous, the shim change against `global.go`, proposed R-94 text, and the
+  cutover with a named legacy reader and the forwarding seat's end condition.
+  Candidate GSI-A to GSI-C.
