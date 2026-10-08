@@ -18,7 +18,7 @@
 - 20:05:09Z, send side, one attempt: `send_message` to `global://kinu/supervisor` returned `reading GLOBAL_PRESENCE: nats: jetstream not enabled (the hub is reached through the local broker's leaf link in domain "global"; a down link and a credential that does not grant this cluster's stream both surface as no responders)`. The seat did not retry it.
 - The local tier, gh, and marvel were unaffected for the whole window.
 - 22:19:08Z: the first poll with no `global_warning`. 22:19:40Z: the held sends went out as seq 700 and 701. Because the last good send was 699, the refused 20:05:09Z send stored nothing, and nothing was duplicated.
-- The recovery was not marvel's: it was a local credential self-recovery outside marvel, which the operator ruled is outside marvel's scope; marvel's daemon restarted nats in reaction to the put (per review). It ran in two cycles, 22:12:52-22:13:33Z and 22:17:55-22:18:36Z (from mokuzai's logs, relayed via review). The seat took no manual step (no leaf re-push, no restart).
+- Recovery ran in this order, in two cycles (22:12:52-22:13:33Z and 22:17:55-22:18:36Z, from mokuzai's logs, relayed via review): first a local credential self-recovery put a credential, which is outside marvel and which the operator ruled is outside marvel's scope; then marvel's daemon restarted nats in reaction to that put (per review). So marvel did not start the recovery; its restart was the second step, in reaction to the put. The seat took no manual step (no leaf re-push, no restart).
 - A peer supervisor reported that its sends to this cluster during the window were refused at the hub with R-92 (no presence for this cluster), so they were never stored. Nothing addressed to this seat was queued and lost; it was refused at the source.
 
 ### 1.2 The unannounced outage
@@ -33,7 +33,7 @@
 
 ## 2. What this shows
 
-1. The two errors do not distinguish a planned hub window from a dropped leaf link, or either from a credential problem. The send-side text says so itself. `/leafz` on the local server separates a down leaf link (0) from a link that is up while the global tier still fails (1); it cannot say why a link is down. It read 0 in the announced window too (the leaf closed at 19:59:43Z and did not return until 22:13:03Z, from mokuzai's logs, relayed via review), so a 0 does not separate a down hub from a down link.
+1. The two errors do not distinguish a planned hub window from a dropped leaf link, or either from a credential problem. The send-side text says so itself. `/leafz` on the local server separates a down leaf link (0) from a link that is up while the global tier still fails (1); it cannot say why a link is down. It would have read 0 in the announced window too: no `/leafz` reading was logged there, so this is inferred from the leaf close and reopen times (19:59:43Z to 22:13:03Z, from mokuzai's logs, relayed via review). If so, a 0 does not separate a down hub from a down link.
 2. A refused send is not a partial send. Holding the relay and resending after recovery is safe on sequence evidence.
 3. A held relay ages. During the second outage, a held review verdict was superseded by a new review request that answered it. Resending it verbatim after recovery would have put a stale verdict on the bus, so the seat sent a short note instead. A relay held across an outage should be re-checked against the current state before it is sent.
 

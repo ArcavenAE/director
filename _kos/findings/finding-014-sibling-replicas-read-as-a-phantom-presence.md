@@ -28,9 +28,9 @@ calling the live replica a "duplicate", until the team manifest showed
 
 The issue was filed before anyone ran the one command that settles it: `ps`
 on the row's pid, then `ps eww` on that pid for its agent id. That read took a
-minute and was enough to withdraw the issue. This is the case the premise-check
-rule in the orchestrator's task workflow is for: a claim about a process that
-one command on its host can confirm or refute.
+minute and was enough to withdraw the issue. The rule that applies: before acting on a
+claim about the world, spend one command checking that it still holds. A claim
+about a process is one that a single command on its host can confirm or refute.
 
 ## 2. Why it was easy to get wrong
 

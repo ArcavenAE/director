@@ -9,7 +9,7 @@
 
 **On a seat that is idle and not cued, a message waits until something else
 wakes the seat, so the receive latency is set by the next unrelated wake, not by
-the bus, and on 2026-10-01 that was 4 to 21 hours.**
+the bus, and between 2026-10-01 and 2026-10-02 that was 4 to 21 hours.**
 
 ## 1. What was measured
 
