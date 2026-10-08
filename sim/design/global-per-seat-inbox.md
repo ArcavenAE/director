@@ -112,7 +112,7 @@ the brief 11 shim build (section 5.1 step 2), plus the pieces marked *added*.
 | *added, transitional:* none | a `legacy-global` read of the cluster's old global subject, enabled only on the seat named in the cutover plan as the forwarder, off everywhere else (section 5.3) |
 | `validate` allows only `supervisor` and `director` as `DIRECTOR_GLOBAL_ROLE` (`:137-140`) | unchanged for the legacy read. The forwarder's `legacy-global` config is stated, not derived: `DIRECTOR_GLOBAL_DOMAIN`, `DIRECTOR_CLUSTER` and `DIRECTOR_GLOBAL_ROLE=supervisor`, set by the cutover plan on that one seat, because its cast role no longer maps to a legacy role word and `research-supervisor` would be refused here |
 | `presenceKey` (`:177`) and `globalPresencePrefix` (`:185`) key legacy presence as `presence.<cluster>.supervisor.<instance>`; `writePresence` records `role: g.cfg.Role` (`:673`) | the legacy row stays, written only by the forwarder, so uncut senders' liveness check still finds a reader. *added:* the alias never reads legacy presence. It resolves from the fabric presence row (brief 11 section 2.6), whose role field is the cast role, so the research seat is never a `supervisor` candidate even while its legacy row says `supervisor` |
-| `publish` checks legacy presence before sending (`:748-752`) | unchanged on uncut clusters, which is what keeps their sends to `global://kinu/supervisor` landing while the forwarder holds the legacy row; on a cut cluster `global://` sends take the alias path instead |
+| `publish` checks legacy presence before sending (`:748-752`) | unchanged on uncut clusters, which is what keeps their sends to `global://kinu/supervisor` landing while the forwarder holds the legacy row. On a cut cluster, `global://` sends take the alias path, with one transitional fallback: a destination cluster with no fabric presence yet (uncut) is reached by this legacy publish, unchanged, so the old tier carries that traffic as brief 11 section 5.2 says |
 | `seatFloor` finds a reconnecting seat's floor from `mcp_global_<agent>_` durables filtered on `inboxSubject` (`:390`) | unchanged for the legacy read: the forwarder's new instance resumes from its own departed instances' floor, so restarting it at the kinu window does not replay the legacy stream from the start. The supervisor runs no legacy read, so its old durables are left to `globalConsumerInactive` |
 
 The legacy read is the one piece that is not in brief 11. It exists only for
@@ -185,6 +185,20 @@ longer reads the shared subject at all, so the collision is closed for the
 supervisor from the kinu window on; the research seat carries the legacy
 traffic until it stops.
 
+The other direction needs no forwarder. A cut kinu seat sending to
+`global://mokuzai/supervisor` during the gap finds no fabric presence on
+mokuzai, so the alias does not refuse but falls back to the legacy publish
+(section 3, the `publish` row), and mokuzai's uncut supervisors read it as
+they do today; after the mokuzai window the alias resolves on the fabric
+and the fallback stops applying.
+
+Alias resolution never reads legacy presence, in either direction. The
+fallback is chosen by the absence of fabric presence on the destination
+cluster, never by a legacy row, so the research seat's legacy `supervisor`
+row can never make it a resolved candidate. Once the fallback is chosen, the
+legacy publish keeps its own liveness check on legacy presence, unchanged;
+that check decides only whether anyone reads the legacy subject, not who.
+
 **The forwarding seat's end condition.** The research seat stops forwarding
 when all three hold, and reports each to director with the command it ran and
 its output:
@@ -199,10 +213,13 @@ its output:
    ```
    nats --js-domain global consumer info GLOBAL_TO_kinu mcp_global_<agent>_<instance> --json
    ```
-   Pass: `num_pending` is 0 and `num_ack_pending` is 0. If
-   `nats --js-domain global consumer ls GLOBAL_TO_kinu` lists other
-   `mcp_global_<agent>_` names, those are its departed instances; the floor
-   that counts is the highest, as `seatFloor` reads it.
+   Pass: `num_pending` is 0 and `num_ack_pending` is 0. Departed instances'
+   durables do not count toward the pass and are not read: the current
+   durable was created from the highest of their ack floors (`seatFloor`,
+   `:388`, which falls back to `floorByName`, `:415`, because a cluster
+   credential gets no responders on consumer listing, finding-006), so its
+   pending count already covers everything above them. The step lists no hub
+   consumers for the same reason.
 3. The legacy kinu global stream has not grown for 24 hours:
    ```
    nats --js-domain global stream info GLOBAL_TO_kinu --json
