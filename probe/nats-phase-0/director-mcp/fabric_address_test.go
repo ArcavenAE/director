@@ -17,9 +17,9 @@ func TestFabricAddressSubjects(t *testing.T) {
 	cases := []struct {
 		addr, subject string
 	}{
-		{"agent://kinu/aae/arcaven/builder-1", "agent.kinu.aae.arcaven.builder-1.inbox"},
-		{"role://kinu/aae/arcaven/supervisor", "agent.kinu.aae.arcaven.role.supervisor.inbox"},
-		{"role://mokuzai/aae/arcaven/research-supervisor", "agent.mokuzai.aae.arcaven.role.research-supervisor.inbox"},
+		{"agent://kinu/ws1/team1/builder-1", "agent.kinu.ws1.team1.builder-1.inbox"},
+		{"role://kinu/ws1/team1/supervisor", "agent.kinu.ws1.team1.role.supervisor.inbox"},
+		{"role://mokuzai/ws1/team1/research-supervisor", "agent.mokuzai.ws1.team1.role.research-supervisor.inbox"},
 		{"director", "director.inbox"},
 	}
 	for _, c := range cases {
@@ -37,18 +37,18 @@ func TestFabricAddressSubjects(t *testing.T) {
 func TestFabricAddressRefusals(t *testing.T) {
 	for _, bad := range []string{
 		"",
-		"agent://kinu/aae/arcaven",         // too few tokens
-		"agent://kinu/aae/arcaven/b/extra", // too many tokens
-		"agent://kinu/aae/arcaven/role",    // role is reserved as a seat id
-		"agent://audit/aae/arcaven/b",      // audit is reserved as a cluster token
-		"agent://kinu/broadcast/arcaven/b", // broadcast is reserved as a workspace token
-		"agent://kinu/aae/arc.aven/b",      // a dot would add a subject token
-		"agent://kinu/aae/arc*aven/b",      // a wildcard is never an identity
-		"agent://kinu/aae/arcaven/>",       // nor is a tail match
-		"role://kinu/aae/arcaven",          // a role address names a team role
-		"global://kinu/supervisor",         // the legacy form is an alias, resolved elsewhere
-		"director/extra",                   // the director has one address
-		"agent://kinu//arcaven/b",          // an empty token
+		"agent://kinu/ws1/team1",         // too few tokens
+		"agent://kinu/ws1/team1/b/extra", // too many tokens
+		"agent://kinu/ws1/team1/role",    // role is reserved as a seat id
+		"agent://audit/ws1/team1/b",      // audit is reserved as a cluster token
+		"agent://kinu/broadcast/team1/b", // broadcast is reserved as a workspace token
+		"agent://kinu/ws1/arc.aven/b",    // a dot would add a subject token
+		"agent://kinu/ws1/arc*aven/b",    // a wildcard is never an identity
+		"agent://kinu/ws1/team1/>",       // nor is a tail match
+		"role://kinu/ws1/team1",          // a role address names a team role
+		"global://kinu/supervisor",       // the legacy form is an alias, resolved elsewhere
+		"director/extra",                 // the director has one address
+		"agent://kinu//team1/b",          // an empty token
 	} {
 		if _, err := parseFabricAddress(bad); err == nil {
 			t.Errorf("%q was accepted; it must be refused, not rewritten (R-76, R-78)", bad)
@@ -57,8 +57,8 @@ func TestFabricAddressRefusals(t *testing.T) {
 }
 
 func TestFabricDurableIsPerAddressAndNeverPerInstance(t *testing.T) {
-	a, _ := parseFabricAddress("agent://kinu/aae/arcaven/builder-1")
-	b, _ := parseFabricAddress("role://kinu/aae/arcaven/builder-1")
+	a, _ := parseFabricAddress("agent://kinu/ws1/team1/builder-1")
+	b, _ := parseFabricAddress("role://kinu/ws1/team1/builder-1")
 	if a.durable() == "" || b.durable() == "" {
 		t.Fatal("a durable name was empty")
 	}
@@ -81,30 +81,30 @@ func TestFabricDurableIsPerAddressAndNeverPerInstance(t *testing.T) {
 }
 
 func seat(cluster, team, id, role string) fabricSeat {
-	a, _ := parseFabricAddress("agent://" + cluster + "/aae/" + team + "/" + id)
+	a, _ := parseFabricAddress("agent://" + cluster + "/ws1/" + team + "/" + id)
 	return fabricSeat{Cluster: cluster, Addr: a, Role: role}
 }
 
 func TestAliasResolvesToTheOneHolderOfTheRole(t *testing.T) {
 	seats := []fabricSeat{
-		seat("kinu", "arcaven", "supervisor-1", "supervisor"),
-		seat("kinu", "arcaven", "research-1", "research-supervisor"),
-		seat("kinu", "arcaven", "builder-1", "builder"),
+		seat("kinu", "team1", "supervisor-1", "supervisor"),
+		seat("kinu", "team1", "research-1", "research-supervisor"),
+		seat("kinu", "team1", "builder-1", "builder"),
 		seat("mokuzai", "other", "supervisor-9", "supervisor"),
 	}
 	got, err := resolveSupervisorAlias("global://kinu/supervisor", seats)
 	if err != nil {
 		t.Fatalf("one supervisor on the cluster should resolve: %v", err)
 	}
-	if got.subject() != "agent.kinu.aae.arcaven.supervisor-1.inbox" {
+	if got.subject() != "agent.kinu.ws1.team1.supervisor-1.inbox" {
 		t.Errorf("resolved to %q", got.subject())
 	}
 }
 
 func TestAliasNeverMakesTheResearchSeatASupervisorCandidate(t *testing.T) {
 	seats := []fabricSeat{
-		seat("kinu", "arcaven", "supervisor-1", "supervisor"),
-		seat("kinu", "arcaven", "research-1", "research-supervisor"),
+		seat("kinu", "team1", "supervisor-1", "supervisor"),
+		seat("kinu", "team1", "research-1", "research-supervisor"),
 	}
 	if _, err := resolveSupervisorAlias("global://kinu/supervisor", seats); err != nil {
 		t.Errorf("the research seat's cast role is research-supervisor, so it is no candidate: %v", err)
@@ -113,7 +113,7 @@ func TestAliasNeverMakesTheResearchSeatASupervisorCandidate(t *testing.T) {
 
 func TestAliasRefusesWhenAmbiguousAndNamesTheCandidates(t *testing.T) {
 	seats := []fabricSeat{
-		seat("kinu", "arcaven", "supervisor-1", "supervisor"),
+		seat("kinu", "team1", "supervisor-1", "supervisor"),
 		seat("kinu", "second", "supervisor-2", "supervisor"),
 	}
 	_, err := resolveSupervisorAlias("global://kinu/supervisor", seats)
@@ -139,7 +139,7 @@ func TestAliasResolvesTheDirectorAndRefusesOtherForms(t *testing.T) {
 	if err != nil || d.subject() != "director.inbox" {
 		t.Errorf("global://director should resolve to director.inbox: %v %v", d, err)
 	}
-	for _, bad := range []string{"global://kinu/worker", "global://kinu/supervisor/x", "agent://kinu/aae/a/b", "global://"} {
+	for _, bad := range []string{"global://kinu/worker", "global://kinu/supervisor/x", "agent://kinu/ws1/a/b", "global://"} {
 		if _, err := resolveSupervisorAlias(bad, nil); err == nil {
 			t.Errorf("%q was accepted as an alias", bad)
 		}
