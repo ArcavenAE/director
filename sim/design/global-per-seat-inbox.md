@@ -109,9 +109,9 @@ the brief 11 shim build (section 5.1 step 2), plus the pieces marked *added*.
 | cross-cluster mail publishes straight to the hub stream (`publish`, `:743`) | publishes on `out.<dest>.` into the local `OUTBOX`, which the destination's `INBOX` sources (brief 11 section 2.3) |
 | `cast-launch.sh:134` maps `research-supervisor` to `GROLE=supervisor` | *added:* the cast role is the fabric role; `DIRECTOR_GLOBAL_ROLE` retires with the global tier |
 | a refused publish surfaces as no responders (`hubHint`, `:579`) | the async permission error becomes a named refusal (brief 11 section 2.4) |
-| *added, transitional:* none | a `legacy-global` read of the cluster's old global subject, enabled only on the seat named in the cutover plan as the forwarder, off everywhere else (section 5.3) |
+| *added, transitional:* none | a `legacy-global` read of the cluster's old global subject, enabled only on the seat named in the cutover plan as the forwarder and on the director (which brief 11 section 5.1 step 4 has reading the old global inbox until the last cluster is cut), off everywhere else (section 5.3) |
 | `validate` allows only `supervisor` and `director` as `DIRECTOR_GLOBAL_ROLE` (`:137-140`) | unchanged for the legacy read. The forwarder's `legacy-global` config is stated, not derived: `DIRECTOR_GLOBAL_DOMAIN`, `DIRECTOR_CLUSTER` and `DIRECTOR_GLOBAL_ROLE=supervisor`, set by the cutover plan on that one seat, because its cast role no longer maps to a legacy role word and `research-supervisor` would be refused here |
-| `presenceKey` (`:177`) and `globalPresencePrefix` (`:185`) key legacy presence as `presence.<cluster>.supervisor.<instance>`; `writePresence` records `role: g.cfg.Role` (`:673`) | the legacy row stays, written only by the forwarder, so uncut senders' liveness check still finds a reader. *added:* the alias never reads legacy presence. It resolves from the fabric presence row (brief 11 section 2.6), whose role field is the cast role, so the research seat is never a `supervisor` candidate even while its legacy row says `supervisor` |
+| `presenceKey` (`:177`) and `globalPresencePrefix` (`:185`) key legacy presence as `presence.<cluster>.supervisor.<instance>`; `writePresence` records `role: g.cfg.Role` (`:673`) | the legacy row stays, written only by the forwarder and the director's legacy read, so uncut senders' liveness check still finds a reader. *added:* the alias never reads legacy presence. It resolves from the fabric presence row (brief 11 section 2.6), whose role field is the cast role, so the research seat is never a `supervisor` candidate even while its legacy row says `supervisor` |
 | `publish` checks legacy presence before sending (`:748-752`) | unchanged on uncut clusters, which is what keeps their sends to `global://kinu/supervisor` landing while the forwarder holds the legacy row. On a cut cluster, `global://` sends take the alias path, with one transitional fallback: a destination cluster that the cutover record does not list as cut is reached by this legacy publish, unchanged, so the old tier carries that traffic as brief 11 section 5.2 says. *added:* the shim reads the cutover record (section 5.3) on each such send; a failed read refuses the send with the error named, and never reads as "not cut" |
 | `seatFloor` finds a reconnecting seat's floor from `mcp_global_<agent>_` durables filtered on `inboxSubject` (`:390`) | unchanged for the legacy read: the forwarder's new instance resumes from its own departed instances' floor, so restarting it at the kinu window does not replay the legacy stream from the start. The supervisor runs no legacy read, so its old durables are left to `globalConsumerInactive` |
 
@@ -204,7 +204,9 @@ in the gap). After kinu is cut, no kinu supervisor shim reads that subject
 unless one is told to.
 
 So the research seat's shim keeps the `legacy-global` read (section 3) on
-kinu, and no other kinu seat does. During the gap the research seat is the
+kinu, and no other kinu supervisor-role seat does; the director keeps its
+own legacy read of the old director inbox, as brief 11 section 5.1 step 4
+already requires. During the gap the research seat is the
 only reader of the shared subject, and it keeps forwarding verbatim to the
 supervisor, now addressed by the supervisor's seat address. The supervisor no
 longer reads the shared subject at all, so the collision is closed for the
@@ -215,13 +217,24 @@ The other direction needs no forwarder, and it is keyed on cutover state,
 never on presence. The cutover plan keeps a **cutover record**: a hub
 key-value bucket, `FABRIC_CUTOVER`, with no TTL and one key per cut cluster.
 The operator writes a cluster's key after its window's step 7 count matches
-and before step 8 starts the new shims. Writing it earlier would lose mail:
-`OUTBOX` is work-queue, so once the key sends other clusters' mail to the
-fabric, sourcing moves each message into this cluster's `INBOX` and removes
-it from the sender's `OUTBOX`, and a step-7 abort deletes that `INBOX`
-(brief 11 section 5.3 step 7) after the senders were told it was accepted.
-With the key written after the count, a step-7 abort has no key to undo and
-no sourced mail to lose.
+and before step 8 starts the new shims, and creates the cluster's
+cross-cluster sources (its `INBOX` sourcing the other clusters' `OUTBOX`es)
+in the same move, not at step 6. This is one change to brief 11 section 5.3
+step 6: the `INBOX` and `OUTBOX` streams are still created there, and only
+the cross-cluster sources move to after the count. Creating them at step 6
+would lose mail of both address forms: `OUTBOX` is work-queue, so a source
+moves each waiting message into this cluster's `INBOX` and removes it from
+the sender's `OUTBOX`, and a step-7 abort deletes that `INBOX` (brief 11
+section 5.3 step 7) after the senders were told it was accepted. That covers
+`agent://` mail a cut cluster's seat sent to one of this cluster's seats, not
+only `global://` mail. With sources and key both after the count, that mail
+waits in the senders' `OUTBOX`es through step 7, as it would through a link
+outage, and a step-7 abort has no source to remove, no key to undo and no
+sourced mail to lose. Of the two fixes the review offered, this one was
+chosen because it adds no new component and leaves no known loss open: it
+moves an existing step, while narrowing the claim to `global://` would have
+left the `agent://` loss as an open item. The step-7 count and a rollback
+after step 8 are unaffected, as the review traced.
 
 Before the write, other clusters' sends take the legacy publish and are
 refused loudly, because nothing reads the legacy subject any more. That
@@ -235,13 +248,20 @@ check and strands on the legacy stream. Legacy keys have four tokens
 
 ```
 nats --js-domain global kv ls GLOBAL_PRESENCE > presence.txt; echo rc=$?
-grep -c 'presence\.director\.' presence.txt
+grep -c 'presence\.<control>\.' presence.txt
 grep 'presence\.<cluster>\.' presence.txt
 ```
 
-Pass: `rc=0`, the director's row is counted at least once (a positive control
-that the listing holds keys at all, in whatever layout the CLI prints), and
-the last line prints nothing. A failed or empty listing is not a clean one. In a rollback the key is deleted first, before brief 11
+`<control>` is a principal outside the window whose shim is still running:
+in the kinu window, `mokuzai` (uncut, its supervisors still write legacy
+rows); in the mokuzai window, `director` (the director's shim is on kinu,
+and after kinu's cut it keeps a legacy row through its legacy read, per
+brief 11 section 5.1 step 4). The director's row cannot serve in the kinu
+window, because kinu's step 1 stops the director's shim.
+
+Pass: `rc=0`, the control is counted at least once (proof that the listing
+holds keys at all, in whatever layout the CLI prints), and the last line
+prints nothing. A failed or empty listing is not a clean one. In a rollback the key is deleted first, before brief 11
 section 5.4 step 1 stops the new shims. A cut
 kinu seat sending to `global://mokuzai/supervisor` reads the record:
 
