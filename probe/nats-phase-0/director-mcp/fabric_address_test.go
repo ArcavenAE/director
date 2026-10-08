@@ -35,6 +35,11 @@ func TestFabricAddressSubjects(t *testing.T) {
 }
 
 func TestFabricAddressRefusals(t *testing.T) {
+	// A positive control first, so this test cannot pass on code that refuses
+	// everything.
+	if _, err := parseFabricAddress("agent://kinu/ws1/team1/builder-1"); err != nil {
+		t.Fatalf("a well-formed address was refused: %v", err)
+	}
 	for _, bad := range []string{
 		"",
 		"agent://kinu/ws1/team1",         // too few tokens
@@ -47,6 +52,7 @@ func TestFabricAddressRefusals(t *testing.T) {
 		"agent://kinu/ws1/team1/>",       // nor is a tail match
 		"role://kinu/ws1/team1",          // a role address names a team role
 		"global://kinu/supervisor",       // the legacy form is an alias, resolved elsewhere
+		"a/b/c/d",                        // no scheme: four tokens alone are not an address
 		"director/extra",                 // the director has one address
 		"agent://kinu//team1/b",          // an empty token
 	} {
@@ -72,11 +78,21 @@ func TestFabricDurableIsPerAddressAndNeverPerInstance(t *testing.T) {
 		t.Errorf("durable %q carries a character a consumer name cannot", a.durable())
 	}
 	// Tokens may hold "-" and "_", so a plain join would let two different
-	// addresses name one durable. The name must keep them apart.
-	x, _ := parseFabricAddress("agent://a-b/c/d/e")
-	y, _ := parseFabricAddress("agent://a/b-c/d/e")
-	if x.durable() == y.durable() {
-		t.Errorf("distinct addresses share durable %q", x.durable())
+	// addresses name one durable. The name must keep them apart, for both
+	// characters: under a plain "_" join the second pair below would both read
+	// fab_agent_a_b_c_d_e.
+	for _, pair := range [][2]string{
+		{"agent://a-b/c/d/e", "agent://a/b-c/d/e"},
+		{"agent://a_b/c/d/e", "agent://a/b_c/d/e"},
+	} {
+		x, errx := parseFabricAddress(pair[0])
+		y, erry := parseFabricAddress(pair[1])
+		if errx != nil || erry != nil {
+			t.Fatalf("pair %v refused: %v %v", pair, errx, erry)
+		}
+		if x.durable() == y.durable() {
+			t.Errorf("%s and %s share durable %q", pair[0], pair[1], x.durable())
+		}
 	}
 }
 
@@ -128,8 +144,13 @@ func TestAliasRefusesWhenAmbiguousAndNamesTheCandidates(t *testing.T) {
 }
 
 func TestAliasRefusesWhenNobodyHoldsTheRole(t *testing.T) {
-	_, err := resolveSupervisorAlias("global://kinu/supervisor", []fabricSeat{seat("mokuzai", "t", "s", "supervisor")})
-	if err == nil {
+	seats := []fabricSeat{seat("mokuzai", "t", "s", "supervisor")}
+	// Positive control: the one holder on its own cluster resolves, so this
+	// test cannot pass on code that refuses everything.
+	if _, err := resolveSupervisorAlias("global://mokuzai/supervisor", seats); err != nil {
+		t.Fatalf("the holder on its own cluster should resolve: %v", err)
+	}
+	if _, err := resolveSupervisorAlias("global://kinu/supervisor", seats); err == nil {
 		t.Error("no live holder on the cluster must refuse (R-92 liveness)")
 	}
 }
@@ -139,9 +160,15 @@ func TestAliasResolvesTheDirectorAndRefusesOtherForms(t *testing.T) {
 	if err != nil || d.subject() != "director.inbox" {
 		t.Errorf("global://director should resolve to director.inbox: %v %v", d, err)
 	}
-	for _, bad := range []string{"global://kinu/worker", "global://kinu/supervisor/x", "agent://kinu/ws1/a/b", "global://"} {
-		if _, err := resolveSupervisorAlias(bad, nil); err == nil {
-			t.Errorf("%q was accepted as an alias", bad)
+	// The roster holds a live supervisor on the very cluster the bad forms name,
+	// so a form that is not the supervisor alias must refuse for its own shape
+	// and not merely because nobody is alive to receive it.
+	live := []fabricSeat{seat("kinu", "team1", "supervisor-1", "supervisor")}
+	for _, bad := range []string{"global://kinu/worker", "global://kinu/supervisor/x", "global://kinu", "agent://kinu/ws1/a/b", "global://"} {
+		for name, seats := range map[string][]fabricSeat{"empty roster": nil, "live supervisor": live} {
+			if got, err := resolveSupervisorAlias(bad, seats); err == nil {
+				t.Errorf("%q was accepted as an alias with a %s, resolving to %s", bad, name, got)
+			}
 		}
 	}
 }
