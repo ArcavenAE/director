@@ -41,9 +41,10 @@ same global subject.
 Director's measurement, 2026-10-07: `nats --js-domain global stream info
 GLOBAL_TO_kinu` reports limits retention, 11 consumers and 677 messages. Some
 follow-up reads returned "no responders". That is recorded as unexplained:
-the shim's own hint (`global.go:579`, `hubHint`) says a down leaf link and
-a credential that does not grant the stream both surface as no responders, so
-the reply does not say which. Nothing in this design depends on resolving it,
+the shim's own hint (`global.go:579`, `hubHint`) names a down leaf link and
+a credential that does not grant the stream as two causes that both surface
+as no responders, and the reply cannot separate those two causes, or any
+other. Nothing in this design depends on resolving it,
 and nothing here should be read as explaining it.
 
 The cost was measured before this note: finding-023 (91% of one seat's 300
@@ -109,6 +110,10 @@ the brief 11 shim build (section 5.1 step 2), plus the pieces marked *added*.
 | `cast-launch.sh:134` maps `research-supervisor` to `GROLE=supervisor` | *added:* the cast role is the fabric role; `DIRECTOR_GLOBAL_ROLE` retires with the global tier |
 | a refused publish surfaces as no responders (`hubHint`, `:579`) | the async permission error becomes a named refusal (brief 11 section 2.4) |
 | *added, transitional:* none | a `legacy-global` read of the cluster's old global subject, enabled only on the seat named in the cutover plan as the forwarder, off everywhere else (section 5.3) |
+| `validate` allows only `supervisor` and `director` as `DIRECTOR_GLOBAL_ROLE` (`:137-140`) | unchanged for the legacy read. The forwarder's `legacy-global` config is stated, not derived: `DIRECTOR_GLOBAL_DOMAIN`, `DIRECTOR_CLUSTER` and `DIRECTOR_GLOBAL_ROLE=supervisor`, set by the cutover plan on that one seat, because its cast role no longer maps to a legacy role word and `research-supervisor` would be refused here |
+| `presenceKey` (`:177`) and `globalPresencePrefix` (`:185`) key legacy presence as `presence.<cluster>.supervisor.<instance>`; `writePresence` records `role: g.cfg.Role` (`:673`) | the legacy row stays, written only by the forwarder, so uncut senders' liveness check still finds a reader. *added:* the alias never reads legacy presence. It resolves from the fabric presence row (brief 11 section 2.6), whose role field is the cast role, so the research seat is never a `supervisor` candidate even while its legacy row says `supervisor` |
+| `publish` checks legacy presence before sending (`:748-752`) | unchanged on uncut clusters, which is what keeps their sends to `global://kinu/supervisor` landing while the forwarder holds the legacy row; on a cut cluster `global://` sends take the alias path instead |
+| `seatFloor` finds a reconnecting seat's floor from `mcp_global_<agent>_` durables filtered on `inboxSubject` (`:390`) | unchanged for the legacy read: the forwarder's new instance resumes from its own departed instances' floor, so restarting it at the kinu window does not replay the legacy stream from the start. The supervisor runs no legacy read, so its old durables are left to `globalConsumerInactive` |
 
 The legacy read is the one piece that is not in brief 11. It exists only for
 the gap between two cluster windows and is removed in the same change that
@@ -181,11 +186,32 @@ supervisor from the kinu window on; the research seat carries the legacy
 traffic until it stops.
 
 **The forwarding seat's end condition.** The research seat stops forwarding
-when all three hold, and reports each to director with the command it ran:
+when all three hold, and reports each to director with the command it ran and
+its output:
 
-1. The last cluster window has completed its step 9 (legacy quiet).
-2. Its own legacy global durable reports zero pending.
-3. The legacy kinu global stream's last sequence has not moved for 24 hours.
+1. The last cluster window has completed its step 9 (legacy quiet), from that
+   window's own record.
+2. Its own legacy global durable shows nothing unprocessed and nothing
+   ack-pending. The durable is named per instance,
+   `mcp_global_<agent>_<instance>` (`global.go:205`), so the reader takes its
+   agent id and its current instance from its own presence row and reads that
+   one name:
+   ```
+   nats --js-domain global consumer info GLOBAL_TO_kinu mcp_global_<agent>_<instance> --json
+   ```
+   Pass: `num_pending` is 0 and `num_ack_pending` is 0. If
+   `nats --js-domain global consumer ls GLOBAL_TO_kinu` lists other
+   `mcp_global_<agent>_` names, those are its departed instances; the floor
+   that counts is the highest, as `seatFloor` reads it.
+3. The legacy kinu global stream has not grown for 24 hours:
+   ```
+   nats --js-domain global stream info GLOBAL_TO_kinu --json
+   ```
+   Pass: `state.last_seq` is the same on two reads at least 24 hours apart,
+   and `state.last_ts` is more than 24 hours old at the second read.
+
+A "no responders" reply, a timeout or any other error on either command is
+not a pass. It is a failed check, reported as it came back.
 
 Then its shim restarts without the `legacy-global` read, and `GLOBAL_TO_kinu`
 is eligible for retirement under brief 11 section 5.2. If the mokuzai window
