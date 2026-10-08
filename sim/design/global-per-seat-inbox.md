@@ -112,7 +112,7 @@ the brief 11 shim build (section 5.1 step 2), plus the pieces marked *added*.
 | *added, transitional:* none | a `legacy-global` read of the cluster's old global subject, enabled only on the seat named in the cutover plan as the forwarder, off everywhere else (section 5.3) |
 | `validate` allows only `supervisor` and `director` as `DIRECTOR_GLOBAL_ROLE` (`:137-140`) | unchanged for the legacy read. The forwarder's `legacy-global` config is stated, not derived: `DIRECTOR_GLOBAL_DOMAIN`, `DIRECTOR_CLUSTER` and `DIRECTOR_GLOBAL_ROLE=supervisor`, set by the cutover plan on that one seat, because its cast role no longer maps to a legacy role word and `research-supervisor` would be refused here |
 | `presenceKey` (`:177`) and `globalPresencePrefix` (`:185`) key legacy presence as `presence.<cluster>.supervisor.<instance>`; `writePresence` records `role: g.cfg.Role` (`:673`) | the legacy row stays, written only by the forwarder, so uncut senders' liveness check still finds a reader. *added:* the alias never reads legacy presence. It resolves from the fabric presence row (brief 11 section 2.6), whose role field is the cast role, so the research seat is never a `supervisor` candidate even while its legacy row says `supervisor` |
-| `publish` checks legacy presence before sending (`:748-752`) | unchanged on uncut clusters, which is what keeps their sends to `global://kinu/supervisor` landing while the forwarder holds the legacy row. On a cut cluster, `global://` sends take the alias path, with one transitional fallback: a destination cluster with no fabric presence yet (uncut) is reached by this legacy publish, unchanged, so the old tier carries that traffic as brief 11 section 5.2 says |
+| `publish` checks legacy presence before sending (`:748-752`) | unchanged on uncut clusters, which is what keeps their sends to `global://kinu/supervisor` landing while the forwarder holds the legacy row. On a cut cluster, `global://` sends take the alias path, with one transitional fallback: a destination cluster that the cutover record does not list as cut is reached by this legacy publish, unchanged, so the old tier carries that traffic as brief 11 section 5.2 says. *added:* the shim reads the cutover record (section 5.3) on each such send; a failed read refuses the send with the error named, and never reads as "not cut" |
 | `seatFloor` finds a reconnecting seat's floor from `mcp_global_<agent>_` durables filtered on `inboxSubject` (`:390`) | unchanged for the legacy read: the forwarder's new instance resumes from its own departed instances' floor, so restarting it at the kinu window does not replay the legacy stream from the start. The supervisor runs no legacy read, so its old durables are left to `globalConsumerInactive` |
 
 The legacy read is the one piece that is not in brief 11. It exists only for
@@ -147,7 +147,8 @@ Brief 11 section 5, with nothing reordered:
 
 1. Builds ready and pinned: the new shim with section 3's changes, the
    migration tool, and the current shim pinned as the rollback build.
-2. `DIRECTOR_INBOX` created on the hub first.
+2. `DIRECTOR_INBOX` created on the hub first, and the empty `FABRIC_CUTOVER`
+   record beside it (section 5.3).
 3. The kinu window (brief 11 section 5.3, steps 1 to 10). Before step 8,
    `cast-launch.sh` on kinu carries the cast-role change, so every seat starts
    on its own address.
@@ -185,19 +186,34 @@ longer reads the shared subject at all, so the collision is closed for the
 supervisor from the kinu window on; the research seat carries the legacy
 traffic until it stops.
 
-The other direction needs no forwarder. A cut kinu seat sending to
-`global://mokuzai/supervisor` during the gap finds no fabric presence on
-mokuzai, so the alias does not refuse but falls back to the legacy publish
-(section 3, the `publish` row), and mokuzai's uncut supervisors read it as
-they do today; after the mokuzai window the alias resolves on the fabric
-and the fallback stops applying.
+The other direction needs no forwarder, and it is keyed on cutover state,
+never on presence. The cutover plan keeps a **cutover record**: a hub
+key-value bucket, `FABRIC_CUTOVER`, with no TTL and one key per cut cluster.
+The operator writes a cluster's key at its window's step 8, once its new
+shims are up, and deletes it first in that cluster's rollback, before
+brief 11 section 5.4 step 1 stops the new shims. A cut
+kinu seat sending to `global://mokuzai/supervisor` reads the record:
+
+- **mokuzai not listed** (the gap): the send takes the legacy publish
+  (section 3, the `publish` row), and mokuzai's uncut supervisors read it as
+  they do today.
+- **mokuzai listed**: the send goes to the fabric through `OUTBOX`
+  (brief 11 section 2.3), and waits there through a link outage. Presence on
+  the destination does not change this. A fabric presence row that expired
+  during an outage (section 2.6 gives `FLEET_PRESENCE` a short TTL) must not
+  read as "uncut": mokuzai's legacy rows were deleted at its step 1
+  (`deletePresence`, `:691`), so a legacy publish would be refused, or, if a
+  legacy row outlived its session, stranded on `GLOBAL_TO_mokuzai` with no
+  reader.
+- **the record cannot be read**: the send is refused, naming the error. A
+  failed read is never taken as absence.
 
 Alias resolution never reads legacy presence, in either direction. The
-fallback is chosen by the absence of fabric presence on the destination
-cluster, never by a legacy row, so the research seat's legacy `supervisor`
-row can never make it a resolved candidate. Once the fallback is chosen, the
-legacy publish keeps its own liveness check on legacy presence, unchanged;
-that check decides only whether anyone reads the legacy subject, not who.
+fallback is chosen by the cutover record alone, never by a legacy row or by
+missing fabric presence, so the research seat's legacy `supervisor` row can
+never make it a resolved candidate. Once the fallback is chosen, the legacy
+publish keeps its own liveness check on legacy presence, unchanged; that
+check decides only whether anyone reads the legacy subject, not who.
 
 **The forwarding seat's end condition.** The research seat stops forwarding
 when all three hold, and reports each to director with the command it ran and
@@ -245,6 +261,10 @@ outbox limit there is the reason). Two additions:
   resumes forwarding on the shared subject exactly as it does today.
 - A rollback after the kinu window but before the mokuzai window needs only
   kinu rolled back; mokuzai never left the legacy tier.
+- Each cluster's rollback deletes its `FABRIC_CUTOVER` key first, before its
+  new shims stop, so no other cluster sends to its fabric inbox while it is
+  being parked. Mail already sent waits in the sender's `OUTBOX`, the limit
+  brief 11 section 5.4 states.
 
 The R-94 text in section 4 is not rolled back by a cutover rollback. It
 describes the target, and the old build simply does not implement it yet.
