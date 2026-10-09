@@ -74,7 +74,7 @@ a probe before it hardens.
   cutover with a named legacy reader and the forwarding seat's end condition.
   Candidate GSI-A to GSI-C.
 - `director-functions-redesign.md` (design for review 2026-10-09): the
-  operations coordination plan's part 2. An inventory of 19 director
+  operations coordination plan's part 2. An inventory of 24 director
   functions, four designs that keep all of them, and the panel's
   recommendation D (C's stores and reconciler on the existing `dws` fold,
   A's presentation check, B's mirror-or-proposal tags and UNREAD rule, the

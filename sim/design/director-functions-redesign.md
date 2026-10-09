@@ -1,8 +1,9 @@
 # Director functions, redesigned
 
-Status: design for review, 2026-10-09. Owner: the architect role. Docs only;
-nothing is built or filed until the operator picks a design. The party
-ratifies nothing: every recommendation below is the panel's, for the
+Status: design for review, 2026-10-09. Owner: the architect role. Docs only.
+Nothing is filed until the operator has seen this file. The common tickets
+(section 6) need no design pick; everything else waits for the pick. The
+party ratifies nothing: every recommendation below is the panel's, for the
 operator to rule.
 
 - Commission: the operations coordination plan, part 2. The operator's
@@ -15,10 +16,10 @@ operator to rule.
 - Method: a six-round party of nine seats (refine, define, design, audit,
   plan, forced vote). The record is a gitignored party record in a private
   repository. This file is the result.
-- Pins: director main 860f1aa. R-200 to R-204 are cited from #273 (open,
-  unmerged).
+- Pins: director main 860f1aa. R-200 to R-204 are proposed in #273 (open,
+  unmerged), and are cited here as proposed.
 - Requirements: R-134, R-135, R-152, R-153, R-159, R-162, R-169, R-171,
-  R-177, R-184, R-192, R-196, R-197, R-198, R-201, R-202, R-203, R-204.
+  R-177, R-184, R-192, R-196, R-197, R-198, and R-201 to R-204 (proposed).
 
 ## 1. Why
 
@@ -26,14 +27,15 @@ Director grew one function at a time, each in answer to a failure, and the
 functions now keep the same fact in several places. The clearest case is
 the queue of what waits on the operator. It is kept by hand in sweep notes,
 in the ledger's operator-blocked rows, in `board.md` prose and on the Desk,
-and nothing reconciles them. R-202 measured the cost: the ledger listed 18
+and nothing reconciles them. R-202 (proposed) measured the cost: the ledger listed 18
 rows as blocked on the operator, and 13 had been ruled hours earlier. Seven
 of nine seats, working apart, named this queue as the most costly function.
 
 A redesign has to keep every function, including those that exist only as
-habit. The inventory found 19 functions. Several have no written definition
-on main: the Desk's card rules, the operator digest, the close-or-kill pass
-and the merge exclusions.
+habit. The first inventory found 19 functions, and the capability audit
+added five more, for 24 rows in all (section 3). Several have no written
+definition on main: the Desk's card rules, the operator digest, the
+close-or-kill pass and the merge exclusions.
 
 ## 2. What was found on the way
 
@@ -67,11 +69,42 @@ the pin.
 - **The inventory had gaps.** R-115 (dispatch ledger) and R-170
   (review-request tracking) had no row; neither did the queue's surfacing
   filters (R-171, R-177, R-198, R-203), R-192 clock stamps, or the board's
-  Uncaptured block.
+  Uncaptured block. These five were added as rows 20 to 24 below. R-170 has
+  no answer in any design yet.
 
 ## 3. Designs considered
 
-Each maps all 19 functions, and none retires one.
+The three first designs were drafted against rows 1 to 19 and mapped every
+one; none retired a function. The audit added rows 20 to 24, and D (planned
+after the audit) answers those it can. A cell names where the function
+lives in that design.
+
+| # | function | A one record | B small tools | C keep the stores | D recommended |
+|---|---|---|---|---|---|
+| 1 | Decision Desk | a view of the ask fold | a render of the `asks` tool | kept as the store | kept as the store of asks |
+| 2 | workstream ledger | `stream` kind in the log | `streams` tool | kept; the reconciler checks it | kept (`dws`); blocked-on-operator needs a card id (K13) |
+| 3 | board | a regenerated brief, plus notes citing ids | a generated page, plus notes | authored, with a generated state section first | generated state first, narrative second, ids resolve (K19) |
+| 4 | relay log | `message` kind | `relay` tool, clock-stamped | kept, local | kept, local, clock-stamped (K6) |
+| 5 | bus reading | one reader per tier writes receipts | one `inbox` tool, one cursor | one draining path with a handled ledger | as C (K3, K4) |
+| 6 | merge-guard | kept, reads exclusions | kept, reads exclusions | kept, reads exclusions | kept, reads exclusions (K1) |
+| 7 | harvest | same as today | `notes` tool | same as today | same; reconciler proposes a harvest due (R-179) |
+| 8 | operator digests | a view of the fold | a render of `queue` | reconciler output | reconciler render (K18) |
+| 9 | close-or-kill | a view of the fold, proposals only | weekly render | reconciler list | reconciler render, with an `idea` age line (K7, K18) |
+| 10 | sweep (`dsi`, `dsx`) | a query over the store | renders | same; lists open cards | same; state first; tick runs drain and reconcile (K20) |
+| 11 | stansfield roll call | same as today | `seats` snapshot | same as today | same as today |
+| 12 | ask ledger | ask-state events from the bus reader | part of `inbox` and `asks` | kept; shares the cursor | kept; shares the drain (K4) |
+| 13 | ruling records | `ruling` kind | `rulings` tool | `rulings.jsonl` or a Desk collection | `rulings.jsonl` (K9) |
+| 14 | ring and ack | `receipt` kind | `rings` tool | ring record in the ledger | `rings.jsonl` keyed by seat (K14) |
+| 15 | successor inheritance | a fold of receipts | grants and terms, by-role read | cards and rulings only | `inherit <role>` read, plus `term` kind (K15, K9) |
+| 16 | replay | same as today | `notes` tool | same as today | same as today |
+| 17 | capture triggers | same as today | same as today | same as today | same; written in the definitions file (K2) |
+| 18 | relay authority rule | same as today (open by ruling) | same | same | same; grants bound merges and terms only |
+| 19 | merge exclusions | `exclusion` grants | deny-grants | exclusion records | exclusion records, data kept local (K1, K9) |
+| 20 | R-115 dispatch ledger | not mapped | not mapped | not mapped | per-seat depth view, partial (K17) |
+| 21 | R-170 review tracking | not mapped | not mapped | not mapped | open: no answer yet |
+| 22 | surfacing filters (R-171, R-177, R-198, R-203) | presentation check | in `queue` (one draft) | not named | presentation check (K12) |
+| 23 | R-192 clock stamps | not mapped | `relay` helper | clock stamps | clock stamps (K6) |
+| 24 | the board's Uncaptured block | `note` kind (one draft) | notes file | kept in the authored board | kept in the narrative |
 
 - **A. One decision-and-work record.** One append-only event log; the Desk,
   ledger, board, digest and close-or-kill are views. Weakest point: one bad
@@ -96,10 +129,10 @@ Each maps all 19 functions, and none retires one.
 - `board.md` stays authored.
 - The relay log stays local and append-only.
 - New: `rulings.jsonl` beside the ledger, on the same fold and lock code.
-  Its kinds are `ruling` (R-201), `grant` (draft or confirmed), `exclusion`
-  (R-153), and `term` (R-204), each term with a `replaced` mark.
+  Its kinds are `ruling` (R-201, proposed), `grant` (draft or confirmed), `exclusion`
+  (R-153), and `term` (R-204, proposed), each term with a `replaced` mark.
 - New: `rings.jsonl`, keyed by seat, for a ring, its first turn, its ack and
-  its blocker (R-200).
+  its blocker (R-200, proposed).
 
 **Writers.** Each event carries a tag: mirror (a cited external fact),
 proposal (needs a confirm) or judgment (director's own call). Writers that
@@ -157,11 +190,15 @@ honor-only, and the definitions file says so.
 - nothing executes on a clock or on silence;
 - merge-guard is the only gate.
 
-**Stop lines.**
-- If the Desk snapshot reads UNREAD twice in a week, ask for Q4 the other
-  way, and move the store of asks to a local file.
-- If most events end up tagged judgment, drop the tags and keep UNREAD and
-  the presentation check.
+**Stop lines.** Each is an observation that sends a recommendation back to
+the operator. Nothing changes on the observation alone.
+- If the Desk snapshot reads UNREAD twice in a week, the architect role
+  re-presents Q4 with that evidence, recommending (b), a local store of
+  asks. The store moves only if the operator rules (b).
+- If most events end up tagged judgment, the architect role re-presents the
+  tags with that evidence, recommending that they be dropped while UNREAD
+  and the presentation check are kept. They are dropped only if the
+  operator agrees.
 
 ## 5. Decisions for the operator
 
@@ -172,7 +209,7 @@ it then. Nothing executes on silence. Dissent is named by seat.
 |---|---|---|---|---|
 | Q0 | Which design? | A, B, C, D | D | 9-0 |
 | Q5 | A merged or closed linked PR against an open ask (amends R-197, OBSERVED) | (a) it clears the block; (b) it only proposes closing, and the card shows it; (c) the ledger flag clears by mirror, the ask stays open, and the queue hides it until director closes it | (c) | 7-2; automation and organization prefer (b) |
-| Q4 | Where do decision records live? (R-202 names no store) | (a) the Desk stays the store; director reads it in session; scripts get a read path if one exists; (b) a local file, with the Desk as a render and a sync step | (a) | 9-0 |
+| Q4 | Where do decision records live? (R-202, proposed, names no store) | (a) the Desk stays the store; director reads it in session; scripts get a read path if one exists; (b) a local file, with the Desk as a render and a sync step | (a) | 9-0 |
 | Q1 | Which items interrupt you? (R-134, JUDGMENT) | (a) none by default, you name the list; (b) a default list for you to confirm: an outage, a console step or recommendation expiring before the next digest, a seat blocked on your ask | (b) | 7-2; architect and automation prefer (a) |
 | X7 | How do grants take effect? | (a) director drafts, you confirm on a card showing the bounds; (b) director writes from your quoted words, and the reconciler flags any grant with no source | (a) | 9-0 |
 | Q2 | A cap on open asks? (R-135, no owner) | shown, never blocking, N named by you; or none | shown, N yours | 9-0 |
@@ -185,7 +222,8 @@ practitioner preferred no check on prose.
 
 ## 6. Candidate tickets (not filed)
 
-Flat, with edges. "Common" lands under any design and needs no pick. Even
+Flat, with edges. R-200 to R-204 in the serves column are proposed
+(#273). "Common" lands under any design and needs no pick. Even
 so, nothing is filed before the operator has seen this file.
 
 | id | title | needs first | serves | common |
@@ -211,7 +249,8 @@ so, nothing is filed before the operator has seen this file.
 | K19 | Put a generated state section first on the board | K11 | R-36 | |
 | K20 | Change the sweep order; run drain and reconcile on the tick | K4, K11, K19 | R-196 | |
 
-Order: K1, K2 and K4 start on day one; K4 is the long pole. Before any
+Order: K1, K2 and K3 start on day one, and K4 follows K3 at once. K3 and K4
+together are the long pole. Before any
 ticket cites R-201 or R-202, those requirements are split so that each
 R-id owns one behavior. Both sit in #273 and are unmerged.
 
