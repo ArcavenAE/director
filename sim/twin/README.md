@@ -29,6 +29,13 @@ validation against criteria 3.1 to 3.6.
   the value.
 - `claude-bedrock-launch`: the same key block, then `exec claude "$@"`, for a
   session that is not cast through cast-launch.
+  Both read the key through `/usr/bin/security` by absolute path, with no
+  override, so a writable PATH entry cannot supply the key; the verify script
+  tests a copy with that one path replaced.
+  The block runs only when `CLAUDE_CODE_USE_BEDROCK=1` is in the launcher's own
+  environment. A role that selects Bedrock only through an overlay's settings
+  `env` never triggers it, because that env reaches claude after the launcher
+  has run; such a role must also have the variable set where the launcher runs.
 - `verify-cast-launch.sh`: proves the launcher's per-role handling of the
   global tier without a broker and without casting anything. claude, the
   shim, the wardrobe root and slice.sh are stubs; each case checks both the

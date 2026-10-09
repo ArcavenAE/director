@@ -11,8 +11,12 @@ set -euo pipefail
 # is read. Otherwise the key comes from the macOS keychain item that
 # CLAUDE_BEDROCK_KEY_ITEM names: looked up by name only, exported for claude
 # alone, never stored, never printed. A missing, empty or badly named item
-# fails the launch, so a seat never starts on the wrong credential. The spawn
+# fails the launch, so a seat never starts on the wrong credential. The lookup
+# is /usr/bin/security by absolute path: a PATH entry a seat or a pane can
+# write must not decide what supplies the key. There is no override; the
+# verify script tests a copy of this file with that one path substituted. The spawn
 # line carries the item's name (bedrock_note), never its value.
+bedrock_prog=claude-bedrock-launch
 bedrock_note=""
 # xtrace is suspended around the block and restored after it, so a launcher run
 # under bash -x or SHELLOPTS=xtrace never traces the key value.
@@ -24,11 +28,11 @@ if [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == 1 ]]; then
   else
     bedrock_item="${CLAUDE_BEDROCK_KEY_ITEM:-}"
     [[ "$bedrock_item" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
-      || { echo "cast-launch: CLAUDE_CODE_USE_BEDROCK=1 needs CLAUDE_BEDROCK_KEY_ITEM to name a keychain item ([A-Za-z0-9._-], no leading punctuation); not starting the harness" >&2; exit 1; }
-    bedrock_key="$(security find-generic-password -s "$bedrock_item" -w 2>/dev/null)" \
-      || { echo "cast-launch: keychain item '$bedrock_item' not readable; not starting the harness" >&2; exit 1; }
+      || { echo "$bedrock_prog: CLAUDE_CODE_USE_BEDROCK=1 needs CLAUDE_BEDROCK_KEY_ITEM to name a keychain item ([A-Za-z0-9._-], no leading punctuation); not starting the harness" >&2; exit 1; }
+    bedrock_key="$(/usr/bin/security find-generic-password -s "$bedrock_item" -w 2>/dev/null)" \
+      || { echo "$bedrock_prog: keychain item '$bedrock_item' not readable; not starting the harness" >&2; exit 1; }
     [[ -n "$bedrock_key" ]] \
-      || { echo "cast-launch: keychain item '$bedrock_item' is empty; not starting the harness" >&2; exit 1; }
+      || { echo "$bedrock_prog: keychain item '$bedrock_item' is empty; not starting the harness" >&2; exit 1; }
     export AWS_BEARER_TOKEN_BEDROCK="$bedrock_key"
     unset bedrock_key
     bedrock_note=", Bedrock key from keychain item $bedrock_item"
@@ -37,4 +41,5 @@ fi
 if [[ "$bedrock_xtrace" == 1 ]]; then set -x; fi
 unset bedrock_xtrace
 
+[[ -z "$bedrock_note" ]] || echo "$bedrock_prog: ${bedrock_note#, }" >&2
 exec claude "$@"

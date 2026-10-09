@@ -702,6 +702,20 @@ f="$root/keychain/\$3"
 cat "\$f"
 STUB
 chmod +x "$root/bin/security"
+# The launcher pins /usr/bin/security and has no override, so a production launch
+# cannot be made to choose the binary through its environment or PATH. These
+# cases test a COPY of each script with that one path replaced by the fake, in
+# a directory only this script writes. The originals are checked separately
+# below: the pin is present, and a fake on PATH is ignored.
+LAUNCH_ORIG="$LAUNCH"
+patched="$root/patched"; mkdir -p "$patched"
+for f in "$(dirname "$LAUNCH")/cast-launch.sh" "$(dirname "$LAUNCH")/claude-bedrock-launch"; do
+  [[ -f "$f" ]] || continue
+  sed "s#/usr/bin/security#$root/bin/security#g" "$f" > "$patched/$(basename "$f")"
+  chmod +x "$patched/$(basename "$f")"
+done
+[[ "$(basename "$LAUNCH")" == cast-launch.sh ]] || cp "$LAUNCH" "$patched/cast-launch.sh"
+LAUNCH="$patched/cast-launch.sh"
 CANARY="canary-bedrock-9f3a71c2"
 BEDROCK_ON=(CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=bedrock-key)
 printf '%s\n' "$CANARY" > "$root/keychain/bedrock-key"
@@ -792,9 +806,10 @@ fi
 
 # claude-bedrock-launch carries cast-launch's key block word for word.
 wrapper="$(dirname "$LAUNCH")/claude-bedrock-launch"
+wrapper_orig="$(dirname "$LAUNCH_ORIG")/claude-bedrock-launch"
 if [[ -x "$wrapper" ]]; then
   blk() { sed -n '/^bedrock_note=""$/,/^unset bedrock_xtrace$/p' "$1"; }
-  [[ -n "$(blk "$LAUNCH")" && "$(blk "$LAUNCH")" == "$(blk "$wrapper")" ]] \
+  [[ -n "$(blk "$LAUNCH_ORIG")" && "$(blk "$LAUNCH_ORIG")" == "$(blk "$wrapper_orig")" ]] \
     && ok "claude-bedrock-launch: the key block matches cast-launch's" \
     || bad "claude-bedrock-launch: the key block differs from cast-launch's"
   wrap() { # extra KEY=VALUE pairs, then args after --
@@ -821,8 +836,40 @@ if [[ -x "$wrapper" ]]; then
       && ok "claude-bedrock-launch: an environment token wins" \
       || bad "claude-bedrock-launch: environment token replaced"
   fi
+  if wrap CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=bedrock-key; then
+    grep -q '^claude-bedrock-launch: Bedrock key from keychain item bedrock-key$' "$root/out/stderr" \
+      && [[ -z "$(leaks)" ]] \
+      && ok "claude-bedrock-launch: prints the item name before exec, never the value" \
+      || bad "claude-bedrock-launch: item name line" "$(cat "$root/out/stderr")"
+  fi
+  if wrap CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=empty-key; then :; elif grep -q '^claude-bedrock-launch: keychain item' "$root/out/stderr"; then
+    ok "claude-bedrock-launch: a refusal names the wrapper, not cast-launch"
+  else
+    bad "claude-bedrock-launch: refusal prefix" "$(cat "$root/out/stderr")"
+  fi
 else
   bad "claude-bedrock-launch is missing or not executable beside the launcher"
+fi
+
+# The pin itself, on the ORIGINAL scripts. Each names /usr/bin/security by
+# absolute path, and a fake `security` first on PATH is not used: the lookup
+# either reaches the real tool (which has no such item) or finds none, and
+# either way the launch is refused and the canary never appears.
+for f in "$LAUNCH_ORIG" "$wrapper_orig"; do
+  [[ -f "$f" ]] || continue
+  grep -q '"\$(/usr/bin/security find-generic-password' "$f" \
+    && ! grep -qE '(^|[^/])security find-generic-password' "$f" \
+    && ok "pin: $(basename "$f") calls /usr/bin/security by absolute path" \
+    || bad "pin: $(basename "$f") does not pin /usr/bin/security"
+done
+rm -f "$root/out/claude.env"
+printf '%s\n' "$CANARY" > "$root/keychain/verify-pin-item-7c1e"
+if env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=verify-pin-item-7c1e "$wrapper_orig" >"$root/out/stdout" 2>"$root/out/stderr"; then
+  bad "pin: the original wrapper used a fake security from PATH"
+else
+  [[ ! -f "$root/out/claude.env" && -z "$(leaks)" ]] \
+    && ok "pin: a fake security first on PATH is ignored by the original" \
+    || bad "pin: PATH reached the key lookup" "$(leaks)"
 fi
 
 echo "$pass passed, $fail failed"
