@@ -706,7 +706,7 @@ chmod +x "$root/bin/security"
 # cannot be made to choose the binary through its environment or PATH. These
 # cases test a COPY of each script with that one path replaced by the fake, in
 # a directory only this script writes. The originals are checked separately
-# below: the pin is present, and a fake on PATH is ignored.
+# below, by reading them only: the pin is present.
 LAUNCH_ORIG="$LAUNCH"
 patched="$root/patched"; mkdir -p "$patched"
 for f in "$(dirname "$LAUNCH")/cast-launch.sh" "$(dirname "$LAUNCH")/claude-bedrock-launch"; do
@@ -851,10 +851,9 @@ else
   bad "claude-bedrock-launch is missing or not executable beside the launcher"
 fi
 
-# The pin itself, on the ORIGINAL scripts. Each names /usr/bin/security by
-# absolute path, and a fake `security` first on PATH is not used: the lookup
-# either reaches the real tool (which has no such item) or finds none, and
-# either way the launch is refused and the canary never appears.
+# The pin itself, on the ORIGINAL scripts, by reading them only: each names
+# /usr/bin/security by absolute path. No case runs an original with Bedrock on,
+# because that would query the real keychain.
 for f in "$LAUNCH_ORIG" "$wrapper_orig"; do
   [[ -f "$f" ]] || continue
   grep -q '"\$(/usr/bin/security find-generic-password' "$f" \
@@ -862,15 +861,6 @@ for f in "$LAUNCH_ORIG" "$wrapper_orig"; do
     && ok "pin: $(basename "$f") calls /usr/bin/security by absolute path" \
     || bad "pin: $(basename "$f") does not pin /usr/bin/security"
 done
-rm -f "$root/out/claude.env"
-printf '%s\n' "$CANARY" > "$root/keychain/verify-pin-item-7c1e"
-if env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=verify-pin-item-7c1e "$wrapper_orig" >"$root/out/stdout" 2>"$root/out/stderr"; then
-  bad "pin: the original wrapper used a fake security from PATH"
-else
-  [[ ! -f "$root/out/claude.env" && -z "$(leaks)" ]] \
-    && ok "pin: a fake security first on PATH is ignored by the original" \
-    || bad "pin: PATH reached the key lookup" "$(leaks)"
-fi
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

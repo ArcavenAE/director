@@ -36,6 +36,11 @@ validation against criteria 3.1 to 3.6.
   environment. A role that selects Bedrock only through an overlay's settings
   `env` never triggers it, because that env reaches claude after the launcher
   has run; such a role must also have the variable set where the launcher runs.
+  Trust boundary: the launching environment is trusted. Anything that controls
+  it (a `BASH_ENV` file that defines a function named `/usr/bin/security`, or a
+  preset `AWS_BEARER_TOKEN_BEDROCK`, which wins by design) controls the token.
+  The absolute path closes the PATH case, which needs no control of the
+  environment, and nothing more.
 - `verify-cast-launch.sh`: proves the launcher's per-role handling of the
   global tier without a broker and without casting anything. claude, the
   shim, the wardrobe root and slice.sh are stubs; each case checks both the
