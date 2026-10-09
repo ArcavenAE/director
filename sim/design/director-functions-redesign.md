@@ -19,7 +19,7 @@ operator to rule.
 - Pins: director main 860f1aa. R-200 to R-204 are proposed in #273 (open,
   unmerged), and are cited here as proposed.
 - Requirements: R-134, R-135, R-152, R-153, R-159, R-162, R-169, R-171,
-  R-177, R-184, R-192, R-196, R-197, R-198, and R-201 to R-204 (proposed).
+  R-177, R-184, R-192, R-196, R-197, R-198, and R-200 to R-204 (proposed).
 
 ## 1. Why
 
@@ -68,43 +68,48 @@ the pin.
   :173-177), so no design adds a check on relay wording.
 - **The inventory had gaps.** R-115 (dispatch ledger) and R-170
   (review-request tracking) had no row; neither did the queue's surfacing
-  filters (R-171, R-177, R-198, R-203), R-192 clock stamps, or the board's
+  filters (R-171, R-177, R-198, R-203 proposed), R-192 clock stamps, or the board's
   Uncaptured block. These five were added as rows 20 to 24 below. R-170 has
-  no answer in any design yet.
+  no answer in any design yet, D included.
 
 ## 3. Designs considered
 
 The three first designs were drafted against rows 1 to 19 and mapped every
-one; none retired a function. The audit added rows 20 to 24, and D (planned
-after the audit) answers those it can. A cell names where the function
-lives in that design.
+one; none retired a function. The audit added rows 20 to 24 after A, B and
+C were drafted, so A to C give no mapping for most of those rows, and their
+cells say "open". Where a draft did name one (B's `relay` helper, A's
+presentation check), the cell says so. D, planned after the audit, answers
+the rows it can and says "open" for R-170. A cell names where the function
+lives in that design; "as today" means it stays where the today column
+says. Today's column records whether a function is code, a requirement
+only, or habit held in agent memory, as the first round sorted them.
 
-| # | function | A one record | B small tools | C keep the stores | D recommended |
-|---|---|---|---|---|---|
-| 1 | Decision Desk | a view of the ask fold | a render of the `asks` tool | kept as the store | kept as the store of asks |
-| 2 | workstream ledger | `stream` kind in the log | `streams` tool | kept; the reconciler checks it | kept (`dws`); blocked-on-operator needs a card id (K13) |
-| 3 | board | a regenerated brief, plus notes citing ids | a generated page, plus notes | authored, with a generated state section first | generated state first, narrative second, ids resolve (K19) |
-| 4 | relay log | `message` kind | `relay` tool, clock-stamped | kept, local | kept, local, clock-stamped (K6) |
-| 5 | bus reading | one reader per tier writes receipts | one `inbox` tool, one cursor | one draining path with a handled ledger | as C (K3, K4) |
-| 6 | merge-guard | kept, reads exclusions | kept, reads exclusions | kept, reads exclusions | kept, reads exclusions (K1) |
-| 7 | harvest | same as today | `notes` tool | same as today | same; reconciler proposes a harvest due (R-179) |
-| 8 | operator digests | a view of the fold | a render of `queue` | reconciler output | reconciler render (K18) |
-| 9 | close-or-kill | a view of the fold, proposals only | weekly render | reconciler list | reconciler render, with an `idea` age line (K7, K18) |
-| 10 | sweep (`dsi`, `dsx`) | a query over the store | renders | same; lists open cards | same; state first; tick runs drain and reconcile (K20) |
-| 11 | stansfield roll call | same as today | `seats` snapshot | same as today | same as today |
-| 12 | ask ledger | ask-state events from the bus reader | part of `inbox` and `asks` | kept; shares the cursor | kept; shares the drain (K4) |
-| 13 | ruling records | `ruling` kind | `rulings` tool | `rulings.jsonl` or a Desk collection | `rulings.jsonl` (K9) |
-| 14 | ring and ack | `receipt` kind | `rings` tool | ring record in the ledger | `rings.jsonl` keyed by seat (K14) |
-| 15 | successor inheritance | a fold of receipts | grants and terms, by-role read | cards and rulings only | `inherit <role>` read, plus `term` kind (K15, K9) |
-| 16 | replay | same as today | `notes` tool | same as today | same as today |
-| 17 | capture triggers | same as today | same as today | same as today | same; written in the definitions file (K2) |
-| 18 | relay authority rule | same as today (open by ruling) | same | same | same; grants bound merges and terms only |
-| 19 | merge exclusions | `exclusion` grants | deny-grants | exclusion records | exclusion records, data kept local (K1, K9) |
-| 20 | R-115 dispatch ledger | not mapped | not mapped | not mapped | per-seat depth view, partial (K17) |
-| 21 | R-170 review tracking | not mapped | not mapped | not mapped | open: no answer yet |
-| 22 | surfacing filters (R-171, R-177, R-198, R-203) | presentation check | in `queue` (one draft) | not named | presentation check (K12) |
-| 23 | R-192 clock stamps | not mapped | `relay` helper | clock stamps | clock stamps (K6) |
-| 24 | the board's Uncaptured block | `note` kind (one draft) | notes file | kept in the authored board | kept in the narrative |
+| # | function | today | A one record | B small tools | C keep the stores | D recommended |
+|---|---|---|---|---|---|---|
+| 1 | Decision Desk | the Desk Artifact; card rules are habit | a view of the ask fold | a render of the `asks` tool | kept as the store | kept as the store of asks |
+| 2 | workstream ledger | `dws` (code) | `stream` kind in the log | `streams` tool | kept; the reconciler checks it | kept (`dws`); blocked-on-operator needs a card id (K13) |
+| 3 | board | `board.md`, authored; `board-html` (code) | a regenerated brief, plus notes citing ids | a generated page, plus notes | authored, with a generated state section first | generated state first, narrative second, ids resolve (K19) |
+| 4 | relay log | a local log, by hand | `message` kind | `relay` tool, clock-stamped | kept, local | kept, local, clock-stamped (K6) |
+| 5 | bus reading | director-mcp drain (code; acks on read) | one reader per tier writes receipts | one `inbox` tool, one cursor | one draining path with a handled ledger | as C (K3, K4) |
+| 6 | merge-guard | `merge-guard` (code) | kept, reads exclusions | kept, reads exclusions | kept, reads exclusions | kept, reads exclusions (K1) |
+| 7 | harvest | by hand | as today | `notes` tool | as today | same; reconciler proposes a harvest due (R-179) |
+| 8 | operator digests | habit; no definition on main | a view of the fold | a render of `queue` | reconciler output | reconciler render (K18) |
+| 9 | close-or-kill | habit; no definition on main | a view of the fold, proposals only | weekly render | reconciler list | reconciler render, with an `idea` age line (K7, K18) |
+| 10 | sweep (`dsi`, `dsx`) | `dsi`, `dsx` (code) | a query over the store | renders | same; lists open cards | same; state first; tick runs drain and reconcile (K20) |
+| 11 | stansfield roll call | by hand | as today | `seats` snapshot | as today | as today |
+| 12 | ask ledger | design, plus the `askledger.go` probe | ask-state events from the bus reader | part of `inbox` and `asks` | kept; shares the cursor | kept; shares the drain (K4) |
+| 13 | ruling records | none (R-201, proposed) | `ruling` kind | `rulings` tool | `rulings.jsonl` or a Desk collection | `rulings.jsonl` (K9) |
+| 14 | ring and ack | none (R-200, proposed) | `receipt` kind | `rings` tool | ring record in the ledger | `rings.jsonl` keyed by seat (K14) |
+| 15 | successor inheritance | none (R-204, proposed) | a fold of receipts | grants and terms, by-role read | cards and rulings only | `inherit <role>` read, plus `term` kind (K15, K9) |
+| 16 | replay | by hand | as today | `notes` tool | as today | as today |
+| 17 | capture triggers | habit (the admission test) | as today | as today | as today | same; written in the definitions file (K2) |
+| 18 | relay authority rule | prose (R-184), open by ruling | as today (open by ruling) | as today (open by ruling) | as today (open by ruling) | as today; grants bound merges and terms only |
+| 19 | merge exclusions | none (R-153 is ruled, no code) | `exclusion` grants | deny-grants | exclusion records | exclusion records, data kept local (K1, K9) |
+| 20 | R-115 dispatch ledger | requirement only | open | open | open | per-seat depth view, partial (K17) |
+| 21 | R-170 review tracking | requirement only | open | open | open | open: no answer yet |
+| 22 | surfacing filters (R-171, R-177, R-198, R-203 proposed) | requirements; R-203 proposed | presentation check | in `queue` (one draft) | open | presentation check (K12) |
+| 23 | R-192 clock stamps | requirement only | open | `relay` helper | clock stamps | clock stamps (K6) |
+| 24 | the board's Uncaptured block | a block in `board.md` | `note` kind (one draft) | notes file | kept in the authored board | kept in the narrative |
 
 - **A. One decision-and-work record.** One append-only event log; the Desk,
   ledger, board, digest and close-or-kill are views. Weakest point: one bad
@@ -264,7 +269,7 @@ R-id owns one behavior. Both sit in #273 and are unmerged.
 
 Candidate DFR-A to DFR-C, provisional, for harvest once the operator picks:
 - DFR-A: every operator-facing list is a query over records, and none is
-  hand-kept (R-202).
+  hand-kept (R-202, proposed).
 - DFR-B: every source a director view reads prints its last-read time, or
   UNREAD, and a count reads "at least n" while a source is unread.
 - DFR-C: a grant takes effect only on the operator's confirm of a card that
