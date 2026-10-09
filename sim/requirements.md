@@ -2208,6 +2208,127 @@ or by the byline marker when that is all there is, never by the transport login.
 *Earned by: O-06u, O-2027.*
 *Source: OBSERVED. Cross-refs R-82, R-52.*
 
+**R-200 (OBSERVED) · a ring is followed to a first turn and an acknowledgement,
+and a seat that does not get there is reported with its blocker.** After a
+host's scheduled rotation, six successor seats sat at an empty prompt with no
+turns while the review queue stalled for 35 minutes. Two days later two
+reviewer seats held routed asks for over an hour: when rung, one took a turn and
+was denied the tool it needed to acknowledge, and the other reported that it
+could not authenticate to or reach GitHub. The urgent pull request merged on
+another reviewer's approval before either started. The same day three
+successor seats on another team sat at an empty prompt after a max-age shift
+until director rang them. Within a set time of a spawn or a doorbell, director confirms the seat took a turn and acknowledged,
+and when it has not, reports the seat with the exact blocker it shows: a dialog,
+a permission or classifier denial quoted verbatim, a missing tool or network, or
+no turn at all.
+*Earned by: O-2028, O-2068, O-2070.*
+*Source: OBSERVED. Extends R-185 and R-194; cross-refs R-117, R-195.*
+
+**R-201 (OBSERVED) · rulings are records keyed by subject, and director checks
+for one before it raises a decision.** Director escalated a question to the
+operator as urgent, in a seat's framing, when the operator had already ruled on
+the same subject three times; the rulings lived only in relay-log prose.
+Separately, an architect's ruling on a ticket and an open operator card from the
+same seat's triage answered one question two ways, and a pull request built from
+the ruling reached merge recommended before anyone saw the conflict. Director
+keeps each ruling as a record with its subject, searches it before raising a
+decision, links each open card to the tickets and pull requests it decides, and
+stops a merge that would pre-empt an open card.
+*Earned by: O-2058, O-2061.*
+*Source: OBSERVED. Cross-refs R-177, R-186, R-188.*
+
+**R-202 (RULED) · each operator ask is one decision record that carries its
+content, and every other operator queue is derived from it.** The operator asked
+for a pending question and found the board held only "pause option 1/2/3", with
+no options text and no source; recovering it took about eight tool calls.
+Operator, 2026-10-08: "the board has NOTHING, you give me NOTHING to go on, just
+"a/b/c" this is a failure". Hand-kept queues drifted the same day: the
+ledger listed 18 rows blocked on the operator, 13 already ruled hours earlier,
+while two real asks had never reached the decision page. Three asks a seat
+carried across two generations reached director only as titles. One record per
+ask holds the question, each option's text, the recommendation, its expiry and a
+source pointer. The ledger's operator-blocked rows are read from those records,
+and an ask a seat raises is held as a record whether or not it arrived shaped
+as a decision.
+*Earned by: O-2055, O-2056, O-2060.*
+*Source: RULED 2026-10-08, with OBSERVED instances. Extends R-188 and R-197.*
+
+**R-203 (RULED) · clerical relay is never an operator ask.** Director had no
+way to post in a team chat channel, so it parked a drafted post on the operator
+as a manual paste for about 16 hours and listed it as blocked on the operator.
+Operator, 2026-10-08: "fuck off i'm not your copy paste monkey". A paste, retype
+or relay chore is never listed as the operator's. Director finds a seat or tool
+that can do it, and when none can yet, records it as a director capability gap.
+Approvals, decisions and credentialed console steps stay the operator's.
+*Earned by: O-2065 and the ruling quoted above; relay-log R-2552 (2026-10-08
+20:0xZ) agrees.*
+*Source: RULED 2026-10-08. Cross-refs R-191, R-193.*
+
+**R-204 (OBSERVED) · a successor inherits its predecessor's open asks and
+standing terms as a record.** A supervisor respawned holding 83 queued messages
+addressed to its predecessor and no handoff file. A worker in its team then held
+two contradicting terms: the predecessor had set "draft only, never post", and
+the successor asked it to post a COMMENT, and the worker held its ack pending a
+ruling on which term stood.
+Earlier, three operator asks crossed two generations of another seat and
+surfaced only as titles. A generation change hands the successor every open ask
+and every standing term its predecessor set, and a term the successor overrides
+is marked as replaced, so a worker never has to arbitrate between two instances
+of one role.
+*Earned by: O-2068, O-2060.*
+*Source: OBSERVED. Cross-refs R-115, R-202.*
+
+### Harvest diff (2026-10-09)
+
+Covers O-2046 through O-2070 and the 2026-10-09 entry, and friction after the
+2026-10-07 entries (FR-2027 and the two merge-guard notes). Same bar: an item is
+promoted on two or more recorded instances, or on an operator ruling.
+
+- **Promoted (5):** R-200 (a ring is followed to a turn and an ack), R-201
+  (rulings keyed by subject, checked first), R-202 (one decision record per
+  operator ask), R-203 (clerical relay is never an operator ask), R-204 (a
+  successor inherits open asks and standing terms).
+- **Unchanged, new instances (9 requirements, 8 entries):**
+  - R-196 and R-169: director read the bus by hand for days, with two read
+    paths and no shared cursor, and a hand-carried sequence skipped a range
+    holding a merge-ready report for about two hours; a recommendation sat
+    about two hours between scans; global-tier mail went unread from one
+    reconnect onward; and once a recurring tick was cancelled, a doorbell
+    request sat about 45 minutes until the operator asked for status (O-2046,
+    O-2048, O-2059, O-2064, O-2066, 2026-10-09 entry).
+  - R-117: a supervisor sat idle for about 8.5 hours and again for about two
+    hours while holding work, and a cron-driven seat's reports stopped for
+    11.5 hours unseen (O-2049, O-2051, O-2062).
+  - R-177: a seat's suggested sign-in command reached the operator as the step
+    to take, when the fleet signs in another way (O-2063).
+  - R-97: a fan-out to a cluster's supervisors was consumed by whichever one
+    drained it, a third time, and a named principal with no bus presence could
+    not be reached at all (O-2052, O-2067).
+  - R-193: an operator step was forwarded on its author's word, with no check
+    output, and ran twice before it read the right account (O-2053).
+  - R-195: stuck-seat detection across three clusters took 65 captures and a
+    hand pattern that missed one limit wording (O-2054).
+  - R-199: a review was counted toward a gate by its login, and its author
+    later said they had not written it (O-2050).
+  - R-149: one styled capture came back with no escape bytes and read as an
+    undimmed draft; the same capture minutes later showed a dim suggestion
+    (FR-2027).
+- **Kept as observations (4), one instance each:** merges cutting new alphas
+  under a staged rollout plan (O-2047); a per-component stall view for planned
+  work (O-2057); unacknowledged mail deleted at its age limit with no count
+  (O-2046, D2); the merge guard stopping on a stacked child, where the
+  stacked-PR rule's first step is a merge without branch delete (FR, marvel#719).
+- **Rejected for the register (routed elsewhere):**
+  - A reviewer seat with no GitHub network, and one without permission for its
+    bus acknowledgement tool (O-2068): seat casting and manifests, filed with
+    the team that runs those seats; director's half is R-200.
+  - A shell helper that passed two flags as one word, so nine remote doorbells
+    did nothing (2026-10-09 relay log): general shell practice, already in the
+    orchestrator's shell rules.
+  - GitHub reporting a review's commit as the current head after a merge-commit
+    push (FR, marvel#718): the merge guard already anchors on review time
+    versus head arrival and stopped; no change.
+
 ### Harvest diff (2026-10-07)
 
 Covers the 2026-10-06 named observations not taken by the last harvest, O-2027
