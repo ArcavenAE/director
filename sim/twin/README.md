@@ -24,7 +24,8 @@ validation against criteria 3.1 to 3.6.
   levers, the bus pre-flight).
   On Bedrock (`CLAUDE_CODE_USE_BEDROCK=1`) it reads the key from the keychain
   item `CLAUDE_BEDROCK_KEY_ITEM` names and exports `AWS_BEARER_TOKEN_BEDROCK`
-  for claude; a token already in the environment wins, a missing, empty or
+  to claude, which its children inherit (every Bash tool call, every MCP
+  server); a token already in the environment wins, a missing, empty or
   badly named item fails the launch, and the spawn line names the item, never
   the value.
 - `claude-bedrock-launch`: the same key block, then `exec claude "$@"`, for a
@@ -40,7 +41,8 @@ validation against criteria 3.1 to 3.6.
   it (a `BASH_ENV` file that defines a function named `/usr/bin/security`, or a
   preset `AWS_BEARER_TOKEN_BEDROCK`, which wins by design) controls the token.
   The absolute path closes the PATH case, which needs no control of the
-  environment, and nothing more.
+  environment, and nothing more. The key is not kept from claude's own
+  children: a seat that runs `env` or `printenv` in a Bash tool call prints it.
 - `verify-cast-launch.sh`: proves the launcher's per-role handling of the
   global tier without a broker and without casting anything. claude, the
   shim, the wardrobe root and slice.sh are stubs; each case checks both the

@@ -302,8 +302,9 @@ DIRECTOR_TEAM="$DIRECTOR_TEAM" DIRECTOR_WORKSPACE="$DIRECTOR_WORKSPACE" NATS_URL
 # the session runs on Bedrock, claude takes its credential from
 # AWS_BEARER_TOKEN_BEDROCK. A token already in the environment wins and nothing
 # is read. Otherwise the key comes from the macOS keychain item that
-# CLAUDE_BEDROCK_KEY_ITEM names: looked up by name only, exported for claude
-# alone, never stored, never printed. A missing, empty or badly named item
+# CLAUDE_BEDROCK_KEY_ITEM names: looked up by name only, exported to claude
+# (and so inherited by everything claude starts: Bash tool calls, MCP servers),
+# never stored, never printed. A missing, empty or badly named item
 # fails the launch, so a seat never starts on the wrong credential. The lookup
 # is /usr/bin/security by absolute path: a PATH entry a seat or a pane can
 # write must not decide what supplies the key. There is no override; the
