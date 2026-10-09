@@ -2383,7 +2383,7 @@ an item is promoted on two or more recorded instances.
   casting rulings land as versioned changes), R-190 (a local address for every
   supervisor on a cluster), R-191 (the runnable command first), R-192 (log
   times from the clock).
-- **Unchanged, new instances (9 requirements, 8 entries):**
+- **Unchanged, new instances (8):**
   - R-117: idle seats again held work mail for hours; folded into R-185 for
     director's own reporting.
   - R-181: host setup refused as self-modification, an upstream create
