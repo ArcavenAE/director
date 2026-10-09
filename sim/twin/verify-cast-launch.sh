@@ -687,7 +687,7 @@ if cast builder WARDROBE_SPAWN_LOG="$root/elsewhere/spawn.log"; then
     || bad "slice.sh spawn log override" "$(cat "$root/out/slice.spawnlog")"
 fi
 
-# --- the Bedrock key (corp-bedrock-token-delivery, option c) -------------------
+# --- the Bedrock key (the operator's ruling, relayed by director on 2026-10-08) -------------------
 # A fake `security` answers from files under $root/keychain, so no case touches
 # the real keychain. The canary is a recognisable value that must reach the
 # session environment and nowhere else: not argv, not stdout, not stderr, and
@@ -762,6 +762,27 @@ refuses "bedrock bad name (leading dash)" "needs CLAUDE_BEDROCK_KEY_ITEM" \
 refuses "bedrock item unset" "needs CLAUDE_BEDROCK_KEY_ITEM" \
   CLAUDE_CODE_USE_BEDROCK=1
 
+# xtrace must never print the key: run the launcher under bash -x and under an
+# exported SHELLOPTS=xtrace and look for the canary in stdout and stderr.
+cast_x() { rm -f "$root/out/claude.env" "$root/out/claude.args"
+    env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" MARVEL_ROLE=builder MARVEL_SESSION=verify-builder-0 \
+      WARDROBE_ROOT="$root/wardrobe/contents" DIRECTOR_SHIM_BIN="$root/bin/director-mcp" TWIN_CWD="$root" \
+      DIRECTOR_TEAM=fleet DIRECTOR_WORKSPACE=verifyws "${BEDROCK_ON[@]}" "$@" \
+      >"$root/out/stdout" 2>"$root/out/stderr"; }
+for mode in "bash -x" "SHELLOPTS=xtrace"; do
+  for target in "$LAUNCH" "$(dirname "$LAUNCH")/claude-bedrock-launch"; do
+    [[ -x "$target" ]] || continue
+    if [[ "$mode" == "bash -x" ]]; then cast_x bash -x "$target" || true
+    else cast_x SHELLOPTS=xtrace "$target" || true; fi
+    if [[ -f "$root/out/claude.env" ]] && in_env AWS_BEARER_TOKEN_BEDROCK "$CANARY" claude.env \
+       && [[ -z "$(leaks)" ]]; then
+      ok "xtrace ($mode, $(basename "$target")): the key reaches claude and no trace carries it"
+    else
+      bad "xtrace ($mode, $(basename "$target"))" "reached=$([[ -f $root/out/claude.env ]] && echo y || echo n) leaks:$(leaks)"
+    fi
+  done
+done
+
 # Off unless CLAUDE_CODE_USE_BEDROCK is exactly 1: no lookup, no variable.
 if cast builder CLAUDE_BEDROCK_KEY_ITEM=bedrock-key; then
   has_env AWS_BEARER_TOKEN_BEDROCK claude.env \
@@ -772,7 +793,7 @@ fi
 # claude-bedrock-launch carries cast-launch's key block word for word.
 wrapper="$(dirname "$LAUNCH")/claude-bedrock-launch"
 if [[ -x "$wrapper" ]]; then
-  blk() { sed -n '/^bedrock_note=""$/,/^fi$/p' "$1"; }
+  blk() { sed -n '/^bedrock_note=""$/,/^unset bedrock_xtrace$/p' "$1"; }
   [[ -n "$(blk "$LAUNCH")" && "$(blk "$LAUNCH")" == "$(blk "$wrapper")" ]] \
     && ok "claude-bedrock-launch: the key block matches cast-launch's" \
     || bad "claude-bedrock-launch: the key block differs from cast-launch's"

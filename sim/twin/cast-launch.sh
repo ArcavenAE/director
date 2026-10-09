@@ -298,7 +298,7 @@ DIRECTOR_TEAM="$DIRECTOR_TEAM" DIRECTOR_WORKSPACE="$DIRECTOR_WORKSPACE" NATS_URL
   "$SHIM_BIN" --preflight \
   || { echo "cast-launch: bus pre-flight failed for agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL; not starting the harness (finding-166)" >&2; exit 1; }
 
-# The Bedrock key (operator ruling corp-bedrock-token-delivery, option c). When
+# The Bedrock key (the operator's ruling, relayed by director on 2026-10-08). When
 # the session runs on Bedrock, claude takes its credential from
 # AWS_BEARER_TOKEN_BEDROCK. A token already in the environment wins and nothing
 # is read. Otherwise the key comes from the macOS keychain item that
@@ -307,6 +307,10 @@ DIRECTOR_TEAM="$DIRECTOR_TEAM" DIRECTOR_WORKSPACE="$DIRECTOR_WORKSPACE" NATS_URL
 # fails the launch, so a seat never starts on the wrong credential. The spawn
 # line carries the item's name (bedrock_note), never its value.
 bedrock_note=""
+# xtrace is suspended around the block and restored after it, so a launcher run
+# under bash -x or SHELLOPTS=xtrace never traces the key value.
+case $- in *x*) bedrock_xtrace=1;; *) bedrock_xtrace=0;; esac
+set +x
 if [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == 1 ]]; then
   if [[ -n "${AWS_BEARER_TOKEN_BEDROCK:-}" ]]; then
     bedrock_note=", Bedrock key from the environment"
@@ -323,6 +327,8 @@ if [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == 1 ]]; then
     bedrock_note=", Bedrock key from keychain item $bedrock_item"
   fi
 fi
+if [[ "$bedrock_xtrace" == 1 ]]; then set -x; fi
+unset bedrock_xtrace
 
 # Resolve the per-role overlay just before exec. Missing file: no change
 # (default behavior). Malformed JSON: crash non-zero, matching the bus
