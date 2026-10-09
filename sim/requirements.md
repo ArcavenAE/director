@@ -2214,10 +2214,10 @@ host's scheduled rotation, six successor seats sat at an empty prompt with no
 turns while the review queue stalled for 35 minutes. Two days later two
 reviewer seats held routed asks for over an hour: when rung, one took a turn and
 was denied the tool it needed to acknowledge, and the other reported that it
-could not reach GitHub. The urgent pull request merged on another reviewer's
-approval before either started. The same day three successor seats on another
-team sat at an empty prompt after a max-age shift until director rang them. Within a set time of a
-spawn or a doorbell, director confirms the seat took a turn and acknowledged,
+could not authenticate to or reach GitHub. The urgent pull request merged on
+another reviewer's approval before either started. The same day three
+successor seats on another team sat at an empty prompt after a max-age shift
+until director rang them. Within a set time of a spawn or a doorbell, director confirms the seat took a turn and acknowledged,
 and when it has not, reports the seat with the exact blocker it shows: a dialog,
 a permission or classifier denial quoted verbatim, a missing tool or network, or
 no turn at all.
@@ -2260,15 +2260,16 @@ Operator, 2026-10-08: "fuck off i'm not your copy paste monkey". A paste, retype
 or relay chore is never listed as the operator's. Director finds a seat or tool
 that can do it, and when none can yet, records it as a director capability gap.
 Approvals, decisions and credentialed console steps stay the operator's.
-*Earned by: O-2065 and the ruling quoted above.*
+*Earned by: O-2065 and the ruling quoted above; relay-log R-2552 (2026-10-08
+20:0xZ) agrees.*
 *Source: RULED 2026-10-08. Cross-refs R-191, R-193.*
 
 **R-204 (OBSERVED) · a successor inherits its predecessor's open asks and
 standing terms as a record.** A supervisor respawned holding 83 queued messages
 addressed to its predecessor and no handoff file. A worker in its team then held
 two contradicting terms: the predecessor had set "draft only, never post", and
-the successor asked it to post a review, and the worker held its ack until the
-conflict was settled.
+the successor asked it to post a COMMENT, and the worker held its ack pending a
+ruling on which term stood.
 Earlier, three operator asks crossed two generations of another seat and
 surfaced only as titles. A generation change hands the successor every open ask
 and every standing term its predecessor set, and a term the successor overrides
@@ -2279,7 +2280,7 @@ of one role.
 
 ### Harvest diff (2026-10-09)
 
-Covers O-2046 through O-2068 and the 2026-10-09 entry, and friction after the
+Covers O-2046 through O-2070 and the 2026-10-09 entry, and friction after the
 2026-10-07 entries (FR-2027 and the two merge-guard notes). Same bar: an item is
 promoted on two or more recorded instances, or on an operator ruling.
 
