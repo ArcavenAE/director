@@ -1,0 +1,34 @@
+id: question-fleet-workforce-organization
+type: question
+confidence: frontier
+title: "How is a director, supervisor and worker fleet staffed and routed, and what signal does a supervisor need to see load?"
+tags: [director, organization, supervisor]
+content: |
+  finding-005 answers the seven questions of bd aae-orc-2tntp from prior art
+  (Simon, Graicunas and the span-of-control literature, mission command,
+  Beer's Viable System Model, Baldwin and Clark) and one measured fleet
+  session (2026-09-19 to 09-20).
+
+  Its two results:
+  1. The director boundary is a routing problem before it is a discipline
+     problem. When the coordination channel fails, doing the work yourself
+     is the only path that still terminates, so a guardrail alone will keep
+     being breached until the channel is fixed.
+  2. The fleet lacks a live capacity signal. Every classical model assumes a
+     manager can see load; a supervisor here cannot.
+
+  The capacity signal is now a marvel design (marvel's team-load rollup,
+  `docs/design/team-load-rollup.md` there), and its waiting-on-operator
+  cell needs a new director rollup field (bd aae-orc-xga6w).
+
+  OPEN: which of finding-005's staffing rules (scale up, redistribute,
+  escalate) become director requirements once the load signal exists.
+edges:
+  - target: question-global-supervisor-delivery-scope
+    type: derives
+    note: "span of control is priced by how much mail each supervisor must read"
+provenance:
+  created_by: agent
+  session: architect-2026-10-09-harvest
+  created_at: "2026-10-09"
+  discovered_from: finding-005-workforce-organization-model

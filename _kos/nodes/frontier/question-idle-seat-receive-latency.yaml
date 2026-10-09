@@ -41,6 +41,14 @@ content: |
 
   None of A to C is decided. The measurement is one seat over one day; the
   mechanism is the one #166 already names.
+
+  HARVEST 2026-10-09:
+  - finding-011: `wait_for_message` clamps `timeout_seconds` to 120, which is
+    the Claude Code background threshold, so a full-length wait becomes a
+    background task and each empty return wakes the seat for a turn.
+  - finding-021: `sender.session` is the harness session UUID; the shim's
+    per-process ULID travels in `sender.instance`, self-asserted. `unread`
+    keys its reads-outside-durable evidence on it and says so in `basis`.
 edges:
   - target: finding-013-an-idle-supervisor-without-the-cue-reads-mail-hours-late
     type: derives

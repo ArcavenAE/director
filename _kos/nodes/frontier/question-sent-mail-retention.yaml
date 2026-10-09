@@ -37,6 +37,10 @@ content: |
   The audit stream was built as an append-only record for operators, not as
   a seat's history, and it holds every seat's mail. Exposing it to seats is
   an authority question (who may read whose sent mail), not only a tool.
+
+  HARVEST 2026-10-09: finding-021 (`sender.instance`, self-asserted) bears
+  on what a sender can learn about its own sends; the detail is on
+  question-idle-seat-receive-latency.
 edges:
   - target: finding-010-explicit-workspace-send-is-accepted-for-a-mailbox-nobody-reads
     type: derives

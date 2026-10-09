@@ -169,6 +169,13 @@ content: |
   startup, so this is a director requirement class, not general hygiene.
   The registration collision (ci2gy) is partly harness shape and partly
   ours; it stays here because the seat is the thing colliding.
+
+  HARVEST 2026-10-09 (finding-020): the director skill's `dws refresh` release
+  hint used `gh release list --exclude-pre-releases --limit 1`, which filters
+  on the client and walks every release, about 150 s on a repo with only
+  pre-releases. `gh api repos/{repo}/releases/latest` is one request; a 404
+  maps to no release (director#202). A tool the seat runs every refresh is
+  part of what the seat costs to run.
 edges:
   - target: finding-015-a-respawned-seat-still-replays-its-inbox-after-the-resume-fix
     type: derives

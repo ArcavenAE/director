@@ -1,0 +1,40 @@
+id: question-global-hub-transport
+type: question
+confidence: frontier
+title: "What does the global hub need before its TLS cutover, and what does JetStream lose across a leaf partition?"
+tags: [director, global-tier, tls, jetstream, leafnode]
+content: |
+  The global hub (R-86, `sim/design/global-bus-tier.md`) still runs
+  plaintext. Four findings measure what the cutover and the leaf link need.
+
+  MEASURED:
+  - finding-001: server TLS on a scratch hub, 24 of 24 checks. The live
+    cutover is one hub restart plus one leaf reload.
+  - finding-002: the trial root does not ship. A ceremony root (five-year,
+    born on a RAM disk, passphrase held by no agent, two offline copies, one
+    log line per signature) replaces it, and the CA digest is matched on the
+    far side before the flip.
+  - finding-004: JetStream across a leaf partition reconciles by stored
+    sequence. The one loss is source-side retention eviction during a long
+    isolation.
+  - finding-019: a TLS leaf links across nats-server 2.14.6 and 2.15.0 in
+    both directions, and a rogue CA or a plaintext leaf is refused. The SAN
+    set finding-002 rehearsed is stale: it carries an address that is on no
+    interface of the hub host today.
+
+  RULING (operator, 2026-10-04, "1 b", relayed by director; recorded on bd
+  aae-orc-4vx98): wait for marvel to accept a list of hub URLs, then run one
+  first-mint ceremony against the final SAN set. marvel#575 (the list of hub URLs) closed completed
+  on 2026-10-05, so the remaining steps are operator-gated: the ceremony,
+  shipping the CA and matching its digest, and the cutover.
+
+  OPEN: the final SAN set, and the cutover itself.
+edges:
+  - target: question-cross-cluster-supervisor-reach
+    type: derives
+    note: "reach rides the same hub; a cutover changes what every leaf dials"
+provenance:
+  created_by: agent
+  session: architect-2026-10-09-harvest
+  created_at: "2026-10-09"
+  discovered_from: finding-001-hub-tls-local-trial
