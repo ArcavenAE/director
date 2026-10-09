@@ -73,3 +73,11 @@ a probe before it hardens.
   ambiguous, the shim change against `global.go`, proposed R-94 text, and the
   cutover with a named legacy reader and the forwarding seat's end condition.
   Candidate GSI-A to GSI-C.
+- `director-functions-redesign.md` (design for review 2026-10-09): the
+  operations coordination plan's part 2. An inventory of 19 director
+  functions, four designs that keep all of them, and the panel's
+  recommendation D (C's stores and reconciler on the existing `dws` fold,
+  A's presentation check, B's mirror-or-proposal tags and UNREAD rule, the
+  Desk as the store of asks). The decisions for the operator, with votes
+  and dissent; R-153 has no enforcing code today; 20 candidate tickets, not
+  filed. Candidate DFR-A to DFR-C.
