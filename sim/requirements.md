@@ -2285,7 +2285,7 @@ promoted on two or more recorded instances, or on an operator ruling.
   (rulings keyed by subject, checked first), R-202 (one decision record per
   operator ask), R-203 (clerical relay is never an operator ask), R-204 (a
   successor inherits open asks and standing terms).
-- **Unchanged, new instances (8):**
+- **Unchanged, new instances (9 requirements, 8 entries):**
   - R-196 and R-169: director read the bus by hand for days, with two read
     paths and no shared cursor, and a hand-carried sequence skipped a range
     holding a merge-ready report for about two hours; a recommendation sat
@@ -2383,7 +2383,7 @@ an item is promoted on two or more recorded instances.
   casting rulings land as versioned changes), R-190 (a local address for every
   supervisor on a cluster), R-191 (the runnable command first), R-192 (log
   times from the clock).
-- **Unchanged, new instances (8):**
+- **Unchanged, new instances (9 requirements, 8 entries):**
   - R-117: idle seats again held work mail for hours; folded into R-185 for
     director's own reporting.
   - R-181: host setup refused as self-modification, an upstream create
