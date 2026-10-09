@@ -76,10 +76,11 @@ the pin.
 
 The three first designs were drafted against rows 1 to 19 and mapped every
 one; none retired a function. The audit added rows 20 to 24 after A, B and
-C were drafted, so A to C give no mapping for most of those rows, and their
-cells say "open". Where a draft did name one (B's `relay` helper, A's
-presentation check), the cell says so. D, planned after the audit, answers
-the rows it can and says "open" for R-170. A cell names where the function
+C were drafted. Where a draft had already named the function, its cell
+says where; where none had, the cell says "open". That maps 7 of those 15
+cells: A maps 2 of the 5 rows (22, 24), B maps 3 (22, 23, 24) and C maps 2
+(23, 24). Rows 20 and 21 are open under all three. D, planned after the
+audit, maps every row but 21, R-170, which it leaves open. A cell names where the function
 lives in that design; "as today" means it stays where the today column
 says. Today's column records whether a function is code, a requirement
 only, or habit held in agent memory, as the first round sorted them.
@@ -92,22 +93,22 @@ only, or habit held in agent memory, as the first round sorted them.
 | 4 | relay log | a local log, by hand | `message` kind | `relay` tool, clock-stamped | kept, local | kept, local, clock-stamped (K6) |
 | 5 | bus reading | director-mcp drain (code; acks on read) | one reader per tier writes receipts | one `inbox` tool, one cursor | one draining path with a handled ledger | as C (K3, K4) |
 | 6 | merge-guard | `merge-guard` (code) | kept, reads exclusions | kept, reads exclusions | kept, reads exclusions | kept, reads exclusions (K1) |
-| 7 | harvest | by hand | as today | `notes` tool | as today | same; reconciler proposes a harvest due (R-179) |
+| 7 | harvest | by hand | as today | `notes` tool | as today | as today; reconciler proposes a harvest due (R-179) |
 | 8 | operator digests | habit; no definition on main | a view of the fold | a render of `queue` | reconciler output | reconciler render (K18) |
 | 9 | close-or-kill | habit; no definition on main | a view of the fold, proposals only | weekly render | reconciler list | reconciler render, with an `idea` age line (K7, K18) |
-| 10 | sweep (`dsi`, `dsx`) | `dsi`, `dsx` (code) | a query over the store | renders | same; lists open cards | same; state first; tick runs drain and reconcile (K20) |
+| 10 | sweep (`dsi`, `dsx`) | `dsi`, `dsx` (code) | a query over the store | renders | as today; lists open cards | as today; state first; tick runs drain and reconcile (K20) |
 | 11 | stansfield roll call | by hand | as today | `seats` snapshot | as today | as today |
 | 12 | ask ledger | design, plus the `askledger.go` probe | ask-state events from the bus reader | part of `inbox` and `asks` | kept; shares the cursor | kept; shares the drain (K4) |
 | 13 | ruling records | none (R-201, proposed) | `ruling` kind | `rulings` tool | `rulings.jsonl` or a Desk collection | `rulings.jsonl` (K9) |
 | 14 | ring and ack | none (R-200, proposed) | `receipt` kind | `rings` tool | ring record in the ledger | `rings.jsonl` keyed by seat (K14) |
 | 15 | successor inheritance | none (R-204, proposed) | a fold of receipts | grants and terms, by-role read | cards and rulings only | `inherit <role>` read, plus `term` kind (K15, K9) |
 | 16 | replay | by hand | as today | `notes` tool | as today | as today |
-| 17 | capture triggers | habit (the admission test) | as today | as today | as today | same; written in the definitions file (K2) |
+| 17 | capture triggers | habit (the admission test) | as today | as today | as today | as today; written in the definitions file (K2) |
 | 18 | relay authority rule | prose (R-184), open by ruling | as today (open by ruling) | as today (open by ruling) | as today (open by ruling) | as today; grants bound merges and terms only |
 | 19 | merge exclusions | none (R-153 is ruled, no code) | `exclusion` grants | deny-grants | exclusion records | exclusion records, data kept local (K1, K9) |
 | 20 | R-115 dispatch ledger | requirement only | open | open | open | per-seat depth view, partial (K17) |
 | 21 | R-170 review tracking | requirement only | open | open | open | open: no answer yet |
-| 22 | surfacing filters (R-171, R-177, R-198, R-203 proposed) | requirements; R-203 proposed | presentation check | in `queue` (one draft) | open | presentation check (K12) |
+| 22 | surfacing filters (R-171, R-177, R-198, R-203 proposed) | requirements | presentation check | in `queue` (one draft) | open | presentation check (K12) |
 | 23 | R-192 clock stamps | requirement only | open | `relay` helper | clock stamps | clock stamps (K6) |
 | 24 | the board's Uncaptured block | a block in `board.md` | `note` kind (one draft) | notes file | kept in the authored board | kept in the narrative |
 

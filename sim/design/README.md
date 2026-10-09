@@ -76,7 +76,7 @@ a probe before it hardens.
 - `director-functions-redesign.md` (design for review 2026-10-09): the
   operations coordination plan's part 2. An inventory of 24 director
   functions, four designs (three drafted before the audit added five rows,
-  which they leave open), and the panel's
+  of whose 15 cells they map 7), and the panel's
   recommendation D (C's stores and reconciler on the existing `dws` fold,
   A's presentation check, B's mirror-or-proposal tags and UNREAD rule, the
   Desk as the store of asks). The decisions for the operator, with votes
