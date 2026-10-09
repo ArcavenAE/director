@@ -2211,23 +2211,24 @@ or by the byline marker when that is all there is, never by the transport login.
 **R-200 (OBSERVED) · a ring is followed to a first turn and an acknowledgement,
 and a seat that does not get there is reported with its blocker.** After a
 host's scheduled rotation, six successor seats sat at an empty prompt with no
-turns while the review queue stalled for 35 minutes. Two days later three
+turns while the review queue stalled for 35 minutes. Two days later two
 reviewer seats held routed asks for over an hour: when rung, one took a turn and
-was denied the tool it needed to acknowledge, one reported that it could not
-reach GitHub, and the third was still working. The urgent pull request merged on
-another reviewer's approval before any of them started. Within a set time of a
+was denied the tool it needed to acknowledge, and the other reported that it
+could not reach GitHub. The urgent pull request merged on another reviewer's
+approval before either started. The same day three successor seats on another
+team sat at an empty prompt after a max-age shift until director rang them. Within a set time of a
 spawn or a doorbell, director confirms the seat took a turn and acknowledged,
 and when it has not, reports the seat with the exact blocker it shows: a dialog,
 a permission or classifier denial quoted verbatim, a missing tool or network, or
 no turn at all.
-*Earned by: O-2028, O-2068.*
+*Earned by: O-2028, O-2068, O-2070.*
 *Source: OBSERVED. Extends R-185 and R-194; cross-refs R-117, R-195.*
 
 **R-201 (OBSERVED) · rulings are records keyed by subject, and director checks
 for one before it raises a decision.** Director escalated a question to the
 operator as urgent, in a seat's framing, when the operator had already ruled on
-the same subject three times; the rulings lived only in relay-log prose. On
-another day an architect's ruling on a ticket and an open operator card from the
+the same subject three times; the rulings lived only in relay-log prose.
+Separately, an architect's ruling on a ticket and an open operator card from the
 same seat's triage answered one question two ways, and a pull request built from
 the ruling reached merge recommended before anyone saw the conflict. Director
 keeps each ruling as a record with its subject, searches it before raising a
@@ -2241,7 +2242,7 @@ content, and every other operator queue is derived from it.** The operator asked
 for a pending question and found the board held only "pause option 1/2/3", with
 no options text and no source; recovering it took about eight tool calls.
 Operator, 2026-10-08: "the board has NOTHING, you give me NOTHING to go on, just
-"a/b/c" this is a failure". Two days of hand-kept queues then drifted: the
+"a/b/c" this is a failure". Hand-kept queues drifted the same day: the
 ledger listed 18 rows blocked on the operator, 13 already ruled hours earlier,
 while two real asks had never reached the decision page. Three asks a seat
 carried across two generations reached director only as titles. One record per
@@ -2266,7 +2267,8 @@ Approvals, decisions and credentialed console steps stay the operator's.
 standing terms as a record.** A supervisor respawned holding 83 queued messages
 addressed to its predecessor and no handoff file. A worker in its team then held
 two contradicting terms: the predecessor had set "draft only, never post", and
-the successor asked it to post a review, so the worker stopped to ask a human.
+the successor asked it to post a review, and the worker held its ack until the
+conflict was settled.
 Earlier, three operator asks crossed two generations of another seat and
 surfaced only as titles. A generation change hands the successor every open ask
 and every standing term its predecessor set, and a term the successor overrides
