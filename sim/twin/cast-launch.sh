@@ -298,6 +298,43 @@ DIRECTOR_TEAM="$DIRECTOR_TEAM" DIRECTOR_WORKSPACE="$DIRECTOR_WORKSPACE" NATS_URL
   "$SHIM_BIN" --preflight \
   || { echo "cast-launch: bus pre-flight failed for agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL; not starting the harness (finding-166)" >&2; exit 1; }
 
+# The Bedrock key (the operator's ruling, relayed by director on 2026-10-08). When
+# the session runs on Bedrock, claude takes its credential from
+# AWS_BEARER_TOKEN_BEDROCK. A token already in the environment wins and nothing
+# is read. Otherwise the key comes from the macOS keychain item that
+# CLAUDE_BEDROCK_KEY_ITEM names: looked up by name only, exported to claude
+# (and so inherited by everything claude starts: Bash tool calls, MCP servers),
+# never stored, never printed. A missing, empty or badly named item
+# fails the launch, so a seat never starts on the wrong credential. The lookup
+# is /usr/bin/security by absolute path: a PATH entry a seat or a pane can
+# write must not decide what supplies the key. There is no override; the
+# verify script tests a copy of this file with that one path substituted. The spawn
+# line carries the item's name (bedrock_note), never its value.
+bedrock_prog=cast-launch
+bedrock_note=""
+# xtrace is suspended around the block and restored after it, so a launcher run
+# under bash -x or SHELLOPTS=xtrace never traces the key value.
+case $- in *x*) bedrock_xtrace=1;; *) bedrock_xtrace=0;; esac
+set +x
+if [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == 1 ]]; then
+  if [[ -n "${AWS_BEARER_TOKEN_BEDROCK:-}" ]]; then
+    bedrock_note=", Bedrock key from the environment"
+  else
+    bedrock_item="${CLAUDE_BEDROCK_KEY_ITEM:-}"
+    [[ "$bedrock_item" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+      || { echo "$bedrock_prog: CLAUDE_CODE_USE_BEDROCK=1 needs CLAUDE_BEDROCK_KEY_ITEM to name a keychain item ([A-Za-z0-9._-], no leading punctuation); not starting the harness" >&2; exit 1; }
+    bedrock_key="$(/usr/bin/security find-generic-password -s "$bedrock_item" -w 2>/dev/null)" \
+      || { echo "$bedrock_prog: keychain item '$bedrock_item' not readable; not starting the harness" >&2; exit 1; }
+    [[ -n "$bedrock_key" ]] \
+      || { echo "$bedrock_prog: keychain item '$bedrock_item' is empty; not starting the harness" >&2; exit 1; }
+    export AWS_BEARER_TOKEN_BEDROCK="$bedrock_key"
+    unset bedrock_key
+    bedrock_note=", Bedrock key from keychain item $bedrock_item"
+  fi
+fi
+if [[ "$bedrock_xtrace" == 1 ]]; then set -x; fi
+unset bedrock_xtrace
+
 # Resolve the per-role overlay just before exec. Missing file: no change
 # (default behavior). Malformed JSON: crash non-zero, matching the bus
 # pre-flight loud-failure precedent (finding-166), so a broken backend
@@ -333,7 +370,7 @@ if [[ -f "$overlay_file" ]]; then
   echo "cast-launch: attaching backend overlay $overlay_file for role $MARVEL_ROLE (merged over marvel policy as --settings $merged)" >&2
 fi
 
-echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD$cue_note" >&2
+echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD$cue_note$bedrock_note" >&2
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$prompt" \

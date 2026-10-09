@@ -687,5 +687,205 @@ if cast builder WARDROBE_SPAWN_LOG="$root/elsewhere/spawn.log"; then
     || bad "slice.sh spawn log override" "$(cat "$root/out/slice.spawnlog")"
 fi
 
+# --- the Bedrock key (the operator's ruling, relayed by director on 2026-10-08) -------------------
+# A fake `security` answers from files under $root/keychain, so no case touches
+# the real keychain. The canary is a recognisable value that must reach the
+# session environment and nowhere else: not argv, not stdout, not stderr, and
+# not the spawn line.
+mkdir -p "$root/keychain"
+cat > "$root/bin/security" <<STUB
+#!/usr/bin/env bash
+# find-generic-password -s <item> -w
+[[ "\${1:-}" == find-generic-password && "\${2:-}" == -s && "\${4:-}" == -w ]] || exit 2
+f="$root/keychain/\$3"
+[[ -f "\$f" ]] || { echo "security: The specified item could not be found in the keychain." >&2; exit 44; }
+cat "\$f"
+STUB
+chmod +x "$root/bin/security"
+# The launcher pins /usr/bin/security and has no override, so a production launch
+# cannot be made to choose the binary through its environment or PATH. These
+# cases test a COPY of each script with that one path replaced by the fake, in
+# a directory only this script writes. The originals are checked separately
+# below, by reading them only: the pin is present.
+LAUNCH_ORIG="$LAUNCH"
+patched="$root/patched"; mkdir -p "$patched"
+# $LAUNCH is patched whatever it is called, so CAST_LAUNCH=<installed path> is
+# tested as installed too. The wrapper is the file beside it, when there is one.
+sed "s#/usr/bin/security#$root/bin/security#g" "$LAUNCH" > "$patched/cast-launch.sh"
+chmod +x "$patched/cast-launch.sh"
+if [[ -f "$(dirname "$LAUNCH")/claude-bedrock-launch" ]]; then
+  sed "s#/usr/bin/security#$root/bin/security#g" "$(dirname "$LAUNCH")/claude-bedrock-launch" > "$patched/claude-bedrock-launch"
+  chmod +x "$patched/claude-bedrock-launch"
+fi
+# Refuse to run a Bedrock case on a copy that still names the real tool: that
+# would query the real keychain.
+for f in "$patched"/*; do
+  if grep -q '/usr/bin/security' "$f" || ! grep -q "$root/bin/security" "$f"; then
+    echo "verify: the patched copy $(basename "$f") does not name only the fake security; refusing to run" >&2
+    exit 2
+  fi
+done
+LAUNCH="$patched/cast-launch.sh"
+CANARY="canary-bedrock-9f3a71c2"
+BEDROCK_ON=(CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=bedrock-key)
+printf '%s\n' "$CANARY" > "$root/keychain/bedrock-key"
+: > "$root/keychain/empty-key"
+
+# The canary must not appear anywhere a person or a log could read it.
+leaks() { # prints the places the canary was found
+  local f out=""
+  for f in claude.args stdout stderr; do
+    grep -qF "$CANARY" "$root/out/$f" 2>/dev/null && out+=" $f"
+  done
+  echo "$out"
+}
+
+if cast builder "${BEDROCK_ON[@]}"; then
+  in_env AWS_BEARER_TOKEN_BEDROCK "$CANARY" claude.env \
+    && ok "bedrock: the keychain value reaches claude's environment" \
+    || bad "bedrock: key not exported to claude"
+  [[ -z "$(leaks)" ]] \
+    && ok "bedrock: no key value in argv, stdout or stderr" \
+    || bad "bedrock: key value leaked" "$(leaks)"
+  grep -q 'Bedrock key from keychain item bedrock-key' "$root/out/stderr" \
+    && ok "bedrock: the spawn line names the item" \
+    || bad "bedrock: spawn line does not name the item" "$(cat "$root/out/stderr")"
+else
+  bad "bedrock cast with a valid item" "$(cat "$root/out/stderr")"
+fi
+
+if cast builder "${BEDROCK_ON[@]}" AWS_BEARER_TOKEN_BEDROCK=from-env-wins; then
+  in_env AWS_BEARER_TOKEN_BEDROCK from-env-wins claude.env \
+    && ok "bedrock: a token already in the environment wins" \
+    || bad "bedrock: environment token was replaced"
+  [[ -z "$(leaks)" ]] && ok "bedrock: environment wins without reading the keychain" \
+                      || bad "bedrock: keychain read despite an environment token" "$(leaks)"
+else
+  bad "bedrock cast with an environment token" "$(cat "$root/out/stderr")"
+fi
+
+refuses() { # label, expected stderr fragment, then cast args
+  local label="$1" frag="$2"; shift 2
+  if cast builder "$@"; then
+    bad "$label: the launch succeeded"
+  elif [[ ! -f "$root/out/claude.env" ]] && grep -qF "$frag" "$root/out/stderr"; then
+    [[ -z "$(leaks)" ]] && ok "$label: refused, claude not started" \
+                        || bad "$label: refused but leaked" "$(leaks)"
+  else
+    bad "$label: wrong refusal" "$(cat "$root/out/stderr")"
+  fi
+}
+refuses "bedrock missing item" "not readable" \
+  CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=no-such-item
+refuses "bedrock empty item" "is empty" \
+  CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=empty-key
+refuses "bedrock bad name (space)" "needs CLAUDE_BEDROCK_KEY_ITEM" \
+  CLAUDE_CODE_USE_BEDROCK=1 "CLAUDE_BEDROCK_KEY_ITEM=bad name"
+refuses "bedrock bad name (leading dash)" "needs CLAUDE_BEDROCK_KEY_ITEM" \
+  CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=-s
+refuses "bedrock item unset" "needs CLAUDE_BEDROCK_KEY_ITEM" \
+  CLAUDE_CODE_USE_BEDROCK=1
+
+# xtrace must never print the key: run the launcher under bash -x and under an
+# exported SHELLOPTS=xtrace and look for the canary in stdout and stderr.
+cast_x() { rm -f "$root/out/claude.env" "$root/out/claude.args"
+    env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" MARVEL_ROLE=builder MARVEL_SESSION=verify-builder-0 \
+      WARDROBE_ROOT="$root/wardrobe/contents" DIRECTOR_SHIM_BIN="$root/bin/director-mcp" TWIN_CWD="$root" \
+      DIRECTOR_TEAM=fleet DIRECTOR_WORKSPACE=verifyws "${BEDROCK_ON[@]}" "$@" \
+      >"$root/out/stdout" 2>"$root/out/stderr"; }
+for mode in "bash -x" "SHELLOPTS=xtrace"; do
+  for target in "$LAUNCH" "$(dirname "$LAUNCH")/claude-bedrock-launch"; do
+    [[ -x "$target" ]] || continue
+    if [[ "$mode" == "bash -x" ]]; then cast_x bash -x "$target" || true
+    else cast_x SHELLOPTS=xtrace "$target" || true; fi
+    if [[ -f "$root/out/claude.env" ]] && in_env AWS_BEARER_TOKEN_BEDROCK "$CANARY" claude.env \
+       && [[ -z "$(leaks)" ]]; then
+      ok "xtrace ($mode, $(basename "$target")): the key reaches claude and no trace carries it"
+    else
+      bad "xtrace ($mode, $(basename "$target"))" "reached=$([[ -f $root/out/claude.env ]] && echo y || echo n) leaks:$(leaks)"
+    fi
+  done
+done
+
+# Off unless CLAUDE_CODE_USE_BEDROCK is exactly 1: no lookup, no variable.
+if cast builder CLAUDE_BEDROCK_KEY_ITEM=bedrock-key; then
+  has_env AWS_BEARER_TOKEN_BEDROCK claude.env \
+    && bad "bedrock off: a key reached the session" \
+    || ok "bedrock off: no key is read or exported"
+fi
+
+# claude-bedrock-launch carries cast-launch's key block word for word.
+wrapper="$(dirname "$LAUNCH")/claude-bedrock-launch"
+wrapper_orig="$(dirname "$LAUNCH_ORIG")/claude-bedrock-launch"
+if [[ -x "$wrapper" ]]; then
+  blk() { sed -n '/^bedrock_note=""$/,/^unset bedrock_xtrace$/p' "$1"; }
+  [[ -n "$(blk "$LAUNCH_ORIG")" && "$(blk "$LAUNCH_ORIG")" == "$(blk "$wrapper_orig")" ]] \
+    && ok "claude-bedrock-launch: the key block matches cast-launch's" \
+    || bad "claude-bedrock-launch: the key block differs from cast-launch's"
+  wrap() { # extra KEY=VALUE pairs, then args after --
+    rm -f "$root/out/claude.env" "$root/out/claude.args"
+    env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" "$@" \
+      "$wrapper" --flag "a b" >"$root/out/stdout" 2>"$root/out/stderr"
+  }
+  if wrap "${BEDROCK_ON[@]}"; then
+    in_env AWS_BEARER_TOKEN_BEDROCK "$CANARY" claude.env \
+      && [[ "$(cat "$root/out/claude.args")" == $'--flag\na b' && -z "$(leaks)" ]] \
+      && ok "claude-bedrock-launch: exports the key, passes args through, leaks nothing" \
+      || bad "claude-bedrock-launch: key or args wrong" "$(leaks)"
+  else
+    bad "claude-bedrock-launch with a valid item" "$(cat "$root/out/stderr")"
+  fi
+  if wrap CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=empty-key; then
+    bad "claude-bedrock-launch: an empty item launched"
+  else
+    [[ ! -f "$root/out/claude.env" ]] && ok "claude-bedrock-launch: an empty item refuses" \
+                                      || bad "claude-bedrock-launch: claude ran on an empty item"
+  fi
+  if wrap CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=bedrock-key AWS_BEARER_TOKEN_BEDROCK=from-env-wins; then
+    in_env AWS_BEARER_TOKEN_BEDROCK from-env-wins claude.env \
+      && ok "claude-bedrock-launch: an environment token wins" \
+      || bad "claude-bedrock-launch: environment token replaced"
+  fi
+  if wrap CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=bedrock-key; then
+    grep -q '^claude-bedrock-launch: Bedrock key from keychain item bedrock-key$' "$root/out/stderr" \
+      && [[ -z "$(leaks)" ]] \
+      && ok "claude-bedrock-launch: prints the item name before exec, never the value" \
+      || bad "claude-bedrock-launch: item name line" "$(cat "$root/out/stderr")"
+  fi
+  if wrap CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=empty-key; then :; elif grep -q '^claude-bedrock-launch: keychain item' "$root/out/stderr"; then
+    ok "claude-bedrock-launch: a refusal names the wrapper, not cast-launch"
+  else
+    bad "claude-bedrock-launch: refusal prefix" "$(cat "$root/out/stderr")"
+  fi
+else
+  bad "claude-bedrock-launch is missing or not executable beside the launcher"
+fi
+
+# The pin itself, on the ORIGINAL scripts, by reading them only: each names
+# /usr/bin/security by absolute path. No case runs an original with Bedrock on,
+# because that would query the real keychain.
+for f in "$LAUNCH_ORIG" "$wrapper_orig"; do
+  [[ -f "$f" ]] || continue
+  grep -q '"\$(/usr/bin/security find-generic-password' "$f" \
+    && ! grep -qE '(^|[^/])security find-generic-password' "$f" \
+    && ok "pin: $(basename "$f") calls /usr/bin/security by absolute path" \
+    || bad "pin: $(basename "$f") does not pin /usr/bin/security"
+done
+
+# CAST_LAUNCH mode with a launcher whose name is not cast-launch.sh (an installed
+# copy): the Bedrock cases must run on a patched copy there too and never reach
+# the real keychain tool. Run this script again against a renamed copy; its own
+# refusal guard (above) aborts if a copy still names /usr/bin/security.
+if [[ -z "${VERIFY_NESTED:-}" ]]; then
+  nested="$root/nested"; mkdir -p "$nested"
+  cp "$LAUNCH_ORIG" "$nested/cast-launch"; chmod +x "$nested/cast-launch"
+  [[ -f "$wrapper_orig" ]] && cp "$wrapper_orig" "$nested/claude-bedrock-launch"
+  if VERIFY_NESTED=1 CAST_LAUNCH="$nested/cast-launch" "${BASH_SOURCE[0]}" >"$root/out/nested.log" 2>&1; then
+    ok "CAST_LAUNCH with a renamed launcher: all cases pass on the patched copy, none on the original"
+  else
+    bad "CAST_LAUNCH with a renamed launcher" "$(tail -3 "$root/out/nested.log")"
+  fi
+fi
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

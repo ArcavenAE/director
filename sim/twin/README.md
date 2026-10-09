@@ -22,6 +22,27 @@ validation against criteria 3.1 to 3.6.
   slice.sh owns the wardrobe refusals; the launcher owns the ones about the
   session it is about to start (the id class, `TWIN_CWD`, the global-tier
   levers, the bus pre-flight).
+  On Bedrock (`CLAUDE_CODE_USE_BEDROCK=1`) it reads the key from the keychain
+  item `CLAUDE_BEDROCK_KEY_ITEM` names and exports `AWS_BEARER_TOKEN_BEDROCK`
+  to claude, which its children inherit (every Bash tool call, every MCP
+  server); a token already in the environment wins, a missing, empty or
+  badly named item fails the launch, and the spawn line names the item, never
+  the value.
+- `claude-bedrock-launch`: the same key block, then `exec claude "$@"`, for a
+  session that is not cast through cast-launch.
+  Both read the key through `/usr/bin/security` by absolute path, with no
+  override, so a writable PATH entry cannot supply the key; the verify script
+  tests a copy with that one path replaced.
+  The block runs only when `CLAUDE_CODE_USE_BEDROCK=1` is in the launcher's own
+  environment. A role that selects Bedrock only through an overlay's settings
+  `env` never triggers it, because that env reaches claude after the launcher
+  has run; such a role must also have the variable set where the launcher runs.
+  Trust boundary: the launching environment is trusted. Anything that controls
+  it (a `BASH_ENV` file that defines a function named `/usr/bin/security`, or a
+  preset `AWS_BEARER_TOKEN_BEDROCK`, which wins by design) controls the token.
+  The absolute path closes the PATH case, which needs no control of the
+  environment, and nothing more. The key is not kept from claude's own
+  children: a seat that runs `env` or `printenv` in a Bash tool call prints it.
 - `verify-cast-launch.sh`: proves the launcher's per-role handling of the
   global tier without a broker and without casting anything. claude, the
   shim, the wardrobe root and slice.sh are stubs; each case checks both the
