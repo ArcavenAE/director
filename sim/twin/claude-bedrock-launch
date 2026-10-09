@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Start claude on Bedrock with the key read from the keychain, for a session that
+# is not cast through cast-launch (a hand-started seat, a marvel image that
+# names no launcher). The block below is cast-launch's, word for word; keep the
+# two in step (verify-cast-launch.sh compares them).
+set -euo pipefail
+
+# The Bedrock key (operator ruling corp-bedrock-token-delivery, option c). When
+# the session runs on Bedrock, claude takes its credential from
+# AWS_BEARER_TOKEN_BEDROCK. A token already in the environment wins and nothing
+# is read. Otherwise the key comes from the macOS keychain item that
+# CLAUDE_BEDROCK_KEY_ITEM names: looked up by name only, exported for claude
+# alone, never stored, never printed. A missing, empty or badly named item
+# fails the launch, so a seat never starts on the wrong credential. The spawn
+# line carries the item's name (bedrock_note), never its value.
+bedrock_note=""
+if [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == 1 ]]; then
+  if [[ -n "${AWS_BEARER_TOKEN_BEDROCK:-}" ]]; then
+    bedrock_note=", Bedrock key from the environment"
+  else
+    bedrock_item="${CLAUDE_BEDROCK_KEY_ITEM:-}"
+    [[ "$bedrock_item" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+      || { echo "cast-launch: CLAUDE_CODE_USE_BEDROCK=1 needs CLAUDE_BEDROCK_KEY_ITEM to name a keychain item ([A-Za-z0-9._-], no leading punctuation); not starting the harness" >&2; exit 1; }
+    bedrock_key="$(security find-generic-password -s "$bedrock_item" -w 2>/dev/null)" \
+      || { echo "cast-launch: keychain item '$bedrock_item' not readable; not starting the harness" >&2; exit 1; }
+    [[ -n "$bedrock_key" ]] \
+      || { echo "cast-launch: keychain item '$bedrock_item' is empty; not starting the harness" >&2; exit 1; }
+    export AWS_BEARER_TOKEN_BEDROCK="$bedrock_key"
+    unset bedrock_key
+    bedrock_note=", Bedrock key from keychain item $bedrock_item"
+  fi
+fi
+
+exec claude "$@"

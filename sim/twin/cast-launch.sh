@@ -298,6 +298,32 @@ DIRECTOR_TEAM="$DIRECTOR_TEAM" DIRECTOR_WORKSPACE="$DIRECTOR_WORKSPACE" NATS_URL
   "$SHIM_BIN" --preflight \
   || { echo "cast-launch: bus pre-flight failed for agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL; not starting the harness (finding-166)" >&2; exit 1; }
 
+# The Bedrock key (operator ruling corp-bedrock-token-delivery, option c). When
+# the session runs on Bedrock, claude takes its credential from
+# AWS_BEARER_TOKEN_BEDROCK. A token already in the environment wins and nothing
+# is read. Otherwise the key comes from the macOS keychain item that
+# CLAUDE_BEDROCK_KEY_ITEM names: looked up by name only, exported for claude
+# alone, never stored, never printed. A missing, empty or badly named item
+# fails the launch, so a seat never starts on the wrong credential. The spawn
+# line carries the item's name (bedrock_note), never its value.
+bedrock_note=""
+if [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == 1 ]]; then
+  if [[ -n "${AWS_BEARER_TOKEN_BEDROCK:-}" ]]; then
+    bedrock_note=", Bedrock key from the environment"
+  else
+    bedrock_item="${CLAUDE_BEDROCK_KEY_ITEM:-}"
+    [[ "$bedrock_item" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+      || { echo "cast-launch: CLAUDE_CODE_USE_BEDROCK=1 needs CLAUDE_BEDROCK_KEY_ITEM to name a keychain item ([A-Za-z0-9._-], no leading punctuation); not starting the harness" >&2; exit 1; }
+    bedrock_key="$(security find-generic-password -s "$bedrock_item" -w 2>/dev/null)" \
+      || { echo "cast-launch: keychain item '$bedrock_item' not readable; not starting the harness" >&2; exit 1; }
+    [[ -n "$bedrock_key" ]] \
+      || { echo "cast-launch: keychain item '$bedrock_item' is empty; not starting the harness" >&2; exit 1; }
+    export AWS_BEARER_TOKEN_BEDROCK="$bedrock_key"
+    unset bedrock_key
+    bedrock_note=", Bedrock key from keychain item $bedrock_item"
+  fi
+fi
+
 # Resolve the per-role overlay just before exec. Missing file: no change
 # (default behavior). Malformed JSON: crash non-zero, matching the bus
 # pre-flight loud-failure precedent (finding-166), so a broken backend
@@ -333,7 +359,7 @@ if [[ -f "$overlay_file" ]]; then
   echo "cast-launch: attaching backend overlay $overlay_file for role $MARVEL_ROLE (merged over marvel policy as --settings $merged)" >&2
 fi
 
-echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD$cue_note" >&2
+echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD$cue_note$bedrock_note" >&2
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$prompt" \

@@ -22,6 +22,13 @@ validation against criteria 3.1 to 3.6.
   slice.sh owns the wardrobe refusals; the launcher owns the ones about the
   session it is about to start (the id class, `TWIN_CWD`, the global-tier
   levers, the bus pre-flight).
+  On Bedrock (`CLAUDE_CODE_USE_BEDROCK=1`) it reads the key from the keychain
+  item `CLAUDE_BEDROCK_KEY_ITEM` names and exports `AWS_BEARER_TOKEN_BEDROCK`
+  for claude; a token already in the environment wins, a missing, empty or
+  badly named item fails the launch, and the spawn line names the item, never
+  the value.
+- `claude-bedrock-launch`: the same key block, then `exec claude "$@"`, for a
+  session that is not cast through cast-launch.
 - `verify-cast-launch.sh`: proves the launcher's per-role handling of the
   global tier without a broker and without casting anything. claude, the
   shim, the wardrobe root and slice.sh are stubs; each case checks both the
