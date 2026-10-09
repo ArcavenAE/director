@@ -74,17 +74,19 @@ content: |
   removed user's open leaf closes too is unmeasured.
 
   HARVEST 2026-10-09, disconnect and reach measurements:
+  Both lines below are relayed measurements. Their logs are not committed,
+  and no finding stands behind them yet.
   - A product team supervisor's disconnect probe: a reach test was acked
-    after about 8m19s, and `wait_for_message` returned silence during the hub
-    loss, with no error. The log is held in that seat's own state; copies are
-    held for a ruling, not committed.
+    after about 8m19s, and the seat reported `wait_for_message` as silent
+    during the hub loss. The log is held in that seat's own state.
   - A disconnect probe on the hub cluster (2026-10-04): the bus never failed
-    for a seat there. Log held by the ops reader seat, not committed.
-  - A second cluster's errand seat holds a disconnect timeline in its review
-    notes and in marvel#461 comments 5985006460 and 5985046420; it is to be
-    compared against the third-cluster bring-up finding and marvel#577.
-  OPEN: silence that is a lost hub reads the same as an empty inbox. See
-  finding-024 for the leaf-side view of two outages.
+    for a seat there. The log is held by the ops reader seat.
+  - A second cluster's errand seat holds a disconnect timeline on its own
+    host.
+  OPEN: finding-024 recorded the opposite of silence in both of its outages:
+  `wait_for_message` returned local messages plus a `global_warning` (no
+  responders). The product seat's report of silence is not reconciled with
+  it; which build and which call each used is the question to answer.
 edges:
   - target: finding-009-hub-grant-reload-misses-existing-leaf
     type: derives

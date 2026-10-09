@@ -24,8 +24,7 @@ content: |
 
   RULING (operator, 2026-10-04, "1 b", relayed by director; recorded on bd
   aae-orc-4vx98): wait for marvel to accept a list of hub URLs, then run one
-  first-mint ceremony against the final SAN set. The separate SAN-update
-  runbook was abandoned. marvel#575 (the list of hub URLs) closed completed
+  first-mint ceremony against the final SAN set. marvel#575 (the list of hub URLs) closed completed
   on 2026-10-05, so the remaining steps are operator-gated: the ceremony,
   shipping the CA and matching its digest, and the cutover.
 

@@ -30,9 +30,10 @@ content: |
 
   HARVEST 2026-10-09: global sequences 14 to 42 were left unconsumed in a
   research seat's waiting set. Whether a per-session durable exists on the
-  running build is unverified. Pairs with sim observation O-2067 (a global
-  fan-out misroute). finding-023 is the same class: one errand seat needed 11
-  drains of 50, with 539 held, for one harvest.
+  running build is unverified. This is a relayed measurement with no finding
+  behind it, and its record is not committed. finding-023 records the same
+  class: one errand supervisor drained 182 held messages on 2026-10-02 and
+  321 on 2026-10-04, none addressed to it.
 
 edges:
   - target: finding-006-global-tier-has-no-per-agent-address
