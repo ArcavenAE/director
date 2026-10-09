@@ -37,6 +37,14 @@ content: |
   The audit stream was built as an append-only record for operators, not as
   a seat's history, and it holds every seat's mail. Exposing it to seats is
   an authority question (who may read whose sent mail), not only a tool.
+
+  HARVEST 2026-10-09:
+  - finding-011: `wait_for_message` clamps `timeout_seconds` to 120, which is
+    the Claude Code background threshold, so a full-length wait becomes a
+    background task and each empty return wakes the seat for a turn.
+  - finding-021: `sender.session` is the harness session UUID; the shim's
+    per-process ULID travels in `sender.instance`, self-asserted. `unread`
+    keys its reads-outside-durable evidence on it and says so in `basis`.
 edges:
   - target: finding-010-explicit-workspace-send-is-accepted-for-a-mailbox-nobody-reads
     type: derives

@@ -72,6 +72,19 @@ content: |
   finding-009 found an added grant does not reach an open leaf. So revocation
   takes effect on reload and a new grant waits for a reconnect; whether a
   removed user's open leaf closes too is unmeasured.
+
+  HARVEST 2026-10-09, disconnect and reach measurements:
+  - A product team supervisor's disconnect probe: a reach test was acked
+    after about 8m19s, and `wait_for_message` returned silence during the hub
+    loss, with no error. The log is held in that seat's own state; copies are
+    held for a ruling, not committed.
+  - A disconnect probe on the hub cluster (2026-10-04): the bus never failed
+    for a seat there. Log held by the ops reader seat, not committed.
+  - A second cluster's errand seat holds a disconnect timeline in its review
+    notes and in marvel#461 comments 5985006460 and 5985046420; it is to be
+    compared against the third-cluster bring-up finding and marvel#577.
+  OPEN: silence that is a lost hub reads the same as an empty inbox. See
+  finding-024 for the leaf-side view of two outages.
 edges:
   - target: finding-009-hub-grant-reload-misses-existing-leaf
     type: derives
