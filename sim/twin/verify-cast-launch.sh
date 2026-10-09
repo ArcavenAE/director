@@ -709,12 +709,22 @@ chmod +x "$root/bin/security"
 # below, by reading them only: the pin is present.
 LAUNCH_ORIG="$LAUNCH"
 patched="$root/patched"; mkdir -p "$patched"
-for f in "$(dirname "$LAUNCH")/cast-launch.sh" "$(dirname "$LAUNCH")/claude-bedrock-launch"; do
-  [[ -f "$f" ]] || continue
-  sed "s#/usr/bin/security#$root/bin/security#g" "$f" > "$patched/$(basename "$f")"
-  chmod +x "$patched/$(basename "$f")"
+# $LAUNCH is patched whatever it is called, so CAST_LAUNCH=<installed path> is
+# tested as installed too. The wrapper is the file beside it, when there is one.
+sed "s#/usr/bin/security#$root/bin/security#g" "$LAUNCH" > "$patched/cast-launch.sh"
+chmod +x "$patched/cast-launch.sh"
+if [[ -f "$(dirname "$LAUNCH")/claude-bedrock-launch" ]]; then
+  sed "s#/usr/bin/security#$root/bin/security#g" "$(dirname "$LAUNCH")/claude-bedrock-launch" > "$patched/claude-bedrock-launch"
+  chmod +x "$patched/claude-bedrock-launch"
+fi
+# Refuse to run a Bedrock case on a copy that still names the real tool: that
+# would query the real keychain.
+for f in "$patched"/*; do
+  if grep -q '/usr/bin/security' "$f" || ! grep -q "$root/bin/security" "$f"; then
+    echo "verify: the patched copy $(basename "$f") does not name only the fake security; refusing to run" >&2
+    exit 2
+  fi
 done
-[[ "$(basename "$LAUNCH")" == cast-launch.sh ]] || cp "$LAUNCH" "$patched/cast-launch.sh"
 LAUNCH="$patched/cast-launch.sh"
 CANARY="canary-bedrock-9f3a71c2"
 BEDROCK_ON=(CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=bedrock-key)
@@ -861,6 +871,21 @@ for f in "$LAUNCH_ORIG" "$wrapper_orig"; do
     && ok "pin: $(basename "$f") calls /usr/bin/security by absolute path" \
     || bad "pin: $(basename "$f") does not pin /usr/bin/security"
 done
+
+# CAST_LAUNCH mode with a launcher whose name is not cast-launch.sh (an installed
+# copy): the Bedrock cases must run on a patched copy there too and never reach
+# the real keychain tool. Run this script again against a renamed copy; its own
+# refusal guard (above) aborts if a copy still names /usr/bin/security.
+if [[ -z "${VERIFY_NESTED:-}" ]]; then
+  nested="$root/nested"; mkdir -p "$nested"
+  cp "$LAUNCH_ORIG" "$nested/cast-launch"; chmod +x "$nested/cast-launch"
+  [[ -f "$wrapper_orig" ]] && cp "$wrapper_orig" "$nested/claude-bedrock-launch"
+  if VERIFY_NESTED=1 CAST_LAUNCH="$nested/cast-launch" "${BASH_SOURCE[0]}" >"$root/out/nested.log" 2>&1; then
+    ok "CAST_LAUNCH with a renamed launcher: all cases pass on the patched copy, none on the original"
+  else
+    bad "CAST_LAUNCH with a renamed launcher" "$(tail -3 "$root/out/nested.log")"
+  fi
+fi
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
