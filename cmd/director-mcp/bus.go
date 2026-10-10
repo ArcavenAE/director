@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strings"
@@ -66,6 +67,8 @@ type Bus struct {
 	resumed   []string
 	// cueState reports the channel cue state for presence; nil when off.
 	cueState func() string
+	// handled is the handled-mode state (K4); nil keeps ack-on-read.
+	handled *handledState
 }
 
 // localConsumerInactive is the local durable's inactive threshold. The inbox
@@ -183,7 +186,17 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		nc.Close()
 		return nil, fmt.Errorf("presence KV AGENT_STATE: %w (run the broker setup first)", err)
 	}
-	b := &Bus{nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), state: "idle", globalCfg: gcfg}
+	h, herr := handledFromEnv()
+	if herr != nil {
+		nc.Close()
+		return nil, herr
+	}
+	b := &Bus{nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), state: "idle", globalCfg: gcfg, handled: h}
+	if h != nil {
+		h.streamOf = b.streamFor
+		h.onAck = b.noteTierAcked
+		h.startKeepalive()
+	}
 	// Every envelope this session sends names its instance in sender.instance,
 	// so a reply is attributable to one session and not to every session of
 	// the agent (unread slice M, part E1, director#126). It is not
@@ -215,6 +228,9 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		DeliverPolicy:     jetstream.DeliverAllPolicy,
 		MaxDeliver:        -1,
 		InactiveThreshold: localConsumerInactive,
+	}
+	if b.handled != nil {
+		cfg.AckWait = b.handled.ackWait
 	}
 	liveLocal := func(instance string) bool {
 		_, err := kv.Get(ctx, "presence."+self.Team+"."+self.AgentID+"."+instance)
@@ -986,28 +1002,67 @@ func (b *Bus) refuseArgs(ctx context.Context, raw json.RawMessage, refusal error
 // durable consumer, waiting up to timeout, and acks it. This is the shape the
 // probe set out to measure: the agent CALLS to receive, because MCP cannot
 // push into the model's context (see PROGRESS.md sub-probe 3).
+//
+// With the handled mode on it does not ack (handled.go): the message is held
+// ack-pending until mark_handled. A redelivery of a message already held, or
+// already in the ledger, is not returned, so the poll goes on for the rest of
+// its budget.
 func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, uint64, error) {
-	msgs, err := b.consumer.Fetch(1, jetstream.FetchMaxWait(timeout))
-	if err != nil {
-		return nil, 0, err
-	}
-	for m := range msgs.Messages() {
-		var e Envelope
-		if err := json.Unmarshal(m.Data(), &e); err != nil {
-			_ = m.Term() // poison message: do not redeliver a thing we cannot parse
-			return nil, 0, fmt.Errorf("undecodable message on inbox: %w", err)
+	deadline := time.Now().Add(timeout)
+	for {
+		left := time.Until(deadline)
+		if left <= 0 {
+			left = time.Millisecond // always one fetch, so a zero budget still reads
 		}
-		var seq uint64
-		if md, err := m.Metadata(); err == nil {
-			seq = md.Sequence.Stream
+		msgs, err := b.consumer.Fetch(1, jetstream.FetchMaxWait(left))
+		if err != nil {
+			return nil, 0, err
 		}
-		_ = m.Ack()
-		return &e, seq, nil
+		skipped := false
+		for m := range msgs.Messages() {
+			var e Envelope
+			if err := json.Unmarshal(m.Data(), &e); err != nil {
+				_ = m.Term() // poison message: do not redeliver a thing we cannot parse
+				return nil, 0, fmt.Errorf("undecodable message on inbox: %w", err)
+			}
+			var seq uint64
+			if md, err := m.Metadata(); err == nil {
+				seq = md.Sequence.Stream
+			}
+			if b.handled == nil {
+				_ = m.Ack()
+				return &e, seq, nil
+			}
+			deliver, herr := b.handled.settle(ctx, m, "local", &e, seq)
+			if herr != nil {
+				log.Printf("director-mcp: handled ledger: %v", herr)
+			}
+			if deliver {
+				return &e, seq, nil
+			}
+			skipped = true
+		}
+		if err := msgs.Error(); err != nil {
+			return nil, 0, err
+		}
+		if !skipped || time.Until(deadline) <= 0 {
+			return nil, 0, nil // timed out, no message: a clean empty, not an error
+		}
 	}
-	if err := msgs.Error(); err != nil {
-		return nil, 0, err
+}
+
+// noteTierAcked tells the global tier an ack landed, so its acked floor
+// follows acks made by mark_handled and not only reads.
+func (b *Bus) noteTierAcked(tier string, seq uint64) {
+	if tier != "global" {
+		return
 	}
-	return nil, 0, nil // timed out, no message: a clean empty, not an error
+	b.globalMu.Lock()
+	g := b.global
+	b.globalMu.Unlock()
+	if g != nil {
+		g.noteAcked(seq)
+	}
 }
 
 // globalReady returns the attached hub context, attaching it on first use and
@@ -1024,10 +1079,15 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 	if b.global != nil {
 		return b.global, nil
 	}
-	g, err := attachGlobal(ctx, b.nc, *b.globalCfg, b.self.AgentID, b.instance)
+	gcfg := *b.globalCfg
+	if b.handled != nil {
+		gcfg.AckWait = b.handled.ackWait
+	}
+	g, err := attachGlobal(ctx, b.nc, gcfg, b.self.AgentID, b.instance)
 	if err != nil {
 		return nil, err
 	}
+	g.handled = b.handled
 	b.global = g
 	b.noteResumed("global", g.resumedFrom, g.consumer, g.floorWhy)
 	return g, nil
@@ -1134,7 +1194,7 @@ func (b *Bus) takeWaiting(ctx context.Context, res *pollResult, notices *string)
 	for _, tier := range order {
 		var items []drained
 		if tier == "local" {
-			items, _, _ = pullNoWait(ctx, b.consumer, 1, "local")
+			items, _, _ = pullNoWait(ctx, b.consumer, 1, "local", b.handled)
 		} else {
 			g, err := b.globalReady(ctx)
 			if err != nil {
@@ -1396,6 +1456,9 @@ func (b *Bus) roster(ctx context.Context) ([]map[string]any, error) {
 }
 
 func (b *Bus) close() {
+	if b.handled != nil {
+		b.handled.stop()
+	}
 	if b.nc != nil {
 		b.nc.Drain()
 	}

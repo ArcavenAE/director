@@ -47,6 +47,15 @@ local seats only, and refuses `global://` sends, while local mail is
 unaffected. The shim warns and does not refuse; a worker or any other role
 starts silently.
 
+The handled mode (K4, director#278). Off unless `DIRECTOR_HANDLED=1`, and
+per process, so it is set for director's own seat and no other seat's drain
+changes.
+
+| Variable | Meaning |
+|---|---|
+| `DIRECTOR_HANDLED` | `1` turns the handled mode on; anything else leaves ack-on-read as it is |
+| `DIRECTOR_STATE` | the seat's state directory, default `~/.director/state`; holds `handled.jsonl`, its lock, and `thresholds.json` |
+
 Under marvel, `DIRECTOR_AGENT_ID`, `NATS_URL`, `DIRECTOR_NATS_USER`, and
 `DIRECTOR_NATS_PASS` are stamped into the session environment by the
 daemon; a launcher supplies the rest.
@@ -396,6 +405,64 @@ broadcast is refused with an error naming each seat, its error and its audit
 record, rather than reported as accepted with an empty `sent`. Before director#121 a broadcast published core NATS to
 a subject no stream captured and no session subscribed, and reported
 `"broadcast sent"` for a message that reached no one.
+
+### `mark_handled` (handled mode only)
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `message_id` | yes | the envelope's `message_id`, as `wait_for_message` returned it |
+| `tier` | yes | `local` or `global`, as `wait_for_message` named it |
+| `disposition` | yes | `handled`, `forwarded` or `parked` |
+| `forward_id` | for `forwarded` | the message id of the forward |
+| `reason` | for `parked` | one line on why it waits |
+
+Offered only with `DIRECTOR_HANDLED=1`. With the mode on, `wait_for_message`
+and the batch drain deliver without acking, so each message stays pending on
+the seat's durable until it is recorded here. The record is appended to
+`handled.jsonl`, fsynced, and only then is the message acked. A failed append
+or fsync never acks: the tool returns the error and the message stays pending.
+Every disposition acks, `parked` included; a parked message stays visible
+through the ledger.
+
+The ledger is append-only and folded on read by `message_id`, last event wins,
+with one flock around fold, check and append (the shape of `dws`). Each line
+also records the tier, stream and sequence, for the reader, and a hash of the
+stored data bytes. The sequence is not the key, because a stream that is
+deleted, recreated or restored restarts its sequences. There is no cursor.
+
+A crash between the write and the ack leaves the message pending; it is
+redelivered, the drain finds the `message_id` in the ledger, acks it and does
+not return it, so it is recorded once. While the session is live the shim
+sends `InProgress` on each delivered, unrecorded message before its ack wait
+runs out, so long handling does not cause a redelivery. A redelivery of a
+message the session already holds is not returned again.
+
+An envelope the mode cannot key or trust is rejected, never held: one with no
+`message_id`, and one whose `message_id` is already in the ledger with
+different stored bytes (a reuse by a sender outside the shim). The drain writes
+a `rejected` line keyed by tier, stream and sequence, and Terms the message, as
+the receive path does for undecodable mail. A held message would redeliver
+without bound, since `MaxDeliver` is -1. The original's record stands.
+
+`mark_handled` records only a message this session holds, delivered here and
+not yet recorded. For any other id it returns an error naming the id and writes
+nothing, so a stale or copied id cannot make a message vanish unread when it
+arrives. After a shim restart the redelivery comes back to the new session,
+which then holds it and can mark it.
+
+Rejected lines key by tier, stream and sequence. After a stream reset a second
+rejection at a position already in the ledger writes nothing new and is still
+Termed; it shows in the shim's log, not in `inbox_summary`.
+
+`inbox_summary` gains two sections in this mode: `read_unhandled`, messages
+delivered and not yet recorded, oldest first with their age (not counted in
+`summary` as waiting), and `rejected`, the rejected lines with their reason. An
+unread message is still counted in `summary`.
+
+The ack wait for the mode is the `handled_ack_wait` row of the threshold
+table, 30 minutes unless `thresholds.json` in the state directory sets it
+(for example `{"handled_ack_wait": "45m"}`). A value that is not a positive
+duration, or a key the table does not have, stops the shim at start. So if other readers later add rows to this file, every handled shim built before those rows will refuse to start until it is upgraded.
 
 ## Addresses and subjects
 
