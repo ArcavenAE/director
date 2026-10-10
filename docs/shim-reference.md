@@ -47,6 +47,15 @@ local seats only, and refuses `global://` sends, while local mail is
 unaffected. The shim warns and does not refuse; a worker or any other role
 starts silently.
 
+The handled mode (K4, director#278). Off unless `DIRECTOR_HANDLED=1`, and
+per process, so it is set for director's own seat and no other seat's drain
+changes.
+
+| Variable | Meaning |
+|---|---|
+| `DIRECTOR_HANDLED` | `1` turns the handled mode on; anything else leaves ack-on-read as it is |
+| `DIRECTOR_STATE` | the seat's state directory, default `~/.director/state`; holds `handled.jsonl`, its lock, and `thresholds.json` |
+
 Under marvel, `DIRECTOR_AGENT_ID`, `NATS_URL`, `DIRECTOR_NATS_USER`, and
 `DIRECTOR_NATS_PASS` are stamped into the session environment by the
 daemon; a launcher supplies the rest.
@@ -396,6 +405,38 @@ broadcast is refused with an error naming each seat, its error and its audit
 record, rather than reported as accepted with an empty `sent`. Before director#121 a broadcast published core NATS to
 a subject no stream captured and no session subscribed, and reported
 `"broadcast sent"` for a message that reached no one.
+
+### `mark_handled` (handled mode only)
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `tier` | yes | `local` or `global`, as `wait_for_message` named it |
+| `sequence` | yes | the stream sequence `wait_for_message` returned |
+| `disposition` | yes | `handled`, `forwarded` or `parked` |
+| `forward_id` | for `forwarded` | the message id of the forward |
+| `reason` | for `parked` | one line on why it waits |
+
+Offered only with `DIRECTOR_HANDLED=1`. With the mode on, `wait_for_message`
+and the batch drain deliver without acking, so each message stays pending on
+the seat's durable until it is recorded here. The record is appended to
+`handled.jsonl` first and the ack follows. Every disposition acks, `parked`
+included; a parked message stays visible through the ledger.
+
+The ledger is append-only and folded on read by tier, stream and sequence,
+last event wins, with one flock around fold, check and append (the shape of
+`dws`). There is no cursor. A crash between the write and the ack leaves the
+message pending; it is redelivered, the drain finds the disposition in the
+ledger, acks it and does not return it, so it is recorded once. A redelivery
+of a message the session already holds is not returned again either.
+
+`inbox_summary` gains a `read_unhandled` section in this mode: messages
+delivered and not yet recorded, oldest first with their age. They are not
+counted in `summary` as waiting. An unread message is still counted there.
+
+The ack wait for the mode is the `handled_ack_wait` row of the threshold
+table, 30 minutes unless `thresholds.json` in the state directory sets it
+(for example `{"handled_ack_wait": "45m"}`). A value that is not a positive
+duration stops the shim at start.
 
 ## Addresses and subjects
 

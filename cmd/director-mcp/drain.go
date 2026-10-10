@@ -9,7 +9,8 @@ package main
 //
 //   - wait_for_message with max > 1 returns every waiting message up to max in
 //     one call, oldest first. It consumes (acks) exactly as the single-message
-//     form does.
+//     form does, except in the handled mode (handled.go), where a read holds
+//     the message ack-pending until mark_handled records it.
 //   - inbox_summary counts what is waiting, by sender and by performative,
 //     flags what needs an answer, and lists the sequence numbers. It reads
 //     through a throwaway ephemeral consumer and acks nothing, so the session's
@@ -92,7 +93,7 @@ func orderDrained(items []drained) {
 // returned flagged AckUnconfirmed, the rest of the batch is still acked (so it
 // does not sit ack-pending and redeliver behind newer mail), and the failure
 // comes back as an error beside the items for the caller to report.
-func pullNoWait(ctx context.Context, cons jetstream.Consumer, n int, tier string) ([]drained, int, error) {
+func pullNoWait(ctx context.Context, cons jetstream.Consumer, n int, tier string, h *handledState) ([]drained, int, error) {
 	if n <= 0 {
 		return nil, 0, nil
 	}
@@ -113,6 +114,19 @@ func pullNoWait(ctx context.Context, cons jetstream.Consumer, n int, tier string
 		var seq uint64
 		if md, err := m.Metadata(); err == nil {
 			seq = md.Sequence.Stream
+		}
+		if h != nil {
+			// The handled mode (handled.go): hold the message ack-pending and
+			// return it, unless it is a redelivery of one already held or
+			// already in the ledger, which is not returned.
+			deliver, herr := h.settle(ctx, m, tier, &e, seq)
+			if herr != nil {
+				ackErrs = append(ackErrs, fmt.Errorf("handled ledger, %s sequence %d: %w", tier, seq, herr))
+			}
+			if deliver {
+				out = append(out, drained{Env: &e, Tier: tier, Seq: seq})
+			}
+			continue
 		}
 		d := drained{Env: &e, Tier: tier, Seq: seq}
 		if err := m.DoubleAck(ctx); err != nil {
@@ -152,7 +166,7 @@ func drainAll(pull func(int) ([]drained, int, error), n int) ([]drained, int, er
 func (g *globalTier) drainNoWait(ctx context.Context, n int, agentID, instance string) ([]drained, int, error) {
 	rebuilt := false
 	out, disc, err := drainAll(func(k int) ([]drained, int, error) {
-		out, disc, err := pullNoWait(ctx, g.consumer, k, "global")
+		out, disc, err := pullNoWait(ctx, g.consumer, k, "global", g.handled)
 		if len(out) == 0 && disc == 0 && !rebuilt {
 			rebuilt = true
 			var ok bool
@@ -166,13 +180,15 @@ func (g *globalTier) drainNoWait(ctx context.Context, n int, agentID, instance s
 				return nil, 0, rerr
 			}
 			if ok {
-				return pullNoWait(ctx, g.consumer, k, "global")
+				return pullNoWait(ctx, g.consumer, k, "global", g.handled)
 			}
 		}
 		return out, disc, err
 	}, n)
-	for _, it := range out {
-		g.noteAcked(it.Seq)
+	if g.handled == nil { // with the mode on, acks are noted when they land
+		for _, it := range out {
+			g.noteAcked(it.Seq)
+		}
 	}
 	return out, disc, err
 }
@@ -262,7 +278,7 @@ func (b *Bus) drainWaiting(ctx context.Context, n int, res *batchResult) error {
 // drainLocal takes up to n waiting local messages into res.
 func (b *Bus) drainLocal(ctx context.Context, n int, res *batchResult) error {
 	items, disc, err := drainAll(func(k int) ([]drained, int, error) {
-		return pullNoWait(ctx, b.consumer, k, "local")
+		return pullNoWait(ctx, b.consumer, k, "local", b.handled)
 	}, n)
 	res.Items = append(res.Items, items...)
 	res.Discarded += disc
@@ -575,6 +591,22 @@ func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, err
 			}
 			all = append(all, gitems...)
 		}
+	}
+	if b.handled != nil {
+		// Delivered and unrecorded messages are the session's own to finish.
+		// They get their own section and are not counted as waiting.
+		res.ReadUnhandled = b.handled.unhandled()
+		held := map[string]bool{}
+		for _, r := range res.ReadUnhandled {
+			held[fmt.Sprintf("%s/%d", r.Tier, r.Seq)] = true
+		}
+		unread := all[:0:0]
+		for _, it := range all {
+			if !held[fmt.Sprintf("%s/%d", it.Tier, it.Seq)] {
+				unread = append(unread, it)
+			}
+		}
+		all = unread
 	}
 	res.Summary = summarize(all)
 	return res, nil

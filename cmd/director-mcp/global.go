@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -68,6 +69,9 @@ type globalConfig struct {
 	Domain  string // the hub's JetStream domain, e.g. "global"
 	Cluster string // this cluster's subject token, e.g. "mokuzai" (R-94)
 	Role    string // supervisor | director
+	// AckWait is the durable's ack wait; zero keeps the server default. The
+	// handled mode sets it from the threshold table (handled.go).
+	AckWait time.Duration
 }
 
 // loadGlobalConfig reads the three environment levers. A nil config with a nil
@@ -283,6 +287,9 @@ type globalTier struct {
 	kv       jetstream.KeyValue
 	consumer jetstream.Consumer
 
+	// handled is the bus's handled-mode state, nil when the mode is off.
+	handled *handledState
+
 	// floorWhy is why the seat's earlier hub position could not be read at
 	// attach, empty when it was read or there was none. Reported once with
 	// resumedFrom.
@@ -461,6 +468,7 @@ func (g *globalTier) consumerConfig(agentID, instance string, start uint64) jets
 		DeliverPolicy:     jetstream.DeliverAllPolicy,
 		MaxDeliver:        -1,
 		InactiveThreshold: globalConsumerInactive,
+		AckWait:           g.cfg.AckWait,
 	}
 	if start > 0 {
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
@@ -639,28 +647,52 @@ func (g *globalTier) receive(ctx context.Context, timeout time.Duration, agentID
 // fetchOne pulls at most one message. poison reports a message that was
 // terminated because it could not be decoded; a nil envelope with poison false
 // is the clean empty of a spent wait.
+//
+// With the handled mode on the message is held ack-pending, not acked, and a
+// redelivery of one already held or already in the ledger is not returned (the
+// fetch goes on for the rest of the budget).
 func (g *globalTier) fetchOne(timeout time.Duration) (env *Envelope, seq uint64, poison bool, err error) {
-	msgs, err := g.consumer.Fetch(1, jetstream.FetchMaxWait(timeout))
-	if err != nil {
-		return nil, 0, false, err
-	}
-	for m := range msgs.Messages() {
-		var e Envelope
-		if err := json.Unmarshal(m.Data(), &e); err != nil {
-			_ = m.Term() // do not redeliver a thing we cannot parse
-			return nil, 0, true, nil
+	deadline := time.Now().Add(timeout)
+	for {
+		left := time.Until(deadline)
+		if left <= 0 {
+			left = time.Millisecond
 		}
-		if md, err := m.Metadata(); err == nil {
-			seq = md.Sequence.Stream
+		msgs, err := g.consumer.Fetch(1, jetstream.FetchMaxWait(left))
+		if err != nil {
+			return nil, 0, false, err
 		}
-		_ = m.Ack()
-		g.noteAcked(seq)
-		return &e, seq, false, nil
+		skipped := false
+		for m := range msgs.Messages() {
+			var e Envelope
+			if err := json.Unmarshal(m.Data(), &e); err != nil {
+				_ = m.Term() // do not redeliver a thing we cannot parse
+				return nil, 0, true, nil
+			}
+			if md, err := m.Metadata(); err == nil {
+				seq = md.Sequence.Stream
+			}
+			if g.handled == nil {
+				_ = m.Ack()
+				g.noteAcked(seq)
+				return &e, seq, false, nil
+			}
+			deliver, herr := g.handled.settle(context.Background(), m, "global", &e, seq)
+			if herr != nil {
+				log.Printf("director-mcp: handled ledger: %v", herr)
+			}
+			if deliver {
+				return &e, seq, false, nil
+			}
+			skipped = true
+		}
+		if err := msgs.Error(); err != nil {
+			return nil, 0, false, err
+		}
+		if !skipped || time.Until(deadline) <= 0 {
+			return nil, 0, false, nil
+		}
 	}
-	if err := msgs.Error(); err != nil {
-		return nil, 0, false, err
-	}
-	return nil, 0, false, nil
 }
 
 // writePresence puts this session's record into the hub bucket. It carries the

@@ -144,6 +144,11 @@ func dispatchTool(ctx context.Context, bus *Bus, name string, rawArgs json.RawMe
 		return toolBroadcast(ctx, bus, rawArgs)
 	case "report_status":
 		return toolReportStatus(ctx, bus, rawArgs)
+	case "mark_handled":
+		if bus.handled == nil {
+			return nil, errors.New("unknown tool: " + name)
+		}
+		return toolMarkHandled(ctx, bus, rawArgs)
 	}
 	return nil, errors.New("unknown tool: " + name)
 }
@@ -283,6 +288,11 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		out["note"] = "no message within the window; this is silence, not failure"
 	} else {
 		out["tier"] = res.Tier
+		if bus.handled != nil {
+			// The handled mode needs the sequence to record the message.
+			out["sequence"] = res.Seq
+			out["handled_note"] = "not acked: record it with mark_handled (tier and sequence above)"
+		}
 	}
 	// A global-tier failure is reported beside the answer rather than instead
 	// of it: the local tier keeps working through a hub outage, so the poll
@@ -371,6 +381,14 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 	}
 	if res.GlobalWarn != "" {
 		out["global_warning"] = res.GlobalWarn
+	}
+	if bus.handled != nil {
+		rows := res.ReadUnhandled
+		if rows == nil {
+			rows = []unhandledRow{}
+		}
+		out["read_unhandled"] = rows
+		out["read_unhandled_note"] = "delivered to this session and not yet recorded with mark_handled; not counted in the summary above"
 	}
 	return out, nil
 }
