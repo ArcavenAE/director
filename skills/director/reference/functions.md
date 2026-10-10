@@ -7,7 +7,7 @@ design's section 3 inventory, in the same order and numbering. The rulings
 kinds (K9) and the reconciler (K11) read this file to know which stores exist
 and whose writes they can trust.
 
-Checked at director main `39ec338`. Each entry names the file or section it
+Checked at director main `3d9b9d4`. Each entry names the file or section it
 was read from, so a reader can check it.
 
 ## The labels
@@ -69,9 +69,14 @@ in local or private state.
 ### 4. Relay log
 
 - **Store:** `sim/notes/relay-log.md`, local.
-- **Writers:** director, by hand, one entry per message sent: to, the verbatim
-  text, the outcome (SKILL.md, Relaying). Honor-only. Entry times are typed,
-  not taken from the clock (R-192; K6).
+- **Writers:** director, one entry per message sent: to, the verbatim text,
+  the outcome, written with `relay-log append` (`skills/director/scripts/relay-log`;
+  SKILL.md, Capture triggers). Enforced: the caller cannot set the time. The
+  writer stamps each entry from the clock under one `flock`, its parser has no
+  time argument and refuses one, and it refuses a log path that git would
+  track. `verify-relay-log.sh` checks each of these (R-192; K6). Honor-only:
+  calling the writer at all. An entry typed into the file by hand is not
+  checked.
 - **Readers:** director, in harvest; `reference/relay.md` cites it.
 
 ### 5. Bus reading
@@ -143,10 +148,11 @@ in local or private state.
   after each pass.
 - **Writers:** the ask reader (`askreader.go`, feeding `askledger.go`). It
   reads AGENT_AUDIT by sequence and creates no consumer, so it never moves an
-  ack floor. Enforced in code: what the reader writes, which is only its own
-  store (`askreader.go:6-8`). Honor-only: that nothing else writes the store.
-  Until the reader has its own principal it runs under director's user
-  (`:8-10`), so any process running as that user can write it. Diagnostic:
+  ack floor, and it writes only its own store (`askreader.go:6-8`). Those are
+  its design, not a refusal, so they are honor-only by the definition above.
+  So is being the only writer: until the reader has its own principal it runs
+  under director's user (`:8-10`), so any process running as that user can
+  write the store. Diagnostic:
   nothing waits on it.
 - **Readers:** the on-demand `asks` read.
 
@@ -221,7 +227,11 @@ in local or private state.
 
 ### 23. Clock stamps
 
-- Requirement only (R-192). K6 stamps relay-log entries from the clock.
+- **Store:** the stamp in each relay-log entry's heading.
+- **Writers:** `relay-log` (K6, #287). Enforced: the time comes from the
+  clock and the caller cannot set it. Honor-only: that every entry goes
+  through the writer (see 4, Relay log).
+- **Readers:** director, and R-192's check, `verify-relay-log.sh`.
 
 ### 24. The board's Uncaptured block
 
