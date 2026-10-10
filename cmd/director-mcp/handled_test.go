@@ -688,8 +688,13 @@ func TestBrokerFailedRejectedLineWriteNeverTermsAndTheMessageStaysPending(t *tes
 	}
 	bus.handled.ledger.syncFile = func(*os.File) error { return errors.New("disk full") }
 	_, _ = bus.receiveBatch(ctx, 1*time.Second, 5) // the rejection fails; the error rides beside the result
-	if n := ackPending(t, ctx, bus.consumer); n != 1 {
-		t.Fatalf("ack-pending = %d, want 1: a rejected line that was not written must not be Termed", n)
+	// m.Term() is not confirmed by the server, so a Term sent by a broken guard
+	// can land after the first read. Poll for a second: ack-pending must hold at
+	// 1 the whole time, and any read of 0 is the Term.
+	for until := time.Now().Add(time.Second); time.Now().Before(until); time.Sleep(25 * time.Millisecond) {
+		if n := ackPending(t, ctx, bus.consumer); n != 1 {
+			t.Fatalf("ack-pending = %d, want 1: a rejected line that was not written must not be Termed", n)
+		}
 	}
 	// With the disk back, the redelivery is rejected properly and Termed.
 	bus.handled.ledger.syncFile = func(f *os.File) error { return f.Sync() }

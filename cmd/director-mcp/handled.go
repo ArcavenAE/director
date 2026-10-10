@@ -109,7 +109,7 @@ func loadThresholds(dir string) (map[string]time.Duration, error) {
 	}
 	for k, v := range raw {
 		if _, known := defaultThresholds[k]; !known {
-			return nil, fmt.Errorf("threshold table: unknown key %q (a misspelled row would silently keep its default)", k)
+			return nil, fmt.Errorf("threshold table %s: unknown key %q (a misspelled row would silently keep its default)", filepath.Join(dir, "thresholds.json"), k)
 		}
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {

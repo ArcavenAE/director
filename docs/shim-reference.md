@@ -462,7 +462,7 @@ unread message is still counted in `summary`.
 The ack wait for the mode is the `handled_ack_wait` row of the threshold
 table, 30 minutes unless `thresholds.json` in the state directory sets it
 (for example `{"handled_ack_wait": "45m"}`). A value that is not a positive
-duration, or a key the table does not have, stops the shim at start.
+duration, or a key the table does not have, stops the shim at start. So if other readers later add rows to this file, every handled shim built before those rows will refuse to start until it is upgraded.
 
 ## Addresses and subjects
 
