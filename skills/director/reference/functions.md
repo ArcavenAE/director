@@ -61,8 +61,8 @@ in local or private state.
   is a render of it and the ledger, made only where the operator asked for
   the page.
 - **Writers:** director edits `board.md` by hand. Honor-only: no check reads
-  its prose. `board-html` writes `board.html` (enforced: it renders, and
-  writes nothing else).
+  its prose. `board-html` writes `board.html` and nothing else. That is
+  its design, not a refusal, so it is honor-only by the definition above.
 - **Readers:** director, before the roster on every sweep (SKILL.md, Mode:
   sweep); the operator, through the page.
 
@@ -89,10 +89,13 @@ in local or private state.
 
 - **Store:** none; it reads GitHub and prints one line.
 - **Writers:** none. `merge-guard` is read-only and never merges.
-- **Enforced:** a merge run through it, which proceeds only on `PROCEED` and
-  merges with `--match-head-commit`. Honor-only: whether a merge runs it at
-  all. SKILL.md (Merging) says it runs before every merge, and a merge made
-  outside it is not checked. Operator merge exclusions are not read yet
+- **Enforced:** the verdict itself, which fails closed: any read that errors,
+  comes back empty or lacks a field prints `STOP` (`merge-guard:12-22`). Once
+  `--match-head-commit` is passed, GitHub refuses a merge whose head moved.
+- **Honor-only:** everything after the verdict. `merge-guard` never merges
+  (`merge-guard:27-28`); it prints the merge command (`:7-8`). Running the
+  guard before a merge, obeying `STOP`, and passing the flag are SKILL.md
+  instructions (Merging), and a merge made outside the guard is not checked. Operator merge exclusions are not read yet
   (`merge-guard:29`; K1, #282).
 - **Readers:** director, before any merge it makes or relays.
 
@@ -122,8 +125,9 @@ in local or private state.
   (atomically, through a temp file and `os.replace`), and
   `$DIRECTOR_STATE/external.md`, written by `dsx`.
 - **Writers:** `dsi` and `dsx`, both read-only against what they inspect.
-  Enforced: each writes only its own files. Honor-only: the presented shape,
-  one line per item (SKILL.md, Mode: sweep).
+  Each writes only its own files by design; nothing refuses
+  another writer, so this is honor-only by the definition above, as is the
+  presented shape, one line per item (SKILL.md, Mode: sweep).
 - **Readers:** director and the operator.
 
 ### 11. Stansfield roll call
@@ -137,10 +141,13 @@ in local or private state.
 
 - **Store:** the `ASK_LEDGER` bucket and a JSON file the ask reader rewrites
   after each pass.
-- **Writers:** the ask reader only (`askreader.go`, feeding `askledger.go`). It
+- **Writers:** the ask reader (`askreader.go`, feeding `askledger.go`). It
   reads AGENT_AUDIT by sequence and creates no consumer, so it never moves an
-  ack floor. Enforced in code. Until it has its own principal it runs under
-  director's user. Diagnostic: nothing waits on it.
+  ack floor. Enforced in code: what the reader writes, which is only its own
+  store (`askreader.go:6-8`). Honor-only: that nothing else writes the store.
+  Until the reader has its own principal it runs under director's user
+  (`:8-10`), so any process running as that user can write it. Diagnostic:
+  nothing waits on it.
 - **Readers:** the on-demand `asks` read.
 
 ### 13. Ruling records
@@ -181,7 +188,7 @@ in local or private state.
 ### 18. Relay authority rule
 
 - **Store:** none; it is prose. SKILL.md (Relaying) rules out one thing:
-  director represents itself as carrying no authority it was not given. The
+  director must not represent itself as carrying authority it was not given. The
   rest is open by ruling, and no check is added on relay wording. R-184
   governs a relayed grant refused at the target seat.
 - **Writers:** honor-only.
