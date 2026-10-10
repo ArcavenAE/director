@@ -291,7 +291,7 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		if bus.handled != nil {
 			// The handled mode needs the sequence to record the message.
 			out["sequence"] = res.Seq
-			out["handled_note"] = "not acked: record it with mark_handled (tier and sequence above)"
+			out["handled_note"] = "not acked: record it with mark_handled (the message_id and tier above)"
 		}
 	}
 	// A global-tier failure is reported beside the answer rather than instead
@@ -389,6 +389,10 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 		}
 		out["read_unhandled"] = rows
 		out["read_unhandled_note"] = "delivered to this session and not yet recorded with mark_handled; not counted in the summary above"
+		if len(res.Rejected) > 0 {
+			out["rejected"] = res.Rejected
+			out["rejected_note"] = "envelopes the handled mode could not key or trusted no further (no message_id, or a message_id reused with different bytes); each was recorded and Termed, never returned"
+		}
 	}
 	return out, nil
 }

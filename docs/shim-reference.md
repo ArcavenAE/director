@@ -410,8 +410,8 @@ a subject no stream captured and no session subscribed, and reported
 
 | Argument | Required | Meaning |
 |---|---|---|
+| `message_id` | yes | the envelope's `message_id`, as `wait_for_message` returned it |
 | `tier` | yes | `local` or `global`, as `wait_for_message` named it |
-| `sequence` | yes | the stream sequence `wait_for_message` returned |
 | `disposition` | yes | `handled`, `forwarded` or `parked` |
 | `forward_id` | for `forwarded` | the message id of the forward |
 | `reason` | for `parked` | one line on why it waits |
@@ -419,19 +419,35 @@ a subject no stream captured and no session subscribed, and reported
 Offered only with `DIRECTOR_HANDLED=1`. With the mode on, `wait_for_message`
 and the batch drain deliver without acking, so each message stays pending on
 the seat's durable until it is recorded here. The record is appended to
-`handled.jsonl` first and the ack follows. Every disposition acks, `parked`
-included; a parked message stays visible through the ledger.
+`handled.jsonl`, fsynced, and only then is the message acked. A failed append
+or fsync never acks: the tool returns the error and the message stays pending.
+Every disposition acks, `parked` included; a parked message stays visible
+through the ledger.
 
-The ledger is append-only and folded on read by tier, stream and sequence,
-last event wins, with one flock around fold, check and append (the shape of
-`dws`). There is no cursor. A crash between the write and the ack leaves the
-message pending; it is redelivered, the drain finds the disposition in the
-ledger, acks it and does not return it, so it is recorded once. A redelivery
-of a message the session already holds is not returned again either.
+The ledger is append-only and folded on read by `message_id`, last event wins,
+with one flock around fold, check and append (the shape of `dws`). Each line
+also records the tier, stream and sequence, for the reader, and a hash of the
+stored data bytes. The sequence is not the key, because a stream that is
+deleted, recreated or restored restarts its sequences. There is no cursor.
 
-`inbox_summary` gains a `read_unhandled` section in this mode: messages
-delivered and not yet recorded, oldest first with their age. They are not
-counted in `summary` as waiting. An unread message is still counted there.
+A crash between the write and the ack leaves the message pending; it is
+redelivered, the drain finds the `message_id` in the ledger, acks it and does
+not return it, so it is recorded once. While the session is live the shim
+sends `InProgress` on each delivered, unrecorded message before its ack wait
+runs out, so long handling does not cause a redelivery. A redelivery of a
+message the session already holds is not returned again.
+
+An envelope the mode cannot key or trust is rejected, never held: one with no
+`message_id`, and one whose `message_id` is already in the ledger with
+different stored bytes (a reuse by a sender outside the shim). The drain writes
+a `rejected` line keyed by tier, stream and sequence, and Terms the message, as
+the receive path does for undecodable mail. A held message would redeliver
+without bound, since `MaxDeliver` is -1. The original's record stands.
+
+`inbox_summary` gains two sections in this mode: `read_unhandled`, messages
+delivered and not yet recorded, oldest first with their age (not counted in
+`summary` as waiting), and `rejected`, the rejected lines with their reason. An
+unread message is still counted in `summary`.
 
 The ack wait for the mode is the `handled_ack_wait` row of the threshold
 table, 30 minutes unless `thresholds.json` in the state directory sets it

@@ -195,6 +195,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	if h != nil {
 		h.streamOf = b.streamFor
 		h.onAck = b.noteTierAcked
+		h.startKeepalive()
 	}
 	// Every envelope this session sends names its instance in sender.instance,
 	// so a reply is attributable to one session and not to every session of
@@ -1455,6 +1456,9 @@ func (b *Bus) roster(ctx context.Context) ([]map[string]any, error) {
 }
 
 func (b *Bus) close() {
+	if b.handled != nil {
+		b.handled.stop()
+	}
 	if b.nc != nil {
 		b.nc.Drain()
 	}

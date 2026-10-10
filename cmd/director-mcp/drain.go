@@ -599,6 +599,7 @@ func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, err
 		// Delivered and unrecorded messages are the session's own to finish.
 		// They get their own section and are not counted as waiting.
 		res.ReadUnhandled = b.handled.unhandled()
+		res.Rejected = b.handled.rejected()
 		held := map[string]bool{}
 		for _, r := range res.ReadUnhandled {
 			held[fmt.Sprintf("%s/%d", r.Tier, r.Seq)] = true
