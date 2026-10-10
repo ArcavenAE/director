@@ -121,8 +121,20 @@ code is not an approval of what merges, and an objection to earlier code is
 not withdrawn by someone else approving later code. "Reached GitHub" is the
 later of the head's commit date and its first check suite; GitHub exposes no
 time the head joined the PR, so with no check suite the PROCEED line says the
-push time is unknown. Operator merge exclusions (R-153) are checked
-separately, before the guard.
+push time is unknown.
+
+Operator merge exclusions (R-153) are checked by the guard, first. It reads the
+exclusion records from `$DIRECTOR_STATE/rulings.jsonl` before any `gh` call, and
+reads the PR's labels with the rest of the view. An exclusion is one line,
+`{"kind":"exclusion","repo":"owner/repo","label":"acu.*"}`; repo and label
+compare without case and may be shell patterns. A PR in a matching repo that
+carries a matching label gets a STOP naming the exclusion, whatever its review
+or check state. An unreadable rulings file, a line that is not a JSON object,
+an exclusion missing its repo or label, and a view with no label list are each
+a STOP, and so is a missing rulings file, since a missing record cannot be told
+from none declared: create it, and an empty file means none declared. The file
+lives in the local state directory and is never committed. A merge made outside
+the guard stays honor-only.
 
 ## Replay: the retrospective evidence source
 

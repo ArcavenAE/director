@@ -274,7 +274,7 @@ fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; rm -f "$fx/ruling
 expect_stop "a missing rulings file: STOP, a missing record refuses" "rulings"
 [[ ! -f "$fx/view.calls" ]] && ok "the missing-record STOP comes before any gh call" \
   || bad "missing record before the view" "view.calls=$(cat "$fx/view.calls")"
-grep -q "create" "$fx/out" && ok "the missing-record STOP says to create the file" \
+grep -qi "create the file" "$fx/out" && ok "the missing-record STOP says to create the file" \
   || bad "missing-record STOP says what to do" "$(cat "$fx/out")"
 
 fixture; view OPEN false CLEAN > "$fx/view.json"; : > "$fx/rulings.jsonl"

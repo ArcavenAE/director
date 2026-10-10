@@ -33,9 +33,9 @@
 # PR in a matching repo that carries a matching label STOPs, whatever its review
 # or check state, before any other check. A rulings file that exists and cannot
 # be read, a line that is not a JSON object, and an exclusion without a repo and
-# a label all STOP: a record that might be an exclusion is never skipped. A
-# missing rulings file is no records, and the PROCEED line says so. The labels
-# come from the same gh pr view; a view with no label list STOPs. Like the rest
+# a label all STOP: a record that might be an exclusion is never skipped. So
+# does a missing rulings file, since a missing record cannot be told from none
+# declared; create it, and empty means none declared. The labels come from the same gh pr view; a view with no label list STOPs. Like the rest
 # of the guard this holds only for merges made through it; a merge made outside
 # it stays honor-only.
 #
@@ -58,20 +58,19 @@ err="$(mktemp)"; trap 'rm -f "$err"' EXIT
 # "repo<TAB>label" line per exclusion; $excl_note says what was read.
 rulings="${MERGE_GUARD_RULINGS:-${DIRECTOR_STATE:-$HOME/.director/state}/rulings.jsonl}"
 excl=""; excl_note="no exclusion records"
-if [[ -e "$rulings" ]]; then
-  [[ -f "$rulings" ]] || stop "the rulings path $rulings exists and is not a file; cannot read the exclusion records (R-153)"
-  records="$(cat -- "$rulings" 2>"$err")" || stop "the rulings file $rulings cannot be read: $(tr '\n' ' ' <"$err")"
-  parsed="$(jq -R -c 'select(length > 0) | (fromjson? // error("a rulings line is not JSON: " + .))' <<<"$records" 2>"$err")" \
-    || stop "the rulings file $rulings has a line that is not JSON: $(head -c 200 "$err" | tr '\n' ' ')"
-  excl="$(jq -r 'if type != "object" then error("a rulings line is not an object: " + tojson)
-      elif .kind != "exclusion" then empty
-      elif ((.repo | type) == "string" and (.repo | length) > 0 and (.label | type) == "string" and (.label | length) > 0)
-        then "\(.repo)\t\(.label)"
-      else error("an exclusion needs a repo and a label, both non-empty strings: " + tojson) end' <<<"$parsed" 2>"$err")" \
-    || stop "the rulings file $rulings has an unreadable exclusion: $(head -c 200 "$err" | tr '\n' ' ')"
-  if [[ -n "$excl" ]]; then
-    excl_note="$(grep -c . <<<"$excl") exclusion record(s), none matching"
-  fi
+[[ -e "$rulings" ]] || stop "no rulings file at $rulings; the guard cannot tell no exclusions declared from a record that is gone (R-153). Create the file (empty means none declared) and run it again"
+[[ -f "$rulings" ]] || stop "the rulings path $rulings exists and is not a file; cannot read the exclusion records (R-153)"
+records="$(cat -- "$rulings" 2>"$err")" || stop "the rulings file $rulings cannot be read: $(tr '\n' ' ' <"$err")"
+parsed="$(jq -R -c 'select(length > 0) | (fromjson? // error("a rulings line is not JSON: " + .))' <<<"$records" 2>"$err")" \
+  || stop "the rulings file $rulings has a line that is not JSON: $(head -c 200 "$err" | tr '\n' ' ')"
+excl="$(jq -r 'if type != "object" then error("a rulings line is not an object: " + tojson)
+    elif .kind != "exclusion" then empty
+    elif ((.repo | type) == "string" and (.repo | length) > 0 and (.label | type) == "string" and (.label | length) > 0)
+      then "\(.repo)\t\(.label)"
+    else error("an exclusion needs a repo and a label, both non-empty strings: " + tojson) end' <<<"$parsed" 2>"$err")" \
+  || stop "the rulings file $rulings has an unreadable exclusion: $(head -c 200 "$err" | tr '\n' ' ')"
+if [[ -n "$excl" ]]; then
+  excl_note="$(grep -c . <<<"$excl") exclusion record(s), none matching"
 fi
 
 # read_json LABEL ARGS...: run gh, leave parseable output in $json, or STOP.
