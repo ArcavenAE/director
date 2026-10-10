@@ -654,7 +654,7 @@ func TestTheHelpTextSaysAHubAckTimeoutShowsItsReplyAsAnOrphan(t *testing.T) {
 
 func designDoc(t *testing.T) string {
 	t.Helper()
-	b, err := os.ReadFile("../../../sim/design/ask-ledger.md")
+	b, err := os.ReadFile("../../sim/design/ask-ledger.md")
 	if err != nil {
 		t.Fatal(err)
 	}

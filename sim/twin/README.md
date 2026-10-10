@@ -191,7 +191,7 @@ write floor; merge-queue, which is, is not run).
 
 ## Stand-up sequence (S0)
 
-1. Build the shim if needed: `cd director/probe/nats-phase-0/director-mcp
+1. Build the shim if needed: `cd director/cmd/director-mcp
    && go build -o director-mcp .` (the wrapper's default `DIRECTOR_SHIM_BIN`).
 2. Make the read-only wardrobe install root (precondition 2 above).
 3. Start the twin daemon: `MARVEL_TMUX_SOCKET=marvel-twin marvel daemon

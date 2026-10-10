@@ -39,7 +39,7 @@ PORT="${VERIFY_PORT:-4272}"
 HUB_CA="${HUB_CA:-}"
 LEAF_TLS=""; [[ -n "$HUB_CA" ]] && LEAF_TLS=", tls { ca_file: \"$HUB_CA\" }"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHIM_SRC="$here/../nats-phase-0/director-mcp"
+SHIM_SRC="$here/../../cmd/director-mcp"
 
 command -v nats-server >/dev/null || { echo "nats-server not on PATH"; exit 2; }
 command -v nats >/dev/null || { echo "nats CLI not on PATH"; exit 2; }

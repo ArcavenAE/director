@@ -73,7 +73,7 @@ case "$WROLE" in
 esac
 
 [[ -d "$WARDROBE_ROOT/roles" ]] || { echo "cast-launch: no wardrobe root at $WARDROBE_ROOT (set WARDROBE_ROOT)" >&2; exit 1; }
-[[ -x "$SHIM_BIN" ]] || { echo "cast-launch: director shim not executable at $SHIM_BIN; build and install it there (go build -o \"\$HOME/.director/bin/director-mcp\" ./probe/nats-phase-0/director-mcp) or set DIRECTOR_SHIM_BIN to its path. Never point it inside a temporary directory: a scratchpad path is reaped and every later cast fails here" >&2; exit 1; }
+[[ -x "$SHIM_BIN" ]] || { echo "cast-launch: director shim not executable at $SHIM_BIN; build and install it there (cd cmd/director-mcp in the director checkout, then go build -o \"\$HOME/.director/bin/director-mcp\" .) or set DIRECTOR_SHIM_BIN to its path. Never point it inside a temporary directory: a scratchpad path is reaped and every later cast fails here" >&2; exit 1; }
 slice_sh="$(dirname "$WARDROBE_ROOT")/scripts/slice.sh"
 [[ -x "$slice_sh" ]] || { echo "cast-launch: $slice_sh missing; the install root is a full checkout" >&2; exit 1; }
 
