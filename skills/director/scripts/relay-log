@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""relay-log - write a relay-log entry, stamped from the clock.
+
+Director's relay-log times were typed by hand and ran up to 35 minutes ahead of
+`date -u` (R-192). This writer takes the time from the clock at the moment it
+writes, under the lock, and offers no way for the caller to set it: there is no
+time argument, and the entry text is never read for one.
+
+  relay-log append --to <address> [--outcome <text>] (--text <t> | --text-file <path|->)
+  relay-log outcome <R-n> (--text <t> | --text-file <path|->)
+
+append adds the next numbered entry (SKILL.md's shape: R-N, to, the verbatim
+text, the outcome) with a UTC stamp in the heading:
+
+  ## R-<n> (<YYYY-MM-DDTHH:MM:SSZ>) -> <to>
+  **Text, verbatim:**
+  > <each line of the text, prefixed with "> ">
+  **Outcome:** <outcome, "pending" when none is given>
+
+outcome adds a later note for an existing entry, stamped the same way:
+
+  ### R-<n> outcome (<stamp>)
+  <text>
+
+The log is local and stays out of the repository. It is found, in order, at
+$RELAY_LOG, then at <checkout>/sim/notes/relay-log.md when this script is run
+through a symlink into a checkout. If neither names a place, the script refuses
+and says so; it never guesses a path. A log path that sits inside a git work
+tree and is not ignored there is refused too, so an entry cannot reach a commit.
+
+Existing bytes are never rewritten: the file is opened for append, and one
+flock covers the numbering, the stamp and the write.
+"""
+import argparse, datetime, fcntl, os, re, subprocess, sys
+
+HEADING = re.compile(rb"^## R-(\d+)\b", re.M)
+
+
+def find_log():
+    env = os.environ.get("RELAY_LOG")
+    if env:
+        return env
+    here = os.path.dirname(os.path.realpath(__file__))
+    root = os.path.abspath(os.path.join(here, "..", "..", ".."))
+    d = os.path.join(root, "sim", "notes")
+    if os.path.exists(os.path.join(root, ".git")) and os.path.isdir(d):
+        return os.path.join(d, "relay-log.md")
+    return None
+
+
+def refuse_if_trackable(path):
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    inside = subprocess.run(["git", "-C", d, "rev-parse", "--is-inside-work-tree"],
+                            capture_output=True, text=True)
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        return
+    ignored = subprocess.run(["git", "-C", d, "check-ignore", "-q", os.path.abspath(path)])
+    if ignored.returncode != 0:
+        sys.exit(f"relay-log: refusing {path}: it is inside a git work tree and not ignored there")
+
+
+def read_text(args):
+    if args.text is not None:
+        return args.text
+    if args.text_file == "-":
+        return sys.stdin.read()
+    with open(args.text_file, encoding="utf-8") as f:
+        return f.read()
+
+
+def stamp():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="relay-log", description="write a clock-stamped relay-log entry")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    a = sub.add_parser("append")
+    a.add_argument("--to", required=True)
+    a.add_argument("--outcome", default="pending")
+    g = a.add_mutually_exclusive_group(required=True)
+    g.add_argument("--text")
+    g.add_argument("--text-file")
+    o = sub.add_parser("outcome")
+    o.add_argument("entry", help="R-<n>")
+    g = o.add_mutually_exclusive_group(required=True)
+    g.add_argument("--text")
+    g.add_argument("--text-file")
+    args = ap.parse_args()
+
+    log = find_log()
+    if not log:
+        sys.exit("relay-log: no log path: set RELAY_LOG, or run this through a symlink into a director checkout that has sim/notes/")
+    refuse_if_trackable(log)
+    text = read_text(args)
+    if not text.strip():
+        sys.exit("relay-log: the text is empty")
+
+    if args.cmd == "append":
+        if not args.to.strip() or "\n" in args.to or "\n" in args.outcome:
+            sys.exit("relay-log: --to must be one non-empty line, and --outcome one line")
+
+    fd = os.open(log + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        with open(log, "ab+") as f:
+            f.seek(0)
+            existing = f.read()
+            numbers = [int(m.group(1)) for m in HEADING.finditer(existing)]
+            if args.cmd == "outcome":
+                m = re.fullmatch(r"R-(\d+)", args.entry)
+                if not m or int(m.group(1)) not in numbers:
+                    sys.exit(f"relay-log: no entry {args.entry} in {log}; nothing written")
+                head = f"### R-{m.group(1)} outcome ({stamp()})"
+                body = head + "\n" + text.rstrip("\n") + "\n"
+            else:
+                n = (max(numbers) if numbers else 0) + 1
+                head = f"## R-{n} ({stamp()}) -> {args.to.strip()}"
+                quoted = "\n".join("> " + ln if ln else ">" for ln in text.rstrip("\n").split("\n"))
+                body = f"{head}\n**Text, verbatim:**\n{quoted}\n**Outcome:** {args.outcome.strip()}\n"
+            lead = b""
+            if existing and not existing.endswith(b"\n"):
+                lead = b"\n"
+            if existing:
+                lead += b"\n"
+            f.write(lead + body.encode("utf-8"))
+            f.flush()
+            os.fsync(f.fileno())
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    print(head)
+
+
+if __name__ == "__main__":
+    main()
