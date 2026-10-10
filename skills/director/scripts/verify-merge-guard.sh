@@ -257,6 +257,19 @@ expect_proceed "an excluded repo name that is a prefix of this repo is not a mat
 fixture; LABELS="acu.update" view OPEN false CLEAN > "$fx/view.json"; excl org/repo "acu" > "$fx/rulings.jsonl"
 expect_proceed "an excluded label that is a prefix of this label is not a match: PROCEED"
 
+# Anchored at both ends: extra text before the excluded value is not a match.
+fixture; LABELS="acu.update" view OPEN false CLEAN > "$fx/view.json"; excl org/repo "acu.update" > "$fx/rulings.jsonl"
+if guard xorg/repo 7; then
+  grep -q "^PROCEED xorg/repo#7 @" "$fx/out" && ok "a repo with extra text before the excluded one is not a match: PROCEED" \
+    || bad "xorg/repo against org/repo" "$(cat "$fx/out")"
+else bad "xorg/repo against org/repo" "stopped: $(cat "$fx/out")"; fi
+
+fixture; LABELS="notacu.update" view OPEN false CLEAN > "$fx/view.json"; excl org/repo "acu.update" > "$fx/rulings.jsonl"
+expect_proceed "a label with extra text before the excluded one is not a match (notacu.update, acu.update): PROCEED"
+
+fixture; LABELS="acuprod" view OPEN false CLEAN > "$fx/view.json"; excl org/repo "acu.*" > "$fx/rulings.jsonl"
+expect_proceed "a dot in an exclusion is a literal dot, not any character (acuprod, acu.*): PROCEED"
+
 fixture; LABELS="acu.update,bug" view OPEN false CLEAN > "$fx/view.json"
 { echo; printf '{"kind":"ruling","text":"unrelated"}\n'; printf '{"kind":"grant","state":"draft"}\n'; excl other/repo "acu.update"; excl org/repo "release"; echo; } > "$fx/rulings.jsonl"
 expect_proceed "other record kinds, blank lines and non-matching exclusions are read and ignored: PROCEED"
@@ -274,7 +287,8 @@ fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; rm -f "$fx/ruling
 expect_stop "a missing rulings file: STOP, a missing record refuses" "rulings"
 [[ ! -f "$fx/view.calls" ]] && ok "the missing-record STOP comes before any gh call" \
   || bad "missing record before the view" "view.calls=$(cat "$fx/view.calls")"
-grep -qi "create the file" "$fx/out" && ok "the missing-record STOP says to create the file" \
+grep -q "The operator creates the file" "$fx/out" && grep -q "a seat reports this STOP and does not create the file" "$fx/out" \
+  && ok "the missing-record STOP says the operator creates the file and a seat reports it" \
   || bad "missing-record STOP says what to do" "$(cat "$fx/out")"
 
 fixture; view OPEN false CLEAN > "$fx/view.json"; : > "$fx/rulings.jsonl"

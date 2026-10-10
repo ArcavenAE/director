@@ -58,7 +58,7 @@ err="$(mktemp)"; trap 'rm -f "$err"' EXIT
 # "repo<TAB>label" line per exclusion; $excl_note says what was read.
 rulings="${MERGE_GUARD_RULINGS:-${DIRECTOR_STATE:-$HOME/.director/state}/rulings.jsonl}"
 excl=""; excl_note="no exclusion records"
-[[ -e "$rulings" ]] || stop "no rulings file at $rulings; the guard cannot tell no exclusions declared from a record that is gone (R-153). Create the file (empty means none declared) and run it again"
+[[ -e "$rulings" ]] || stop "no rulings file at $rulings; the guard cannot tell no exclusions declared from a record that is gone (R-153). The operator creates the file and enters their exclusions (an empty file means none declared); a seat reports this STOP and does not create the file"
 [[ -f "$rulings" ]] || stop "the rulings path $rulings exists and is not a file; cannot read the exclusion records (R-153)"
 records="$(cat -- "$rulings" 2>"$err")" || stop "the rulings file $rulings cannot be read: $(tr '\n' ' ' <"$err")"
 parsed="$(jq -R -c 'select(length > 0) | (fromjson? // error("a rulings line is not JSON: " + .))' <<<"$records" 2>"$err")" \
@@ -93,7 +93,7 @@ view() {
 view
 
 # Exclusions first, before the state or any other check. The labels must be a
-# list of named labels; anything else is a view we cannot read.
+# list of named labels; anything else is a view the guard cannot read.
 jq -e '(.labels | type == "array") and all(.labels[]; (.name | type == "string") and (.name | length) > 0)' >/dev/null <<<"$json" \
   || stop "the view has no readable label list (labels missing, not a list, or a label with no name); cannot tell whether an operator exclusion applies (R-153)"
 if [[ -n "$excl" ]]; then
