@@ -245,6 +245,9 @@ accounts, harnesses, and backends (Bedrock, Claude platform on AWS, raw SDK
 streams). Treat the shortcuts as scaffolding to be discarded, and note every
 place you lean on one.
 
+`reference/functions.md` defines each director function: its store, its
+writers, its readers, and whether each writer is enforced or honor-only.
+
 ## Vocabulary
 
 There are no peers. There is the human, the human's assistive agent (you),
