@@ -300,19 +300,23 @@ every point below sits inside Q0 and Q5 as ruled.
 
 **Who records a message as handled, and for whom.**
 - Only the session can know that it acted, so the session records it, with
-  a new `mark_handled` tool. It takes the tier, the stream sequence and a
-  disposition: `handled`, `forwarded` (with the forward's message id) or
+  a new `mark_handled` tool. It takes the envelope's `message_id`, the tier
+  and a disposition: `handled`, `forwarded` (with the forward's message id) or
   `parked` (with a one-line reason).
 - The change is scoped to director's own drain, which is what section 4 and
   R-169 cover. The shim gets a per-seat handled mode, on for director and off
-  by default. With it off, `wait_for_message` acks on read exactly as today
-  (`cmd/director-mcp/bus.go:1004`) and no other seat's drain changes. If the
+  by default. With it off, `wait_for_message` acks on read exactly as today,
+  on both tiers (`cmd/director-mcp/bus.go:1004` local, `global.go:656`
+  global), and no other seat's drain changes. With it on, both tiers follow
+  the rules below. If the
   build finds the mode cannot be kept per seat, that is a stop line: it goes
   back to director as a decision, because it would change every draining
   seat.
 - With the mode on, `wait_for_message` delivers without acking, so the
   message stays ack-pending on the seat's durable. `mark_handled` appends the
-  disposition to the ledger first and acks second. A crash between the two
+  disposition to the ledger, fsyncs it, and only then acks. A failed append
+  or fsync never acks; the tool returns the error and the message stays
+  pending. A crash between the write and the ack
   leaves the message pending, and it is redelivered; the drain then finds
   the disposition already in the ledger, acks the message and does not
   return it, so there is no second record.
@@ -322,11 +326,23 @@ every point below sits inside Q0 and Q5 as ruled.
   consumers set none today), so a read message is not redelivered while the
   session is working on it. Its value is an entry in the operator-editable
   threshold table (section 4, the automation boundary), not a constant.
+  While the session is live, the shim sends `InProgress` on each delivered,
+  unrecorded message before its ack wait runs out, so long handling does not
+  cause a redelivery; the ack wait then bounds only a session that died.
 
 **Where the ledger lives.**
 - A per-seat append-only JSONL file beside the seat's other director state,
-  `handled.jsonl`, folded on read by the key tier, stream and sequence. Last
-  event per key wins. There is no cursor and no high-water mark, which is the
+  `handled.jsonl`, folded on read by the envelope's `message_id`. Last event
+  per key wins. Each event also records the tier, stream and sequence, for
+  the reader only. The key is not the sequence because a stream that is
+  deleted, recreated or restored restarts its sequences: a new message that
+  reused a ledgered sequence would be acked and never returned, a silent
+  loss. `message_id` is minted by the sender and is already the bus dedupe
+  id (`Nats-Msg-Id`, `bus.go:823`), so it survives a stream reset. The
+  shim's own sends always carry one (`envelope.go:71`). An envelope from
+  another publisher with no `message_id` cannot be keyed; the drain returns it with
+  the mode's ack withheld and reports it, never folding it under a guessed
+  key. There is no cursor and no high-water mark, which is the
   failure R-169 names.
 - It follows the `dws` store shape (append-only, folded on read, one flock
   around fold, check and append) so that `dws reconcile` can read it. Design
@@ -341,9 +357,12 @@ every point below sits inside Q0 and Q5 as ruled.
 - An unread message is still reported as UNREAD (Q0). A read-unhandled one
   past its window is a reconciler proposal ("an ask unacked past its
   window", section 4), never an automatic action.
-- The waiting-on-PR marker lives on the ask row in `askledger.go`. A merged
-  PR clears the marker as a mirror event; the ask stays open until director
-  closes it (Q5 (c)).
+- K4 does not carry the waiting-on-PR marker. Q5 amends R-197, a workstream
+  ledger requirement, so the marker is on the `workstreams.jsonl` row, where
+  "the ledger" means throughout this doc. A merged PR clears it there as a
+  mirror event, and the ask stays open until director closes it (Q5 (c));
+  that work sits with K11 and K12. The handled ledger and the ask ledger
+  (`askledger.go`, the bus REQUEST ledger) leave that row alone.
 
 ## 7. Open
 
