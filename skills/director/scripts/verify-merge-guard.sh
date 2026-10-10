@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# Prove merge-guard fails closed (R-152): a read that errors, times out, comes
+# Prove merge-guard fails closed (R-152) and enforces operator merge exclusions
+# (R-153): a PR in an excluded repo carrying an excluded label never proceeds,
+# and a label set or an exclusion record that cannot be read stops. A read that errors, times out, comes
 # back empty or unparseable, or reports UNKNOWN stops the merge run; only a
 # CLEAN, open, non-draft PR with passing checks, no stacked child, and a
 # non-author approval at the current head, given after that head reached
 # GitHub, and no standing change request on any commit, proceeds.
-# gh is a stub that replays fixtures, so nothing reaches GitHub.
+# gh is a stub that replays fixtures, so nothing reaches GitHub. Exclusion
+# records are read from rulings.jsonl (MERGE_GUARD_RULINGS), one JSON object per
+# line; only kind "exclusion" lines are read here, and the fixture's own file
+# stands in for the operator's.
 #
 # Usage: skills/director/scripts/verify-merge-guard.sh   Exit nonzero on any miss.
 set -euo pipefail
@@ -52,9 +57,11 @@ review() { # login state submittedAt [commit-oid]
     "$1" "$2" "$3" "${4:-abc1234def5678}"
 }
 GOOD_REVIEW="$(review reviewer APPROVED 2026-09-28T11:00:00Z)"
-view() { # state draft merge-state [rollup-json]
-  printf '{"state":"%s","isDraft":%s,"mergeStateStatus":"%s","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":%s,"author":{"login":"builder"},"commits":[{"oid":"0000000old","committedDate":"2026-09-27T09:00:00Z"},{"oid":"abc1234def5678","committedDate":"%s"}],"reviews":[%s]}\n' \
-    "$1" "$2" "$3" "${4:-[]}" "$HEAD_AT" "${REVIEWS-$GOOD_REVIEW}"
+view() { # state draft merge-state [rollup-json]; LABELS is the label names, comma separated
+  local labels="" l list="${LABELS-}"
+  for l in ${list//,/ }; do labels="${labels:+$labels,}{\"name\":\"$l\"}"; done
+  printf '{"state":"%s","isDraft":%s,"mergeStateStatus":"%s","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":%s,"author":{"login":"builder"},"commits":[{"oid":"0000000old","committedDate":"2026-09-27T09:00:00Z"},{"oid":"abc1234def5678","committedDate":"%s"}],"reviews":[%s],"labels":[%s]}\n' \
+    "$1" "$2" "$3" "${4:-[]}" "$HEAD_AT" "${REVIEWS-$GOOD_REVIEW}" "$labels"
 }
 SUCCESS_RUN='{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}'
 SKIPPED_RUN='{"__typename":"CheckRun","name":"harden","status":"COMPLETED","conclusion":"SKIPPED"}'
@@ -72,10 +79,12 @@ suites() { # created_at... (none: no suite)
 fixture() {
   n=$((n+1)); fx="$root/fx$n"; mkdir -p "$fx"; echo '[]' > "$fx/list.json"
   suites 2026-09-28T10:00:05Z > "$fx/suites.json"
+  : > "$fx/rulings.jsonl" # a present, empty rulings file: no exclusions declared
 }
 guard() {
   env PATH="$root/bin:/usr/bin:/bin" GH_FIXTURE="$fx" \
       MERGE_GUARD_RETRIES="${RETRIES:-2}" MERGE_GUARD_DELAY=0 \
+      MERGE_GUARD_RULINGS="${RULINGS:-$fx/rulings.jsonl}" \
       "$GUARD" "$@" >"$fx/out" 2>&1
 }
 expect_proceed() { # name
@@ -129,7 +138,7 @@ fixture; : > "$fx/view.json"
 expect_stop "gh pr view returns nothing: STOP" "nothing"
 fixture; echo "<html>502</html>" > "$fx/view.json"
 expect_stop "gh pr view returns something that is not JSON: STOP" "not JSON"
-fixture; echo '{"state":"OPEN","mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[]}' > "$fx/view.json"
+fixture; echo '{"state":"OPEN","mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"labels":[]}' > "$fx/view.json"
 expect_stop "a view with no isDraft field: STOP" "isDraft"
 
 # --- terminal and draft states stop (R-157, R-148) --------------------------------
@@ -197,10 +206,115 @@ expect_stop "a check-suite read with no list: STOP" "check_suites"
 fixture; view OPEN false CLEAN > "$fx/view.json"
 echo '{"total_count":101,"check_suites":[{"created_at":"2026-09-28T10:00:05Z"}]}' > "$fx/suites.json"
 expect_stop "a paged check-suite read: STOP" "paged"
-fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[]}' > "$fx/view.json"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[]}' > "$fx/view.json"
 expect_stop "the head commit is not in the view's commit list: STOP" "head commit"
-fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[{"oid":"abc1234def5678","committedDate":"2026-09-28T10:00:00Z"}]}' > "$fx/view.json"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[{"oid":"abc1234def5678","committedDate":"2026-09-28T10:00:00Z"}],"labels":[]}' > "$fx/view.json"
 expect_stop "a view with no reviews field: STOP" "reviews"
+
+# --- operator merge exclusions (R-153) ---------------------------------------------
+excl() { printf '{"kind":"exclusion","repo":"%s","label":"%s"}\n' "$1" "$2"; }
+
+fixture; LABELS="acu.update" view OPEN false CLEAN > "$fx/view.json"; excl org/repo "acu.update" > "$fx/rulings.jsonl"
+expect_stop "an excluded PR (repo and label match): STOP naming the exclusion" "excluded"
+grep -q "acu.update" "$fx/out" && ok "the exclusion STOP names the label" || bad "exclusion STOP names the label" "$(cat "$fx/out")"
+
+fixture; LABELS="bug,acu.update,docs" view OPEN false CLEAN > "$fx/view.json"; excl org/repo "acu.update" > "$fx/rulings.jsonl"
+expect_stop "an excluded label among several labels: STOP" "excluded"
+
+fixture; LABELS="ACU.Update" view OPEN false CLEAN > "$fx/view.json"; excl ORG/Repo "acu.update" > "$fx/rulings.jsonl"
+expect_stop "repo and label compare without case, as GitHub does: STOP" "excluded"
+
+fixture; LABELS="acu.deps" view OPEN false CLEAN > "$fx/view.json"; excl org/repo 'acu.*' > "$fx/rulings.jsonl"
+expect_stop "a label pattern (acu.*) matches: STOP" "excluded"
+
+fixture; LABELS="acu.update" view OPEN true UNKNOWN > "$fx/view.json"; excl org/repo "acu.update" > "$fx/rulings.jsonl"
+expect_stop "an excluded draft with an unresolved merge state: STOP on the exclusion, before the other checks" "excluded"
+[[ "$(cat "$fx/view.calls")" == 1 ]] && ok "the exclusion is decided on the first read, with no UNKNOWN re-reads" \
+  || bad "exclusion before the other checks" "calls=$(cat "$fx/view.calls")"
+
+fixture; LABELS="acu.update" view MERGED false UNKNOWN > "$fx/view.json"; excl org/repo "acu.update" > "$fx/rulings.jsonl"
+expect_stop "an excluded PR that is also merged: STOP, never PROCEED" "STOP"
+
+# The reads-fine path, as hard as the refusals: nothing here may stop.
+fixture; LABELS="acu.update" view OPEN false CLEAN > "$fx/view.json"; excl other/repo "acu.update" > "$fx/rulings.jsonl"
+expect_proceed "an exclusion for another repo does not touch this PR: PROCEED"
+
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; excl org/repo "acu.update" > "$fx/rulings.jsonl"
+expect_proceed "an exclusion for another label does not touch this PR: PROCEED"
+
+fixture; LABELS="" view OPEN false CLEAN > "$fx/view.json"; excl org/repo "acu.update" > "$fx/rulings.jsonl"
+expect_proceed "a PR with no labels in an excluded repo: PROCEED"
+
+fixture; LABELS="acu" view OPEN false CLEAN > "$fx/view.json"; excl org/repo "acu.update" > "$fx/rulings.jsonl"
+expect_proceed "a label that only starts like the excluded one is not a match: PROCEED"
+
+fixture; LABELS="acu.update" view OPEN false CLEAN > "$fx/view.json"; excl org/repo-two "acu.update" > "$fx/rulings.jsonl"
+expect_proceed "a repo that only starts like the excluded one is not a match: PROCEED"
+
+fixture; LABELS="acu.update" view OPEN false CLEAN > "$fx/view.json"; excl org/rep "acu.update" > "$fx/rulings.jsonl"
+expect_proceed "an excluded repo name that is a prefix of this repo is not a match: PROCEED"
+
+fixture; LABELS="acu.update" view OPEN false CLEAN > "$fx/view.json"; excl org/repo "acu" > "$fx/rulings.jsonl"
+expect_proceed "an excluded label that is a prefix of this label is not a match: PROCEED"
+
+fixture; LABELS="acu.update,bug" view OPEN false CLEAN > "$fx/view.json"
+{ echo; printf '{"kind":"ruling","text":"unrelated"}\n'; printf '{"kind":"grant","state":"draft"}\n'; excl other/repo "acu.update"; excl org/repo "release"; echo; } > "$fx/rulings.jsonl"
+expect_proceed "other record kinds, blank lines and non-matching exclusions are read and ignored: PROCEED"
+grep -q "2 exclusion record(s), none matching" "$fx/out" && ok "the PROCEED line says how many exclusions were read and that none matched" \
+  || bad "PROCEED reports the exclusions read" "$(cat "$fx/out")"
+
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"
+expect_proceed "a present rulings file with no exclusions: PROCEED as before"
+grep -q "no exclusion records" "$fx/out" && ok "with no exclusions the PROCEED line says there are no exclusion records" \
+  || bad "PROCEED says no records" "$(cat "$fx/out")"
+
+# A missing rulings file refuses: the guard cannot tell "none declared" from
+# "the record is gone", so it does not guess.
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; rm -f "$fx/rulings.jsonl"
+expect_stop "a missing rulings file: STOP, a missing record refuses" "rulings"
+[[ ! -f "$fx/view.calls" ]] && ok "the missing-record STOP comes before any gh call" \
+  || bad "missing record before the view" "view.calls=$(cat "$fx/view.calls")"
+grep -qi "create the file" "$fx/out" && ok "the missing-record STOP says to create the file" \
+  || bad "missing-record STOP says what to do" "$(cat "$fx/out")"
+
+fixture; view OPEN false CLEAN > "$fx/view.json"; : > "$fx/rulings.jsonl"
+expect_proceed "an empty rulings file and a PR with neither labels nor exclusions: PROCEED"
+
+# An unreadable label set stops.
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[{"oid":"abc1234def5678","committedDate":"2026-09-28T10:00:00Z"}],"reviews":[]}' > "$fx/view.json"
+expect_stop "a view with no labels field: STOP, cannot tell what the PR carries" "labels"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":null}' > "$fx/view.json"
+expect_stop "labels that are not a list: STOP" "labels"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[{"id":"x"}]}' > "$fx/view.json"
+expect_stop "a label with no name: STOP" "label"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[]}' > "$fx/view.json"
+excl org/repo "acu.update" > "$fx/rulings.jsonl"
+expect_stop "labels read as an empty list but the view is otherwise unreadable: STOP, never a pass" "head commit"
+
+# An unreadable exclusion record stops, and stops before gh is asked anything.
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; { excl org/repo x; echo '{"kind":"exclusion","repo":"org/repo"'; } > "$fx/rulings.jsonl"
+expect_stop "a torn exclusion line: STOP, a record that might be an exclusion cannot be skipped" "rulings"
+[[ ! -f "$fx/view.calls" ]] && ok "the records are read before the PR view (gh was never called)" \
+  || bad "records before the view" "view.calls=$(cat "$fx/view.calls")"
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo 'not json at all' > "$fx/rulings.jsonl"
+expect_stop "a rulings line that is not JSON: STOP" "rulings"
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '["exclusion","org/repo"]' > "$fx/rulings.jsonl"
+expect_stop "a rulings line that is JSON but not an object: STOP" "rulings"
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '{"kind":"exclusion","label":"acu.update"}' > "$fx/rulings.jsonl"
+expect_stop "an exclusion with no repo: STOP, it cannot be matched" "repo"
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '{"kind":"exclusion","repo":"org/repo","label":""}' > "$fx/rulings.jsonl"
+expect_stop "an exclusion with an empty label: STOP, an empty label would match nothing or everything" "label"
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '{"kind":"exclusion","repo":42,"label":"x"}' > "$fx/rulings.jsonl"
+expect_stop "an exclusion whose repo is not a string: STOP" "repo"
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; rm -f "$fx/rulings.jsonl"; mkdir "$fx/rulings.jsonl"
+expect_stop "a rulings path that is a directory: STOP" "rulings"
+if [[ "$(id -u)" != 0 ]]; then
+  fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; excl org/repo x > "$fx/rulings.jsonl"; chmod 000 "$fx/rulings.jsonl"
+  expect_stop "a rulings file that exists and cannot be read: STOP" "rulings"
+  chmod 644 "$fx/rulings.jsonl"
+else
+  echo "SKIP an unreadable rulings file (running as root)"
+fi
 
 # --- usage --------------------------------------------------------------------------
 fixture

@@ -24,9 +24,23 @@
 # An empty check list after a successful read is an answer, not a failed read:
 # the repo reports no checks, and CLEAN already covers any required ones.
 #
-# Read-only: it runs gh pr view, gh pr list and gh api (check suites), and
-# never merges anything.
-# Operator merge exclusions (R-153) are not checked here.
+# Operator merge exclusions (R-153) are checked first. The exclusion records are
+# read before gh is asked anything, from rulings.jsonl (MERGE_GUARD_RULINGS,
+# default $DIRECTOR_STATE/rulings.jsonl, DIRECTOR_STATE default
+# ~/.director/state): one JSON object per line, and only the lines whose kind is
+# "exclusion" are read here. An exclusion is {"kind":"exclusion","repo":R,
+# "label":L}; R and L compare without case and may be shell patterns (acu.*). A
+# PR in a matching repo that carries a matching label STOPs, whatever its review
+# or check state, before any other check. A rulings file that exists and cannot
+# be read, a line that is not a JSON object, and an exclusion without a repo and
+# a label all STOP: a record that might be an exclusion is never skipped. So
+# does a missing rulings file, since a missing record cannot be told from none
+# declared; create it, and empty means none declared. The labels come from the same gh pr view; a view with no label list STOPs. Like the rest
+# of the guard this holds only for merges made through it; a merge made outside
+# it stays honor-only.
+#
+# Read-only: it runs gh pr view, gh pr list and gh api (check suites), reads the
+# rulings file, and never merges anything.
 set -uo pipefail
 
 [[ $# -eq 2 ]] || { sed -n '4,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
@@ -39,6 +53,25 @@ command -v jq >/dev/null || stop "jq not found; cannot read gh output"
 command -v gh >/dev/null || stop "gh not found"
 
 err="$(mktemp)"; trap 'rm -f "$err"' EXIT
+
+# Exclusion records (R-153), read before any gh call. $excl holds one
+# "repo<TAB>label" line per exclusion; $excl_note says what was read.
+rulings="${MERGE_GUARD_RULINGS:-${DIRECTOR_STATE:-$HOME/.director/state}/rulings.jsonl}"
+excl=""; excl_note="no exclusion records"
+[[ -e "$rulings" ]] || stop "no rulings file at $rulings; the guard cannot tell no exclusions declared from a record that is gone (R-153). Create the file (empty means none declared) and run it again"
+[[ -f "$rulings" ]] || stop "the rulings path $rulings exists and is not a file; cannot read the exclusion records (R-153)"
+records="$(cat -- "$rulings" 2>"$err")" || stop "the rulings file $rulings cannot be read: $(tr '\n' ' ' <"$err")"
+parsed="$(jq -R -c 'select(length > 0) | (fromjson? // error("a rulings line is not JSON: " + .))' <<<"$records" 2>"$err")" \
+  || stop "the rulings file $rulings has a line that is not JSON: $(head -c 200 "$err" | tr '\n' ' ')"
+excl="$(jq -r 'if type != "object" then error("a rulings line is not an object: " + tojson)
+    elif .kind != "exclusion" then empty
+    elif ((.repo | type) == "string" and (.repo | length) > 0 and (.label | type) == "string" and (.label | length) > 0)
+      then "\(.repo)\t\(.label)"
+    else error("an exclusion needs a repo and a label, both non-empty strings: " + tojson) end' <<<"$parsed" 2>"$err")" \
+  || stop "the rulings file $rulings has an unreadable exclusion: $(head -c 200 "$err" | tr '\n' ' ')"
+if [[ -n "$excl" ]]; then
+  excl_note="$(grep -c . <<<"$excl") exclusion record(s), none matching"
+fi
 
 # read_json LABEL ARGS...: run gh, leave parseable output in $json, or STOP.
 json=""
@@ -54,10 +87,31 @@ field() { jq -r --arg f "$1" 'if has($f) then .[$f] | tostring else "__missing__
 
 view() {
   read_json "gh pr view" pr view "$num" -R "$repo" \
-    --json state,isDraft,mergeStateStatus,headRefName,headRefOid,statusCheckRollup,author,commits,reviews
+    --json state,isDraft,mergeStateStatus,headRefName,headRefOid,statusCheckRollup,author,commits,reviews,labels
 }
 
 view
+
+# Exclusions first, before the state or any other check. The labels must be a
+# list of named labels; anything else is a view we cannot read.
+jq -e '(.labels | type == "array") and all(.labels[]; (.name | type == "string") and (.name | length) > 0)' >/dev/null <<<"$json" \
+  || stop "the view has no readable label list (labels missing, not a list, or a label with no name); cannot tell whether an operator exclusion applies (R-153)"
+if [[ -n "$excl" ]]; then
+  shopt -s nocasematch
+  hits=""
+  while IFS=$'\t' read -r xrepo xlabel; do
+    [[ -n "$xrepo" ]] || continue
+    # shellcheck disable=SC2053 # the right side is a pattern on purpose
+    [[ "$repo" == $xrepo ]] || continue
+    while IFS= read -r lname; do
+      # shellcheck disable=SC2053
+      [[ -n "$lname" && "$lname" == $xlabel ]] && hits="${hits:+$hits; }label $lname matches exclusion $xrepo $xlabel"
+    done < <(jq -r '.labels[].name' <<<"$json")
+  done <<<"$excl"
+  shopt -u nocasematch
+  [[ -z "$hits" ]] || stop "excluded by an operator merge exclusion (R-153): $hits; no seat merges this, whatever its review or check state"
+fi
+
 state="$(field state)"
 [[ "$state" == OPEN ]] || stop "state is $state, not OPEN; nothing to merge (terminal state read first, R-157)"
 
@@ -157,4 +211,4 @@ jq -e 'type == "array"' >/dev/null <<<"$json" || stop "the stacked-child read is
 children="$(jq -r '.[].number | "#\(.)"' <<<"$json" | tr '\n' ' ')"
 [[ -z "$children" ]] || stop "open PR(s) based on $head_ref: ${children% }; merge the base without --delete-branch first (stacked-pr-merge-order)"
 
-echo "PROCEED $repo#$num @$head_sha: OPEN, not draft, CLEAN, $nchecks check(s) passing, approved at head by $fresh after $anchor_note, no stacked child"
+echo "PROCEED $repo#$num @$head_sha: OPEN, not draft, CLEAN, $nchecks check(s) passing, approved at head by $fresh after $anchor_note, no stacked child, $excl_note"
