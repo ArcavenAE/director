@@ -58,7 +58,7 @@ SEAT_PASS_FILE="$MARVEL_BUS_STATE/director.pass"
 
 if [ ! -x "$DIRECTOR_MCP_BIN" ]; then
   echo "director-mcp-seat: no director-mcp at $DIRECTOR_MCP_BIN" >&2
-  echo "  build it from probe/nats-phase-0/director-mcp and install it there," >&2
+  echo "  build it from cmd/director-mcp and install it there," >&2
   echo "  or set DIRECTOR_MCP_BIN to its path." >&2
   exit 1
 fi

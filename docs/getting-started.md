@@ -83,7 +83,7 @@ A marvel-managed broker does this for you at start (see section 9).
 ## 3. Build the shim
 
 ```sh
-cd probe/nats-phase-0/director-mcp
+cd cmd/director-mcp
 go build -o director-mcp .
 go test ./...                      # 25 broker-free tests
 cd -
@@ -93,7 +93,7 @@ Check the preflight against the broker you just provisioned:
 
 ```sh
 DIRECTOR_AGENT_ID=probe DIRECTOR_TEAM=ops DIRECTOR_WORKSPACE=aae-orc \
-  probe/nats-phase-0/director-mcp/director-mcp --preflight
+  cmd/director-mcp/director-mcp --preflight
 # director-mcp preflight: ok
 ```
 
@@ -120,7 +120,7 @@ environment. Three values are the identity, and each must match
 line so the id belongs to exactly this process:
 
 ```sh
-SHIM="$PWD/probe/nats-phase-0/director-mcp/director-mcp"
+SHIM="$PWD/cmd/director-mcp/director-mcp"
 claude --strict-mcp-config --mcp-config "$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_TEAM":"ops","DIRECTOR_WORKSPACE":"aae-orc","NATS_URL":"nats://127.0.0.1:4222"}}}}' "$SHIM" reviewer-a)"
 ```
 
@@ -136,7 +136,7 @@ writes the server into Claude Code's local-scope config for this project:
 claude mcp add --scope local director-mcp \
   -e DIRECTOR_AGENT_ID=operator -e DIRECTOR_TEAM=ops -e DIRECTOR_WORKSPACE=aae-orc \
   -e NATS_URL=nats://127.0.0.1:4222 \
-  -- "$PWD/probe/nats-phase-0/director-mcp/director-mcp"
+  -- "$PWD/cmd/director-mcp/director-mcp"
 claude mcp list                    # director-mcp ... Connected
 ```
 

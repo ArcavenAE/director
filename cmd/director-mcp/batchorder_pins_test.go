@@ -33,7 +33,7 @@ func TestBatchResultCarriesBatchOrderNote(t *testing.T) {
 
 // The shim reference shows the same note in its batch example.
 func TestShimReferenceBatchExampleCarriesBatchOrderNote(t *testing.T) {
-	b, err := os.ReadFile("../../../docs/shim-reference.md")
+	b, err := os.ReadFile("../../docs/shim-reference.md")
 	if err != nil {
 		t.Fatal(err)
 	}

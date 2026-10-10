@@ -1,4 +1,4 @@
-module github.com/ArcavenAE/director/probe/director-mcp
+module github.com/ArcavenAE/director/cmd/director-mcp
 
 go 1.26.5
 

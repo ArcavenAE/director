@@ -114,7 +114,7 @@ CLUSTER_B="${CLUSTER_B:-mokuzai}"
 DOMAIN="${DOMAIN:-global}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHIM_SRC="$here/../nats-phase-0/director-mcp"
+SHIM_SRC="$here/../../cmd/director-mcp"
 
 for t in nats-server nats jq go; do
   command -v "$t" >/dev/null || { echo "$t not on PATH"; exit 2; }

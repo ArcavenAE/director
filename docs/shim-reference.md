@@ -1,6 +1,6 @@
 # director-mcp shim reference
 
-The shim is a Go program in `probe/nats-phase-0/director-mcp/`. A harness
+The shim is a Go program in `cmd/director-mcp/`. A harness
 launches one per session as an MCP stdio server; the shim connects to a NATS
 broker and exposes seven tools that carry director envelopes. It is the Phase
 0 probe cut, kept small on purpose: it proves the transport and the receive

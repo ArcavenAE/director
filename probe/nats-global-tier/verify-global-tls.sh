@@ -40,7 +40,7 @@ command -v jq >/dev/null || { echo "jq not on PATH"; exit 2; }
 command -v go >/dev/null || { echo "go not on PATH"; exit 2; }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHIM_SRC="$here/../nats-phase-0/director-mcp"
+SHIM_SRC="$here/../../cmd/director-mcp"
 HUB_NAME="${HUB_NAME:-global-hub}"
 HUB_LAN_IP="${HUB_LAN_IP:-$(ifconfig 2>/dev/null | awk '/inet 192\.168\./{print $2; exit}')}"
 [[ -n "$HUB_LAN_IP" ]] || HUB_LAN_IP=127.0.0.1
