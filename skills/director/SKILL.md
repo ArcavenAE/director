@@ -202,7 +202,7 @@ in session 1 every capture without a trigger silently failed to happen.
 | You could not act as the software would, so you quietly changed the expectation (dropped an ask you could not route, treated a dead session as done, narrowed a task the peer could not accept). The evidence is an absence, so name it or it is lost | `sim/notes/observations.md` (O-N), tagged COULD NOT DO IT |
 | A tool warning, quirk, or workaround fought you, BEFORE you apply the workaround | `sim/notes/friction.md` (FR-N) |
 | You leaned on a harness internal to get the job done | `sim/notes/shortcuts.md` |
-| You sent a message to a session | `sim/notes/relay-log.md` (R-N: to, verbatim text, outcome) |
+| You sent a message to a session | `sim/notes/relay-log.md` (R-N: to, verbatim text, outcome), written with `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-log append --to <address> --text-file - --outcome <outcome>`, which stamps the entry from the clock; never type the time |
 | A struggle has recurred enough to name a firm requirement | `sim/specs/` |
 | A session's output would otherwise be lost | `$DIRECTOR_STATE/board.md`, under Uncaptured |
 
