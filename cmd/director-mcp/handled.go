@@ -108,6 +108,9 @@ func loadThresholds(dir string) (map[string]time.Duration, error) {
 		return nil, fmt.Errorf("threshold table %s: %w", filepath.Join(dir, "thresholds.json"), err)
 	}
 	for k, v := range raw {
+		if _, known := defaultThresholds[k]; !known {
+			return nil, fmt.Errorf("threshold table: unknown key %q (a misspelled row would silently keep its default)", k)
+		}
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
 			return nil, fmt.Errorf("threshold table: %s = %q is not a positive duration", k, v)
@@ -518,22 +521,28 @@ func (h *handledState) rejected() []handledEvent {
 
 // mark records a disposition: append, fsync, and only then ack. A failed append
 // or fsync never acks; the error comes back and the message stays pending. A
-// message this session does not hold (a restart lost it) is recorded and left
-// for its redelivery to be acked by the drain.
+// message this session does not hold is refused and nothing is written: after a
+// restart the redelivery comes back to the new session, which then holds it.
 func (h *handledState) mark(ctx context.Context, tier, messageID, disposition, forwardID, reason string) (map[string]any, error) {
 	h.mu.Lock()
 	held := h.pending[messageID]
 	h.mu.Unlock()
-	if held != nil && held.tier != tier {
+	if held == nil {
+		// Only a message this session holds can be recorded. A mark on an id it
+		// has not been delivered would make that message vanish unread when it
+		// arrives, and would skip the reuse check (no hash was recorded). After
+		// a restart the redelivery comes back to the new session, which then
+		// holds it and can mark it.
+		return nil, fmt.Errorf("mark_handled: this session does not hold message_id %q (not delivered here and unrecorded, or already recorded); nothing was written. Read the message with wait_for_message, then mark it", messageID)
+	}
+	if held.tier != tier {
 		return nil, fmt.Errorf("mark_handled: %s was delivered on the %s tier, not %s", messageID, held.tier, tier)
 	}
 	ev := handledEvent{
 		At: h.now().UTC().Format(time.RFC3339), Tier: tier, Stream: h.streamOf(tier),
 		MessageID: messageID, Disposition: disposition, ForwardID: forwardID, Reason: reason,
 	}
-	if held != nil {
-		ev.Stream, ev.Seq, ev.Hash = held.stream, held.seq, held.hash
-	}
+	ev.Stream, ev.Seq, ev.Hash = held.stream, held.seq, held.hash
 	wrote, err := h.ledger.record(ev)
 	if err != nil {
 		return nil, err // nothing acked: the message stays pending
@@ -547,10 +556,6 @@ func (h *handledState) mark(ctx context.Context, tier, messageID, disposition, f
 	}
 	if !wrote {
 		out["status"] = "already_recorded"
-	}
-	if held == nil {
-		out["note"] = "this session does not hold that message; it is recorded, and the drain acks it if it is redelivered"
-		return out, nil
 	}
 	h.mu.Lock()
 	delete(h.pending, messageID)

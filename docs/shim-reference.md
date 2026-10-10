@@ -444,6 +444,16 @@ a `rejected` line keyed by tier, stream and sequence, and Terms the message, as
 the receive path does for undecodable mail. A held message would redeliver
 without bound, since `MaxDeliver` is -1. The original's record stands.
 
+`mark_handled` records only a message this session holds, delivered here and
+not yet recorded. For any other id it returns an error naming the id and writes
+nothing, so a stale or copied id cannot make a message vanish unread when it
+arrives. After a shim restart the redelivery comes back to the new session,
+which then holds it and can mark it.
+
+Rejected lines key by tier, stream and sequence. After a stream reset a second
+rejection at a position already in the ledger writes nothing new and is still
+Termed; it shows in the shim's log, not in `inbox_summary`.
+
 `inbox_summary` gains two sections in this mode: `read_unhandled`, messages
 delivered and not yet recorded, oldest first with their age (not counted in
 `summary` as waiting), and `rejected`, the rejected lines with their reason. An
@@ -452,7 +462,7 @@ unread message is still counted in `summary`.
 The ack wait for the mode is the `handled_ack_wait` row of the threshold
 table, 30 minutes unless `thresholds.json` in the state directory sets it
 (for example `{"handled_ack_wait": "45m"}`). A value that is not a positive
-duration stops the shim at start.
+duration, or a key the table does not have, stops the shim at start.
 
 ## Addresses and subjects
 
