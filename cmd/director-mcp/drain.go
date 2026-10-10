@@ -534,6 +534,8 @@ type summaryResult struct {
 	// ack floor, which the summary cannot tell apart from waiting ones.
 	MaybeConsumed map[string]int
 	GlobalWarn    string
+	// ReadUnhandled lists delivered messages not yet in the handled ledger.
+	ReadUnhandled []unhandledRow
 }
 
 // summarizeInbox reads what is waiting on both tiers and summarizes it. It

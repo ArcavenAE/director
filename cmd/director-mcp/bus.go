@@ -66,6 +66,8 @@ type Bus struct {
 	resumed   []string
 	// cueState reports the channel cue state for presence; nil when off.
 	cueState func() string
+	// handled is the handled-mode state (K4); nil keeps ack-on-read.
+	handled *handledState
 }
 
 // localConsumerInactive is the local durable's inactive threshold. The inbox
