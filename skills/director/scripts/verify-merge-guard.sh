@@ -79,6 +79,7 @@ suites() { # created_at... (none: no suite)
 fixture() {
   n=$((n+1)); fx="$root/fx$n"; mkdir -p "$fx"; echo '[]' > "$fx/list.json"
   suites 2026-09-28T10:00:05Z > "$fx/suites.json"
+  : > "$fx/rulings.jsonl" # a present, empty rulings file: no exclusions declared
 }
 guard() {
   env PATH="$root/bin:/usr/bin:/bin" GH_FIXTURE="$fx" \
@@ -137,7 +138,7 @@ fixture; : > "$fx/view.json"
 expect_stop "gh pr view returns nothing: STOP" "nothing"
 fixture; echo "<html>502</html>" > "$fx/view.json"
 expect_stop "gh pr view returns something that is not JSON: STOP" "not JSON"
-fixture; echo '{"state":"OPEN","mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[]}' > "$fx/view.json"
+fixture; echo '{"state":"OPEN","mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"labels":[]}' > "$fx/view.json"
 expect_stop "a view with no isDraft field: STOP" "isDraft"
 
 # --- terminal and draft states stop (R-157, R-148) --------------------------------
@@ -250,6 +251,12 @@ expect_proceed "a label that only starts like the excluded one is not a match: P
 fixture; LABELS="acu.update" view OPEN false CLEAN > "$fx/view.json"; excl org/repo-two "acu.update" > "$fx/rulings.jsonl"
 expect_proceed "a repo that only starts like the excluded one is not a match: PROCEED"
 
+fixture; LABELS="acu.update" view OPEN false CLEAN > "$fx/view.json"; excl org/rep "acu.update" > "$fx/rulings.jsonl"
+expect_proceed "an excluded repo name that is a prefix of this repo is not a match: PROCEED"
+
+fixture; LABELS="acu.update" view OPEN false CLEAN > "$fx/view.json"; excl org/repo "acu" > "$fx/rulings.jsonl"
+expect_proceed "an excluded label that is a prefix of this label is not a match: PROCEED"
+
 fixture; LABELS="acu.update,bug" view OPEN false CLEAN > "$fx/view.json"
 { echo; printf '{"kind":"ruling","text":"unrelated"}\n'; printf '{"kind":"grant","state":"draft"}\n'; excl other/repo "acu.update"; excl org/repo "release"; echo; } > "$fx/rulings.jsonl"
 expect_proceed "other record kinds, blank lines and non-matching exclusions are read and ignored: PROCEED"
@@ -257,9 +264,18 @@ grep -q "2 exclusion record(s), none matching" "$fx/out" && ok "the PROCEED line
   || bad "PROCEED reports the exclusions read" "$(cat "$fx/out")"
 
 fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"
-expect_proceed "no exclusion records at all (no rulings file): PROCEED as before"
-grep -q "no exclusion records" "$fx/out" && ok "with no rulings file the PROCEED line says there are no exclusion records" \
+expect_proceed "a present rulings file with no exclusions: PROCEED as before"
+grep -q "no exclusion records" "$fx/out" && ok "with no exclusions the PROCEED line says there are no exclusion records" \
   || bad "PROCEED says no records" "$(cat "$fx/out")"
+
+# A missing rulings file refuses: the guard cannot tell "none declared" from
+# "the record is gone", so it does not guess.
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; rm -f "$fx/rulings.jsonl"
+expect_stop "a missing rulings file: STOP, a missing record refuses" "rulings"
+[[ ! -f "$fx/view.calls" ]] && ok "the missing-record STOP comes before any gh call" \
+  || bad "missing record before the view" "view.calls=$(cat "$fx/view.calls")"
+grep -q "create" "$fx/out" && ok "the missing-record STOP says to create the file" \
+  || bad "missing-record STOP says what to do" "$(cat "$fx/out")"
 
 fixture; view OPEN false CLEAN > "$fx/view.json"; : > "$fx/rulings.jsonl"
 expect_proceed "an empty rulings file and a PR with neither labels nor exclusions: PROCEED"
@@ -290,7 +306,7 @@ fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '{"kind":"ex
 expect_stop "an exclusion with an empty label: STOP, an empty label would match nothing or everything" "label"
 fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '{"kind":"exclusion","repo":42,"label":"x"}' > "$fx/rulings.jsonl"
 expect_stop "an exclusion whose repo is not a string: STOP" "repo"
-fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; mkdir "$fx/rulings.jsonl"
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; rm -f "$fx/rulings.jsonl"; mkdir "$fx/rulings.jsonl"
 expect_stop "a rulings path that is a directory: STOP" "rulings"
 if [[ "$(id -u)" != 0 ]]; then
   fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; excl org/repo x > "$fx/rulings.jsonl"; chmod 000 "$fx/rulings.jsonl"
