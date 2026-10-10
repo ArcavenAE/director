@@ -290,6 +290,61 @@ together are the long pole. Before any
 ticket cites R-201 or R-202, those requirements are split so that each
 R-id owns one behavior. Both sit in #273 and are unmerged.
 
+### K4 in detail
+
+Rows 5 and 12 say only "one draining path with a handled ledger". The
+builder asked three questions before starting; this is the answer, read
+from section 4 ("Mail addressed to director is read in full on every tier,
+through one drain that acks after handling") and R-169. It adds no ruling:
+every point below sits inside Q0 and Q5 as ruled.
+
+**Who records a message as handled, and for whom.**
+- Only the session can know that it acted, so the session records it, with
+  a new `mark_handled` tool. It takes the tier, the stream sequence and a
+  disposition: `handled`, `forwarded` (with the forward's message id) or
+  `parked` (with a one-line reason).
+- The change is scoped to director's own drain, which is what section 4 and
+  R-169 cover. The shim gets a per-seat handled mode, on for director and off
+  by default. With it off, `wait_for_message` acks on read exactly as today
+  (`cmd/director-mcp/bus.go:1004`) and no other seat's drain changes. If the
+  build finds the mode cannot be kept per seat, that is a stop line: it goes
+  back to director as a decision, because it would change every draining
+  seat.
+- With the mode on, `wait_for_message` delivers without acking, so the
+  message stays ack-pending on the seat's durable. `mark_handled` appends the
+  disposition to the ledger first and acks second. A crash between the two
+  leaves the message pending, and it is redelivered; the drain then finds
+  the disposition already in the ledger, acks the message and does not
+  return it, so there is no second record.
+- Every disposition acks, `parked` included. A parked message stays visible
+  through the ledger, not through redelivery.
+- The ack wait for the handled mode is longer than the default 30 s (the
+  consumers set none today), so a read message is not redelivered while the
+  session is working on it. Its value is an entry in the operator-editable
+  threshold table (section 4, the automation boundary), not a constant.
+
+**Where the ledger lives.**
+- A per-seat append-only JSONL file beside the seat's other director state,
+  `handled.jsonl`, folded on read by the key tier, stream and sequence. Last
+  event per key wins. There is no cursor and no high-water mark, which is the
+  failure R-169 names.
+- It follows the `dws` store shape (append-only, folded on read, one flock
+  around fold, check and append) so that `dws reconcile` can read it. Design
+  D reuses local files on that fold; a JetStream KV would be a new central
+  store, which D ruled out.
+
+**Read but not handled, without redelivery storms.**
+- `inbox_summary` gets its own section for messages delivered to this
+  session and not yet in the ledger, oldest first, with their age. These
+  come from the ledger and the consumer's pending state, not from
+  redelivery.
+- An unread message is still reported as UNREAD (Q0). A read-unhandled one
+  past its window is a reconciler proposal ("an ask unacked past its
+  window", section 4), never an automatic action.
+- The waiting-on-PR marker lives on the ask row in `askledger.go`. A merged
+  PR clears the marker as a mirror event; the ask stays open until director
+  closes it (Q5 (c)).
+
 ## 7. Open
 
 - Which hosts run a merge guard. Exclusion records held on one host bind
