@@ -36,7 +36,7 @@ command and fix this file.
    that `marvel get sessions` prints. The accepted key is
    `<workspace>/<agent-name>`, plus `--cluster` for a remote cluster:
    - local: `marvel capture aae/arcaven-supervisor-g1-0`
-   - remote: `marvel inject aae/migrated-supervisor-g1-0 "text" -e --cluster skippy`
+   - remote: `marvel inject aae/migrated-supervisor-g1-0 "text" -e --cluster mokuzai`
    The bare `arcaven-supervisor-g1-0` errors `resource not found` and dumps
    usage, which reads like a syntax error but is a lookup miss. Tracked as
    marvel#337 / aae-orc-bd78j; until it is fixed the workspace prefix is
@@ -92,8 +92,8 @@ not consuming its inbox (O-28).
 
 `cluster name == hostname`. kinu = this laptop; mokuzai = skippy's host
 (hostname mokuzai); desk = desk.local. From kinu, reach skippy's fleet with
-`--cluster skippy`; ON skippy the same daemon is the local socket. Skippy's
-own marvel config names that cluster "mokuzai" (same fleet, two names).
+`--cluster mokuzai`; ON mokuzai the same daemon is the local socket. The
+cluster and the host are both named mokuzai.
 
 **After `marvel upgrade --daemon` on a leafed cluster, re-check the leaf.** The
 upgrade re-exec can silently drop the bus leaf ("bus.leaf.unenrolled ... running

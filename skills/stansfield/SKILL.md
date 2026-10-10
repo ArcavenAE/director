@@ -62,8 +62,8 @@ reach it; if that layer cannot, fall back to the next. Record the chosen layer.
    director skill's `reference/addressing.md`.
 2. **marvel capture / inject** — the key is `<workspace>/<agent-name>`, NOT
    the bare AGENT NAME `get sessions` prints, plus `--cluster` for a remote
-   cluster: `marvel capture aae/errand-supervisor-g1-0 --cluster skippy`,
-   `marvel inject aae/migrated-supervisor-g1-0 "text" -e --cluster skippy`
+   cluster: `marvel capture aae/errand-supervisor-g1-0 --cluster mokuzai`,
+   `marvel inject aae/migrated-supervisor-g1-0 "text" -e --cluster mokuzai`
    (`-e` submits; without it the text stages as an unsent draft). The bare
    name errors `resource not found` (marvel#337). Pane read + keystroke
    doorbell, executive privilege.
