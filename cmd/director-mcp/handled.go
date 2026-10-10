@@ -117,6 +117,7 @@ type handledEvent struct {
 	Stream      string `json:"stream"`
 	Seq         uint64 `json:"sequence"`
 	MessageID   string `json:"message_id,omitempty"`
+	Hash        string `json:"hash,omitempty"`
 	Disposition string `json:"disposition"`
 	ForwardID   string `json:"forward_id,omitempty"`
 	Reason      string `json:"reason,omitempty"`
@@ -124,10 +125,20 @@ type handledEvent struct {
 
 func (e handledEvent) key() handledKey { return handledKey{e.Tier, e.Stream, e.Seq} }
 
-type handledLedger struct{ path, lock string }
+// handledFold is the ledger folded: handled messages by message_id, and
+// rejected lines by position.
+type handledFold struct {
+	ByID     map[string]handledEvent
+	Rejected map[handledKey]handledEvent
+}
+
+type handledLedger struct {
+	path, lock string
+	syncFile   func(*os.File) error
+}
 
 func newHandledLedger(dir string) *handledLedger {
-	return &handledLedger{path: filepath.Join(dir, "handled.jsonl"), lock: filepath.Join(dir, "handled.lock")}
+	return &handledLedger{path: filepath.Join(dir, "handled.jsonl"), lock: filepath.Join(dir, "handled.lock"), syncFile: func(f *os.File) error { return f.Sync() }}
 }
 
 // foldLines folds the ledger bytes: last event per key wins. A line that is not
@@ -153,7 +164,11 @@ func foldLines(b []byte) map[handledKey]handledEvent {
 	return out
 }
 
-func (l *handledLedger) fold() (map[handledKey]handledEvent, error) {
+func (l *handledLedger) fold() (*handledFold, error) {
+	return &handledFold{ByID: map[string]handledEvent{}, Rejected: map[handledKey]handledEvent{}}, nil
+}
+
+func (l *handledLedger) foldV1() (map[handledKey]handledEvent, error) {
 	b, err := os.ReadFile(l.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[handledKey]handledEvent{}, nil
@@ -200,7 +215,7 @@ func (l *handledLedger) record(ev handledEvent) (bool, error) {
 		return false, err
 	}
 	defer unlock()
-	cur, err := l.fold()
+	cur, err := l.foldV1()
 	if err != nil {
 		return false, err
 	}
@@ -310,7 +325,7 @@ func (h *handledState) ack(ctx context.Context, m jetstream.Msg, tier string, se
 //   - Otherwise it is held ack-pending and returned.
 func (h *handledState) settle(ctx context.Context, m jetstream.Msg, tier string, e *Envelope, seq uint64) (bool, error) {
 	key := handledKey{tier, h.streamOf(tier), seq}
-	folded, ferr := h.ledger.fold()
+	folded, ferr := h.ledger.foldV1()
 	if ferr == nil {
 		if _, ok := folded[key]; ok {
 			h.mu.Lock()
@@ -403,6 +418,7 @@ func (h *handledState) mark(ctx context.Context, tier string, seq uint64, dispos
 
 // markArgs are the mark_handled tool arguments.
 type markArgs struct {
+	MessageID   string `json:"message_id"`
 	Tier        string `json:"tier"`
 	Seq         uint64 `json:"sequence"`
 	Disposition string `json:"disposition"`
@@ -417,9 +433,6 @@ func parseMarkArgs(raw json.RawMessage) (markArgs, error) {
 	}
 	if a.Tier != "local" && a.Tier != "global" {
 		return a, fmt.Errorf("mark_handled: tier must be local or global, got %q", a.Tier)
-	}
-	if a.Seq == 0 {
-		return a, errors.New("mark_handled: sequence is required (the sequence wait_for_message returned)")
 	}
 	switch a.Disposition {
 	case "handled":
@@ -446,7 +459,9 @@ func (b *Bus) streamFor(tier string) string {
 }
 
 // markHandled is the mark_handled tool's work.
-func (b *Bus) markHandled(ctx context.Context, tier string, seq uint64, disposition, detail string) (map[string]any, error) {
+func (b *Bus) markHandled(ctx context.Context, tier, messageID string, disposition, detail string) (map[string]any, error) {
+	var seq uint64
+	_ = messageID
 	if b.handled == nil {
 		return nil, errors.New("mark_handled: the handled mode is off for this session (DIRECTOR_HANDLED is not 1), so messages are acked on read and there is nothing to record")
 	}
@@ -472,7 +487,7 @@ func toolMarkHandled(ctx context.Context, bus *Bus, raw json.RawMessage) (any, e
 	if a.Disposition == "parked" {
 		detail = a.Reason
 	}
-	return bus.markHandled(ctx, a.Tier, a.Seq, a.Disposition, detail)
+	return bus.markHandled(ctx, a.Tier, a.MessageID, a.Disposition, detail)
 }
 
 // toolCatalogHandled is toolCatalog plus the handled mode's changes: the
@@ -507,3 +522,7 @@ func toolCatalogHandled(gcfg *globalConfig, cueOn, handledOn bool) []toolDef {
 		},
 	})
 }
+
+func envelopeHash(data []byte) string { return "" }
+
+func (h *handledState) simulateCrash() {}

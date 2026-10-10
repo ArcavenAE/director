@@ -552,6 +552,9 @@ type summaryResult struct {
 	GlobalWarn    string
 	// ReadUnhandled lists delivered messages not yet in the handled ledger.
 	ReadUnhandled []unhandledRow
+	// Rejected are the ledger's rejected lines: envelopes the handled mode
+	// could not key or trusted no further, reported and Termed.
+	Rejected []handledEvent
 }
 
 // summarizeInbox reads what is waiting on both tiers and summarizes it. It
