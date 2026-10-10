@@ -345,10 +345,12 @@ every point below sits inside Q0 and Q5 as ruled.
   sequence, counted by `inbox_summary`) and then Terms it, as the receive
   path already does for undecodable mail (`bus.go:997`, `global.go:650`).
   Holding it would redeliver it without bound, since `MaxDeliver` is -1.
-  Each event also records a hash of the envelope. A ledgered `message_id`
-  that arrives with a different hash is a reuse by a sender outside the
-  shim; the drain reports it and returns it to the session rather than
-  acking it as handled. There is no cursor and no high-water mark, which is the
+  Each event also records a hash of the envelope bytes as stored, not the
+  headers (a migration may add a header, as the probe cutover does, and that
+  is not a reuse). A ledgered `message_id` that arrives with a different hash
+  is a reuse by a sender outside the shim; the drain treats it as the no-id
+  case: a `rejected` line keyed by tier, stream and sequence, a report, then
+  Term. The original's disposition is left as recorded. There is no cursor and no high-water mark, which is the
   failure R-169 names.
 - It follows the `dws` store shape (append-only, folded on read, one flock
   around fold, check and append) so that `dws reconcile` can read it. Design
