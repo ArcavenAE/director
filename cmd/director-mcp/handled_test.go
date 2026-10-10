@@ -221,6 +221,12 @@ func TestHandledAckWaitComesFromTheThresholdTable(t *testing.T) {
 	if _, err := handledFromEnv(); err == nil {
 		t.Error("a bad table value must be loud, not silently defaulted")
 	}
+	if err := os.WriteFile(filepath.Join(dir, "thresholds.json"), []byte(`{"handled_ack_wiat":"5m"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handledFromEnv(); err == nil || !strings.Contains(err.Error(), "handled_ack_wiat") {
+		t.Errorf("a misspelled key must be refused by name, not silently ignored: %v", err)
+	}
 }
 
 func TestMarkHandledToolIsOfferedOnlyWithTheModeOn(t *testing.T) {
@@ -615,19 +621,122 @@ func TestBrokerSummaryListsReadUnhandledOldestFirstApartFromUnread(t *testing.T)
 	}
 }
 
-func TestBrokerMarkingAMessageThisSessionNeverHeldStillRecords(t *testing.T) {
+func TestBrokerMarkOfAnIdThisSessionDoesNotHoldIsRefusedAndWritesNothing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	bus, _, _, dir := handledBus(t, ctx, true, "")
-	out, err := bus.markHandled(ctx, "local", "ghost", "handled", "")
+	_, err := bus.markHandled(ctx, "local", "ghost", "handled", "")
+	if err == nil || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("a mark for an id the session does not hold must be refused with an error naming it, got %v", err)
+	}
+	if n := len(ledgerLines(t, dir)); n != 0 {
+		t.Errorf("ledger has %d lines, want 0: a refused mark writes nothing", n)
+	}
+}
+
+func TestBrokerMessageMarkedBeforeDeliveryIsStillReturnedWhenItArrives(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	bus, js, _, _ := handledBus(t, ctx, true, "")
+	// A stale or copied id, marked before its message exists.
+	if _, err := bus.markHandled(ctx, "local", "u1", "handled", ""); err == nil {
+		t.Fatal("the mark must be refused")
+	}
+	pubEnv(t, ctx, js, mineSubject, "u1", "REQUEST", "the real message")
+	res, err := bus.receiveBatch(ctx, 2*time.Second, 5)
+	if err != nil || len(res.Items) != 1 || res.Items[0].Env.MessageID != "u1" {
+		t.Fatalf("batch = %v, %v; u1 must be returned, not acked unread", ids(res.Items), err)
+	}
+	if n := ackPending(t, ctx, bus.consumer); n != 1 {
+		t.Errorf("ack-pending = %d, want 1: delivered, not acked", n)
+	}
+}
+
+func TestBrokerReuseAfterARefusedUnheldMarkIsStillRejected(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	bus, js, _, dir := handledBus(t, ctx, true, "")
+	if _, err := bus.markHandled(ctx, "local", "u2", "handled", ""); err == nil {
+		t.Fatal("the unheld mark must be refused")
+	}
+	pubEnv(t, ctx, js, mineSubject, "u2", "REQUEST", "original bytes")
+	if res, _ := bus.receiveTiered(ctx, 2*time.Second); res.Env == nil || res.Env.MessageID != "u2" {
+		t.Fatalf("the original must be returned: %+v", res)
+	}
+	if _, err := bus.markHandled(ctx, "local", "u2", "handled", ""); err != nil {
+		t.Fatal(err)
+	}
+	pubEnv(t, ctx, js, mineSubject, "u2", "REQUEST", "other bytes under the same id")
+	pubEnv(t, ctx, js, mineSubject, "after", "INFORM", "next")
+	res, err := bus.receiveBatch(ctx, 2*time.Second, 5)
+	if err != nil || len(res.Items) != 1 || res.Items[0].Env.MessageID != "after" {
+		t.Fatalf("batch = %v, %v; the reuse must be rejected, not acked as handled", ids(res.Items), err)
+	}
+	if f, _ := newHandledLedger(dir).fold(); len(f.Rejected) != 1 {
+		t.Errorf("rejected = %v, want the reuse", f.Rejected)
+	}
+}
+
+func TestBrokerFailedRejectedLineWriteNeverTermsAndTheMessageStaysPending(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	bus, js, _, dir := handledBus(t, ctx, true, `{"handled_ack_wait":"1s"}`)
+	e := testEnv("", "outsider", "INFORM", "no id here")
+	b, _ := json.Marshal(e)
+	if _, err := js.Publish(ctx, mineSubject, b); err != nil {
+		t.Fatal(err)
+	}
+	bus.handled.ledger.syncFile = func(*os.File) error { return errors.New("disk full") }
+	_, _ = bus.receiveBatch(ctx, 1*time.Second, 5) // the rejection fails; the error rides beside the result
+	if n := ackPending(t, ctx, bus.consumer); n != 1 {
+		t.Fatalf("ack-pending = %d, want 1: a rejected line that was not written must not be Termed", n)
+	}
+	// With the disk back, the redelivery is rejected properly and Termed.
+	bus.handled.ledger.syncFile = func(f *os.File) error { return f.Sync() }
+	time.Sleep(1500 * time.Millisecond)
+	if _, err := bus.receiveBatch(ctx, 1*time.Second, 5); err != nil {
+		t.Fatal(err)
+	}
+	if n := ackPending(t, ctx, bus.consumer); n != 0 {
+		t.Errorf("ack-pending = %d, want 0 after the redelivery was rejected and Termed", n)
+	}
+	if f, _ := newHandledLedger(dir).fold(); len(f.Rejected) != 1 {
+		t.Errorf("rejected = %v, want 1", f.Rejected)
+	}
+}
+
+func TestBrokerAckWaitIsSetOnBothTiersFromTheTable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	bus, _, _, _ := handledBus(t, ctx, true, `{"handled_ack_wait":"7m"}`)
+	g, err := bus.globalReady(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out["acked"] != false {
-		t.Errorf("result = %v; nothing was pending, so acked must be false and say so", out)
+	for name, c := range map[string]jetstream.Consumer{"local": bus.consumer, "global": g.consumer} {
+		info, err := c.Info(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Config.AckWait != 7*time.Minute {
+			t.Errorf("%s ack wait = %v, want 7m from the table", name, info.Config.AckWait)
+		}
 	}
-	if f, _ := newHandledLedger(dir).fold(); len(f.ByID) != 1 {
-		t.Errorf("ledger = %v, want the one entry", f.ByID)
+}
+
+func TestBrokerAckWaitIsLeftAloneWithTheModeOff(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	bus, _, _, _ := handledBus(t, ctx, false, `{"handled_ack_wait":"7m"}`)
+	g, err := bus.globalReady(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]jetstream.Consumer{"local": bus.consumer, "global": g.consumer} {
+		info, _ := c.Info(ctx)
+		if info.Config.AckWait == 7*time.Minute {
+			t.Errorf("%s ack wait was set with the mode off", name)
+		}
 	}
 }
 
