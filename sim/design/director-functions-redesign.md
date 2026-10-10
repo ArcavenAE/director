@@ -1,6 +1,8 @@
 # Director functions, redesigned
 
-Status: design for review, 2026-10-09. Owner: the architect role. Docs only.
+Status: design for review, 2026-10-09; the operator ruled every section 5
+decision on 2026-10-10 (section 5, "Operator rulings"). Owner: the architect
+role. Docs only.
 Nothing is filed until the operator has seen this file. The common tickets
 (section 6) need no design pick; everything else waits for the pick. The
 party ratifies nothing: every recommendation below is the panel's, for the
@@ -226,11 +228,39 @@ it then. Nothing executes on silence. Dissent is named by seat.
 A further ruling is optional. The board's prose check (V4) carried 8-1;
 practitioner preferred no check on prose.
 
+### Operator rulings (2026-10-10)
+
+Relayed by director from the operator's decision desk, and recorded by the
+architect role that chaired the panel. Each ruling quotes the option the
+operator chose, as it was written on the card.
+
+| # | ruling | the chosen option, as written |
+|---|---|---|
+| Q0 | **D**, as recommended | "The mix (9 of 9 seats): keep today's separate stores (desk, board, ledger) with a reconciler that only proposes changes, built on the existing workstream ledger; add a check that every open ask is shown to you somewhere; tag each record as either a copy of outside state or a proposal; and treat any message nobody has read as a problem to report." |
+| Q1 | **(b)**, the default list, as recommended | "Use that list." |
+| Q2 | **none**, against the recommendation | "No cap; show everything." |
+| Q3 | **one line per use**, as recommended | "Yes, one line per use." |
+| Q4 | **(a)**, as recommended | "Yes, the Desk stays the store." |
+| Q5 | **(c)**, as recommended | "The ledger's 'waiting on PR' marker clears by itself, but your ask stays open until director checks the result and closes it." |
+| Q6 | the operator's numbers | "Ring after 10 minutes idle with mail; at most 3 rings per seat per hour, then report the seat as stuck." |
+| Q7 | **twice daily**, as recommended | "Twice a day." |
+| X7 | **(a)**, as recommended | "Yes, director drafts and you confirm each one on a card." |
+
+Consequences for section 6:
+- K8 to K20 no longer wait on Q0. Their other edges stand.
+- Q2's ruling removes the cap: the presentation check (K12) shows every open
+  ask, and no N is configured.
+- K14 takes Q6's numbers: a 10-minute idle-with-mail window, three rings per
+  seat per hour, then a stuck report.
+- The rulings are design inputs. Nothing is filed or built from them until
+  the tickets are filed in their own step.
+
 ## 6. Candidate tickets (not filed)
 
 Flat, with edges. R-200 to R-204 in the serves column are proposed
-(#273). "Common" lands under any design and needs no pick. Even
-so, nothing is filed before the operator has seen this file.
+(#273). "Common" lands under any design and needs no pick. The Q and X
+entries in the "needs first" column are ruled (section 5); filing is its own
+step.
 
 | id | title | needs first | serves | common |
 |---|---|---|---|---|
