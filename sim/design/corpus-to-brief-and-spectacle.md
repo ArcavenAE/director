@@ -51,8 +51,22 @@ director has 204 numbered requirements, 29 candidate designs, 27 findings and a 
   - 1 has no Earned-by line.
 
   Git history anchors 3 of the 4 session-relative ones to a dated harvest commit. Read alone, a 20-entry sample only rejects the probe's "2 or fewer notes-only" line; it cannot estimate a rate.
-- **The register cites 7 of the 29 designs, and none of the newest.** It has no entry dated 2026-10-10. The nine rulings of that day are in the ruling table of `director-functions-redesign.md` (lines 239 to 247), which merged in #276.
-- **Some of director is built.** 15 test files under `cmd/director-mcp` name register ids. Whether their R-1, R-3 and R-6 mean the register's R-01, R-03 and R-06 is unchecked. The supervisor application is not built.
+- **The register cites 8 of the 28 designs, and none of the newest.** At 1c6ec09, `sim/design/` holds 29 files. One is `README.md`, the directory's index, which is not counted as a design. One design, `identity-default.md`, is cited by its bare file name (`sim/requirements.md:1794`). The count comes from:
+
+  ```sh
+  git show 1c6ec09:sim/requirements.md > req.md
+  git ls-tree --name-only 1c6ec09 sim/design/ | sed 's#sim/design/##' | grep -v '^README.md$' \
+    | while read -r f; do grep -qF -- "$f" req.md && echo "$f"; done | wc -l   # 8
+  ```
+
+  The register has no entry dated 2026-10-10. The nine rulings of that day are in the ruling table of `director-functions-redesign.md` (lines 239 to 247), which merged in #276. None of the 8 cited designs is that one.
+- **Some of director is built.** 12 test files under `cmd/director-mcp` name register ids: R-50, R-76, R-78, R-88, R-92 and R-94. A broader pattern finds 15 files, but 3 of them match only `LR-3` and `LR-6`, a separate id family that is not in the register. The count comes from:
+
+  ```sh
+  git grep -l -E '(^|[^A-Za-z])R-[0-9]{1,3}' 1c6ec09 -- 'cmd/director-mcp/*_test.go' | wc -l   # 12
+  ```
+
+  The supervisor application is not built.
 
 ## 4. Part 1: analyze and organize the corpus
 
@@ -151,7 +165,14 @@ The vsdd factory takes the BRS as its first-level input only after the operator 
 5. **The gate before `reverse-brief`:**
    - the probe says go;
    - the gather fix is merged;
-   - one recorded command on gather's output at the pinned commit shows exactly 204 requirement rows, none repeated, and one row per tracked file under `sim/design/`, `sim/specs/` and `docs/`. 6-0.
+   - one recorded command on gather's output at the pinned commit shows exactly 204 requirement rows, none repeated, and one row per tracked file under `sim/design/`, `sim/specs/` and `docs/`. 6-0. `README.md` files are indexed as doc rows, not design rows. Against the fixed gather's index, with `PIN` the pinned commit:
+
+     ```sh
+     grep -oE 'REQ:R-[0-9]+' evidence-index.md | sort | uniq -d | wc -l   # must be 0
+     grep -oE 'REQ:R-[0-9]+' evidence-index.md | sort -u | wc -l          # must be 204
+     git ls-tree --name-only "$PIN" sim/design/ sim/specs/ docs/ \
+       | while read -r f; do grep -qF -- "$f" evidence-index.md || echo "missing $f"; done   # must print nothing
+     ```
 
    All three are structural or a written finding. None is a health metric.
 6. **Discovery** with the operator, either side of the gate, done before `brs-review.md` is filled.
