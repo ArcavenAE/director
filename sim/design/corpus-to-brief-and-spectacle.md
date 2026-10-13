@@ -7,7 +7,7 @@ Status: a design party's recommendation, 2026-10-13. Six seats; every item was p
 
 ## 1. Why
 
-director has 204 numbered requirements, 29 candidate designs, 27 findings and a simulation record, but no product brief and no PRD. The tools to draw a brief from a project's own records already exist in spectacle and have run once, on marvel (marvel#526). Run as built on director, they would cite duplicate requirement rows and could not see the designs where the operator's newest rulings live. This doc says what to fix first, in what order, and how to keep a generated brief faithful to its sources.
+director has 204 numbered requirements, 28 candidate designs, 27 findings and a simulation record, but no product brief and no PRD. The tools to draw a brief from a project's own records already exist in spectacle and have run once, on marvel (marvel#526). Run as built on director, they would cite duplicate requirement rows and could not see the designs where the operator's newest rulings live. This doc says what to fix first, in what order, and how to keep a generated brief faithful to its sources.
 
 ## 2. Terms
 
@@ -55,7 +55,7 @@ director has 204 numbered requirements, 29 candidate designs, 27 findings and a 
 
   ```sh
   git show 1c6ec09:sim/requirements.md > req.md
-  git ls-tree --name-only 1c6ec09 sim/design/ | sed 's#sim/design/##' | grep -v '^README.md$' \
+  git ls-tree -r --name-only 1c6ec09 sim/design/ | sed 's#sim/design/##' | grep -v '^README.md$' \
     | while read -r f; do grep -qF -- "$f" req.md && echo "$f"; done | wc -l   # 8
   ```
 
@@ -170,7 +170,7 @@ The vsdd factory takes the BRS as its first-level input only after the operator 
      ```sh
      grep -oE 'REQ:R-[0-9]+' evidence-index.md | sort | uniq -d | wc -l   # must be 0
      grep -oE 'REQ:R-[0-9]+' evidence-index.md | sort -u | wc -l          # must be 204
-     git ls-tree --name-only "$PIN" sim/design/ sim/specs/ docs/ \
+     git ls-tree -r --name-only "$PIN" sim/design/ sim/specs/ docs/ \
        | while read -r f; do grep -qF -- "$f" evidence-index.md || echo "missing $f"; done   # must print nothing
      ```
 
