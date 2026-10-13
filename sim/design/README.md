@@ -82,3 +82,10 @@ a probe before it hardens.
   Desk as the store of asks). The decisions for the operator, with votes
   and dissent; R-153 has no enforcing code today; 20 candidate tickets, not
   filed. Candidate DFR-A to DFR-C.
+- `corpus-to-brief-and-spectacle.md` (2026-10-13, a party's recommendation):
+  how to organize director's corpus (a parser-written register projection, an
+  evidence-locus census, a public evidence ledger, indexed designs with class
+  ceilings), bootstrap it into a BRS and StRS through spectacle's existing
+  chain with bmad driving the process, and map it onto spectacle's document
+  types. The gather fix and a structural gate come first; a support audit with
+  a positive control keeps the brief faithful. Votes and dissent recorded.
