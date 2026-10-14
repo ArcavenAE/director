@@ -12,6 +12,21 @@ It captures with colour codes (-e), because a plain capture shows a generated
 prompt suggestion exactly like typed text. In a capture, typed text follows the
 prompt mark in the default colour; a suggestion is wrapped in the dim code.
 
+The composer is the region from the last line that BEGINS with the prompt mark
+down to the next rule line (a line of box-drawing dashes) or the menu title,
+whichever comes first, so a draft that wraps onto a second line counts, and a
+status line below the rule, or a line that merely ends in the mark, does not.
+Any non-dim text in the region is HAS-TEXT. Colour codes are parsed as units
+(38, 48 and 58 take their `;5;n`, `;2;r;g;b` or `:` forms whole), so a colour
+parameter is never read as the dim attribute; only SGR 2 sets dim, and 0, 22
+and 39 clear it (39 is not strictly SGR for dim, but it errs toward refusing).
+
+The menu is recognised only as its own block: the title line followed within a
+few lines by an option line "1. Yes" and a later "2. Not now", and only below
+the composer. The phrase in the transcript, or a quoted copy of the menu above
+the composer, is not the menu. A composer holding typed text is HAS-TEXT even
+when a menu is showing, and nothing is sent.
+
 Verdict on stdout, one word, and the exit code:
 
   EMPTY      0  nothing after the prompt mark: safe to inject
@@ -23,16 +38,21 @@ Verdict on stdout, one word, and the exit code:
 With --handle-menu and --pane, a MENU verdict sends the single key `2` (the
 "2. Not now" entry; never Enter, never "Don't show again"), recaptures, and
 reports the verdict of the recapture. If the menu is still there it stays MENU
-(exit 2). Nothing else is ever sent. Without --handle-menu the script only
-reads.
+(exit 2). Nothing else is ever sent, and nothing is sent on any other verdict.
+A capture or a send that fails exits nonzero with no verdict on stdout.
+Without --handle-menu the script only reads.
 
 TMUX_BIN overrides the tmux binary (the tests use a fake).
 """
 import argparse, os, re, subprocess, sys
 
-PROMPT = "❯"  # the prompt mark
-ANSI = re.compile(r"\x1b\[([0-9;]*)m")
-MENU = re.compile(r"Teach auto mode", re.I)
+PROMPT = "\u276f"  # the prompt mark
+ANSI = re.compile(r"\x1b\[([0-9;:]*)m")
+RULE = re.compile(r"^\s*[\u2500-\u257f-]{5,}\s*$")
+MENU_TITLE = re.compile(r"Teach auto mode", re.I)
+OPT_YES = re.compile(r"^\s*(?:[\u276f>]\s*)?1\.\s+Yes\b")
+OPT_NOT_NOW = re.compile(r"^\s*(?:[\u276f>]\s*)?2\.\s+Not now\b")
+MENU_SPAN = 6  # lines after the title within which both options must appear
 
 
 def tmux(*a):
@@ -46,48 +66,83 @@ def capture(pane, extra):
     return r.stdout
 
 
-def after_prompt(line):
-    """The text after the last prompt mark on this line, split into (dim, plain) runs."""
-    i = line.rfind(PROMPT)
-    if i < 0:
-        return None
-    rest = line[i + 1:]
-    dim = False
-    plain, dimmed = "", ""
-    pos = 0
-    for m in ANSI.finditer(rest):
-        seg = rest[pos:m.start()]
-        if dim:
-            dimmed += seg
-        else:
-            plain += seg
-        for code in (m.group(1) or "0").split(";"):
-            if code in ("2",):
-                dim = True
-            elif code in ("0", "22", "39", ""):
-                dim = False
+def runs(text):
+    """Split a line into (dim, text) runs. Only SGR 2 sets dim; 0, 22 and 39 clear it.
+    Extended colours (38, 48, 58) are consumed as units so their sub-parameters
+    (the 2 in 38;2;r;g;b, the 5 in 38;5;n) are never read as attributes."""
+    out, dim, pos = [], False, 0
+    for m in ANSI.finditer(text):
+        if m.start() > pos:
+            out.append((dim, text[pos:m.start()]))
         pos = m.end()
-    seg = rest[pos:]
-    if dim:
-        dimmed += seg
-    else:
-        plain += seg
-    return dimmed, plain
+        params = (m.group(1) or "0").split(";")
+        i = 0
+        while i < len(params):
+            p = params[i]
+            if ":" in p:
+                i += 1  # a colon form is one unit
+                continue
+            if p in ("38", "48", "58"):
+                kind = params[i + 1] if i + 1 < len(params) else ""
+                i += 3 if kind == "5" else 5 if kind == "2" else 1
+                continue
+            if p == "2":
+                dim = True
+            elif p in ("0", "", "22", "39"):
+                dim = False
+            i += 1
+    if pos < len(text):
+        out.append((dim, text[pos:]))
+    return out
+
+
+def plain(line):
+    return ANSI.sub("", line)
+
+
+def blank(s):
+    return not s.replace("\u00a0", " ").strip()
+
+
+def menu_at(lines, start):
+    """Index of a menu title that is its own block (both options follow), at or after start."""
+    for i in range(start, len(lines)):
+        if MENU_TITLE.search(plain(lines[i])):
+            tail = [plain(l) for l in lines[i + 1:i + 1 + MENU_SPAN]]
+            y = next((k for k, l in enumerate(tail) if OPT_YES.match(l)), None)
+            n = next((k for k, l in enumerate(tail) if OPT_NOT_NOW.match(l)), None)
+            if y is not None and n is not None and y < n:
+                return i
+    return None
 
 
 def verdict(text):
-    plain_lines = [ANSI.sub("", l) for l in text.splitlines()]
-    if any(MENU.search(l) for l in plain_lines):
-        return "MENU"
-    for line in reversed(text.splitlines()):
-        if PROMPT in line:
-            dimmed, plain = after_prompt(line)
-            if plain.replace(" ", " ").strip():
+    lines = text.splitlines()
+    mark = next((i for i in range(len(lines) - 1, -1, -1)
+                 if plain(lines[i]).lstrip().startswith(PROMPT)), None)
+    if mark is None:
+        return "NO-PROMPT"
+    menu = menu_at(lines, mark + 1)
+    end = menu if menu is not None else len(lines)
+    for i in range(mark + 1, end):
+        if RULE.match(plain(lines[i])):
+            end = i
+            break
+    state, seen = "EMPTY", False
+    for i in range(mark, end):
+        for dim, seg in runs(lines[i]):
+            if not seen:
+                if PROMPT not in seg:
+                    continue  # colour-only runs and indentation before the mark
+                seg, seen = seg.split(PROMPT, 1)[1], True
+            if blank(seg):
+                continue
+            if not dim:
                 return "HAS-TEXT"
-            if dimmed.replace(" ", " ").strip():
-                return "SUGGESTION"
-            return "EMPTY"
-    return "NO-PROMPT"
+            state = "SUGGESTION"
+    if menu is not None:
+        return "MENU"
+    return state
 
 
 CODES = {"EMPTY": 0, "SUGGESTION": 0, "HAS-TEXT": 1, "MENU": 2, "NO-PROMPT": 3}

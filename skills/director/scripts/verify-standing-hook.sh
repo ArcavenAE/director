@@ -60,5 +60,11 @@ cp "$root/link" "$root/link.bytes"
 sleep 1; "$H" beat
 cmp -s "$root/link" "$root/link.bytes" && ok "beat replaces by rename (the old inode keeps the old bytes)" || bad "beat replaces by rename"
 
+# --- the default state path, with DIRECTOR_STATE unset --------------------------------
+( unset DIRECTOR_STATE; "$H" beat )
+[[ -s "$HOME/.director/state/last-drain" ]] && ok "with DIRECTOR_STATE unset the heartbeat lands under \$HOME/.director/state" || bad "the default state path"
+first="$(unset DIRECTOR_STATE; "$H" | sed -n 1p)"
+[[ "$first" == "drain age: 0m since the last drain ("* ]] && ok "and the hook reads it back from there" || bad "the hook reads the default path" "$first"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
