@@ -242,6 +242,15 @@ MIS="$(mg rev-parse HEAD)"
 mg switch -q main; mg switch -q -c norecipe
 mg rm -q scripts/build-director-mcp; mg commit -q -m NoRecipe
 NOR="$(mg rev-parse HEAD)"
+# A recipe whose output is executable but cannot be run (a missing interpreter).
+mg switch -q main; mg switch -q -c badexec
+cat > "$msrc/scripts/build-director-mcp" <<'STUB'
+#!/bin/bash
+while [[ $# -gt 0 ]]; do case "$1" in --out) out="$2"; shift 2 ;; *) shift ;; esac; done
+printf '#!/nonexistent/interpreter\n' > "$out"; chmod +x "$out"
+STUB
+mg commit -q -am BadExec
+BAD="$(mg rev-parse HEAD)"
 mg switch -q main
 BLOB="$(mg rev-parse "$M1:cmd/director-mcp/go.mod")"
 
@@ -312,6 +321,9 @@ done
 dm director-mcp --ref "$BLOB" || { grep -q "cannot resolve ref" "$out/stderr" && ok "a blob id is refused as not a commit" || bad "blob refusal text" "$(cat "$out/stderr")"; }
 dm director-mcp --ref "$NOR" || { grep -q "no scripts/build-director-mcp" "$out/stderr" && ok "a commit with no recipe is refused by name" || bad "no recipe text" "$(cat "$out/stderr")"; }
 dm director-mcp --ref "$MIS" || { grep -q "does not report rev $MIS" "$out/stderr" && ok "a build that does not match the ref is refused by name" || bad "mismatch text" "$(cat "$out/stderr")"; }
+dm director-mcp --ref "$BAD" && bad "a built file that cannot run was accepted" \
+  || { grep -q "exec .*director-mcp: " "$out/stderr" && ok "a built file that cannot be executed is refused with the exec error" || bad "exec failure text" "$(cat "$out/stderr")"; }
+[[ "$(mlink)" == "$live" ]] && ok "an unrunnable build leaves the old binary in place" || bad "link moved for the unrunnable build" "$(mlink)"
 [[ ! -d "$mhome/lib/director-mcp/$MIS" && ! -d "$mhome/lib/director-mcp/$NOR" ]] \
   && ok "a refused build leaves no installed directory" || bad "refused build left a directory"
 ls "$mhome/lib/director-mcp" | grep -q '^\.stage\.' && bad "a stage directory was left behind" || ok "no stage directory is left behind"
