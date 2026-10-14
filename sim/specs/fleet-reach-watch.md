@@ -49,26 +49,38 @@ Health is never read from ping, a name lookup or a side endpoint (R-208).
   clock is keyed by link id, never by remote address, so a new connection from
   the same address does not inherit the old one's stall clock.
 - **First-failure class:** the error class at the first failed call of an
-  outage, held until the next success: no route, host down, refused, handshake,
-  or timeout. The class decays during an outage (host down becomes a bare
+  outage, held until the next success: no route, network unreachable, host
+  down, refused, handshake, or timeout. The class decays during an outage (host down becomes a bare
   timeout when the neighbour cache expires), so only the first one is kept.
-- **Last good address:** per peer, the watching host's own address the last
-  time that peer answered.
+- **Last good addresses:** per peer and per path (marvel, bus), two values
+  recorded at the last success on that path: the watching host's own address,
+  and the address the peer was reached at.
+- **Peer's current address:** the address the peer publishes for itself when
+  it does (director#289), else the remote address of its bus link, matched by
+  server key, else unknown.
 
 ## Verdicts
 
-One per peer, every round:
+One per peer, every round. Rows are evaluated top to bottom and the first
+match wins, so the most specific cause is reported before any general one.
+Each row's condition includes "no row above matched", which makes the rows
+disjoint.
 
-| verdict | condition |
-|---|---|
-| `ok` | the marvel call succeeded |
-| `this-host-moved-from-<addr>` | the call failed and the watching host's address differs from the last good address |
-| `path-down` | the call failed, no address changed on either side, and the first class is no route or network unreachable |
-| `moved-or-marvel-down` | the call failed and the peer's bus link, matched by server key, is still up |
-| `asleep` | the peer declared a sleep that covers now |
-| `trust-store-damaged` | the first class is a handshake failure that names the local host-key file |
-| `not-listening` | the peer's daemon publishes that it takes no remote calls |
-| `down-or-asleep` | nothing above applies and the bus link is also down |
+| order | verdict | condition |
+|---|---|---|
+| 1 | `ok` | the marvel call succeeded |
+| 2 | `trust-store-damaged` | the first class is a handshake failure that names the local host-key file |
+| 3 | `not-listening` | the peer's daemon publishes that it takes no remote calls |
+| 4 | `asleep` | the peer declared a sleep that covers now |
+| 5 | `this-host-moved-from-<addr>` | the watching host's address differs from its last good address on the marvel path |
+| 6 | `peer-moved-from-<addr>` | the peer's current address is known and differs from its last good address on the marvel path |
+| 7 | `path-down` | both addresses are unchanged (or the peer's is unknown) and the first class is no route or network unreachable |
+| 8 | `moved-or-marvel-down` | the peer's bus link, matched by server key, is still up |
+| 9 | `down-or-asleep` | the bus link is also down |
+
+Rows 5 and 6 can both be true when both hosts moved; row 5 wins, because the
+watching host's own change is the one it can confirm. The verdict then names
+both: `this-host-moved-from-<addr>` with `peer-also-moved` appended.
 
 Limits that the verdict carries with it:
 
@@ -77,9 +89,11 @@ Limits that the verdict carries with it:
   down-or-asleep. A verdict reached across segments says it is provisional.
 - A bus link is held continuously and has two sources; a marvel probe is
   sampled and has one. They are reported with that difference visible.
-- A transition counts only after it holds for one full probe interval, so a
-  link that answers for under a minute between failures does not trigger a
-  repair.
+- Debounce is per path. A change on the bus path counts after it holds for
+  three bus samples (60 seconds at the reference 20-second rate). A change on
+  the marvel path counts after two consecutive probes agree (5 minutes at the
+  reference rate). A path that answers once between failures inside its
+  window is reported as flapping, and no repair is triggered from it.
 
 ## Output
 

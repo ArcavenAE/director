@@ -2300,8 +2300,9 @@ unchanged, and a consumer diagnosed it as a dial target nobody had re-pointed.
 Director records the last good local and peer address for each path and
 reports one of: this host moved, the peer moved, the path is down with
 addresses unchanged, or down-or-asleep. It acts on reachability transitions,
-not on an address change alone. It debounces a link that answers for under a
-minute between failures, so a repair never chases a flap. Its verdict holds
+not on an address change alone. It debounces each path at its own sample
+rate, and a path that answers once between failures inside that window reads
+as flapping, so a repair never chases it. Its verdict holds
 within one link; across segments it says the verdict is provisional.
 *Earned by: FR-netmove-7, -8, -16, -17, -81, -85, -108, -111, -113.*
 *Source: OBSERVED. Cross-refs R-174.*
