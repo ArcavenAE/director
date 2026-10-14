@@ -66,7 +66,7 @@ type Bus struct {
 	resumedMu sync.Mutex
 	resumed   []string
 	// cueState reports the channel cue state for presence; nil when off.
-	cueState func() string
+	cueState func() (state, reason string)
 	// handled is the handled-mode state (K4); nil keeps ack-on-read.
 	handled *handledState
 }
@@ -1266,6 +1266,10 @@ func (b *Bus) writeGlobalPresence(ctx context.Context, state string) string {
 	return ""
 }
 
+// attachCue publishes the cue's presence view beside this seat's presence row.
+// It is the one place the row's cue state is wired, so a test can cover it.
+func (b *Bus) attachCue(c *cue) { b.cueState = c.presence }
+
 // writePresence puts the presence record under a per-session key
 // (presence.<team>.<id>.<instance>), so N concurrent sessions under one id show
 // as N roster entries instead of last-writer-wins collapsing them to one.
@@ -1288,7 +1292,11 @@ func (b *Bus) writePresence(ctx context.Context, state string) error {
 	// The P1 cue state beside presence (channel-cue.md 3.3), only on a seat
 	// that opted in, so director can list seats whose cue is not live.
 	if b.cueState != nil {
-		rec["cue"] = b.cueState()
+		state, reason := b.cueState()
+		rec["cue"] = state
+		if reason != "" {
+			rec["cue_reason"] = reason
+		}
 	}
 	body, _ := json.Marshal(rec)
 	key := "presence." + b.self.Team + "." + b.self.AgentID + "." + b.instance

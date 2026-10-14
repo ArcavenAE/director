@@ -173,7 +173,7 @@ func main() {
 		}, time.Now, randomNonce)
 		c.logf = logf
 		srv.cue = c
-		bus.cueState = func() string { return c.status()["state"] }
+		bus.attachCue(c)
 		bus.nc.SetReconnectHandler(func(*nats.Conn) { c.reconnected() })
 		go c.run(ctx)
 		logf("channel cue on (DIRECTOR_CUE=1): measured versions %v, poll %s, floor %s, window %s", cueCfg.Versions, cueCfg.Poll, cueCfg.Floor, cueCfg.Window)
