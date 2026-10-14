@@ -202,7 +202,7 @@ install_director_mcp() {
     # --version prints one line and exits before any config or connection, so
     # this run cannot join the bus. A guard anyway: stdin from /dev/null, a
     # 5-second alarm, and a broker address nobody listens on.
-    info="$(env -i PATH="$PATH" NATS_URL=nats://127.0.0.1:1 perl -e 'alarm 5; exec @ARGV' "$built" --version </dev/null 2>&1)" \
+    info="$(env -i PATH="$PATH" NATS_URL=nats://127.0.0.1:1 perl -e 'alarm 5; exec @ARGV or die "exec $ARGV[0]: $!\n"' "$built" --version </dev/null 2>&1)" \
       || die "the built shim did not run --version cleanly for $ref ($sha); nothing was switched. Output: $info"
     [[ "$info" == "director-mcp "*" rev $sha channel "* ]] \
       || die "the built shim does not report rev $sha (it said: $info); nothing was switched"
