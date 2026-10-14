@@ -22,7 +22,7 @@ type Sender struct {
 
 type Recipient struct {
 	// agent://{team}/{id} | role://{team}/{role} | broadcast://{ws}[/{team}]
-	// | global://director | global://{cluster}/supervisor
+	// | global://director | role://director | global://{cluster}/supervisor
 	Address string `json:"address"`
 	// Team is empty for a global address: the global tier's subjects carry a
 	// cluster and a role and no team, and a supervisor's team is a local fact

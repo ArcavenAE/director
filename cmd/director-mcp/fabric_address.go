@@ -57,7 +57,7 @@ var reservedScopeTokens = map[string]bool{"audit": true, "broadcast": true}
 //
 // A value outside the identity class is rejected, not rewritten (R-76).
 func parseFabricAddress(s string) (fabricAddr, error) {
-	if s == "director" {
+	if s == "director" || s == roleDirectorAddress {
 		return fabricAddr{Kind: fabricKindDirector}, nil
 	}
 	var kind, rest string
