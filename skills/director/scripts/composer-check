@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""composer-check - look at a pane before an inject that ends in Enter.
+
+An Enter into a composer that already holds typed text sends that text with
+yours; an Enter into the "Teach auto mode about your environment?" menu picks
+"1. Yes" and swallows the message. Run this first.
+
+  composer-check --pane <tmux-target> [--tmux-arg ARG ...] [--handle-menu]
+  composer-check --file <capture>           (a `tmux capture-pane -p -e` capture)
+
+It captures with colour codes (-e), because a plain capture shows a generated
+prompt suggestion exactly like typed text. In a capture, typed text follows the
+prompt mark in the default colour; a suggestion is wrapped in the dim code.
+
+The composer is the region framed by the last two rule lines on screen. A rule is
+a DRAWN rule: the colour ESC[38;5;244m (after an optional ESC[39m) then a run of
+U+2500, optionally with a label between two runs, as measured from three live
+Claude Code panes; ASCII dashes and uncoloured box characters are never a rule,
+so a rule-shaped line typed into a draft is just draft text. The frame must hold
+exactly one line that begins with the prompt mark. Any non-dim text in the frame,
+on the mark line or on any other line, is HAS-TEXT. A frame that is missing
+(fewer than two coloured rules: another theme, another harness, a scrolled-off
+top), or that holds no mark line or several, is refused as UNCLEAR rather than
+guessed at. A mark line between the frame's top and the rule before it is
+refused too, as a second guard. Lines below the bottom rule are not the composer
+(a status line, even one that is only the mark), except that a mark line there
+which carries text is refused as UNCLEAR: the frame did not cover it. Colour codes in the
+composer are parsed as units (38, 48 and 58 take their `;5;n`, `;2;r;g;b` or `:`
+forms whole), so a colour parameter is never read as the dim attribute; only SGR
+2 sets dim, and 0, 22 and 39 clear it (39 is not strictly SGR for dim, but it
+errs toward refusing).
+
+The menu is recognised only as its own block BELOW the bottom rule: the title
+line followed within a few lines by an option line "1. Yes" and a later
+"2. Not now" (a leading cursor mark on an option line is allowed). The phrase in
+the transcript, a quoted menu above the composer, or menu text typed into the
+composer is not the menu. A composer holding typed text is HAS-TEXT even when a
+menu is showing, and nothing is sent.
+
+Verdict on stdout, one word, and the exit code:
+
+  EMPTY      0  nothing after the prompt mark: safe to inject
+  SUGGESTION 0  only dim text after the mark: typed text replaces it, safe
+  HAS-TEXT   1  non-dim text after the mark: REFUSE, do not inject
+  MENU       2  the auto-mode menu is showing: answer "2. Not now", then ring
+  UNCLEAR    3  no frame, or no single mark line in it: refuse; look at the pane first
+
+With --handle-menu and --pane, a MENU verdict sends the single key `2` (the
+"2. Not now" entry; never Enter, never "Don't show again"), recaptures, and
+reports the verdict of the recapture. If the menu is still there it stays MENU
+(exit 2). Nothing else is ever sent, and nothing is sent on any other verdict.
+A capture or a send that fails exits nonzero with no verdict on stdout.
+Without --handle-menu the script only reads.
+
+TMUX_BIN overrides the tmux binary (the tests use a fake).
+"""
+import argparse, os, re, subprocess, sys
+
+PROMPT = "\u276f"  # the prompt mark
+ANSI = re.compile(r"\x1b\[([0-9;:]*)m")
+# A drawn rule, measured from three live Claude Code panes on 2026-10-14: after an optional
+# ESC[39m, the colour ESC[38;5;244m, then a run of U+2500 (never ASCII "-"); the top rule
+# carries a label between two runs. Typed text does not carry that colour, so a typed
+# rule-shaped line is not a rule. With another theme no rule is found, the frame is
+# missing, and the check refuses.
+RULE_COLOUR = re.compile(r"^(?:\x1b\[39m)?\x1b\[38;5;244m")
+RULE_SHAPE = re.compile(r"^\u2500{5,}(?: .* \u2500+)?$")
+
+
+def is_rule(raw):
+    return bool(RULE_COLOUR.match(raw)) and bool(RULE_SHAPE.match(plain(raw)))
+
+
+MENU_TITLE = re.compile(r"Teach auto mode", re.I)
+OPT_YES = re.compile(r"^\s*(?:[\u276f>]\s*)?1\.\s+Yes\b")
+OPT_NOT_NOW = re.compile(r"^\s*(?:[\u276f>]\s*)?2\.\s+Not now\b")
+MENU_SPAN = 6  # lines after the title within which both options must appear
+
+
+def tmux(*a):
+    return subprocess.run([os.environ.get("TMUX_BIN", "tmux"), *a], capture_output=True, text=True)
+
+
+def capture(pane, extra):
+    r = tmux(*extra, "capture-pane", "-p", "-e", "-t", pane)
+    if r.returncode != 0:
+        sys.exit(f"composer-check: capture of {pane} failed: {r.stderr.strip()}")
+    return r.stdout
+
+
+def runs(text):
+    """Split a line into (dim, text) runs. Only SGR 2 sets dim; 0, 22 and 39 clear it.
+    Extended colours (38, 48, 58) are consumed as units so their sub-parameters
+    (the 2 in 38;2;r;g;b, the 5 in 38;5;n) are never read as attributes."""
+    out, dim, pos = [], False, 0
+    for m in ANSI.finditer(text):
+        if m.start() > pos:
+            out.append((dim, text[pos:m.start()]))
+        pos = m.end()
+        params = (m.group(1) or "0").split(";")
+        i = 0
+        while i < len(params):
+            p = params[i]
+            if ":" in p:
+                i += 1  # a colon form is one unit
+                continue
+            if p in ("38", "48", "58"):
+                kind = params[i + 1] if i + 1 < len(params) else ""
+                i += 3 if kind == "5" else 5 if kind == "2" else 1
+                continue
+            if p == "2":
+                dim = True
+            elif p in ("0", "", "22", "39"):
+                dim = False
+            i += 1
+    if pos < len(text):
+        out.append((dim, text[pos:]))
+    return out
+
+
+def plain(line):
+    return ANSI.sub("", line)
+
+
+def blank(s):
+    return not s.replace("\u00a0", " ").strip()
+
+
+def menu_at(lines, start):
+    """Index of a menu title that is its own block (both options follow), at or after start."""
+    for i in range(start, len(lines)):
+        if MENU_TITLE.search(plain(lines[i])):
+            tail = [plain(l) for l in lines[i + 1:i + 1 + MENU_SPAN]]
+            y = next((k for k, l in enumerate(tail) if OPT_YES.match(l)), None)
+            n = next((k for k, l in enumerate(tail) if OPT_NOT_NOW.match(l)), None)
+            if y is not None and n is not None and y < n:
+                return i
+    return None
+
+
+def verdict(text):
+    """The composer is framed: the rule line above it and the one below, the last two
+    rules on screen. Anything that does not look like that is refused, not guessed at."""
+    lines = text.splitlines()
+    rules = [i for i, l in enumerate(lines) if is_rule(l)]
+    if len(rules) < 2:
+        return "UNCLEAR"
+    top, bot = rules[-2], rules[-1]
+    # A rule-shaped line typed into a draft can pose as the frame's top. A drawn top rule
+    # sits above it, so a mark line between the rule before and this "top" means the
+    # frame's top is inside a draft: refuse.
+    if len(rules) >= 3 and any(plain(lines[i]).lstrip().startswith(PROMPT) for i in range(rules[-3] + 1, top)):
+        return "UNCLEAR"
+    marks = [i for i in range(top + 1, bot) if plain(lines[i]).lstrip().startswith(PROMPT)]
+    if len(marks) != 1:
+        return "UNCLEAR"
+    state = "EMPTY"
+    for i in range(top + 1, bot):
+        seen = i != marks[0]
+        for dim, seg in runs(lines[i]):
+            if not seen:
+                if PROMPT not in seg:
+                    continue  # colour-only runs and indentation before the mark
+                seg, seen = seg.split(PROMPT, 1)[1], True
+            if blank(seg):
+                continue
+            if not dim:
+                return "HAS-TEXT"
+            state = "SUGGESTION"
+    if menu_at(lines, bot + 1) is not None:
+        return "MENU"
+    # A mark line below the bottom rule that carries text is a draft the frame did not
+    # cover (the last drawn pair framed an empty mark above it): refuse. After the menu
+    # check, because a menu's cursor line ("1. Yes" behind a mark) is such a line.
+    for i in range(bot + 1, len(lines)):
+        t = plain(lines[i]).lstrip()
+        if t.startswith(PROMPT) and not blank(t[len(PROMPT):]):
+            return "UNCLEAR"
+    return state
+
+
+CODES = {"EMPTY": 0, "SUGGESTION": 0, "HAS-TEXT": 1, "MENU": 2, "UNCLEAR": 3}
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="composer-check")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--pane")
+    g.add_argument("--file")
+    ap.add_argument("--tmux-arg", action="append", default=[], help="extra tmux args, e.g. -L <socket>")
+    ap.add_argument("--handle-menu", action="store_true")
+    a = ap.parse_args()
+    if a.file and a.handle_menu:
+        sys.exit("composer-check: --handle-menu needs --pane")
+    text = open(a.file, encoding="utf-8", errors="replace").read() if a.file else capture(a.pane, a.tmux_arg)
+    v = verdict(text)
+    if v == "MENU" and a.handle_menu:
+        r = tmux(*a.tmux_arg, "send-keys", "-t", a.pane, "2")
+        if r.returncode != 0:
+            sys.exit(f"composer-check: sending 2 to {a.pane} failed: {r.stderr.strip()}")
+        v = verdict(capture(a.pane, a.tmux_arg))
+    print(v)
+    sys.exit(CODES[v])
+
+
+if __name__ == "__main__":
+    main()

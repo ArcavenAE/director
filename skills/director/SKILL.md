@@ -102,6 +102,30 @@ the board and the roster as above.
   ask whether to hand the work off or drop the role. In session 1 the role
   dissolved into ordinary work over six days and nobody noticed.
 
+## Standing checklist: a cue outside the answer
+
+Standing duties (drain the inbox, read answered Desk cards) have no cue of
+their own: they run only inside turns the operator starts, so a fast run of
+questions crowds them out. Three scripts in `scripts/` give them one.
+
+- `standing-hook` is a prompt hook. Wired as a Claude Code `UserPromptSubmit`
+  hook, it prints the drain age and the three-line checklist before each
+  answer. After every drain, run `standing-hook beat` to record it. With no
+  heartbeat it says the age is unknown; it never invents one.
+  `verify-standing-hook.sh` proves it.
+- `reference/relay-template.md` is the form to fill before a relay.
+- `composer-check` looks at a pane before an inject that ends in Enter. It
+  refuses when the composer holds typed text (a dim suggestion is fine), and
+  with `--handle-menu` answers the "Teach auto mode" menu with `2`, "Not now",
+  never Enter. `verify-composer-check.sh` proves it.
+
+The hook entry, in the session's settings:
+
+```json
+{"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command",
+  "command": "<checkout>/skills/director/scripts/standing-hook"}]}]}}
+```
+
 ## Merging: the guard runs before every merge
 
 Before any merge you make or relay, run `${DIRECTOR_HOME:-$HOME/.director}/bin/merge-guard <owner/repo> <n>`
