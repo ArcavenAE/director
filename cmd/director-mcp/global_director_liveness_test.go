@@ -160,3 +160,73 @@ func TestDirectorIsAReservedClusterName(t *testing.T) {
 		t.Errorf("address refusal %q does not say the name is reserved", err)
 	}
 }
+
+// The director may hold an ordinary seat name (seat-id Q2), so its row can be
+// presence.director.<seat>.<instance>. Such a row is a director row; the
+// liveness count must see it, or two live directors count as one (R-78).
+func TestAFourTokenDirectorRowBesideAThreeTokenOneRefusesNamingBoth(t *testing.T) {
+	ctx, g, kv, gjs := newDirectorRig(t)
+	putRow(t, ctx, kv, "presence.director.01AAAAAAAAAAAAAAAAAAAAAAAA", directorRow("director", "01AAAAAAAAAAAAAAAAAAAAAAAA"))
+	putRow(t, ctx, kv, "presence.director.ops-director-g1-0.01BBBBBBBBBBBBBBBBBBBBBBBB", directorRow("ops-director-g1-0", "01BBBBBBBBBBBBBBBBBBBBBBBB"))
+	for _, addr := range []string{"global://director", "role://director"} {
+		err := sendTo(t, ctx, g, addr, "m4-"+addr)
+		if err == nil {
+			t.Fatalf("%s: a three-token and a four-token director row are two live directors, the send was accepted", addr)
+		}
+		for _, want := range []string{"01AAAAAAAAAAAAAAAAAAAAAAAA", "01BBBBBBBBBBBBBBBBBBBBBBBB"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: refusal %q does not name %q", addr, err, want)
+			}
+		}
+	}
+	if n := storedDirectorMessages(t, ctx, gjs); n != 0 {
+		t.Errorf("%d message(s) stored despite the refusal", n)
+	}
+}
+
+// A lone four-token director row is a live director.
+func TestALoneFourTokenDirectorRowCountsAsLive(t *testing.T) {
+	ctx, g, kv, _ := newDirectorRig(t)
+	putRow(t, ctx, kv, "presence.director.ops-director-g1-0.01BBBBBBBBBBBBBBBBBBBBBBBB", directorRow("ops-director-g1-0", "01BBBBBBBBBBBBBBBBBBBBBBBB"))
+	live, _, err := g.records(ctx, globalPresencePrefix("", roleDirector))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 1 {
+		t.Fatalf("counted %d director row(s), want 1", len(live))
+	}
+	if err := sendTo(t, ctx, g, "global://director", "m-lone4"); err != nil {
+		t.Fatalf("one live director under a seat name must be reachable: %v", err)
+	}
+}
+
+// The director filter applies to the director's prefix only. The roster read
+// passes an empty prefix and must still see every row, supervisors included
+// (bus.go reads g.records(ctx, "")).
+func TestTheDirectorKeyFilterDoesNotNarrowTheEmptyPrefixRosterRead(t *testing.T) {
+	ctx, g, kv, _ := newDirectorRig(t)
+	putRow(t, ctx, kv, "presence.director.01AAAAAAAAAAAAAAAAAAAAAAAA", directorRow("director", "01AAAAAAAAAAAAAAAAAAAAAAAA"))
+	putRow(t, ctx, kv, "presence.director.ops-director-g1-0.01BBBBBBBBBBBBBBBBBBBBBBBB", directorRow("ops-director-g1-0", "01BBBBBBBBBBBBBBBBBBBBBBBB"))
+	putRow(t, ctx, kv, "presence.c1.supervisor.01CCCCCCCCCCCCCCCCCCCCCCCC", `{"cluster":"c1","role":"supervisor","agent_id":"c1-sup","instance":"01CCCCCCCCCCCCCCCCCCCCCCCC"}`)
+	all, _, err := g.records(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("the empty-prefix roster read returned %d row(s), want all 3", len(all))
+	}
+}
+
+// The one-director refusal is for the director role only: two live supervisors
+// of one cluster are two instances of an ordinary role and publish as before.
+func TestTwoLiveSupervisorsOfOneClusterStillPublish(t *testing.T) {
+	ctx, g, kv, gjs := newDirectorRig(t)
+	if _, err := gjs.CreateStream(ctx, jetstream.StreamConfig{Name: "GLOBAL_TO_c1", Subjects: []string{"global.c1.>"}}); err != nil {
+		t.Fatal(err)
+	}
+	putRow(t, ctx, kv, "presence.c1.supervisor.01CCCCCCCCCCCCCCCCCCCCCCCC", `{"cluster":"c1","role":"supervisor","agent_id":"c1-sup","instance":"01CCCCCCCCCCCCCCCCCCCCCCCC"}`)
+	putRow(t, ctx, kv, "presence.c1.supervisor.01DDDDDDDDDDDDDDDDDDDDDDDD", `{"cluster":"c1","role":"supervisor","agent_id":"c1-sup-2","instance":"01DDDDDDDDDDDDDDDDDDDDDDDD"}`)
+	if err := sendTo(t, ctx, g, "global://c1/supervisor", "m-sups"); err != nil {
+		t.Fatalf("two supervisors of one cluster must not be refused as two directors: %v", err)
+	}
+}
