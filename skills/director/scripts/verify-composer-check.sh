@@ -29,13 +29,18 @@ check() { # name, expected verdict, expected rc, capture text
   [[ "$got" == "$want" && "$r" == "$rc" ]] && ok "$name" || bad "$name" "got $got rc=$r, want $want rc=$rc"
 }
 
-R="$(for _ in $(seq 1 20); do printf '\xe2\x94\x80'; done)"   # a rule line of box characters
+RUN20="$(for _ in $(seq 1 20); do printf '\xe2\x94\x80'; done)"
+RUN10="$(for _ in $(seq 1 10); do printf '\xe2\x94\x80'; done)"
+# A DRAWN rule, as measured from three live panes: ESC[39m ESC[38;5;244m then a run of U+2500.
+R="${E}[39m${E}[38;5;244m${RUN20}"
+# the same characters with no colour code are what a user could type: never a rule
+PR="${RUN20}"
 MENU_BLOCK=" 1. Yes
  2. Not now"
 MENU_T="Teach auto mode about your environment?"
-LABELED="$(for _ in $(seq 1 15); do printf '\xe2\x94\x80'; done) some-session-name $(printf '\xe2\x94\x80')"   # the top rule carries a label
+LABELED="${E}[38;5;244m${RUN10} some-session-name ${RUN10}"   # the drawn top rule carries a label
 # framed BODY: the screen shape the check reads, the composer between two rules and a status line below
-framed() { printf '%s\n%s\n%s\n  status line' "$R" "$1" "$R"; }
+framed() { printf '%s\n%s\n%s\n  status line' "$LABELED" "$1" "$R"; }
 
 check "an empty composer is EMPTY"            EMPTY      0 "$(framed "${P} ")"
 check "an empty composer with a cursor block is EMPTY" EMPTY 0 "$(framed "${P} ${E}[7m ${E}[0m")"
@@ -96,38 +101,71 @@ check "a status line that is only the mark does not make an empty composer a dra
 ${P} 
 ${R}
 ${P}"
-check "a pasted shell transcript ending at a fresh prompt is refused" UNCLEAR 3 "${R}
-${P} git status
+check "a pasted shell transcript ending at a fresh prompt is refused" UNCLEAR 3 "$(framed "${P} git status
 On branch main
-${P} 
-${R}"
-check "dashes inside a draft whose first line is empty are not the frame" UNCLEAR 3 "${R}
-${P} 
+${P} ")"
+check "dashes inside a draft whose first line is empty are draft text" HAS-TEXT 1 "$(framed "${P} 
 -----
-  draft after a rule
-${R}"
-check "a box rule inside a draft whose first line is empty is not the frame" UNCLEAR 3 "${R}
-${P} 
-${R}
-  draft after a rule
-${R}"
-check "a rule inside a draft after typed text is refused" UNCLEAR 3 "${R}
-${P} typed
-${R}
-more draft
-${R}"
+  draft after a rule")"
+check "a typed box rule inside a draft whose first line is empty is draft text" HAS-TEXT 1 "$(framed "${P} 
+${PR}
+  draft after a rule")"
+check "a typed box rule inside a draft after typed text is draft text" HAS-TEXT 1 "$(framed "${P} typed
+${PR}
+more draft")"
 
-# --- a rule-shaped line typed into a draft cannot become the frame's top (review 5523646637) ---
-check "a typed dashed line then an empty mark line inside the frame is refused" UNCLEAR 3 "$(framed "${P} git log
+# --- review 5523734158: a drawn rule carries the measured colour, a typed one cannot ------
+# the five shapes that read EMPTY while only two rules are on screen
+check "(1) a typed dashed line then an empty mark line is refused" UNCLEAR 3 "$(framed "${P} git log
 ----------
 ${P} ")"
-check "a typed labelled dashed line then an empty mark line is refused" UNCLEAR 3 "$(framed "${P} draft
+check "(2) a typed labelled dashed line then an empty mark line is refused" UNCLEAR 3 "$(framed "${P} draft
 ----- note -
 ${P} ")"
-check "a typed box rule then an empty mark line is refused" UNCLEAR 3 "$(framed "${P} draft
-${R}
+check "(3) a typed box rule then an empty mark line is refused" UNCLEAR 3 "$(framed "${P} draft
+${PR}
 ${P} ")"
-check "a transcript rule above an echoed mark line and a real frame is refused (fails safe)" UNCLEAR 3 "${R}
+check "(4) a scrolled-off mark above a typed rule is refused" UNCLEAR 3 "On branch main
+----------
+${P} 
+${R}"
+check "(4b) the same with a typed box rule" UNCLEAR 3 "On branch main
+${PR}
+${P} 
+${R}"
+check "(5) a typed dashed rule as the first visible line is refused" UNCLEAR 3 "-----
+${P} typed
+${R}"
+check "(5b) a typed box rule as the first visible line is refused" UNCLEAR 3 "${PR}
+${P} typed
+${R}"
+check "(5c) a typed labelled rule as the first visible line is refused" UNCLEAR 3 "${RUN10} note ${RUN10}
+${P} typed
+${R}"
+
+# a correctly drawn rule in another theme colour is not a rule here: the frame is missing, so refuse
+OTHER_TOP="${E}[38;5;240m${RUN10} some-session-name ${RUN10}"
+OTHER_BOT="${E}[39m${E}[38;5;240m${RUN20}"
+check "rules in another theme colour: UNCLEAR, never a verdict" UNCLEAR 3 "${OTHER_TOP}
+${P} 
+${OTHER_BOT}
+  status line"
+check "rules in another theme colour holding typed text: UNCLEAR" UNCLEAR 3 "${OTHER_TOP}
+${P} typed
+${OTHER_BOT}"
+check "uncoloured box-drawing rules are not drawn rules" UNCLEAR 3 "${PR}
+${P} 
+${PR}"
+check "coloured ASCII dashes are not a rule" UNCLEAR 3 "${E}[38;5;244m--------------------
+${P} 
+${E}[39m${E}[38;5;244m--------------------"
+check "the colour code must start the line: one mid-line is not a rule" UNCLEAR 3 "x ${R}
+${P} 
+${R}"
+check "a drawn top rule without the leading reset still frames" EMPTY 0 "${E}[38;5;244m${RUN20}
+${P} 
+${R}"
+check "a transcript rule above an echoed mark line and a real frame is refused (second guard, fails safe)" UNCLEAR 3 "${R}
 ${P} an echoed message
 $(framed "${P} ")"
 check "a transcript rule with no mark line before the frame is fine" EMPTY 0 "${R}
@@ -135,19 +173,26 @@ some assistant text
 $(framed "${P} ")"
 
 # --- what counts as a rule is pinned ----------------------------------------------------
-check "a label with no trailing dashes is not a rule" UNCLEAR 3 "$(for _ in 1 2 3 4 5 6; do printf '\xe2\x94\x80'; done) some-label
+C244="${E}[38;5;244m"
+check "a label with no trailing run is not a rule" UNCLEAR 3 "${C244}${RUN10} some-label
 ${P} typed
 ${R}"
-check "two dashes are not a rule"                   UNCLEAR 3 "--
+check "four box characters are not a rule"         UNCLEAR 3 "${C244}$(for _ in 1 2 3 4; do printf '\xe2\x94\x80'; done)
 ${P} typed
 ${R}"
-check "four dashes are not a rule"                  UNCLEAR 3 "----
+check "five box characters are a rule"             HAS-TEXT 1 "${C244}$(for _ in 1 2 3 4 5; do printf '\xe2\x94\x80'; done)
 ${P} typed
 ${R}"
-check "five dashes are a rule"                      HAS-TEXT 1 "-----
+check "text before the run is not a rule (colour, then text, then the run)" UNCLEAR 3 "${C244}x ${RUN20}
 ${P} typed
 ${R}"
-check "a draft line that only ends in dashes is not a rule" HAS-TEXT 1 "$(framed "${P} note ----------")"
+check "leading spaces before the run are not a rule" UNCLEAR 3 "${C244} ${RUN20}
+${P} typed
+${R}"
+check "a label must be set off by a space from the first run" UNCLEAR 3 "${C244}${RUN10}name ${RUN10}
+${P} typed
+${R}"
+check "a draft line that only ends in dashes is draft text" HAS-TEXT 1 "$(framed "${P} note ----------")"
 
 # --- the menu is its own block, below the bottom rule -------------------------------------
 check "the auto-mode menu below the composer is MENU" MENU 2 "$(framed "${P} ")
@@ -197,12 +242,10 @@ ${P}
 ${MENU_T}
 ${MENU_BLOCK}
 ${R}"
-check "menu text typed into the draft, with a rule before the options, is refused not MENU" UNCLEAR 3 "${R}
-${P} 
+check "menu text typed into the draft, with a typed rule before the options, is HAS-TEXT not MENU" HAS-TEXT 1 "$(framed "${P} 
 ${MENU_T}
-${R}
-${MENU_BLOCK}
-${R}"
+${PR}
+${MENU_BLOCK}")"
 
 # --- the menu handler: a fake tmux that records keys -----------------------------------------
 MENU_PANE="$(framed "${P} ")

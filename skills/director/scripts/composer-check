@@ -12,19 +12,22 @@ It captures with colour codes (-e), because a plain capture shows a generated
 prompt suggestion exactly like typed text. In a capture, typed text follows the
 prompt mark in the default colour; a suggestion is wrapped in the dim code.
 
-The composer is the region framed by the last two rule lines on screen (lines of
-box-drawing dashes: the rule above the composer and the rule below it). It must
-hold exactly one line that begins with the prompt mark. Any non-dim text in the
-frame, on the mark line or on any other line, is HAS-TEXT, so a draft that wraps
-or that holds dashes, a pasted shell transcript or menu text is a draft. A frame
-that is missing (fewer than two rules), or that holds no mark line or several,
-is refused as UNCLEAR rather than guessed at. A mark line between the frame's top and the rule before it
-means the "top" was typed into a draft, and is refused too. Lines below the bottom rule (a
-status line, even one that is only the mark) are not the composer. Colour codes
-are parsed as units (38, 48 and 58 take their `;5;n`, `;2;r;g;b` or `:` forms
-whole), so a colour parameter is never read as the dim attribute; only SGR 2
-sets dim, and 0, 22 and 39 clear it (39 is not strictly SGR for dim, but it errs
-toward refusing).
+The composer is the region framed by the last two rule lines on screen. A rule is
+a DRAWN rule: the colour ESC[38;5;244m (after an optional ESC[39m) then a run of
+U+2500, optionally with a label between two runs, as measured from three live
+Claude Code panes; ASCII dashes and uncoloured box characters are never a rule,
+so a rule-shaped line typed into a draft is just draft text. The frame must hold
+exactly one line that begins with the prompt mark. Any non-dim text in the frame,
+on the mark line or on any other line, is HAS-TEXT. A frame that is missing
+(fewer than two coloured rules: another theme, another harness, a scrolled-off
+top), or that holds no mark line or several, is refused as UNCLEAR rather than
+guessed at. A mark line between the frame's top and the rule before it is
+refused too, as a second guard. Lines below the bottom rule (a status line,
+even one that is only the mark) are not the composer. Colour codes in the
+composer are parsed as units (38, 48 and 58 take their `;5;n`, `;2;r;g;b` or `:`
+forms whole), so a colour parameter is never read as the dim attribute; only SGR
+2 sets dim, and 0, 22 and 39 clear it (39 is not strictly SGR for dim, but it
+errs toward refusing).
 
 The menu is recognised only as its own block BELOW the bottom rule: the title
 line followed within a few lines by an option line "1. Yes" and a later
@@ -54,9 +57,19 @@ import argparse, os, re, subprocess, sys
 
 PROMPT = "\u276f"  # the prompt mark
 ANSI = re.compile(r"\x1b\[([0-9;:]*)m")
-BOX = "[\u2500-\u257f-]"
-# a rule line: a run of box dashes, optionally with a label and more dashes (the top rule carries the session name)
-RULE = re.compile(r"^\s*" + BOX + r"{5,}(?:\s.*\s" + BOX + r"+)?\s*$")
+# A drawn rule, measured from three live Claude Code panes on 2026-10-14: after an optional
+# ESC[39m, the colour ESC[38;5;244m, then a run of U+2500 (never ASCII "-"); the top rule
+# carries a label between two runs. Typed text does not carry that colour, so a typed
+# rule-shaped line is not a rule. With another theme no rule is found, the frame is
+# missing, and the check refuses.
+RULE_COLOUR = re.compile(r"^(?:\x1b\[39m)?\x1b\[38;5;244m")
+RULE_SHAPE = re.compile(r"^\u2500{5,}(?: .* \u2500+)?$")
+
+
+def is_rule(raw):
+    return bool(RULE_COLOUR.match(raw)) and bool(RULE_SHAPE.match(plain(raw)))
+
+
 MENU_TITLE = re.compile(r"Teach auto mode", re.I)
 OPT_YES = re.compile(r"^\s*(?:[\u276f>]\s*)?1\.\s+Yes\b")
 OPT_NOT_NOW = re.compile(r"^\s*(?:[\u276f>]\s*)?2\.\s+Not now\b")
@@ -128,7 +141,7 @@ def verdict(text):
     """The composer is framed: the rule line above it and the one below, the last two
     rules on screen. Anything that does not look like that is refused, not guessed at."""
     lines = text.splitlines()
-    rules = [i for i, l in enumerate(lines) if RULE.match(plain(l))]
+    rules = [i for i, l in enumerate(lines) if is_rule(l)]
     if len(rules) < 2:
         return "UNCLEAR"
     top, bot = rules[-2], rules[-1]
