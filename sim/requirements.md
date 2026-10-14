@@ -2278,6 +2278,199 @@ of one role.
 *Earned by: O-2068, O-2060.*
 *Source: OBSERVED. Cross-refs R-115, R-202.*
 
+**R-205 (OBSERVED) · director watches fleet reach as a supervised service, and
+says when it is not watching.** For five days the reach watcher was a
+hand-started loop with a run count. It stopped without notice at least eight
+times. Once it ended after 67 minutes, because failing probes made each round
+shorter. Once it ended six hours into an outage and missed the host's return.
+A peer read it as permanent, and every fix was a hand restart. Director runs
+reach monitoring with its own lifetime and no run limit. It keeps a heartbeat
+that separates "ran and could not probe" from "ran and found nothing wrong",
+and it reports its own stop as an event.
+*Earned by: FR-netmove-14, -23, -29, -37, -39, -41, -45, -48, -49, -54, -103.*
+*Source: OBSERVED. Cross-refs R-107.*
+
+**R-206 (OBSERVED) · a reach verdict names which side moved, from the last
+address that worked.** When kinu changed subnet, the verdict for both peers
+read "moved or marvel down", because it had no case for the watching host
+moving. On another day a peer concluded both hosts had moved without reading
+its own record of the other's address, and retracted. One outage was not a
+move at all: the route between two segments failed with every address
+unchanged, and a consumer diagnosed it as a dial target nobody had re-pointed.
+Director records the last good local and peer address for each path and
+reports one of: this host moved, the peer moved, the path is down with
+addresses unchanged, or down-or-asleep. It acts on reachability transitions,
+not on an address change alone. It debounces a link that answers for under a
+minute between failures, so a repair never chases a flap. Its verdict holds
+within one link; across segments it says the verdict is provisional.
+*Earned by: FR-netmove-7, -8, -16, -17, -81, -85, -108, -111, -113.*
+*Source: OBSERVED. Cross-refs R-174.*
+
+**R-207 (OBSERVED) · a reach failure keeps its error text and its first
+class.** The first watcher discarded the probe's error output, so a
+two-minute gap stayed unexplained. One peer produced four error classes in a
+day: timeout, host down, network unreachable from two different causes, and
+the bus refusal. The informative class at the start of an outage decayed to a
+bare timeout once the neighbour cache expired. Two failures that were not
+network faults read the same as "unreachable": a damaged host-key file, and a
+daemon started with no remote listener. Director keeps each failure's text,
+records the class at the first failure of an outage until the next success,
+and names "trust store damaged" and "peer not listening by design" as states
+of their own. It stores a repeated cause once, not once per probe; the
+watcher's error log reached about 9.6 MB, most of it repeated help text.
+*Earned by: FR-netmove-12, -47, -51, -53, -102, -116.*
+*Source: OBSERVED. Cross-refs R-206.*
+
+**R-208 (OBSERVED) · reach health is read from the paths director uses, never
+from ping or a side endpoint.** Short-name ping reported every host down while
+marvel and the bus answered. Later a sleeping host answered ping, since its
+network interface answers for it, while its marvel port stayed closed. The
+forge's rate-limit endpoint read healthy for 40 minutes while every call was
+refused, so director's forge column was wrong for the whole outage. The health
+of a path comes from a real call on that path.
+*Earned by: FR-netmove-1, -10, -95.*
+*Source: OBSERVED. Cross-refs R-93.*
+
+**R-209 (OBSERVED) · a quiet peer is checked for sleep before it is called
+lost.** Director and a peer spent hours on leaf-link mechanics before anyone
+read the peer's power log, which showed each drop following a maintenance
+sleep. Another host's power settings read "sleep 0" while maintenance sleep
+still ran, and the operator later reported that host's keep-awake hold was not
+running. Before raising a network fault, director reads each host's declared
+sleep and wake events and its live sleep holds, or a sleep window the host
+reports itself. A peer in a declared sleep reads as asleep, not lost, and any
+staleness judgement director makes subtracts the time director's own host
+slept.
+*Earned by: FR-netmove-65, -67, -71, -72, -93, -104.*
+*Source: OBSERVED. Cross-refs R-45.*
+
+**R-210 (OBSERVED) · a refusal for an absent cluster says when it was last
+present, and the roster shows a flapping cluster as flapping.** Four times a
+global send was refused with "the cluster name is likely wrong" while the name
+was right and the cluster was moving or unreachable. One cluster's presence
+rode a leaf that connected and dropped every few minutes, so the roster listed
+three of its supervisors and a send seconds later was refused. The refusal
+reads "no live presence for <cluster>, last seen <time>", and the roster gives
+transitions per hour for a cluster whose presence comes and goes.
+*Earned by: FR-netmove-3, -7, -20, -59.*
+*Source: OBSERVED. Cross-refs R-92, R-93.*
+
+**R-211 (OBSERVED) · while a cluster is unreachable, the work waiting on it and
+the doorbells that cannot fire are listed with their age.** Reviews routed to
+an absent cluster's reviewer sat queued, and the review lane had no notion of
+"reviewer host away". An inject to an unreachable cluster printed nothing and
+read as a doorbell that rang. With the host-key file damaged, director could
+ring no remote pane and had no second path. Director shows "cannot ring
+<cluster>" as a state, lists each item waiting on that cluster with its age,
+and names the second path it will use.
+*Earned by: FR-netmove-6, -8, -24, -52.*
+*Source: OBSERVED. Extends R-160 and R-162; cross-refs R-200.*
+
+**R-212 (OBSERVED) · recovery is announced, and a watch armed after an outage
+looks back.** When the route between segments returned after about 1h38m,
+nothing told any seat, and stranded work was re-rung by hand. Two review
+verdicts posted during that outage were seen 1h50m late, because the watches
+armed afterwards started from "now". While the bus was cut, coordination moved
+to an issue thread, and nobody could see how far behind that thread ran. On a
+reachability recovery director tells the seats with stranded work and re-rings
+it, and it reads from the last event it saw, not from now. While a fallback
+transport carries traffic, director says which one and how far behind it is.
+*Earned by: FR-netmove-17, -19, -21.*
+*Source: OBSERVED. Cross-refs R-168, R-185.*
+
+### Harvest diff (2026-10-14, network move)
+
+Covers FR-netmove-1 through FR-netmove-116 (2026-10-10 to 2026-10-14) and the
+network-move observations of the same days. Most of the evidence came from a
+reach watcher director ran by hand on kinu while three hosts changed networks,
+so every entry below is the job that watcher did, measured. Same bar: an item
+is promoted on two or more recorded instances. The firm spec of the watcher's
+job is `sim/specs/fleet-reach-watch.md`.
+
+- **Promoted (8):** R-205 (reach watching is a supervised service that reports
+  its own stop), R-206 (the verdict names which side moved), R-207 (a failure
+  keeps its text and first class), R-208 (health from the paths in use, never
+  ping), R-209 (sleep is checked before a peer is called lost), R-210 (a
+  refusal says when the cluster was last present; flapping is shown), R-211
+  (work waiting on an unreachable cluster is listed), R-212 (recovery is
+  announced; late watches look back).
+- **Unchanged, new instances:**
+  - R-199: no way to map an issue comment, posted under the shared login, to a
+    marvel session key (FR-netmove-27).
+  - R-194: a doorbell landed on a harness menu; the capture still showed the
+    menu after it was dismissed (FR-netmove-50).
+  - R-164: director measured the wrong broker because two servers run on one
+    host and the bus tier was inferred from a port (FR-netmove-58).
+  - R-174 and R-192: an interval posted from mental arithmetic, corrected in a
+    second comment (FR-netmove-66).
+  - R-176: the disclosure scan ran in sequence with a post, not as its gate,
+    twice; both times only a report-class check fired, on a private repo
+    (O-netmove-scan-seq, O-netmove-scan-seq-2).
+  - R-168: a respawned peer's reach test waited about 15 minutes for an ack,
+    because director drained its inbox on a loop (FR-netmove-55).
+- **Kept as observations, one instance each:** an operator statement of fact
+  reopened as an ask because a tool could not confirm it (observation of 2026-10-10T15:00Z); a
+  Desk recommendation whose options could not survive DHCP and network hops
+  (O-netmove-hub-card-wrong-shape); a seat citing an operator question held
+  only in the operator's own chat with another session
+  (O-netmove-phantom-operator-ask); two director instances posting the same
+  round on one issue and restarting one shared watcher (O-two-directors,
+  FR-netmove-49), which is R-140's open study.
+- **Rejected for the register (routed elsewhere):**
+  - Cluster entries that pin a literal address, and the missing repoint path
+    (FR-netmove-2, -27, -32, -40, -113): marvel, `marvel config repoint`
+    (marvel#863). The operator's direction for this half, verbatim: "we're not
+    all passive, our marvel --cluster stuff needs to recover ... how we're
+    accepted or rejected on each cluster also/with the keys".
+  - Host-key trust with no prompt, and add-cluster overwriting a name silently
+    (FR-netmove-4): marvel, follow-on to marvel#840.
+  - A host-key file emptied by a test or run that touched the real home
+    directory (FR-netmove-51): marvel, the marvel#863 series; director's half
+    is R-207.
+  - The global hub advertising a startup-time address for its whole life, a
+    reload that refuses the advertise field and drops the rest of the reload,
+    and reload events reported as done when only the signal was sent
+    (FR-netmove-11, -25, -26, -31, -76, -99): hub configuration, in the
+    architect's hub leaf-advertise design note (not yet in a repo); marvel#855
+    and marvel#514.
+  - A leaf retry with no backoff, and a remote pool that grows with each hub
+    address (FR-netmove-73, -102): NATS leaf configuration,
+    the same design note.
+  - Fleet names that resolve only by mDNS, on one link, and two hosts that
+    publish no mDNS name (FR-netmove-13, -33, -41, -79, -83, -96, -108): host
+    naming, director#289 (which record carries a host's address).
+  - Hosts publishing their own sleep and wake events, and a runtime clock that
+    stops during sleep (FR-netmove-65, -98): marvel#866; director's half is
+    R-209.
+  - Link health joined across both ends of a leaf, half-open links, and link
+    uptime per address class (FR-netmove-44, -57, -61, -62): NATS hub
+    observability, under R-85.
+  - `marvel get sessions -w` with no backoff on a non-transient error, help
+    text printed after every connection error, an inject that prints nothing
+    on failure, and event times with no date (FR-netmove-24, -36, -60, -102):
+    marvel.
+  - Leaked test NATS servers (FR-netmove-101): marvel#463.
+  - Keep-awake and power-nap settings checked before a host is called
+    always-on (FR-netmove-72, -93): fleet host setup, platform graph.
+  - The watcher's own defects (a header row counted as a link, stall clocks
+    keyed by address, the wrong broker): general instrument practice, test a
+    hand-built tool before trusting it; no director requirement beyond R-205
+    to R-208.
+
+**Was the watcher useful?** Yes, as a measuring stick, and not as something to
+keep. It caught kinu's own subnet change in one round with the exact error,
+and its counter-stall flag led every leaf close by about 1.5 to 4 minutes.
+That lead is what pointed at sleep and then at the power logs, the root cause
+of a day of drops. Its records are the evidence behind marvel#866, the hub
+advertise design, and the peer-side links check. Against that, it stopped
+silently at least eight times, carried at least four defects of its own that
+each skewed a posted reading before they were fixed, and its 20-second marvel
+probes added handshake-failure noise to the peers' logs while the host-key
+file was broken. Each of those costs is now a requirement (R-205 to R-208).
+The script stays on kinu as the reference behaviour for
+`sim/specs/fleet-reach-watch.md`, and it should be retired once that spec is
+built.
+
 ### Harvest diff (2026-10-09)
 
 Covers O-2046 through O-2070 and the 2026-10-09 entry, and friction after the
