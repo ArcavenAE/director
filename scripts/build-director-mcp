@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Build director-mcp from one commit, stamped with that commit, the same bytes
+# wherever it runs (sim/design/shim-release-and-pinned-install.md, R2).
+#
+#   scripts/build-director-mcp --git-dir DIR --sha SHA --out PATH [--channel NAME]
+#
+#   --git-dir  a git directory or bare mirror that holds SHA
+#   --sha      the full commit to build
+#   --out      where to write the binary
+#
+# The source is `git archive` of the commit, never a working tree, so a dirty
+# checkout cannot leak in and the walk up to an enclosing repository
+# (finding-018) cannot happen. -buildvcs=false, -trimpath, an empty build id,
+# CGO off and a pinned toolchain remove the remaining differences between a
+# checkout and an archive. VERSION comes from the commit's committer timestamp,
+# not a clock, so two builds of one commit report one string.
+set -euo pipefail
+
+TOOLCHAIN="go1.26.5"
+die() { echo "build-director-mcp: $*" >&2; exit 1; }
+
+gitdir="" sha="" out="" chan="alpha"
+while (($#)); do
+  case "$1" in
+    --git-dir) [[ $# -ge 2 ]] || die "--git-dir needs a value"; gitdir="$2"; shift ;;
+    --sha) [[ $# -ge 2 ]] || die "--sha needs a value"; sha="$2"; shift ;;
+    --out) [[ $# -ge 2 ]] || die "--out needs a value"; out="$2"; shift ;;
+    --channel) [[ $# -ge 2 ]] || die "--channel needs a value"; chan="$2"; shift ;;
+    *) die "unknown argument: $1" ;;
+  esac
+  shift
+done
+[[ -n "$gitdir" && -n "$sha" && -n "$out" ]] || die "usage: $0 --git-dir DIR --sha SHA --out PATH [--channel NAME]"
+[[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "--sha must be a full 40-character commit id, got '$sha'"
+[[ "$(git -C "$gitdir" cat-file -t "$sha" 2>/dev/null || true)" == commit ]] || die "$sha is not a commit in $gitdir"
+
+stamp="$(TZ=UTC git -C "$gitdir" show -s --format=%cd --date=format-local:%Y%m%d.%H%M%S "$sha")"
+version="0.1.0-alpha.${stamp}.${sha:0:7}"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+git -C "$gitdir" archive "$sha" cmd/director-mcp | tar -x -C "$work"
+[[ -f "$work/cmd/director-mcp/go.mod" ]] || die "$sha has no cmd/director-mcp/go.mod"
+
+mkdir -p "$(dirname "$out")"
+(
+  cd "$work/cmd/director-mcp"
+  GOTOOLCHAIN="$TOOLCHAIN" CGO_ENABLED=0 go build -trimpath -buildvcs=false \
+    -ldflags "-s -w -buildid= -X main.version=$version -X main.revision=$sha -X main.channel=$chan" \
+    -o "$work/director-mcp" .
+)
+mv "$work/director-mcp" "$out"
+echo "build-director-mcp: $out is $version rev $sha"

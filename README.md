@@ -135,11 +135,12 @@ Three tools, each with its own scope:
 
 - **`install.sh`** (above): the skills, the command, `board-html`, `dws`,
   `director-install`, and the state root.
-- **By hand** (next section): the bus seat, `director-mcp` and
-  `director-mcp-seat`. No tool installs these yet.
-- **`director-install`**: `cast-launch` only, the launcher marvel runs for
-  wardrobe-cast seats. It does not install `director-mcp` or
-  `director-mcp-seat`.
+- **By hand** (next section): the bus seat and `director-mcp-seat`. No tool
+  installs `director-mcp-seat` yet.
+- **`director-install`**: `cast-launch`, the launcher marvel runs for
+  wardrobe-cast seats, and `director-mcp`, the shim, built from a commit with
+  `director-install director-mcp --ref <commit>` and undone with `--rollback`.
+  It does not install `director-mcp-seat`.
 
 A host that runs wardrobe-cast seats installs the launcher from a commit,
 with no checkout needed:
@@ -173,7 +174,8 @@ anger, not a packaged install. Writing the installer is a separate job.
 
 Two files, both under `probe/nats-phase-0/`:
 
-- `director-mcp`, the MCP server. Build it and install it at
+- `director-mcp`, the MCP server. Install it with
+  `director-install director-mcp --ref <commit>`, or build it and place it at
   `~/.director/bin/director-mcp`, or point `DIRECTOR_MCP_BIN` at it. The
   launcher refuses to start if it is missing.
 - `director-mcp-seat`, the launcher that works out who the seat is. The fleet
