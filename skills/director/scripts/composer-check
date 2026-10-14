@@ -22,8 +22,9 @@ on the mark line or on any other line, is HAS-TEXT. A frame that is missing
 (fewer than two coloured rules: another theme, another harness, a scrolled-off
 top), or that holds no mark line or several, is refused as UNCLEAR rather than
 guessed at. A mark line between the frame's top and the rule before it is
-refused too, as a second guard. Lines below the bottom rule (a status line,
-even one that is only the mark) are not the composer. Colour codes in the
+refused too, as a second guard. Lines below the bottom rule are not the composer
+(a status line, even one that is only the mark), except that a mark line there
+which carries text is refused as UNCLEAR: the frame did not cover it. Colour codes in the
 composer are parsed as units (38, 48 and 58 take their `;5;n`, `;2;r;g;b` or `:`
 forms whole), so a colour parameter is never read as the dim attribute; only SGR
 2 sets dim, and 0, 22 and 39 clear it (39 is not strictly SGR for dim, but it
@@ -168,6 +169,13 @@ def verdict(text):
             state = "SUGGESTION"
     if menu_at(lines, bot + 1) is not None:
         return "MENU"
+    # A mark line below the bottom rule that carries text is a draft the frame did not
+    # cover (the last drawn pair framed an empty mark above it): refuse. After the menu
+    # check, because a menu's cursor line ("1. Yes" behind a mark) is such a line.
+    for i in range(bot + 1, len(lines)):
+        t = plain(lines[i]).lstrip()
+        if t.startswith(PROMPT) and not blank(t[len(PROMPT):]):
+            return "UNCLEAR"
     return state
 
 

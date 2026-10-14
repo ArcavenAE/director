@@ -194,6 +194,31 @@ ${P} typed
 ${R}"
 check "a draft line that only ends in dashes is draft text" HAS-TEXT 1 "$(framed "${P} note ----------")"
 
+# --- review 5523892620: a draft below the bottom rule is not covered by the frame -----------
+check "an empty framed mark with typed text under a later drawn pair is refused" UNCLEAR 3 "out
+${R}
+${P} 
+${LABELED}
+${P} typed draft"
+check "the same with a status line after it" UNCLEAR 3 "out
+${R}
+${P} 
+${LABELED}
+${P} typed draft
+  status line"
+check "typed text on a mark line below a framed composer is refused" UNCLEAR 3 "$(framed "${P} ")
+${P} typed draft"
+check "dim text on a mark line below the frame is refused too" UNCLEAR 3 "$(framed "${P} ")
+${P} ${E}[2mhint${E}[0m"
+check "a bare-mark status line below the frame stays EMPTY" EMPTY 0 "$(framed "${P} ")
+${P} "
+check "the cursor menu below the frame is still MENU, not the refusal" MENU 2 "${R}
+${P} 
+${R}
+${MENU_T}
+ ${P} 1. Yes
+ 2. Not now"
+
 # --- the menu is its own block, below the bottom rule -------------------------------------
 check "the auto-mode menu below the composer is MENU" MENU 2 "$(framed "${P} ")
 ${MENU_T}
