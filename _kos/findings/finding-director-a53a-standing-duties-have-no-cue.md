@@ -26,7 +26,9 @@ own question asking why this happens.
 **Standing duties have no cue of their own.** Draining the inbox, keeping the
 ledger, re-checking state and reading answered cards all run only inside turns
 the operator starts. When questions come fast, every turn goes to an answer, and
-the duties with no cue fall away. Three facts back this. The first two can be checked from this repo with one command each; the third is an observation from the session notes:
+the duties with no cue fall away. Three facts back this. The first two can be
+checked from this repo with one command each; the third is an observation from
+the session notes:
 
 1. **The skill never names the drain.** `grep -ci drain` over
    `skills/director/SKILL.md` and `reference/` returns 0. Its standing-mode
@@ -39,17 +41,20 @@ the duties with no cue fall away. Three facts back this. The first two can be ch
    reads: "This is a poll: the model must call it. The server cannot push a
    message into context on its own." R-106 keeps messages durable, but a message
    that is kept is not one that is read.
-3. **Director has never run a standing loop** (observed in the gitignored session notes and relay log; not reproducible from this repo). Every loop it ran was a watch on
-   one task, started and cancelled by hand. The first was a session-only cron
-   that expired after seven days and was built to stop itself after two quiet
-   hours (2026-09-18). Later loops were stood down on the operator's order on
-   2026-10-09 and again on 2026-10-14. None of them drained the inbox.
+3. **Director has never run a standing loop** (observed in the gitignored
+   session notes and relay log; not reproducible from this repo). Every loop it
+   ran was a watch on one task, started and cancelled by hand. The first was a
+   session-only cron that expired after seven days and was built to stop itself
+   after two quiet hours (2026-09-18). Later loops were stood down on the
+   operator's order on 2026-10-09 and again on 2026-10-14. None of them drained
+   the inbox.
 
 Context pressure is an accelerant, inferred and not measured.
 
 ## The nine misses, their class, and which fix cuts each
 
-The eight misses above (the artifact and the ledger counted as one unowned record, the two misfiled notes as two), plus one near miss, make nine:
+The eight misses above (the artifact and the ledger counted as one unowned
+record, the two misfiled notes as two), plus one near miss, make nine:
 
 | # | miss | class | cut by fix |
 |---|---|---|---|
@@ -60,13 +65,18 @@ The eight misses above (the artifact and the ledger counted as one unowned recor
 | 5 | a stub with placeholder text was sent to director's own address | slip under rush | 5 |
 | 6 | director claimed review authority the operator had not given | slip under rush | 1 |
 | 7 | observations were written into the relay log | slip under rush | 1, 4 |
-| 8 | a relayed note was attributed to the wrong place | slip under rush | 1, 4 |
+| 8 | a relayed note was filed in the wrong place | slip under rush | 1, 4 |
 | 9 | a seat's composer held a dimmed suggestion one Enter would have submitted; caught by hand | near miss | 4 |
 
-Omissions need a cue outside the answer; slips need a check inside it. Fix 1 cuts row 2 through line 1 of the checklist (answered cards read), and rows 6 to 8 through lines 2 and 3.
+Omissions need a cue outside the answer; slips need a check inside it. Row 9
+is in neither class: nothing went wrong, and it is counted because the same
+load produced it. Fix 1 cuts row 2 through line 1 of the checklist (answered
+cards read), and rows 6 to 8 through lines 2 and 3.
 
-No single fix covers both classes, which is why a loop alone, or a checklist
-alone, would leave half of them open.
+No single mechanism covers both classes: a cue outside the answer catches
+omissions, and a check inside it catches slips. Fix 1 cuts rows in both only
+because it carries both, a drain-age cue and a checklist; a loop alone, or a
+checklist alone, would leave one class open.
 
 ## Fixes, ranked by misses cut (out of nine)
 
@@ -78,7 +88,10 @@ alone, would leave half of them open.
 | 4 | a relay template (verbatim text, the standing ruling it touches, the file it goes to) and an empty-composer check before any inject with Enter, both in the skill | now: skill | 3 (rows 7, 8, 9); 1 not cut by another fix |
 | 5 | R-213's compose step, so a stub never publishes | build: director software | 1 |
 
-Counted from the table: fix 1 cuts rows 1, 2, 6, 7, 8; fix 2 rows 1 to 4; fix 3 rows 1, 2, 4; fix 4 rows 7, 8, 9; fix 5 row 5. The fixes that need no build (1, 3, 4) cover rows 1, 2, 4 and 6 to 9, which is 7 of the 9; with the build items, all 9.
+Counted from the table: fix 1 cuts rows 1, 2, 6, 7, 8; fix 2 rows 1 to 4; fix 3
+rows 1, 2, 4; fix 4 rows 7, 8, 9; fix 5 row 5. The fixes that need no build (1,
+3, 4) cover rows 1, 2, 4 and 6 to 9, which is 7 of the 9; with the build items,
+all 9.
 
 **The checklist** (fix 1), as adopted 2-1:
 
