@@ -631,3 +631,34 @@ func TestPruningKeepsANonceStillInsideW(t *testing.T) {
 		t.Fatalf("an earlier cue's nonce still inside W must promote: %v", st)
 	}
 }
+
+func TestPresenceCueIsNotLiveWhileTheWatcherCannotReadInboxState(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.c.ack("nonce1")
+	if st, reason := r.c.presence(); st != "live" || reason != "" {
+		t.Fatalf("a healthy watcher is live with no reason: %q %q", st, reason)
+	}
+	r.src.err = fmt.Errorf("consumer not found")
+	r.step(2 * time.Second)
+	st, reason := r.c.presence()
+	if st == "live" || !strings.Contains(reason, "watcher: cannot read inbox state: consumer not found") {
+		t.Fatalf("a failed read must leave live and say why in presence: %q %q", st, reason)
+	}
+	r.src.err = nil
+	r.step(2 * time.Second)
+	if st, reason := r.c.presence(); st != "live" || reason != "" {
+		t.Fatalf("a good read returns presence to live: %q %q", st, reason)
+	}
+}
+
+func TestPresenceCueCarriesTheSelfTestReason(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.c.mu.Lock()
+	r.c.reason = "no nonce echo after self-test"
+	r.c.mu.Unlock()
+	if st, reason := r.c.presence(); st != "unverified" || reason != "no nonce echo after self-test" {
+		t.Fatalf("presence carries the self-test reason beside the state: %q %q", st, reason)
+	}
+}

@@ -225,6 +225,22 @@ func (c *cue) reconnected() {
 	c.mu.Unlock()
 }
 
+// presence is the cue as other seats read it beside the presence row. A seat
+// whose watcher cannot read its inbox state is never cued, so it must not read
+// live there (director#173); inbox_summary keeps the state it earned and shows
+// the read failure in the reason.
+func (c *cue) presence() (state, reason string) {
+	st := c.status()
+	state, reason = st["state"], st["reason"]
+	c.mu.Lock()
+	failing := c.readErr != ""
+	c.mu.Unlock()
+	if failing && state == cueStateLive {
+		state = cueStateUnver
+	}
+	return state, reason
+}
+
 func (c *cue) status() map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
