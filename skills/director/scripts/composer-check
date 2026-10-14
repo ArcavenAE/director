@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""composer-check - look at a pane before an inject that ends in Enter.
+
+An Enter into a composer that already holds typed text sends that text with
+yours; an Enter into the "Teach auto mode about your environment?" menu picks
+"1. Yes" and swallows the message. Run this first.
+
+  composer-check --pane <tmux-target> [--tmux-arg ARG ...] [--handle-menu]
+  composer-check --file <capture>           (a `tmux capture-pane -p -e` capture)
+
+It captures with colour codes (-e), because a plain capture shows a generated
+prompt suggestion exactly like typed text. In a capture, typed text follows the
+prompt mark in the default colour; a suggestion is wrapped in the dim code.
+
+Verdict on stdout, one word, and the exit code:
+
+  EMPTY      0  nothing after the prompt mark: safe to inject
+  SUGGESTION 0  only dim text after the mark: typed text replaces it, safe
+  HAS-TEXT   1  non-dim text after the mark: REFUSE, do not inject
+  MENU       2  the auto-mode menu is showing: answer "2. Not now", then ring
+  NO-PROMPT  3  no prompt mark found: refuse; look at the pane first
+
+With --handle-menu and --pane, a MENU verdict sends the single key `2` (the
+"2. Not now" entry; never Enter, never "Don't show again"), recaptures, and
+reports the verdict of the recapture. If the menu is still there it stays MENU
+(exit 2). Nothing else is ever sent. Without --handle-menu the script only
+reads.
+
+TMUX_BIN overrides the tmux binary (the tests use a fake).
+"""
+import argparse, os, re, subprocess, sys
+
+PROMPT = "❯"  # the prompt mark
+ANSI = re.compile(r"\x1b\[([0-9;]*)m")
+MENU = re.compile(r"Teach auto mode", re.I)
+
+
+def tmux(*a):
+    return subprocess.run([os.environ.get("TMUX_BIN", "tmux"), *a], capture_output=True, text=True)
+
+
+def capture(pane, extra):
+    r = tmux(*extra, "capture-pane", "-p", "-e", "-t", pane)
+    if r.returncode != 0:
+        sys.exit(f"composer-check: capture of {pane} failed: {r.stderr.strip()}")
+    return r.stdout
+
+
+def after_prompt(line):
+    """The text after the last prompt mark on this line, split into (dim, plain) runs."""
+    i = line.rfind(PROMPT)
+    if i < 0:
+        return None
+    rest = line[i + 1:]
+    dim = False
+    plain, dimmed = "", ""
+    pos = 0
+    for m in ANSI.finditer(rest):
+        seg = rest[pos:m.start()]
+        if dim:
+            dimmed += seg
+        else:
+            plain += seg
+        for code in (m.group(1) or "0").split(";"):
+            if code in ("2",):
+                dim = True
+            elif code in ("0", "22", "39", ""):
+                dim = False
+        pos = m.end()
+    seg = rest[pos:]
+    if dim:
+        dimmed += seg
+    else:
+        plain += seg
+    return dimmed, plain
+
+
+def verdict(text):
+    plain_lines = [ANSI.sub("", l) for l in text.splitlines()]
+    if any(MENU.search(l) for l in plain_lines):
+        return "MENU"
+    for line in reversed(text.splitlines()):
+        if PROMPT in line:
+            dimmed, plain = after_prompt(line)
+            if plain.replace(" ", " ").strip():
+                return "HAS-TEXT"
+            if dimmed.replace(" ", " ").strip():
+                return "SUGGESTION"
+            return "EMPTY"
+    return "NO-PROMPT"
+
+
+CODES = {"EMPTY": 0, "SUGGESTION": 0, "HAS-TEXT": 1, "MENU": 2, "NO-PROMPT": 3}
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="composer-check")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--pane")
+    g.add_argument("--file")
+    ap.add_argument("--tmux-arg", action="append", default=[], help="extra tmux args, e.g. -L <socket>")
+    ap.add_argument("--handle-menu", action="store_true")
+    a = ap.parse_args()
+    if a.file and a.handle_menu:
+        sys.exit("composer-check: --handle-menu needs --pane")
+    text = open(a.file, encoding="utf-8", errors="replace").read() if a.file else capture(a.pane, a.tmux_arg)
+    v = verdict(text)
+    if v == "MENU" and a.handle_menu:
+        r = tmux(*a.tmux_arg, "send-keys", "-t", a.pane, "2")
+        if r.returncode != 0:
+            sys.exit(f"composer-check: sending 2 to {a.pane} failed: {r.stderr.strip()}")
+        v = verdict(capture(a.pane, a.tmux_arg))
+    print(v)
+    sys.exit(CODES[v])
+
+
+if __name__ == "__main__":
+    main()
