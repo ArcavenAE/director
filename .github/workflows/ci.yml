@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (cmd/director-mcp)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: cmd/director-mcp
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'cmd/director-mcp/go.mod'
+          cache-dependency-path: cmd/director-mcp/go.sum
+
+      - name: Install nats-server
+        # The broker-backed tests skip when nats-server is not on PATH
+        # (exec.LookPath in drain_broker_test.go, global_floor_test.go and
+        # leafrig_test.go), so without this step CI skips them. The version is
+        # the fleet pin, the same pair marvel's ci.yml uses; bump the version
+        # and the checksum together, taking the checksum from the release's
+        # SHA256SUMS. The download is checked before it is unpacked.
+        env:
+          NATS_SERVER_VERSION: v2.15.0
+          NATS_SERVER_SHA256: 5d2c51caca950333aba84911df7d377f826f3a59ec36061c6539105084f65c92
+        run: |
+          set -euo pipefail
+          name="nats-server-${NATS_SERVER_VERSION}-linux-amd64"
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/${name}.tar.gz" \
+            "https://github.com/nats-io/nats-server/releases/download/${NATS_SERVER_VERSION}/${name}.tar.gz"
+          echo "${NATS_SERVER_SHA256}  ${RUNNER_TEMP}/${name}.tar.gz" | sha256sum --check --strict -
+          mkdir -p "${RUNNER_TEMP}/nats-bin"
+          tar -xzf "${RUNNER_TEMP}/${name}.tar.gz" -C "${RUNNER_TEMP}/nats-bin" --strip-components=1 "${name}/nats-server"
+          echo "${RUNNER_TEMP}/nats-bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/nats-bin/nats-server" --version
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests with the race detector
+        run: go test ./... -v -count=1 -race
+
+  skill-verifiers:
+    name: Skill script verifiers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run each verifier with bash
+        # Every skills/director/scripts/verify-*.sh, one at a time, all of them
+        # even after a failure, so one run shows every miss.
+        run: |
+          set -uo pipefail
+          failed=()
+          for f in skills/director/scripts/verify-*.sh; do
+            echo "::group::${f}"
+            if bash "$f"; then echo "ok ${f}"; else echo "::error file=${f}::${f} failed"; failed+=("$f"); fi
+            echo "::endgroup::"
+          done
+          if (( ${#failed[@]} )); then
+            printf 'failed: %s\n' "${failed[@]}"
+            exit 1
+          fi
