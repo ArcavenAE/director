@@ -1,3 +1,17 @@
+# What this workflow does not cover, so a green check is read for what it is:
+#   - scripts/: its verifiers (verify-install.sh, verify-skill-ledger.sh,
+#     director-install and draft-sweep) are not run here.
+#   - sim/twin/verify-cast-launch.sh is not run here.
+#   - probe/: 23 shell scripts, 8 of them verify-*.sh that need a live broker or
+#     hub and the nats CLI, and a second Go module (probe/leaf-fabric/fabtool)
+#     that the go vet and go test below never reach, since the Go job works in
+#     cmd/director-mcp.
+#   - anything that needs a live marvel or a macOS host, and a real terminal
+#     pane.
+# The runner's egress policy is audit: it records outbound calls and blocks
+# none. Once a few runs have recorded the endpoints, block with an allow-list is
+# a possible follow-up.
+#
 name: CI
 
 on:
