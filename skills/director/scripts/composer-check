@@ -12,20 +12,25 @@ It captures with colour codes (-e), because a plain capture shows a generated
 prompt suggestion exactly like typed text. In a capture, typed text follows the
 prompt mark in the default colour; a suggestion is wrapped in the dim code.
 
-The composer is the region from the last line that BEGINS with the prompt mark
-down to the next rule line (a line of box-drawing dashes) or the menu title,
-whichever comes first, so a draft that wraps onto a second line counts, and a
-status line below the rule, or a line that merely ends in the mark, does not.
-Any non-dim text in the region is HAS-TEXT. Colour codes are parsed as units
-(38, 48 and 58 take their `;5;n`, `;2;r;g;b` or `:` forms whole), so a colour
-parameter is never read as the dim attribute; only SGR 2 sets dim, and 0, 22
-and 39 clear it (39 is not strictly SGR for dim, but it errs toward refusing).
+The composer is the region framed by the last two rule lines on screen (lines of
+box-drawing dashes: the rule above the composer and the rule below it). It must
+hold exactly one line that begins with the prompt mark. Any non-dim text in the
+frame, on the mark line or on any other line, is HAS-TEXT, so a draft that wraps
+or that holds dashes, a pasted shell transcript or menu text is a draft. A frame
+that is missing (fewer than two rules), or that holds no mark line or several,
+is refused as UNCLEAR rather than guessed at. Lines below the bottom rule (a
+status line, even one that is only the mark) are not the composer. Colour codes
+are parsed as units (38, 48 and 58 take their `;5;n`, `;2;r;g;b` or `:` forms
+whole), so a colour parameter is never read as the dim attribute; only SGR 2
+sets dim, and 0, 22 and 39 clear it (39 is not strictly SGR for dim, but it errs
+toward refusing).
 
-The menu is recognised only as its own block: the title line followed within a
-few lines by an option line "1. Yes" and a later "2. Not now", and only below
-the composer. The phrase in the transcript, or a quoted copy of the menu above
-the composer, is not the menu. A composer holding typed text is HAS-TEXT even
-when a menu is showing, and nothing is sent.
+The menu is recognised only as its own block BELOW the bottom rule: the title
+line followed within a few lines by an option line "1. Yes" and a later
+"2. Not now" (a leading cursor mark on an option line is allowed). The phrase in
+the transcript, a quoted menu above the composer, or menu text typed into the
+composer is not the menu. A composer holding typed text is HAS-TEXT even when a
+menu is showing, and nothing is sent.
 
 Verdict on stdout, one word, and the exit code:
 
@@ -33,7 +38,7 @@ Verdict on stdout, one word, and the exit code:
   SUGGESTION 0  only dim text after the mark: typed text replaces it, safe
   HAS-TEXT   1  non-dim text after the mark: REFUSE, do not inject
   MENU       2  the auto-mode menu is showing: answer "2. Not now", then ring
-  NO-PROMPT  3  no prompt mark found: refuse; look at the pane first
+  UNCLEAR    3  no frame, or no single mark line in it: refuse; look at the pane first
 
 With --handle-menu and --pane, a MENU verdict sends the single key `2` (the
 "2. Not now" entry; never Enter, never "Don't show again"), recaptures, and
@@ -48,7 +53,9 @@ import argparse, os, re, subprocess, sys
 
 PROMPT = "\u276f"  # the prompt mark
 ANSI = re.compile(r"\x1b\[([0-9;:]*)m")
-RULE = re.compile(r"^\s*[\u2500-\u257f-]{5,}\s*$")
+BOX = "[\u2500-\u257f-]"
+# a rule line: a run of box dashes, optionally with a label and more dashes (the top rule carries the session name)
+RULE = re.compile(r"^\s*" + BOX + r"{5,}(?:\s.*\s" + BOX + r"+)?\s*$")
 MENU_TITLE = re.compile(r"Teach auto mode", re.I)
 OPT_YES = re.compile(r"^\s*(?:[\u276f>]\s*)?1\.\s+Yes\b")
 OPT_NOT_NOW = re.compile(r"^\s*(?:[\u276f>]\s*)?2\.\s+Not now\b")
@@ -117,19 +124,19 @@ def menu_at(lines, start):
 
 
 def verdict(text):
+    """The composer is framed: the rule line above it and the one below, the last two
+    rules on screen. Anything that does not look like that is refused, not guessed at."""
     lines = text.splitlines()
-    mark = next((i for i in range(len(lines) - 1, -1, -1)
-                 if plain(lines[i]).lstrip().startswith(PROMPT)), None)
-    if mark is None:
-        return "NO-PROMPT"
-    menu = menu_at(lines, mark + 1)
-    end = menu if menu is not None else len(lines)
-    for i in range(mark + 1, end):
-        if RULE.match(plain(lines[i])):
-            end = i
-            break
-    state, seen = "EMPTY", False
-    for i in range(mark, end):
+    rules = [i for i, l in enumerate(lines) if RULE.match(plain(l))]
+    if len(rules) < 2:
+        return "UNCLEAR"
+    top, bot = rules[-2], rules[-1]
+    marks = [i for i in range(top + 1, bot) if plain(lines[i]).lstrip().startswith(PROMPT)]
+    if len(marks) != 1:
+        return "UNCLEAR"
+    state = "EMPTY"
+    for i in range(top + 1, bot):
+        seen = i != marks[0]
         for dim, seg in runs(lines[i]):
             if not seen:
                 if PROMPT not in seg:
@@ -140,12 +147,12 @@ def verdict(text):
             if not dim:
                 return "HAS-TEXT"
             state = "SUGGESTION"
-    if menu is not None:
+    if menu_at(lines, bot + 1) is not None:
         return "MENU"
     return state
 
 
-CODES = {"EMPTY": 0, "SUGGESTION": 0, "HAS-TEXT": 1, "MENU": 2, "NO-PROMPT": 3}
+CODES = {"EMPTY": 0, "SUGGESTION": 0, "HAS-TEXT": 1, "MENU": 2, "UNCLEAR": 3}
 
 
 def main():
