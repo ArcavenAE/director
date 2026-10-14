@@ -1,10 +1,11 @@
 package main
 
-// The seat URI, marvel://<fleet>/<cluster>/<ws>/<team>/<slot> with
+// The seat URI, marvel://<cluster>/<ws>/<team>/<slot> with
 // <slot> = <role>-<idx>: the one constant and builder in this codebase, so
 // every projection of a seat's identity is cut from the same string and
 // agrees with marvel's byte for byte (CAND-ID-6, aae-orc
-// docs/design/seat-identity-grammar.md section 3.1 and 4).
+// docs/design/seat-identity-grammar.md section 3.1 and 4). The operator ruled
+// the fleet segment out on 2026-10-14, so the URI has four parts.
 //
 // Segments are validated as raw strings and never rewritten (CAND-ID-1,
 // CAND-ID-2): url.Parse decodes escapes in Path, so a validator that read the
@@ -19,13 +20,13 @@ import (
 const seatURIScheme = "marvel://"
 
 // seatURISegments is the count after the scheme (CAND-ID-4).
-const seatURISegments = 5
+const seatURISegments = 4
 
 // SeatURI is the parsed form of a seat URI. The slot is Role-Index.
 type SeatURI struct {
-	Fleet, Cluster, Workspace, Team string
-	Role                            string
-	Index                           int
+	Cluster, Workspace, Team string
+	Role                     string
+	Index                    int
 }
 
 // validSegment reports CAND-ID-1: lowercase letters and digits in runs joined
@@ -99,16 +100,16 @@ func (u SeatURI) Slot() string { return u.Role + "-" + strconv.Itoa(u.Index) }
 
 // String is the URI. It does not validate; use NewSeatURI to build one.
 func (u SeatURI) String() string {
-	return seatURIScheme + strings.Join([]string{u.Fleet, u.Cluster, u.Workspace, u.Team, u.Slot()}, "/")
+	return seatURIScheme + strings.Join([]string{u.Cluster, u.Workspace, u.Team, u.Slot()}, "/")
 }
 
 // NewSeatURI is the builder: it validates every part and returns the seat.
-func NewSeatURI(fleet, cluster, ws, team, role string, idx int) (SeatURI, error) {
+func NewSeatURI(cluster, ws, team, role string, idx int) (SeatURI, error) {
 	if idx < 0 {
 		return SeatURI{}, fmt.Errorf("index %d is negative", idx)
 	}
-	u := SeatURI{Fleet: fleet, Cluster: cluster, Workspace: ws, Team: team, Role: role, Index: idx}
-	for _, p := range []struct{ name, v string }{{"fleet", fleet}, {"cluster", cluster}, {"workspace", ws}, {"team", team}} {
+	u := SeatURI{Cluster: cluster, Workspace: ws, Team: team, Role: role, Index: idx}
+	for _, p := range []struct{ name, v string }{{"cluster", cluster}, {"workspace", ws}, {"team", team}} {
 		if !validSegment(p.v) {
 			return SeatURI{}, fmt.Errorf("%s %q is not a valid segment", p.name, p.v)
 		}
@@ -131,11 +132,11 @@ func ParseSeatURI(raw string) (SeatURI, error) {
 	}
 	parts := strings.Split(rest, "/")
 	if len(parts) != seatURISegments {
-		return SeatURI{}, fmt.Errorf("seat URI %q has %d segments, want %d", raw, len(parts), seatURISegments)
+		return SeatURI{}, fmt.Errorf("seat URI %q has %d segments, want %d (cluster, workspace, team, slot; there is no fleet segment)", raw, len(parts), seatURISegments)
 	}
-	role, idx, err := splitSlot(parts[4])
+	role, idx, err := splitSlot(parts[3])
 	if err != nil {
 		return SeatURI{}, err
 	}
-	return NewSeatURI(parts[0], parts[1], parts[2], parts[3], role, idx)
+	return NewSeatURI(parts[0], parts[1], parts[2], role, idx)
 }
