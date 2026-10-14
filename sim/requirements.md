@@ -2416,7 +2416,7 @@ operator had asked for the ticket; the operator: "stop arguing with me and do as
 I ask". Director records an operator statement of fact or an instruction as the
 resolution, does not let a weaker evidence source put it back on the board, and
 raises a premise flag once before carrying out the ask.
-*Earned by: O-2073, O-netmove-jared.*
+*Earned by: O-2073, observation of 2026-10-10T15:00Z.*
 *Source: OBSERVED. Cross-refs R-201, R-202.*
 
 **R-216 (OBSERVED) · a cast seat that never starts reads "not started", and a
@@ -2460,21 +2460,32 @@ item is promoted on two or more recorded instances, or on an operator ruling.
   - R-197: director reported a party as running for two hours while it waited
     on director's own go (O-party-stalled-on-go).
   - R-201: director widened an operator prohibition past its text and held the
-    widening for about 11 hours (O-2071).
+    widening for about 11 hours, colliding with a standing rule on the same
+    subject (O-2071). The remedy is R-201's record: keep the ruling's exact
+    text and scope, apply only that, and check it against standing rules on
+    the same subject before acting on any wider reading.
   - R-189: a rule added to seven seat files landed on one host only (O-2075).
-  - R-184 and R-191: the harness's auto-mode classifier refused an
-    operator-ordered merge, a relayed go, and an operator-typed command on
-    director's side; none was retried (O-2074, relay-log 2026-10-09).
 - **Kept as observations (one instance each):** director's own spend estimated
   by hand from its transcript (O-2077); clean pull requests with no review
   request for two to three days (O-unreviewed-clean-prs).
+- **Kept as an observation, not yet promoted:** the harness's auto-mode
+  classifier refused acts the operator had ordered when director ran them on
+  its own side: one merge in an "approve and merge them" set, a relayed go,
+  and a command the operator typed in the same message (O-2074, relay-log
+  2026-10-09). Director did not retry any of them, which is correct. The
+  failure is that director held the operator's authority only as chat text,
+  which the harness cannot check. The records do not say who finally ran each
+  act or after how many rounds, so this is not an instance of R-184 (a grant
+  refused at the target seat) or R-191 (the operator gets the runnable command
+  first) until that is known.
 - **Rejected for the register (routed elsewhere):**
   - A disclosure scan run in sequence with a post rather than as its gate, twice
     (O-netmove-scan-seq, -2): general posting practice, already the
     orchestrator's upstream claim gate rule ("gate it, never sequence it").
   - A delegated read-only fork that edited files and sent asks anyway
     (O-doctor-fork-acted): delegation practice for any agent, not director's
-    software; recorded in the operator's fork practice notes.
+    software. The incident is recorded only in director's gitignored notes
+    (O-doctor-fork-acted); there is no public record to point to.
 - **Director build tickets these map to:** R-215 to K9 (rulings record kinds);
   R-216 partly to K16 (owed forwards with arrival time) and K17 (per-seat
   depth view); the R-202 instances to K11 (reconcile, unread per source) and
