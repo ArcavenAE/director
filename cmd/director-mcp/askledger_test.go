@@ -818,6 +818,9 @@ func TestAGlobalPresenceKeyIsReadForItsClusterAndRole(t *testing.T) {
 	}{
 		{"presence.cluster-b.supervisor.01ABC", globalObs{Cluster: "cluster-b", Role: "supervisor"}, true},
 		{"presence.director.01ABC", globalObs{Role: "director"}, true},
+		{"presence.director.director-0.01ABC", globalObs{Role: "director"}, true}, // per seat name (seat-id Q2)
+		{"presence.director.supervisor.01ABC", globalObs{}, false},                // ambiguous with a cluster named director, refused as before
+		{"presence.director.a.b.c", globalObs{}, false},
 		{"presence.cluster-b.worker.01ABC", globalObs{}, false}, // not a global role
 		{"presence.cluster-b.supervisor", globalObs{}, false},   // no instance
 		{"other.cluster-b.supervisor.01ABC", globalObs{}, false},

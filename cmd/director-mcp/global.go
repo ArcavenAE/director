@@ -218,7 +218,22 @@ func globalDurable(agentID, instance string) string {
 //
 // A worker form, a third role word, a cluster-qualified director, or a stray
 // path segment is refused here rather than turned into a subject nobody reads.
+// roleDirectorAddress is the one-segment address of the director (seat-id Q2,
+// operator: "yes c with b underneath"). Senders name the role, not a host or a
+// seat; whichever director instance is running answers, and that instance has
+// an ordinary seat name in presence. It is the same address as global://director.
+const roleDirectorAddress = "role://director"
+
+// isGlobalAddress reports whether an address routes to the hub: a global://
+// address, or the one-segment role://director.
+func isGlobalAddress(addr string) bool {
+	return strings.HasPrefix(addr, "global://") || addr == roleDirectorAddress
+}
+
 func parseGlobalAddress(addr string) (cluster, role string, err error) {
+	if addr == roleDirectorAddress {
+		return "", roleDirector, nil
+	}
 	if !strings.HasPrefix(addr, "global://") {
 		return "", "", errors.New("not a global address: " + addr)
 	}

@@ -21,6 +21,7 @@ func TestFabricAddressSubjects(t *testing.T) {
 		{"role://kinu/ws1/team1/supervisor", "agent.kinu.ws1.team1.role.supervisor.inbox"},
 		{"role://mokuzai/ws1/team1/research-supervisor", "agent.mokuzai.ws1.team1.role.research-supervisor.inbox"},
 		{"director", "director.inbox"},
+		{"role://director", "director.inbox"},
 	}
 	for _, c := range cases {
 		a, err := parseFabricAddress(c.addr)
@@ -54,6 +55,7 @@ func TestFabricAddressRefusals(t *testing.T) {
 		"global://kinu/supervisor",       // the legacy form is an alias, resolved elsewhere
 		"a/b/c/d",                        // no scheme: four tokens alone are not an address
 		"director/extra",                 // the director has one address
+		"role://director/extra",          // nor does role://director take a tail
 		"agent://kinu//team1/b",          // an empty token
 	} {
 		if _, err := parseFabricAddress(bad); err == nil {

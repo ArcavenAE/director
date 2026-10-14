@@ -857,7 +857,7 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 	if len(body) > maxEnvelopeBytes {
 		return nil, atStage("size", fmt.Errorf("envelope %d bytes exceeds 64 KiB; use content.refs pointers", len(body)))
 	}
-	if strings.HasPrefix(e.Recipient.Address, "global://") {
+	if isGlobalAddress(e.Recipient.Address) {
 		return b.publishGlobal(ctx, e, body)
 	}
 	subject, durable, err := b.resolveSubject(ctx, e.Recipient.Address, wsHint)
