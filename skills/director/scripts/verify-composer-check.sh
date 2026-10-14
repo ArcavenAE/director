@@ -117,6 +117,38 @@ ${R}
 more draft
 ${R}"
 
+# --- a rule-shaped line typed into a draft cannot become the frame's top (review 5523646637) ---
+check "a typed dashed line then an empty mark line inside the frame is refused" UNCLEAR 3 "$(framed "${P} git log
+----------
+${P} ")"
+check "a typed labelled dashed line then an empty mark line is refused" UNCLEAR 3 "$(framed "${P} draft
+----- note -
+${P} ")"
+check "a typed box rule then an empty mark line is refused" UNCLEAR 3 "$(framed "${P} draft
+${R}
+${P} ")"
+check "a transcript rule above an echoed mark line and a real frame is refused (fails safe)" UNCLEAR 3 "${R}
+${P} an echoed message
+$(framed "${P} ")"
+check "a transcript rule with no mark line before the frame is fine" EMPTY 0 "${R}
+some assistant text
+$(framed "${P} ")"
+
+# --- what counts as a rule is pinned ----------------------------------------------------
+check "a label with no trailing dashes is not a rule" UNCLEAR 3 "$(for _ in 1 2 3 4 5 6; do printf '\xe2\x94\x80'; done) some-label
+${P} typed
+${R}"
+check "two dashes are not a rule"                   UNCLEAR 3 "--
+${P} typed
+${R}"
+check "four dashes are not a rule"                  UNCLEAR 3 "----
+${P} typed
+${R}"
+check "five dashes are a rule"                      HAS-TEXT 1 "-----
+${P} typed
+${R}"
+check "a draft line that only ends in dashes is not a rule" HAS-TEXT 1 "$(framed "${P} note ----------")"
+
 # --- the menu is its own block, below the bottom rule -------------------------------------
 check "the auto-mode menu below the composer is MENU" MENU 2 "$(framed "${P} ")
 ${MENU_T}

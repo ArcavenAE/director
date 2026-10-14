@@ -18,7 +18,8 @@ hold exactly one line that begins with the prompt mark. Any non-dim text in the
 frame, on the mark line or on any other line, is HAS-TEXT, so a draft that wraps
 or that holds dashes, a pasted shell transcript or menu text is a draft. A frame
 that is missing (fewer than two rules), or that holds no mark line or several,
-is refused as UNCLEAR rather than guessed at. Lines below the bottom rule (a
+is refused as UNCLEAR rather than guessed at. A mark line between the frame's top and the rule before it
+means the "top" was typed into a draft, and is refused too. Lines below the bottom rule (a
 status line, even one that is only the mark) are not the composer. Colour codes
 are parsed as units (38, 48 and 58 take their `;5;n`, `;2;r;g;b` or `:` forms
 whole), so a colour parameter is never read as the dim attribute; only SGR 2
@@ -131,6 +132,11 @@ def verdict(text):
     if len(rules) < 2:
         return "UNCLEAR"
     top, bot = rules[-2], rules[-1]
+    # A rule-shaped line typed into a draft can pose as the frame's top. A drawn top rule
+    # sits above it, so a mark line between the rule before and this "top" means the
+    # frame's top is inside a draft: refuse.
+    if len(rules) >= 3 and any(plain(lines[i]).lstrip().startswith(PROMPT) for i in range(rules[-3] + 1, top)):
+        return "UNCLEAR"
     marks = [i for i in range(top + 1, bot) if plain(lines[i]).lstrip().startswith(PROMPT)]
     if len(marks) != 1:
         return "UNCLEAR"
