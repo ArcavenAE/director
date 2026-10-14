@@ -2379,6 +2379,109 @@ transport carries traffic, director says which one and how far behind it is.
 *Earned by: FR-netmove-17, -19, -21.*
 *Source: OBSERVED. Cross-refs R-168, R-185.*
 
+**R-213 (OBSERVED) · a send's recipient is selected, never typed, and director
+cannot address itself.** Director sent to its own global address five times in
+six days: three stub sends that fired with placeholder text before the body was
+written, and two replies that copied the incoming message's recipient (director)
+as the outgoing one. Each landed only in director's own inbox, so no seat was
+misled, but each was a send nobody meant. Two more sends were refused because
+director typed the workspace into the team slot of a local address. The send
+path takes the recipient from the roster or from the message being answered,
+refuses director's own address, and has a compose step, so a body that is a
+stub never publishes.
+*Earned by: O-2072, relay-log 2026-10-09 (stub to self), relay-log 2026-10-11
+(stub to self), O-self-send, O 2026-10-14u; relay-log 2026-10-08 and 2026-10-11
+(team slot refused).*
+*Source: OBSERVED. Extends R-187.*
+
+**R-214 (OBSERVED) · an outward act on a shared subject is claimed before it is
+made.** Three times in four days two actors did the same outward act. Director
+merged a pull request 20 seconds after another identity had merged it; the head
+check kept that harmless. A second director session posted the same issue round
+13 seconds after the first and restarted a shared watcher. Director relayed one
+operator note to two candidate owners before knowing which owned the ticket,
+and both posted it, so the ticket carries it twice. Before a merge, a post to a
+thread another actor also writes, or a relay to an owner, director takes or
+checks a claim on that subject (the pull request, the thread round, the
+ticket's owner), and a second actor sees the claim instead of repeating the act.
+*Earned by: O-dual-merge-599, O-two-directors, O 2026-10-13T20:07Z (double comment).*
+*Source: OBSERVED. Cross-refs R-54, R-140 (multi-instance study).*
+
+**R-215 (OBSERVED) · the operator's answer closes the question.** The operator
+stated a fact (an account already had a second owner); a tool that could not
+read the console came back UNKNOWN, and director turned that back into an
+operator ask in two statuses. The operator: "why are you asking me ... in the
+console?" Separately, director repeated a seat's premise flag twice after the
+operator had asked for the ticket; the operator: "stop arguing with me and do as
+I ask". Director records an operator statement of fact or an instruction as the
+resolution, does not let a weaker evidence source put it back on the board, and
+raises a premise flag once before carrying out the ask.
+*Earned by: O-2073, O-netmove-jared.*
+*Source: OBSERVED. Cross-refs R-201, R-202.*
+
+**R-216 (OBSERVED) · a cast seat that never starts reads "not started", and a
+recurring report that misses its beat is raised.** Successor seats cast at a
+generation shift sat at an empty prompt with no turn: three on one team for an
+unknown stretch, found only when a send was refused, and a team supervisor for
+about 20 hours, while the roster showed it present and idle. In that window six
+of the team's three-hourly sweep reports were never sent, and director did not
+notice the absence until the operator asked. Earlier, a cron-driven seat's
+reports stopped for 11.5 hours unseen. Director knows each seat's expected
+recurring reports and raises a missed one, and a freshly cast seat that has
+taken no first turn is shown as not started, not idle.
+*Earned by: O-2062, O-2070, O-2076, O 2026-10-13T14:20Z (supervisor idle 20h).*
+*Source: OBSERVED. Sharpens R-117 and R-195.*
+
+### Harvest diff (2026-10-14, general)
+
+Covers the observations O-2071 through the 2026-10-14 entries and the relay log
+from 2026-10-10 on, after the 2026-10-09 harvest, outside the network-move
+entries the 2026-10-14 network-move harvest took. Friction after the 2026-10-09
+harvest is all network-move material, so it adds nothing here. Same bar: an
+item is promoted on two or more recorded instances, or on an operator ruling.
+
+- **Promoted (4):** R-213 (a recipient is selected, never typed; no send to
+  self), R-214 (an outward act on a shared subject is claimed first), R-215 (the
+  operator's answer closes the question), R-216 (not started and missed beats
+  are visible).
+- **Unchanged, new instances:**
+  - R-194 and R-149: twice a seat's composer held a dim harness suggestion that
+    one Enter would submit as if typed, once a false claim that the operator had
+    refreshed a cloud session, once an action still waiting on an operator card
+    (O-dangerous-suggestion, O 2026-10-14v).
+  - R-117 and R-195: a reviewer supervisor held presence and read healthy while
+    its pane was an empty session that never polled, with five reviews unacked
+    (O-2076).
+  - R-202: a design party's eight operator decisions never reached the decision
+    page and sat about 24 hours (O-2078); a seat cited an operator question that
+    lived only in the operator's own chat with another session
+    (O-netmove-phantom-operator-ask, kept as an observation by the network-move
+    harvest).
+  - R-197: director reported a party as running for two hours while it waited
+    on director's own go (O-party-stalled-on-go).
+  - R-201: director widened an operator prohibition past its text and held the
+    widening for about 11 hours (O-2071).
+  - R-189: a rule added to seven seat files landed on one host only (O-2075).
+  - R-184 and R-191: the harness's auto-mode classifier refused an
+    operator-ordered merge, a relayed go, and an operator-typed command on
+    director's side; none was retried (O-2074, relay-log 2026-10-09).
+- **Kept as observations (one instance each):** director's own spend estimated
+  by hand from its transcript (O-2077); clean pull requests with no review
+  request for two to three days (O-unreviewed-clean-prs).
+- **Rejected for the register (routed elsewhere):**
+  - A disclosure scan run in sequence with a post rather than as its gate, twice
+    (O-netmove-scan-seq, -2): general posting practice, already the
+    orchestrator's upstream claim gate rule ("gate it, never sequence it").
+  - A delegated read-only fork that edited files and sent asks anyway
+    (O-doctor-fork-acted): delegation practice for any agent, not director's
+    software; recorded in the operator's fork practice notes.
+- **Director build tickets these map to:** R-215 to K9 (rulings record kinds);
+  R-216 partly to K16 (owed forwards with arrival time) and K17 (per-seat
+  depth view); the R-202 instances to K11 (reconcile, unread per source) and
+  K13 (no operator block without a card); the R-194 instances to K14 (rings
+  keyed by seat). R-213 and R-214 match no existing K ticket; R-213 belongs to
+  the director-mcp send path.
+
 ### Harvest diff (2026-10-14, network move)
 
 Covers FR-netmove-1 through FR-netmove-116 (2026-10-10 to 2026-10-14) and the
