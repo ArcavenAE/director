@@ -642,8 +642,8 @@ func TestPresenceCueIsNotLiveWhileTheWatcherCannotReadInboxState(t *testing.T) {
 	r.src.err = fmt.Errorf("consumer not found")
 	r.step(2 * time.Second)
 	st, reason := r.c.presence()
-	if st == "live" || !strings.Contains(reason, "watcher: cannot read inbox state: consumer not found") {
-		t.Fatalf("a failed read must leave live and say why in presence: %q %q", st, reason)
+	if st != "unverified" || !strings.Contains(reason, "watcher: cannot read inbox state: consumer not found") {
+		t.Fatalf("a failed read must read unverified and say why in presence: %q %q", st, reason)
 	}
 	r.src.err = nil
 	r.step(2 * time.Second)
@@ -660,5 +660,72 @@ func TestPresenceCueCarriesTheSelfTestReason(t *testing.T) {
 	r.c.mu.Unlock()
 	if st, reason := r.c.presence(); st != "unverified" || reason != "no nonce echo after self-test" {
 		t.Fatalf("presence carries the self-test reason beside the state: %q %q", st, reason)
+	}
+}
+
+// presenceRow reads the record other seats see for this session.
+func presenceRow(t *testing.T, ctx context.Context, b *Bus) map[string]any {
+	t.Helper()
+	e, err := b.kv.Get(ctx, "presence."+b.self.Team+"."+b.self.AgentID+"."+b.instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row map[string]any
+	if err := json.Unmarshal(e.Value(), &row); err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func TestPublishedPresenceRowShowsAFailingWatcherAsNotLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	provision(t, ctx, url)
+	bus := roleBus(t, ctx, url, "cue-seat", "")
+	r := newCueRig(t)
+	r.started()
+	r.c.ack("nonce1")
+	bus.attachCue(r.c)
+
+	if err := bus.writePresence(ctx, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	row := presenceRow(t, ctx, bus)
+	if row["cue"] != "live" {
+		t.Fatalf("a healthy watcher publishes live: %v", row)
+	}
+	if _, ok := row["cue_reason"]; ok {
+		t.Fatalf("no reason is published while healthy: %v", row)
+	}
+
+	r.src.err = fmt.Errorf("consumer not found")
+	r.step(2 * time.Second)
+	if err := bus.writePresence(ctx, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	row = presenceRow(t, ctx, bus)
+	reason, _ := row["cue_reason"].(string)
+	if row["cue"] != "unverified" || !strings.Contains(reason, "watcher: cannot read inbox state: consumer not found") {
+		t.Fatalf("a failing watcher publishes unverified with its reason: %v", row)
+	}
+
+	// inbox_summary keeps the state the seat earned and shows the failure in its reason.
+	srv := &Server{cue: r.c}
+	res := map[string]any{}
+	srv.cueBefore("inbox_summary", nil)(res)
+	st, _ := res["cue"].(map[string]string)
+	if st["state"] != "live" || !strings.Contains(st["reason"], "cannot read inbox state") {
+		t.Fatalf("inbox_summary is unchanged: %v", res)
+	}
+
+	r.src.err = nil
+	r.step(2 * time.Second)
+	if err := bus.writePresence(ctx, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	row = presenceRow(t, ctx, bus)
+	if _, ok := row["cue_reason"]; row["cue"] != "live" || ok {
+		t.Fatalf("a good read returns the row to live with no reason: %v", row)
 	}
 }

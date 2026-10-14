@@ -230,12 +230,10 @@ func (c *cue) reconnected() {
 // live there (director#173); inbox_summary keeps the state it earned and shows
 // the read failure in the reason.
 func (c *cue) presence() (state, reason string) {
-	st := c.status()
-	state, reason = st["state"], st["reason"]
 	c.mu.Lock()
-	failing := c.readErr != ""
-	c.mu.Unlock()
-	if failing && state == cueStateLive {
+	defer c.mu.Unlock()
+	state, reason = c.state, c.reasonLocked()
+	if c.readErr != "" && state == cueStateLive {
 		state = cueStateUnver
 	}
 	return state, reason
@@ -244,6 +242,12 @@ func (c *cue) presence() (state, reason string) {
 func (c *cue) status() map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return map[string]string{"state": c.state, "reason": c.reasonLocked()}
+}
+
+// reasonLocked is the reason with the watcher read failure beside it; the
+// caller holds c.mu.
+func (c *cue) reasonLocked() string {
 	reason := c.reason
 	if c.readErr != "" {
 		if reason != "" {
@@ -251,7 +255,7 @@ func (c *cue) status() map[string]string {
 		}
 		reason += c.readErr
 	}
-	return map[string]string{"state": c.state, "reason": reason}
+	return reason
 }
 
 // params builds one cue. While unverified, each cue carries a fresh nonce and
