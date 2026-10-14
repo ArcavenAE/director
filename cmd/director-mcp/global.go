@@ -271,11 +271,24 @@ func parseGlobalAddress(addr string) (cluster, role string, err error) {
 	}
 }
 
-// directorPresencePrefix is the key prefix of the director's own rows. A row
-// counts as the director's only when exactly one token follows it, the instance
-// (a cluster's supervisor row, presence.<cluster>.supervisor.<instance>, has
-// more).
+// directorPresencePrefix is the key prefix of the director's own rows.
 const directorPresencePrefix = "presence.director."
+
+// isDirectorKey reports whether a GLOBAL_PRESENCE key is a director row: one
+// token after presence.director., the instance, or two once the director holds
+// an ordinary seat name (seat-id Q2), the seat then the instance. A second
+// token reading "supervisor" is a cluster's supervisor row
+// (presence.<cluster>.supervisor.<instance>) and never a director row; the
+// cluster name "director" is reserved so that reading cannot collide. The ask
+// ledger and the liveness count both use this, so they cannot disagree on what
+// a director row is (R-78).
+func isDirectorKey(key string) bool {
+	p := strings.Split(key, ".")
+	if len(p) < 3 || p[0] != "presence" || p[1] != roleDirector {
+		return false
+	}
+	return len(p) == 3 || (len(p) == 4 && p[2] != roleSupervisor)
+}
 
 // oneDirectorErr refuses a director-role send unless exactly one director is
 // established live (R-78: two present instances fail loud, never pick one; the
@@ -799,8 +812,8 @@ func (g *globalTier) records(ctx context.Context, prefix string) ([]map[string]a
 		if prefix != "" && !strings.HasPrefix(k, prefix) {
 			continue
 		}
-		if prefix == directorPresencePrefix && strings.Contains(strings.TrimPrefix(k, prefix), ".") {
-			continue // not the director's row: one token after the prefix, no more
+		if prefix == directorPresencePrefix && !isDirectorKey(k) {
+			continue // under the director prefix but not a director row
 		}
 		scan.Matched++
 		entry, err := g.kv.Get(ctx, k)

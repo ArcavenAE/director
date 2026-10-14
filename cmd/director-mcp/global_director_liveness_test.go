@@ -230,3 +230,40 @@ func TestTwoLiveSupervisorsOfOneClusterStillPublish(t *testing.T) {
 		t.Fatalf("two supervisors of one cluster must not be refused as two directors: %v", err)
 	}
 }
+
+// The ledger and the liveness count share one parser for what a director row
+// is, so they cannot disagree.
+func TestTheLedgerAndTheLivenessCountAgreeOnWhatADirectorRowIs(t *testing.T) {
+	for _, key := range []string{
+		"presence.director.01A",
+		"presence.director.ops-director-g1-0.01B",
+		"presence.director.supervisor.01C",
+		"presence.director.a.b.01D",
+		"presence.director.",
+		"presence.director",
+		"presence.c1.supervisor.01E",
+		"presence.c1.director.01F",
+		"other.director.01G",
+	} {
+		obs, ok := globalObsFromKey(key)
+		isLedgerDirector := ok && obs.Role == roleDirector
+		if isLedgerDirector != isDirectorKey(key) {
+			t.Errorf("key %q: the ledger says director=%v, the liveness count says %v", key, isLedgerDirector, isDirectorKey(key))
+		}
+	}
+}
+
+// More than two tokens after the prefix is no director row, and a second token
+// reading "supervisor" is a cluster's supervisor row.
+func TestRowsDeeperThanTheSeatFormAreNotDirectors(t *testing.T) {
+	ctx, g, kv, _ := newDirectorRig(t)
+	putRow(t, ctx, kv, "presence.director.a.b.01DDDDDDDDDDDDDDDDDDDDDDDD", directorRow("deep", "01DDDDDDDDDDDDDDDDDDDDDDDD"))
+	putRow(t, ctx, kv, "presence.director.supervisor.01EEEEEEEEEEEEEEEEEEEEEEEE", directorRow("sup", "01EEEEEEEEEEEEEEEEEEEEEEEE"))
+	live, _, err := g.records(ctx, globalPresencePrefix("", roleDirector))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 0 {
+		t.Fatalf("counted %d director row(s), want 0", len(live))
+	}
+}
