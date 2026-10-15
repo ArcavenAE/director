@@ -2298,8 +2298,14 @@ its own record of the other's address, and retracted. One outage was not a
 move at all: the route between two segments failed with every address
 unchanged, and a consumer diagnosed it as a dial target nobody had re-pointed.
 Director records the last good local and peer address for each path and
-reports one of: this host moved, the peer moved, the path is down with
-addresses unchanged, or down-or-asleep. It acts on reachability transitions,
+reports, for a failed reach that sleep, a damaged trust store and a daemon
+that takes no remote calls do not explain (those are the `asleep`,
+`trust-store-damaged` and `not-listening` verdicts of the spec), one of: this
+host moved, the peer moved, the path is down with addresses unchanged,
+moved-or-marvel-down, down-or-asleep, or bus-state-unknown when the hub cannot
+be read. `peer-also-moved` is appended where both hosts moved, and
+`this-host-also-moved` is appended to `asleep` where the host moved while the
+peer sleeps. It acts on reachability transitions,
 not on an address change alone. It debounces each path at its own sample
 rate, and a path that answers once between failures inside that window reads
 as flapping, so a repair never chases it. Its verdict holds
