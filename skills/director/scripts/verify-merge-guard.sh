@@ -94,6 +94,19 @@ expect_proceed() { # name
     bad "$1" "stopped: $(cat "$fx/out")"
   fi
 }
+# A PR whose only obstacle is an open stacked child gets PROCEED-KEEP-BRANCH: exit 0,
+# the children named, and the merge command without --delete-branch. Its first word
+# is not PROCEED, so a caller that matches the plain PROCEED line never takes it for
+# permission to delete the branch.
+expect_keep() { # name, child numbers the line must name (e.g. "#9")
+  if guard org/repo 7; then
+    grep -q "^PROCEED-KEEP-BRANCH org/repo#7 @abc1234def5678" "$fx/out" \
+      && grep -q -- "$2" "$fx/out" && grep -q -- "WITHOUT --delete-branch" "$fx/out" \
+      && ! grep -q "^PROCEED org/repo" "$fx/out" && ok "$1" || bad "$1" "$(cat "$fx/out")"
+  else
+    bad "$1" "stopped: $(cat "$fx/out")"
+  fi
+}
 expect_stop() { # name, text the STOP line must carry
   if guard org/repo 7; then
     bad "$1" "proceeded: $(cat "$fx/out")"
@@ -164,7 +177,22 @@ expect_stop "the stacked-child read times out: STOP, never read as no children" 
 fixture; view OPEN false CLEAN > "$fx/view.json"; : > "$fx/list.json"
 expect_stop "the stacked-child read returns nothing: STOP" "nothing"
 fixture; view OPEN false CLEAN > "$fx/view.json"; echo '[{"number":9}]' > "$fx/list.json"
-expect_stop "an open PR based on this one's head: STOP naming it" "#9"
+expect_keep "an open PR based on this one's head: PROCEED-KEEP-BRANCH naming it" "#9"
+fixture; view OPEN false CLEAN > "$fx/view.json"; echo '[{"number":9},{"number":12}]' > "$fx/list.json"
+expect_keep "two open children: PROCEED-KEEP-BRANCH naming both" "#9 #12"
+fixture; view OPEN false CLEAN > "$fx/view.json"; echo '{"number":9}' > "$fx/list.json"
+expect_stop "a child read that is not a list: STOP" "not a list"
+# A child never softens any other stop: every other check still runs first.
+fixture; view OPEN true CLEAN > "$fx/view.json"; echo '[{"number":9}]' > "$fx/list.json"
+expect_stop "a draft base with a child: STOP" "draft"
+fixture; view OPEN false BLOCKED > "$fx/view.json"; echo '[{"number":9}]' > "$fx/list.json"
+expect_stop "a BLOCKED base with a child: STOP" "BLOCKED"
+fixture; view OPEN false CLEAN "[$FAILED_RUN]" > "$fx/view.json"; echo '[{"number":9}]' > "$fx/list.json"
+expect_stop "a failed check on a base with a child: STOP" "FAILURE"
+fixture; REVIEWS="" view OPEN false CLEAN > "$fx/view.json"; echo '[{"number":9}]' > "$fx/list.json"
+expect_stop "an unapproved base with a child: STOP" "no approval"
+fixture; REVIEWS="$GOOD_REVIEW,$(review other CHANGES_REQUESTED 2026-09-28T12:00:00Z)" view OPEN false CLEAN > "$fx/view.json"; echo '[{"number":9}]' > "$fx/list.json"
+expect_stop "a standing change request on a base with a child: STOP" "other"
 
 # --- approval at the current head (director#159) -----------------------------------
 fixture; REVIEWS="$(review reviewer APPROVED 2026-09-28T09:30:00Z)" view OPEN false CLEAN > "$fx/view.json"
