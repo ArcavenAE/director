@@ -112,6 +112,12 @@ in local or private state.
   not a JSON object, an exclusion without a repo and a label, and a view with
   no label list each print `STOP` (`merge-guard:27-43`, `:57-73`, `:98-112`). Once
   `--match-head-commit` is passed, GitHub refuses a merge whose head moved.
+  An open PR based on the head is not a stop: after every other check passes the
+  guard prints `PROCEED-KEEP-BRANCH` (exit 0), naming the children and the merge
+  command without `--delete-branch`, since deleting the base branch closes a
+  child for good. A child read that is not a list of PRs with numbers prints
+  `STOP`. The cites above are to the guard at the commit pinned in this file's
+  header and do not move with this verdict.
 - **Honor-only:** everything after the verdict. `merge-guard` never merges
   (`merge-guard:42-43`); it prints the merge command (`:7-8`). Running the
   guard before a merge, obeying `STOP`, and passing the flag are SKILL.md
