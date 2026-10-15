@@ -343,6 +343,10 @@ func noGlobalPresenceErr(addr, prefix string, scan presenceScan) error {
 // handle, the presence bucket, and this session's durable on its own inbox
 // stream.
 type globalTier struct {
+	// violations is the connection's record of publish permission violations,
+	// shared with the Bus (nil in a tier built without one).
+	violations *violationRing
+
 	cfg      globalConfig
 	js       jetstream.JetStream
 	local    jetstream.JetStream // the local tier on the same connection
@@ -857,8 +861,10 @@ func (g *globalTier) publish(ctx context.Context, e *Envelope, body []byte) (*je
 	}
 	msg := &nats.Msg{Subject: globalSubject(cluster, role), Data: body, Header: nats.Header{}}
 	msg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
+	start := time.Now()
 	ack, err := g.js.PublishMsg(ctx, msg)
 	if err != nil {
+		err = g.violations.explain(msg.Subject, start, err)
 		// No responders and a timeout are the two shapes a refused or
 		// unreachable hub takes, and both are a tool error: the send is not
 		// queued, not retried, and must not read as accepted (brief 8
