@@ -138,6 +138,9 @@ func (c *globalConfig) validate() error {
 	if err := validToken("DIRECTOR_CLUSTER", c.Cluster); err != nil {
 		return err
 	}
+	if c.Cluster == roleDirector {
+		return fmt.Errorf("DIRECTOR_CLUSTER %q is reserved: that cluster's supervisor key would sit under the director's presence prefix and be counted as a director (R-78)", c.Cluster)
+	}
 	if c.Role != roleSupervisor && c.Role != roleDirector {
 		return fmt.Errorf("DIRECTOR_GLOBAL_ROLE %q is not a global role; exactly two exist, %s and %s, and a worker never holds a global address (R-94)",
 			c.Role, roleSupervisor, roleDirector)
@@ -188,7 +191,7 @@ func (c *globalConfig) presenceKey(instance string) string {
 // section 2). Reading it is the liveness half of R-92 at this tier.
 func globalPresencePrefix(cluster, role string) string {
 	if role == roleDirector {
-		return "presence.director."
+		return directorPresencePrefix
 	}
 	return "presence." + cluster + "." + role + "."
 }
@@ -254,6 +257,9 @@ func parseGlobalAddress(addr string) (cluster, role string, err error) {
 	if err := validToken("global cluster", head); err != nil {
 		return "", "", err
 	}
+	if head == roleDirector {
+		return "", "", fmt.Errorf("unroutable global address %q; %q is reserved and names no cluster: a cluster of that name would put its supervisor's presence key under the director's prefix (R-78)", addr, roleDirector)
+	}
 	switch tail {
 	case roleSupervisor:
 		return head, roleSupervisor, nil
@@ -263,6 +269,47 @@ func parseGlobalAddress(addr string) (cluster, role string, err error) {
 		return "", "", fmt.Errorf("unroutable global address %q; %q is not a global role, exactly two exist (%s and %s) and a worker never holds a global address (R-94)",
 			addr, tail, roleSupervisor, roleDirector)
 	}
+}
+
+// directorPresencePrefix is the key prefix of the director's own rows.
+const directorPresencePrefix = "presence.director."
+
+// isDirectorKey reports whether a GLOBAL_PRESENCE key is a director row: one
+// token after presence.director., the instance, or two once the director holds
+// an ordinary seat name (seat-id Q2), the seat then the instance. A second
+// token reading "supervisor" is a cluster's supervisor row
+// (presence.<cluster>.supervisor.<instance>) and never a director row; the
+// cluster name "director" is reserved so that reading cannot collide. The ask
+// ledger and the liveness count both use this, so they cannot disagree on what
+// a director row is (R-78).
+func isDirectorKey(key string) bool {
+	p := strings.Split(key, ".")
+	if len(p) < 3 || p[0] != "presence" || p[1] != roleDirector {
+		return false
+	}
+	return len(p) == 3 || (len(p) == 4 && p[2] != roleSupervisor)
+}
+
+// oneDirectorErr refuses a director-role send unless exactly one director is
+// established live (R-78: two present instances fail loud, never pick one; the
+// director role has one instance behind role://director, so refuse rather than
+// fan out). An unreadable row means the count is not established.
+func oneDirectorErr(addr string, live []map[string]any, scan presenceScan) error {
+	if scan.Unreadable > 0 {
+		return fmt.Errorf("%d director presence record(s) in %s could not be read (%d readable), so whether exactly one director is live was NOT established; this send to %s is refused rather than risk reaching two (R-78)",
+			scan.Unreadable, globalPresenceBucket, len(live), addr)
+	}
+	if len(live) < 2 {
+		return nil
+	}
+	var who []string
+	for _, rec := range live {
+		id, _ := rec["agent_id"].(string)
+		inst, _ := rec["instance"].(string)
+		who = append(who, fmt.Sprintf("%s (instance %s)", id, inst))
+	}
+	return fmt.Errorf("%d directors are live in %s: %s; every director-role send reaches each session's own durable, so this send to %s is refused rather than acted on twice (R-78)",
+		len(live), globalPresenceBucket, strings.Join(who, ", "), addr)
 }
 
 // noGlobalPresenceErr is the R-92 liveness refusal at the global tier. The
@@ -765,6 +812,9 @@ func (g *globalTier) records(ctx context.Context, prefix string) ([]map[string]a
 		if prefix != "" && !strings.HasPrefix(k, prefix) {
 			continue
 		}
+		if prefix == directorPresencePrefix && !isDirectorKey(k) {
+			continue // under the director prefix but not a director row
+		}
 		scan.Matched++
 		entry, err := g.kv.Get(ctx, k)
 		if err != nil {
@@ -799,6 +849,11 @@ func (g *globalTier) publish(ctx context.Context, e *Envelope, body []byte) (*je
 	}
 	if len(live) == 0 {
 		return nil, noGlobalPresenceErr(e.Recipient.Address, prefix, scan)
+	}
+	if role == roleDirector {
+		if err := oneDirectorErr(e.Recipient.Address, live, scan); err != nil {
+			return nil, err
+		}
 	}
 	msg := &nats.Msg{Subject: globalSubject(cluster, role), Data: body, Header: nats.Header{}}
 	msg.Header.Set(jetstream.MsgIDHeader, e.MessageID)

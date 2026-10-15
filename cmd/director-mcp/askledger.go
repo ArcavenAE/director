@@ -449,10 +449,9 @@ func globalObsFromKey(key string) (globalObs, bool) {
 	}
 	if p[1] == roleDirector {
 		// presence.director.<instance>, or presence.director.<seat>.<instance>
-		// once the director holds an ordinary seat name (seat-id Q2). A fourth
-		// token reading "supervisor" is ambiguous with a cluster of that name
-		// and stays refused.
-		if len(p) == 3 || (len(p) == 4 && p[2] != roleSupervisor) {
+		// once the director holds an ordinary seat name (seat-id Q2); the shape
+		// is isDirectorKey's, shared with the liveness count.
+		if isDirectorKey(key) {
 			return globalObs{Role: roleDirector}, true
 		}
 		return globalObs{}, false
