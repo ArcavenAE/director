@@ -96,13 +96,16 @@ way, when row 4 matches and the watching host's address also differs from its
 last good address, the verdict is `asleep` with `this-host-also-moved`
 appended, so a host move while every peer sleeps is not hidden.
 
-When the peer's address is unknown because its bus link is down, or the hub's
-monitor endpoint cannot be read, and nothing is published, rows 6 and 7 cannot
-match. The verdict then falls to row 8 (link up but not matched by server
-key), row 9 (link down or absent) or row 10 (endpoint unreadable), and rows 8
-to 10 carry the provisional mark. Every state of the bus link, up, down or not
-readable, therefore has a row, so a watcher that cannot reach the hub still
-reports a verdict.
+When no comparison can be made for the peer's address, rows 6 and 7 cannot
+match. That is so when the address is unknown and nothing is published (the
+bus link is down or absent, no bus link is matched to the peer by server key,
+or the hub's monitor endpoint cannot be read), and when only the other kind of
+address is on record, since the two kinds are never compared. The verdict then
+falls to row 8 (the endpoint is readable and a matched bus link is up), row 9
+(readable, and the link is down or absent) or row 10 (not readable). A verdict
+that reaches any of rows 8 to 10 this way carries the provisional mark. Every
+state of the bus link, up, down, absent or not readable, therefore has a row,
+so a watcher that cannot reach the hub still reports a verdict.
 
 Limits that the verdict carries with it:
 
