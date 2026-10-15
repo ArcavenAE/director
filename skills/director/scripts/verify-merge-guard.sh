@@ -369,7 +369,7 @@ fixture
 if guard only-one-arg; then bad "usage error proceeded"
 else rc=$?; [[ $rc -eq 2 ]] && ok "a usage error exits 2" || bad "usage rc" "rc=$rc"; fi
 # The usage text is the header's verdict list: it must show every verdict, whole.
-grep -q "^usage error" "$fx/out" && grep -q "PROCEED-KEEP-BRANCH" "$fx/out" && grep -q "^STOP " "$fx/out" \
+grep -q "usage error" "$fx/out" && grep -q "PROCEED-KEEP-BRANCH" "$fx/out" && grep -q "STOP <repo>" "$fx/out" \
   && grep -q "line never takes it for leave to delete" "$fx/out" \
   && ok "the usage text shows PROCEED, PROCEED-KEEP-BRANCH, STOP and usage error whole" \
   || bad "usage text" "$(cat "$fx/out")"
