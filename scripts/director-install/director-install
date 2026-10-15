@@ -5,6 +5,8 @@
 #   director-install cast-launch [--ref REF]   install the launcher at REF
 #                                              (default origin/main)
 #   director-install cast-launch --rollback    switch back to the previous install
+#   director-install director-mcp --ref REF    build the shim at REF and install it
+#   director-install director-mcp --rollback   switch the shim back to the previous install
 #   director-install --status                  what is installed and how far behind
 #   director-install -h | --help
 #
@@ -20,6 +22,16 @@
 #      a spawn never runs a mix of two versions.
 # The previous version directory stays, and --rollback switches back to it.
 # git archive reads the commit, so a dirty working tree cannot leak in.
+#
+# The shim, director-mcp, installs the same way from a commit: the recipe at that
+# commit (scripts/build-director-mcp) builds it from `git archive`, stamped with
+# the commit, into $DIRECTOR_HOME/lib/director-mcp/<sha>/. Two checks run on the
+# built file before the switch, which starts no shim (it would join
+# the bus): `director-mcp --version`, run guarded (it exits before any config
+# or connection), must report rev <sha>. $DIRECTOR_HOME/bin/director-mcp then switches
+# atomically. A binary or symlink already there that this installer did not put
+# there is kept under lib/director-mcp/legacy-<time>/, and --rollback returns to
+# the one that was live before. Release download and attestation are not here.
 #
 # --status is a diagnostic, not a gate (diagnostic-not-gate.md): it always exits
 # 0. The one pass/fail step is the verify before the switch, which is a
@@ -39,9 +51,11 @@ MIRROR="$DIRECTOR_HOME/src/director.git"
 LIB="$DIRECTOR_HOME/lib/cast-launch"
 BIN="$DIRECTOR_HOME/bin"
 LINK="$BIN/cast-launch"
+MLIB="$DIRECTOR_HOME/lib/director-mcp"
+MLINK="$BIN/director-mcp"
 
 die() { echo "director-install: $*" >&2; exit 1; }
-usage() { sed -n '5,9p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '5,11p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Create the mirror on first use; fetch it otherwise.
 sync_mirror() {
@@ -125,6 +139,98 @@ rollback_cast_launch() {
   echo "director-install: cast-launch rolled back -> $prev"
 }
 
+# --- director-mcp, the shim --------------------------------------------------
+# The sha (or legacy-<time>) directory the shim link points at now, or empty.
+# Only a link into $MLIB is ours; anything else reads as empty here.
+current_mcp() {
+  local t
+  t="$(readlink "$MLINK" 2>/dev/null)" || return 0
+  [[ "$t" == "$MLIB"/*/director-mcp ]] || return 0
+  basename "$(dirname "$t")"
+}
+
+# Keep what is at the link now when it is not one of ours, as a legacy
+# directory, and print its name. A regular file is copied and a foreign
+# symlink is recreated, never followed.
+keep_legacy_mcp() {
+  local name
+  [[ -e "$MLINK" || -L "$MLINK" ]] || return 0
+  [[ -n "$(current_mcp)" ]] && return 0
+  name="legacy-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  mkdir -p "$MLIB/$name"
+  cp -P "$MLINK" "$MLIB/$name/director-mcp"
+  {
+    echo "sha=unknown"
+    echo "source=found at $MLINK, not installed by director-install"
+    echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$MLIB/$name/STAMP"
+  printf '%s\n' "$name"
+}
+
+switch_mcp() {
+  local sha="$1" prev tmp
+  mkdir -p "$BIN" "$MLIB"
+  prev="$(current_mcp)"
+  [[ -n "$prev" ]] || prev="$(keep_legacy_mcp)"
+  tmp="$BIN/.director-mcp.new.$$"
+  ln -sfn "$MLIB/$sha/director-mcp" "$tmp"
+  mv -f "$tmp" "$MLINK"
+  if [[ -n "$prev" && "$prev" != "$sha" ]]; then
+    printf '%s\n' "$prev" > "$MLIB/.previous.new.$$"
+    mv -f "$MLIB/.previous.new.$$" "$MLIB/.previous"
+  fi
+}
+
+install_director_mcp() {
+  local ref="$1" sha stage recipe built info version
+  command -v go >/dev/null 2>&1 || die "go is not on PATH; the shim is built from source (--ref)"
+  sync_mirror
+  sha="$(resolve "$ref")"
+  mkdir -p "$MLIB"
+  if [[ -d "$MLIB/$sha" ]]; then
+    echo "director-install: $sha is already installed and checked"
+  else
+    stage="$(mktemp -d "$MLIB/.stage.XXXXXX")"
+    trap 'rm -rf "$stage"' EXIT
+    recipe="$stage/build-director-mcp"
+    git -C "$MIRROR" show "$sha:scripts/build-director-mcp" > "$recipe" 2>/dev/null \
+      || die "$ref ($sha) has no scripts/build-director-mcp; refusing an unstamped build. Nothing was switched."
+    built="$stage/director-mcp"
+    bash "$recipe" --git-dir "$MIRROR" --sha "$sha" --out "$built" >"$stage/build.log" 2>&1 \
+      || { echo "director-install: the build failed for $ref ($sha); nothing was switched. Last lines:" >&2; tail -5 "$stage/build.log" >&2; exit 1; }
+    [[ -x "$built" ]] || die "the build wrote no executable for $ref ($sha); nothing was switched"
+    # --version prints one line and exits before any config or connection, so
+    # this run cannot join the bus. A guard anyway: stdin from /dev/null, a
+    # 5-second alarm, and a broker address nobody listens on.
+    info="$(env -i PATH="$PATH" NATS_URL=nats://127.0.0.1:1 perl -e 'alarm 5; exec @ARGV or die "exec $ARGV[0]: $!\n"' "$built" --version </dev/null 2>&1)" \
+      || die "the built shim did not run --version cleanly for $ref ($sha); nothing was switched. Output: $info"
+    [[ "$info" == "director-mcp "*" rev $sha channel "* ]] \
+      || die "the built shim does not report rev $sha (it said: $info); nothing was switched"
+    version="$(awk '{print $2}' <<<"$info")"
+    {
+      echo "sha=$sha"
+      echo "version=${version:-unknown}"
+      echo "ref=$ref"
+      echo "source=$(git -C "$MIRROR" config --get remote.origin.url)"
+      echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$stage/STAMP"
+    rm -f "$recipe"
+    mv "$stage" "$MLIB/$sha"
+    trap - EXIT
+    echo "director-install: built and checked $sha (${version:-unknown})"
+  fi
+  switch_mcp "$sha"
+  echo "director-install: director-mcp -> $sha ($ref)"
+}
+
+rollback_director_mcp() {
+  local prev
+  prev="$(cat "$MLIB/.previous" 2>/dev/null || true)"
+  [[ -n "$prev" && -e "$MLIB/$prev/director-mcp" ]] || die "no previous director-mcp install to roll back to"
+  switch_mcp "$prev"
+  echo "director-install: director-mcp rolled back -> $prev"
+}
+
 # --- status: a diagnostic; every path below exits 0 --------------------------
 status() {
   set +e  # a diagnostic reports what it cannot read; it never stops on it
@@ -145,6 +251,15 @@ status() {
       echo "cast-launch: ${sha:0:12} (ref ${ref:-?}) installed ${installed:-?}; lag unknown (no mirror, or main not in it)"
     fi
     [[ "$fetched" == no ]] && echo "WARN: fetch failed; the count is against the mirror as last fetched"
+  fi
+  local msha
+  msha="$(current_mcp)"
+  if [[ -n "$msha" ]]; then
+    echo "director-mcp: ${msha:0:12} ($(sed -n 's/^version=//p' "$MLIB/$msha/STAMP" 2>/dev/null)) installed $(sed -n 's/^installed_at=//p' "$MLIB/$msha/STAMP" 2>/dev/null)"
+  elif [[ -e "$MLINK" || -L "$MLINK" ]]; then
+    echo "WARN: $MLINK was not installed by director-install; install: director-install director-mcp --ref origin/main"
+  else
+    echo "director-mcp: not installed (install: director-install director-mcp --ref origin/main)"
   fi
   # Wrappers that still exec a checkout are how staleness hides.
   if [[ -d "$MANIFESTS" ]]; then
@@ -169,6 +284,19 @@ case "${1:-}" in
       shift
     done
     if [[ "$action" == rollback ]]; then rollback_cast_launch; else install_cast_launch "$ref"; fi
+    ;;
+  director-mcp)
+    shift
+    ref="origin/main" action=install
+    while (($#)); do
+      case "$1" in
+        --ref) [[ $# -ge 2 ]] || die "--ref needs a value"; ref="$2"; shift ;;
+        --rollback) action=rollback ;;
+        *) die "unknown argument: $1" ;;
+      esac
+      shift
+    done
+    if [[ "$action" == rollback ]]; then rollback_director_mcp; else install_director_mcp "$ref"; fi
     ;;
   --status) status || true; exit 0 ;;
   -h|--help) usage ;;

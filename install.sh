@@ -68,6 +68,7 @@ install_one "$SRC/skills/director/scripts/dws" "$DIRECTOR_HOME/bin/dws"
 install_one "$SRC/skills/director/scripts/dsi" "$DIRECTOR_HOME/bin/dsi"
 install_one "$SRC/skills/director/scripts/dsx" "$DIRECTOR_HOME/bin/dsx"
 install_one "$SRC/skills/director/scripts/merge-guard" "$DIRECTOR_HOME/bin/merge-guard"
+install_one "$SRC/skills/director/scripts/relay-log" "$DIRECTOR_HOME/bin/relay-log"
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"

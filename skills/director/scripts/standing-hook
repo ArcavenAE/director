@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""standing-hook - put drain age and the standing checklist in front of every answer.
+
+Director's standing duties (drain the inbox, read answered cards) have no cue of
+their own: they run only inside turns the operator starts, so a fast run of
+questions crowds them out. This hook is the cue. Wired as a Claude Code
+UserPromptSubmit hook, it prints, before each answer:
+
+  drain age: <N>m since the last drain (<stamp>)
+  Before you answer:
+  1. ...three lines...
+
+Subcommands:
+
+  standing-hook           print the drain age and the checklist (the hook)
+  standing-hook beat      record a drain: write the heartbeat from the clock
+
+The session runs `standing-hook beat` after each inbox drain. The heartbeat is
+one line, an RFC 3339 UTC stamp, in $DIRECTOR_STATE/last-drain (default
+$HOME/.director/state/last-drain). It is written to a temp file and renamed
+into place, and the stamp is the clock's: there is no argument to set it. With
+no heartbeat the hook says so rather than inventing an age. The first line is
+the drain age and nothing else: inbox depth is not shown, because a number
+nobody has checked teaches the reader to trust it.
+
+The hook never types into a pane and never reads the hub; it reads one file.
+"""
+import datetime, os, sys, tempfile
+
+CHECKLIST = """Before you answer:
+1. Drained, and answered Desk cards read, since my last answer? If not, do both first.
+2. Does this answer or relay touch a standing ruling, or claim authority? Quote the ruling.
+3. Where does this text land, and does that file or seat own it?"""
+
+FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def state_file():
+    d = os.environ.get("DIRECTOR_STATE") or os.path.join(os.path.expanduser("~"), ".director", "state")
+    return os.path.join(d, "last-drain")
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def beat():
+    path = state_file()
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".last-drain.")
+    with os.fdopen(fd, "w") as f:
+        f.write(now().strftime(FMT) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def age_line():
+    try:
+        with open(state_file()) as f:
+            raw = f.read().strip()
+        t = datetime.datetime.strptime(raw, FMT).replace(tzinfo=datetime.timezone.utc)
+    except (OSError, ValueError):
+        return "drain age: unknown, no drain recorded (run `standing-hook beat` after a drain)"
+    mins = int((now() - t).total_seconds() // 60)
+    if mins < 0:
+        return f"drain age: unknown, the last drain stamp ({raw}) is in the future"
+    return f"drain age: {mins}m since the last drain ({raw})"
+
+
+def main():
+    if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] != "beat"):
+        sys.exit("usage: standing-hook [beat]")
+    if len(sys.argv) == 2:
+        beat()
+        return
+    print(age_line())
+    print(CHECKLIST)
+
+
+if __name__ == "__main__":
+    main()

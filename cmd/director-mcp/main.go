@@ -68,6 +68,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "director-mcp: %v\n", err)
 		os.Exit(2)
 	}
+	// --version prints one line and exits before any config is read or any
+	// connection is made, so an installer can check what it built by running it.
+	if cli.mode == "version" {
+		fmt.Println(versionLine())
+		return
+	}
 	preflightMode := cli.mode == "preflight"
 	// unread is a read-only report over every seat's durable: it needs no
 	// identity of its own and never registers one (LR-3).
@@ -129,7 +135,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "director-mcp preflight: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Fprintln(os.Stderr, "director-mcp preflight: ok")
+		fmt.Fprintf(os.Stderr, "director-mcp preflight: ok (rev %s)\n", shimRevision())
 		return
 	}
 
@@ -173,7 +179,7 @@ func main() {
 		}, time.Now, randomNonce)
 		c.logf = logf
 		srv.cue = c
-		bus.cueState = func() string { return c.status()["state"] }
+		bus.attachCue(c)
 		bus.nc.SetReconnectHandler(func(*nats.Conn) { c.reconnected() })
 		go c.run(ctx)
 		logf("channel cue on (DIRECTOR_CUE=1): measured versions %v, poll %s, floor %s, window %s", cueCfg.Versions, cueCfg.Poll, cueCfg.Floor, cueCfg.Window)
