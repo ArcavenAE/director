@@ -93,6 +93,14 @@ the board and the roster as above.
    `install.sh` placed is the one that runs. The page exists only if the
    operator asked for it; never create it unasked.
 
+To mark a row blocked on the operator, the row must name an open Desk card
+(K13). A script cannot read the Desk, so in session read the cards with the
+Artifact data tool into a local JSON file, then run
+`${DIRECTOR_HOME:-$HOME/.director}/bin/desk-snapshot write --cards <file> --reported <count the read reported>`,
+and then `dws set <slug> --blocked operator --ask <card id>`. Without a
+snapshot read in the last 24 hours, `dws` refuses and says UNREAD; do not work
+around it, read the Desk again.
+
 ## Mode: standing, additionally
 
 - Re-sweep when the human asks what is in flight, and on your own after any
@@ -102,6 +110,30 @@ the board and the roster as above.
   ask whether to hand the work off or drop the role. In session 1 the role
   dissolved into ordinary work over six days and nobody noticed.
 
+## Standing checklist: a cue outside the answer
+
+Standing duties (drain the inbox, read answered Desk cards) have no cue of
+their own: they run only inside turns the operator starts, so a fast run of
+questions crowds them out. Three scripts in `scripts/` give them one.
+
+- `standing-hook` is a prompt hook. Wired as a Claude Code `UserPromptSubmit`
+  hook, it prints the drain age and the three-line checklist before each
+  answer. After every drain, run `standing-hook beat` to record it. With no
+  heartbeat it says the age is unknown; it never invents one.
+  `verify-standing-hook.sh` proves it.
+- `reference/relay-template.md` is the form to fill before a relay.
+- `composer-check` looks at a pane before an inject that ends in Enter. It
+  refuses when the composer holds typed text (a dim suggestion is fine), and
+  with `--handle-menu` answers the "Teach auto mode" menu with `2`, "Not now",
+  never Enter. `verify-composer-check.sh` proves it.
+
+The hook entry, in the session's settings:
+
+```json
+{"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command",
+  "command": "<checkout>/skills/director/scripts/standing-hook"}]}]}}
+```
+
 ## Merging: the guard runs before every merge
 
 Before any merge you make or relay, run `${DIRECTOR_HOME:-$HOME/.director}/bin/merge-guard <owner/repo> <n>`
@@ -109,6 +141,12 @@ for that PR, and act only on its line:
 
 - `PROCEED ... @<sha>`: merge with `--match-head-commit <sha>`, so a push after
   the read cannot slip in.
+- `PROCEED-KEEP-BRANCH ... @<sha>`: every check passed, and an open PR is based
+  on this head (a stacked child). Merge with `--match-head-commit <sha>` and
+  WITHOUT `--delete-branch`, since deleting the base branch closes the child
+  for good. Then confirm each child retargeted to the default branch and
+  retarget it by hand if not (stacked-pr-merge-order). Only the plain `PROCEED`
+  line says a merge may delete its branch.
 - `STOP ...`: stop the merge run there and report the line. Never skip the PR
   and go on to the next. A skip is how a merge order gets inverted (R-152).
 
@@ -121,8 +159,23 @@ code is not an approval of what merges, and an objection to earlier code is
 not withdrawn by someone else approving later code. "Reached GitHub" is the
 later of the head's commit date and its first check suite; GitHub exposes no
 time the head joined the PR, so with no check suite the PROCEED line says the
-push time is unknown. Operator merge exclusions (R-153) are checked
-separately, before the guard.
+push time is unknown.
+
+Operator merge exclusions (R-153) are checked by the guard, first. It reads the
+exclusion records from `$DIRECTOR_STATE/rulings.jsonl` (default
+`~/.director/state/rulings.jsonl`) before any `gh` call, and reads the PR's
+labels with the rest of the view. An exclusion is one line,
+`{"kind":"exclusion","repo":"owner/repo","label":"acu.*"}`; repo and label
+compare without case and may be shell patterns, where `*` matches any text,
+including `/`, and `.` is a literal dot. A PR in a matching repo that carries a
+matching label gets a STOP naming the exclusion, whatever its review or check
+state. An unreadable rulings file, a line that is not a JSON object, an
+exclusion missing its repo or label, and a view with no label list are each a
+STOP, and so is a missing rulings file, since a missing record cannot be told
+from none declared. The operator creates the file and enters their exclusions
+(an empty file means none declared); a seat that hits the STOP reports it and
+does not create the file. The file lives in the local state directory and is
+never committed. A merge made outside the guard stays honor-only.
 
 ## Replay: the retrospective evidence source
 
@@ -153,8 +206,23 @@ the captures and moves what has hardened into `sim/requirements.md`.
 5. Report a diff: promoted, unchanged, rejected with a reason. A harvest that
    only reports and does not write the register is session-1 behavior in a new
    costume; writing the register is the point.
+6. For an episode that produced a correction or an escalation, add a section
+   headed `Retrospective and coaching` to the report: what the seat should do
+   differently next time. Coaching is recorded under that heading, in the
+   harvest report, and never on a channel of its own, since a second channel is
+   where messages go unread (R-118). An episode with neither a correction nor
+   an escalation needs no such section, and the step is never a gate on a
+   handoff or a shift.
 
 Do not renumber existing requirements. New ones take the next R number.
+
+## Correcting a seat
+
+A correction names the run, the action observed, and its effect, so the seat
+can reproduce it the way it would a bug report; "be more careful" changes
+nothing. This is guidance, not a template. A weak episode is corrected in the
+seat's notes and handoff. A change to a role or identity file goes only as a
+proposal through ratification, and a seat is never retired over one episode.
 
 ## Relaying
 

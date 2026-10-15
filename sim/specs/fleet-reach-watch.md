@@ -52,12 +52,22 @@ Health is never read from ping, a name lookup or a side endpoint (R-208).
   outage, held until the next success: no route, network unreachable, host
   down, refused, handshake, or timeout. The class decays during an outage (host down becomes a bare
   timeout when the neighbour cache expires), so only the first one is kept.
-- **Last good addresses:** per peer and per path (marvel, bus), two values
-  recorded at the last success on that path: the watching host's own address,
-  and the address the peer was reached at.
+- **Last good addresses:** per peer and per path (marvel, bus), recorded at
+  the last success on that path: the watching host's own address, and the
+  peer's address as that path saw it. On the bus path that is the remote
+  address of the peer's bus link; on the marvel path it is the address marvel
+  reached. A published address (director#289), when there is one, is kept as
+  well. Each is compared only with a current value of the same kind, because
+  the bus can use a different address family from marvel's literal host
+  address, and a cross-kind comparison reads as a move with nothing having
+  moved.
 - **Peer's current address:** the address the peer publishes for itself when
   it does (director#289), else the remote address of its bus link, matched by
-  server key, else unknown.
+  server key, while that link is up, else unknown. A down bus link, or a hub
+  whose monitor endpoint cannot be read, with nothing published leaves it
+  unknown. A bus-link address is compared with the last good address on the
+  bus path, and a published address with the last published one; across kinds
+  the answer is unknown.
 
 ## Verdicts
 
@@ -73,14 +83,29 @@ disjoint.
 | 3 | `not-listening` | the peer's daemon publishes that it takes no remote calls |
 | 4 | `asleep` | the peer declared a sleep that covers now |
 | 5 | `this-host-moved-from-<addr>` | the watching host's address differs from its last good address on the marvel path |
-| 6 | `peer-moved-from-<addr>` | the peer's current address is known and differs from its last good address on the marvel path |
-| 7 | `path-down` | both addresses are unchanged (or the peer's is unknown) and the first class is no route or network unreachable |
-| 8 | `moved-or-marvel-down` | the peer's bus link, matched by server key, is still up |
-| 9 | `down-or-asleep` | the bus link is also down |
+| 6 | `peer-moved-from-<addr>` | the peer's current address is known (published, or its bus link is up) and differs from the last good address of the same kind: a bus-link address against the last good address on the bus path, a published address against the last published one |
+| 7 | `path-down` | the watching host's address is unchanged, the peer's current address is known and unchanged (published, or its bus link is up), and the first class is no route or network unreachable |
+| 8 | `moved-or-marvel-down` | the hub's monitor endpoint is readable and the peer's bus link, matched by server key, is still up |
+| 9 | `down-or-asleep` | the hub's monitor endpoint is readable and the peer's bus link is also down or absent (absent includes a link no server key matches to the peer) |
+| 10 | `bus-state-unknown` | the hub's monitor endpoint cannot be read (its host is down or the route to it is cut), so whether the bus link is up is not known |
 
 Rows 5 and 6 can both be true when both hosts moved; row 5 wins, because the
 watching host's own change is the one it can confirm. The verdict then names
-both: `this-host-moved-from-<addr>` with `peer-also-moved` appended.
+both: `this-host-moved-from-<addr>` with `peer-also-moved` appended. In the same
+way, when row 4 matches and the watching host's address also differs from its
+last good address on the marvel path, the verdict is `asleep` with `this-host-also-moved`
+appended, so a host move while every peer sleeps is not hidden.
+
+When no comparison can be made for the peer's address, rows 6 and 7 cannot
+match. That is so when the address is unknown and nothing is published (the
+bus link is down or absent, no bus link is matched to the peer by server key,
+or the hub's monitor endpoint cannot be read), and when only the other kind of
+address is on record, since the two kinds are never compared, and when a bus link is matched but no last good address on the bus path exists yet. The verdict then
+falls to row 8 (the endpoint is readable and a matched bus link is up), row 9
+(readable, and the link is down or absent) or row 10 (not readable). A verdict
+that reaches any of rows 8 to 10 this way carries the provisional mark. Every
+state of the bus link, up, down, absent or not readable, therefore has a row,
+so a watcher that cannot reach the hub still reports a verdict.
 
 Limits that the verdict carries with it:
 

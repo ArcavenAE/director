@@ -439,7 +439,7 @@ func (l *askLedger) ObserveGlobal(now time.Time, live []globalObs) {
 }
 
 // globalObsFromKey reads a GLOBAL_PRESENCE key: presence.director.<instance>
-// for the director, presence.<cluster>.supervisor.<instance> for a cluster's
+// (or presence.director.<seat>.<instance>) for the director, presence.<cluster>.supervisor.<instance> for a cluster's
 // supervisor (global.go globalPresencePrefix). Anything else is not a global
 // principal.
 func globalObsFromKey(key string) (globalObs, bool) {
@@ -448,10 +448,13 @@ func globalObsFromKey(key string) (globalObs, bool) {
 		return globalObs{}, false
 	}
 	if p[1] == roleDirector {
-		if len(p) != 3 {
-			return globalObs{}, false
+		// presence.director.<instance>, or presence.director.<seat>.<instance>
+		// once the director holds an ordinary seat name (seat-id Q2); the shape
+		// is isDirectorKey's, shared with the liveness count.
+		if isDirectorKey(key) {
+			return globalObs{Role: roleDirector}, true
 		}
-		return globalObs{Role: roleDirector}, true
+		return globalObs{}, false
 	}
 	if len(p) != 4 || p[2] != roleSupervisor {
 		return globalObs{}, false
@@ -797,7 +800,7 @@ func rollupKey(p askParty) string {
 	// A party reached by a global:// address rolls up apart from a local one:
 	// validToken accepts "global" as a team, and a cluster can carry the name
 	// of a local team, so team and role alone would merge the two.
-	if strings.HasPrefix(p.Address, "global://") {
+	if isGlobalAddress(p.Address) {
 		return "global:" + p.Team + "/" + p.Role
 	}
 	return p.Team + "/" + p.Role

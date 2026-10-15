@@ -29,10 +29,23 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// shimRevision is the binary's own vcs stamp: vcs.revision, with +dirty when
-// vcs.modified is true, or "unknown" when the binary was built without VCS
-// stamping. It reads the build info and never guesses.
+// Stamped by scripts/build-director-mcp with -ldflags -X, so a recipe build
+// names the commit it was built from and never the enclosing repository
+// (finding-018). Empty in an ad hoc build.
+var (
+	version  string
+	revision string
+	channel  string
+)
+
+// shimRevision is the commit the binary was built from: the stamped revision
+// when the recipe set it, else the binary's own vcs stamp (vcs.revision, with
+// +dirty when vcs.modified is true), or "unknown" when the binary carries
+// neither. It reads the build info and never guesses.
 func shimRevision() string {
+	if revision != "" {
+		return revision
+	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "unknown"
@@ -59,10 +72,24 @@ func revisionFrom(settings []debug.BuildSetting) string {
 	return rev
 }
 
+// versionLine is the one line --version prints: the stamped version and
+// channel and the revision the binary was built from. An ad hoc build has no
+// stamp and says so, so a reader never mistakes it for a release.
+func versionLine() string {
+	v, c := version, channel
+	if v == "" {
+		v = "devel"
+	}
+	if c == "" {
+		c = "dev"
+	}
+	return fmt.Sprintf("director-mcp %s rev %s channel %s", v, shimRevision(), c)
+}
+
 // cliArgs is what the command line asked for. Anything not listed here is
 // refused, rather than ignored and a live shim started (director#75).
 type cliArgs struct {
-	mode      string // serve, preflight, unread, ask-reader, asks
+	mode      string // serve, preflight, version, unread, ask-reader, asks
 	json      bool
 	all       bool          // unread: one row per durable, dead ones included (M1)
 	global    bool          // unread: the hub streams instead of AGENT_INBOX (M3)
@@ -84,6 +111,8 @@ func parseArgs(args []string) (cliArgs, error) {
 		return cliArgs{mode: "serve"}, nil
 	case len(args) == 1 && (args[0] == "--preflight" || args[0] == "-preflight"):
 		return cliArgs{mode: "preflight"}, nil
+	case len(args) == 1 && (args[0] == "--version" || args[0] == "version"):
+		return cliArgs{mode: "version"}, nil
 	case args[0] == "asks":
 		out := cliArgs{mode: "asks"}
 		for _, a := range args[1:] {
