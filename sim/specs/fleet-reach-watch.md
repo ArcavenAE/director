@@ -52,12 +52,19 @@ Health is never read from ping, a name lookup or a side endpoint (R-208).
   outage, held until the next success: no route, network unreachable, host
   down, refused, handshake, or timeout. The class decays during an outage (host down becomes a bare
   timeout when the neighbour cache expires), so only the first one is kept.
-- **Last good addresses:** per peer and per path (marvel, bus), two values
-  recorded at the last success on that path: the watching host's own address,
-  and the address the peer was reached at.
+- **Last good addresses:** per peer and per path (marvel, bus), recorded at
+  the last success on that path: the watching host's own address, and the
+  peer's own address as the watching host then knew it, kept with its source
+  (published by the peer, or the remote address of its bus link). The address
+  marvel dialled is logged for display and is never compared: it is where
+  director called, and the bus link's remote address is where the peer called
+  from, so the two can differ with nothing having moved.
 - **Peer's current address:** the address the peer publishes for itself when
   it does (director#289), else the remote address of its bus link, matched by
-  server key, else unknown.
+  server key, while that link is up, else unknown. A down bus link with
+  nothing published leaves it unknown. It carries its source, and a
+  comparison is made only against a last good address of the same source;
+  across sources the answer is unknown.
 
 ## Verdicts
 
@@ -73,14 +80,19 @@ disjoint.
 | 3 | `not-listening` | the peer's daemon publishes that it takes no remote calls |
 | 4 | `asleep` | the peer declared a sleep that covers now |
 | 5 | `this-host-moved-from-<addr>` | the watching host's address differs from its last good address on the marvel path |
-| 6 | `peer-moved-from-<addr>` | the peer's current address is known and differs from its last good address on the marvel path |
-| 7 | `path-down` | both addresses are unchanged (or the peer's is unknown) and the first class is no route or network unreachable |
+| 6 | `peer-moved-from-<addr>` | the peer's current address is known (published, or its bus link is up), has the same source as its last good address, and differs from it |
+| 7 | `path-down` | the watching host's address is unchanged, the peer's current address is known and unchanged (published, or its bus link is up), and the first class is no route or network unreachable |
 | 8 | `moved-or-marvel-down` | the peer's bus link, matched by server key, is still up |
 | 9 | `down-or-asleep` | the bus link is also down |
 
 Rows 5 and 6 can both be true when both hosts moved; row 5 wins, because the
 watching host's own change is the one it can confirm. The verdict then names
 both: `this-host-moved-from-<addr>` with `peer-also-moved` appended.
+
+When the peer's address is unknown because its bus link is down and nothing
+is published, rows 6 and 7 cannot match. The verdict then falls to row 8 (link
+up but not matched by server key) or row 9 (link down), and carries the
+provisional mark.
 
 Limits that the verdict carries with it:
 
