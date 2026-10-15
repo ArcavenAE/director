@@ -86,21 +86,21 @@ disjoint.
 | 6 | `peer-moved-from-<addr>` | the peer's current address is known (published, or its bus link is up) and differs from the last good address of the same kind: a bus-link address against the last good address on the bus path, a published address against the last published one |
 | 7 | `path-down` | the watching host's address is unchanged, the peer's current address is known and unchanged (published, or its bus link is up), and the first class is no route or network unreachable |
 | 8 | `moved-or-marvel-down` | the hub's monitor endpoint is readable and the peer's bus link, matched by server key, is still up |
-| 9 | `down-or-asleep` | the hub's monitor endpoint is readable and the peer's bus link is also down or absent |
+| 9 | `down-or-asleep` | the hub's monitor endpoint is readable and the peer's bus link is also down or absent (absent includes a link no server key matches to the peer) |
 | 10 | `bus-state-unknown` | the hub's monitor endpoint cannot be read (its host is down or the route to it is cut), so whether the bus link is up is not known |
 
 Rows 5 and 6 can both be true when both hosts moved; row 5 wins, because the
 watching host's own change is the one it can confirm. The verdict then names
 both: `this-host-moved-from-<addr>` with `peer-also-moved` appended. In the same
 way, when row 4 matches and the watching host's address also differs from its
-last good address, the verdict is `asleep` with `this-host-also-moved`
+last good address on the marvel path, the verdict is `asleep` with `this-host-also-moved`
 appended, so a host move while every peer sleeps is not hidden.
 
 When no comparison can be made for the peer's address, rows 6 and 7 cannot
 match. That is so when the address is unknown and nothing is published (the
 bus link is down or absent, no bus link is matched to the peer by server key,
 or the hub's monitor endpoint cannot be read), and when only the other kind of
-address is on record, since the two kinds are never compared. The verdict then
+address is on record, since the two kinds are never compared, and when a bus link is matched but no last good address on the bus path exists yet. The verdict then
 falls to row 8 (the endpoint is readable and a matched bus link is up), row 9
 (readable, and the link is down or absent) or row 10 (not readable). A verdict
 that reaches any of rows 8 to 10 this way carries the provisional mark. Every
