@@ -70,14 +70,16 @@ done
 grep -qF 'only when the installed copy is missing' "$skill" && ok "skill states the fallback to scripts/ only when the installed copy is missing" || bad "skill states the fallback to scripts/ only when the installed copy is missing"
 # No document installed with the skill may call an installed script by a bare relative
 # scripts/<name> path (the replay reference was missed once, which read only SKILL.md).
-# The fallback sentence names skills/director/scripts/<name>, which this pattern skips.
-bare="$(grep -rn -E '(^|[^/A-Za-z])scripts/(dsi|dsx|dws|merge-guard|relay-log|desk-snapshot)([^A-Za-z-]|$)' "$here/skills/director" "$here/commands" --include='*.md' || true)"
+# Any name counts, not a fixed list. The fallback sentence names skills/director/scripts/<name>, which this pattern skips.
+bare="$(grep -rn -E '(^|[^/A-Za-z])scripts/[A-Za-z]' "$here/skills/director" "$here/skills/stansfield" "$here/commands" --include='*.md' || true)"
 [[ -z "$bare" ]] && ok "no installed document calls a bare scripts/<name>" || bad "no installed document calls a bare scripts/<name>" "$bare"
 # The widened check does catch a bare call: plant one in a scratch copy.
 plant="$root/plant.md"; printf 'run scripts/dsi now\n' >"$plant"
-grep -qE '(^|[^/A-Za-z])scripts/(dsi|dsx|dws|merge-guard|relay-log|desk-snapshot)([^A-Za-z-]|$)' "$plant" && ok "the widened pattern flags a planted bare scripts/dsi" || bad "the widened pattern flags a planted bare scripts/dsi"
+grep -qE '(^|[^/A-Za-z])scripts/[A-Za-z]' "$plant" && ok "the widened pattern flags a planted bare scripts/dsi" || bad "the widened pattern flags a planted bare scripts/dsi"
 # The relay template's Log field names the relay-log call from the bin home.
 grep -qF "$BINHOME/relay-log append" "$here/skills/director/reference/relay-template.md" && ok "relay-template Log field calls relay-log from the bin home" || bad "relay-template Log field calls relay-log from the bin home"
+printf 'run scripts/composer-check now\n' >"$plant"
+grep -qE '(^|[^/A-Za-z])scripts/[A-Za-z]' "$plant" && ok "the widened pattern flags a bare call to a script outside the old list" || bad "the widened pattern flags a bare call to a script outside the old list"
 grep -q 'replay.md' <(find "$here/skills/director" -name '*.md') && ok "replay.md is among the documents scanned" || bad "replay.md is among the documents scanned"
 
 # A copy install runs from the bin home with no checkout beside it.
