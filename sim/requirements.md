@@ -320,9 +320,13 @@ receive.
 *Source: OBSERVED.*
 
 **R-16. Status is not liveness.** A roster status is a label the harness last
-wrote, not evidence the session is alive or reachable now.
+wrote, not evidence the session is alive or reachable now. A status claim
+carries who checked it and when, so not-checked reads differently from
+checked-and-fine.
 *Earned by: FR-3.*
-*Source: OBSERVED.*
+*Source: OBSERVED. Second sentence added 2026-10-15 from the leadership
+research (director#74), narrowed from a receiver-produced work counter that no
+component emits.*
 
 **R-17. One terminal signal distinguishes finished from died.** No harness
 measured supplies this. A clean completion and a crash both read as "the
@@ -394,9 +398,12 @@ work itself complete.
 **R-25. Partial compliance is a first-class reportable outcome.** A session did
 four of five things, refused the fifth with a reason, verified the refused item
 read-only, and reported the residual as zero. A boolean ack would have
-destroyed all of that.
-*Earned by: O-6, O-10.*
-*Source: OBSERVED.*
+destroyed all of that. A delegated decision with no verified way to carry it
+out is stalled, not delegated.
+*Earned by: O-6, O-10; O-29 (requests delivered but not consumed, seats parked
+on unsent drafts).*
+*Source: OBSERVED. Last sentence added 2026-10-15 from the leadership research
+(director#74).*
 
 **R-26. A handoff into an unattended channel is not a handoff.** Delivery
 requires a recipient that is actually reading.
@@ -1234,10 +1241,16 @@ brief sent to it on the bus. The worker, supervisor, director path drops an ask
 whenever any hop is idle, and nothing notices the drop. Director must see an
 unacked ask addressed to any hop once its bound lapses, without depending on the
 middle hop being awake. Reporting through supervisors can stay the normal path;
-the bound is what keeps it from being the only one.
+the bound is what keeps it from being the only one. An unacked MUST-wake ask
+(an item a role file lists as one that must reach a human), once its bound
+lapses, moves up one level as a message, level by level, ending at the
+operator. It is a message and never an action: nothing executes on silence or
+on a clock. No new severity table is added; the role MUST-wake lists stand.
 *Earned by: O-2026-09-25-gate-lost-in-hop (COULD NOT DO IT, by the fleet).*
 *Source: OBSERVED. Cross-refs R-107 (starvation is loud), R-110 (reply_by),
-aae-orc-xg9yd, aae-orc-s72sl.*
+aae-orc-xg9yd, aae-orc-s72sl. Last four sentences added 2026-10-15 from the
+leadership research (director#74), narrowed from a severity table with
+automatic escalation on an ack timeout.*
 
 **R-114 (OBSERVED) · the result of a finished headless run is delivered, or at
 least indexed, to director on completion.** The dtu reviewer is a headless codex
@@ -2477,6 +2490,22 @@ file was broken. Each of those costs is now a requirement (R-205 to R-208).
 The script stays on kinu as the reference behaviour for
 `sim/specs/fleet-reach-watch.md`, and it should be retired once that spec is
 built.
+
+**R-217 (OBSERVED) · a status report that was due and did not arrive, or
+arrived empty, is an unknown state to resolve, never read as fine.** A builder's
+GATE line to an idle team supervisor was never relayed, and director found it
+about 1.5 hours later (R-113). A seat whose consumer was gone polled empty and
+was told "silence, not failure" while its presence row kept refreshing (R-107,
+director#66). In both, the missing or empty report read as a good state,
+because the good state is also the quiet one (finding-188). A report that was
+due and did not arrive, or arrived empty, is recorded as unknown and resolved by
+asking or checking, and is never counted as "all is well". It informs and never
+gates: nothing blocks, merges or fires on an unknown report alone. A fixed
+reporting beat is not part of this entry; that lives in the supervisor role.
+*Earned by: O-2026-09-25-gate-lost-in-hop; finding-007 (director#66).*
+*Source: OBSERVED. Added 2026-10-15 from the leadership research (director#74),
+narrowed from a fixed beat with a readiness tightening. Cross-refs R-107,
+R-113, finding-188.*
 
 ### Harvest diff (2026-10-09)
 

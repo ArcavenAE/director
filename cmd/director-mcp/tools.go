@@ -29,7 +29,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 	summaryDesc := "Summarize the messages waiting for this session without consuming any: counts by sender and by performative, the REQUEST, FAILURE and QUERY messages and any that set reply_by, say they hold custody, or await a reply, and the waiting sequence numbers oldest first. Acks nothing; drain in order afterwards with wait_for_message max=N."
 	rosterDesc := "List the sessions currently present, from the presence store. Absence means silence, not a negative report."
 	if gcfg != nil {
-		toDesc += ", or across hosts global://director and global://{cluster}/supervisor. A global send is refused before publish when nobody is live at that address."
+		toDesc += ", or across hosts global://director (also written role://director) and global://{cluster}/supervisor. A global send is refused before publish when nobody is live at that address."
 		sendDesc += " This session is " + gcfg.selfAddress() + " at the global tier: reply to a global message with global://director, and name a cluster (list_roster shows them) to reach its supervisor."
 		waitDesc += " It polls the local inbox and this session's global inbox, and the result names the tier the message came from. A batch is listed local first, then global, each tier oldest first, and its budget is split by turn between the tiers, so the list order is not a delivery priority; sequence numbers order messages within a tier only."
 		summaryDesc += " Covers both the local inbox and this session's global inbox."

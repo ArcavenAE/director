@@ -90,6 +90,15 @@ func TestParseGlobalAddressAcceptsTheTwoForms(t *testing.T) {
 	if err != nil || cluster != "" || role != roleDirector {
 		t.Fatalf("global://director = %q, %q, %v", cluster, role, err)
 	}
+	// The one-segment role://director is the same address (seat-id Q2): the
+	// director is one seat for the fleet, whichever instance is running.
+	cluster, role, err = parseGlobalAddress("role://director")
+	if err != nil || cluster != "" || role != roleDirector {
+		t.Fatalf("role://director = %q, %q, %v", cluster, role, err)
+	}
+	if !isGlobalAddress("role://director") || !isGlobalAddress("global://director") || isGlobalAddress("role://team1/director") {
+		t.Fatal("isGlobalAddress must take role://director and global://, and not a team role")
+	}
 	cluster, role, err = parseGlobalAddress("global://mokuzai/supervisor")
 	if err != nil || cluster != "mokuzai" || role != roleSupervisor {
 		t.Fatalf("global://mokuzai/supervisor = %q, %q, %v", cluster, role, err)
@@ -104,6 +113,9 @@ func TestParseGlobalAddressRefusesEverythingElse(t *testing.T) {
 		"global://",
 		"global://mokuzai",
 		"global://mokuzai/director",
+		"role://director/extra",
+		"role://mokuzai/director", // a team role, not the one-segment director
+		"role://",
 		"global://mokuzai/worker",
 		"global://mokuzai/supervisor/extra",
 		"global://mo.kuzai/supervisor",
