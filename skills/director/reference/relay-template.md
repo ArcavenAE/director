@@ -21,7 +21,7 @@ Lands in:   <where this text ends up (a pane, a file, a public thread) and who
              owns that place. Public destination: ids only, no private
              content.>
 Reply by:   <a date or an event, or "no reply needed">
-Log:        <the relay-log entry: `scripts/relay-log append --to <to> --text-file ...`>
+Log:        <the relay-log entry: `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-log append --to <to> --text-file ...`>
 ```
 
 ## The three questions behind it
@@ -34,7 +34,7 @@ Log:        <the relay-log entry: `scripts/relay-log append --to <to> --text-fil
 3. Destination: where does the text land, and does that file or seat own it? A
    message into another seat's pane or branch is a request to its owner.
 
-Before an inject that ends in Enter, run `scripts/composer-check` (see
+Before an inject that ends in Enter, run `<checkout>/skills/director/scripts/composer-check` (see
 SKILL.md, "Standing checklist").
 
 ## What this does NOT ask
