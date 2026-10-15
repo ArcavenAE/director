@@ -34,7 +34,7 @@ Log:        <the relay-log entry: `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-l
 3. Destination: where does the text land, and does that file or seat own it? A
    message into another seat's pane or branch is a request to its owner.
 
-Before an inject that ends in Enter, run `scripts/composer-check` (see
+Before an inject that ends in Enter, run `<checkout>/skills/director/scripts/composer-check` (see
 SKILL.md, "Standing checklist").
 
 ## What this does NOT ask
