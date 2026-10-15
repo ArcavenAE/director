@@ -2299,7 +2299,9 @@ move at all: the route between two segments failed with every address
 unchanged, and a consumer diagnosed it as a dial target nobody had re-pointed.
 Director records the last good local and peer address for each path and
 reports one of: this host moved, the peer moved, the path is down with
-addresses unchanged, or down-or-asleep. It acts on reachability transitions,
+addresses unchanged, moved-or-marvel-down, down-or-asleep, or bus-state-unknown
+when the hub cannot be read, with `peer-also-moved` or `this-host-also-moved`
+appended where both moved or the host moved while the peer sleeps. It acts on reachability transitions,
 not on an address change alone. It debounces each path at its own sample
 rate, and a path that answers once between failures inside that window reads
 as flapping, so a repair never chases it. Its verdict holds

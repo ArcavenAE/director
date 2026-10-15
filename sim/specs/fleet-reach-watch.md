@@ -54,17 +54,20 @@ Health is never read from ping, a name lookup or a side endpoint (R-208).
   timeout when the neighbour cache expires), so only the first one is kept.
 - **Last good addresses:** per peer and per path (marvel, bus), recorded at
   the last success on that path: the watching host's own address, and the
-  peer's own address as the watching host then knew it, kept with its source
-  (published by the peer, or the remote address of its bus link). The address
-  marvel dialled is logged for display and is never compared: it is where
-  director called, and the bus link's remote address is where the peer called
-  from, so the two can differ with nothing having moved.
+  peer's address as that path saw it. On the bus path that is the remote
+  address of the peer's bus link; on the marvel path it is the address marvel
+  reached. A published address (director#289), when there is one, is kept as
+  well. Each is compared only with a current value of the same kind, because
+  the bus can use a different address family from marvel's literal host
+  address, and a cross-kind comparison reads as a move with nothing having
+  moved.
 - **Peer's current address:** the address the peer publishes for itself when
   it does (director#289), else the remote address of its bus link, matched by
-  server key, while that link is up, else unknown. A down bus link with
-  nothing published leaves it unknown. It carries its source, and a
-  comparison is made only against a last good address of the same source;
-  across sources the answer is unknown.
+  server key, while that link is up, else unknown. A down bus link, or a hub
+  whose monitor endpoint cannot be read, with nothing published leaves it
+  unknown. A bus-link address is compared with the last good address on the
+  bus path, and a published address with the last published one; across kinds
+  the answer is unknown.
 
 ## Verdicts
 
@@ -80,19 +83,26 @@ disjoint.
 | 3 | `not-listening` | the peer's daemon publishes that it takes no remote calls |
 | 4 | `asleep` | the peer declared a sleep that covers now |
 | 5 | `this-host-moved-from-<addr>` | the watching host's address differs from its last good address on the marvel path |
-| 6 | `peer-moved-from-<addr>` | the peer's current address is known (published, or its bus link is up), has the same source as its last good address, and differs from it |
+| 6 | `peer-moved-from-<addr>` | the peer's current address is known (published, or its bus link is up) and differs from the last good address of the same kind: a bus-link address against the last good address on the bus path, a published address against the last published one |
 | 7 | `path-down` | the watching host's address is unchanged, the peer's current address is known and unchanged (published, or its bus link is up), and the first class is no route or network unreachable |
-| 8 | `moved-or-marvel-down` | the peer's bus link, matched by server key, is still up |
-| 9 | `down-or-asleep` | the bus link is also down |
+| 8 | `moved-or-marvel-down` | the hub's monitor endpoint is readable and the peer's bus link, matched by server key, is still up |
+| 9 | `down-or-asleep` | the hub's monitor endpoint is readable and the peer's bus link is also down or absent |
+| 10 | `bus-state-unknown` | the hub's monitor endpoint cannot be read (its host is down or the route to it is cut), so whether the bus link is up is not known |
 
 Rows 5 and 6 can both be true when both hosts moved; row 5 wins, because the
 watching host's own change is the one it can confirm. The verdict then names
-both: `this-host-moved-from-<addr>` with `peer-also-moved` appended.
+both: `this-host-moved-from-<addr>` with `peer-also-moved` appended. In the same
+way, when row 4 matches and the watching host's address also differs from its
+last good address, the verdict is `asleep` with `this-host-also-moved`
+appended, so a host move while every peer sleeps is not hidden.
 
-When the peer's address is unknown because its bus link is down and nothing
-is published, rows 6 and 7 cannot match. The verdict then falls to row 8 (link
-up but not matched by server key) or row 9 (link down), and carries the
-provisional mark.
+When the peer's address is unknown because its bus link is down, or the hub's
+monitor endpoint cannot be read, and nothing is published, rows 6 and 7 cannot
+match. The verdict then falls to row 8 (link up but not matched by server
+key), row 9 (link down or absent) or row 10 (endpoint unreadable), and rows 8
+to 10 carry the provisional mark. Every state of the bus link, up, down or not
+readable, therefore has a row, so a watcher that cannot reach the hub still
+reports a verdict.
 
 Limits that the verdict carries with it:
 
