@@ -112,6 +112,7 @@ refuses "a card that is relayed is not open" "not open" "$DWS" set base --blocke
 refuses "a card that is closed is not open" "not open" "$DWS" set base --blocked operator --ask card-3
 refuses "a card with a status other than open is not open" "not open" "$DWS" set base --blocked operator --ask card-4
 refuses "a card id the snapshot does not hold is refused" "not open" "$DWS" set base --blocked operator --ask card-99
+refuses "a card id with a trailing newline is refused" "not a card id" "$DWS" set base --blocked operator --ask $'card-1\n'
 refuses "--ask with a blocked value other than operator is refused" "operator" "$DWS" set base --blocked "team-a/architect" --ask card-1
 refuses "--ask with no --blocked is refused" "operator" "$DWS" set base --ask card-1
 for v in "Operator" " operator " "OPERATOR"; do
