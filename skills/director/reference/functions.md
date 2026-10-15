@@ -7,7 +7,7 @@ design's section 3 inventory, in the same order and numbering. The rulings
 kinds (K9) and the reconciler (K11) read this file to know which stores exist
 and whose writes they can trust.
 
-Checked at director main `3d9b9d4`. Each entry names the file or section it
+Checked at director main `d8adcec`. Each entry names the file or section it
 was read from, so a reader can check it.
 
 ## The labels
@@ -92,7 +92,8 @@ in local or private state.
 
 ### 6. Merge guard
 
-- **Store:** none; it reads GitHub and prints one line.
+- **Store:** none; it reads GitHub and the rulings file (section 19) and prints
+  one line.
 - **Writers:** none. `merge-guard` is read-only and never merges.
 - **Enforced:** the verdict itself, which fails closed: any read that errors,
   comes back empty or lacks a field prints `STOP` (`merge-guard:12-22`). The
@@ -210,7 +211,8 @@ in local or private state.
   data, by repo and label, and checked before every merge. Only
   `{"kind":"exclusion","repo":R,"label":L}` is read today; K9 adds the
   ruling, grant and term kinds.
-- **Writers:** director, on the operator's ruling. Honor-only. A seat that
+- **Writers:** the operator creates the file and enters the exclusions
+  (`merge-guard:61`); director does not write it. Honor-only. A seat that
   meets the missing-file `STOP` reports it and does not create the file.
 - **Enforced:** `merge-guard` is the reader and fails closed on every
   unreadable case (`merge-guard:57-73`, `:98-112`).
