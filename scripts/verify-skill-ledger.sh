@@ -72,7 +72,10 @@ trap 'rm -rf "$root"' EXIT
 export DIRECTOR_STATE="$root/state" DWS_TEST_CLOCK=1
 mkdir -p "$DIRECTOR_STATE"
 printf '# director board\n' >"$DIRECTOR_STATE/board.md"
-DWS_NOW=2030-12-31T10:00:00Z "$DWS" open w1 --title "one" --stage designed --owner architect --blocked operator --next "rule on X" >/dev/null
+# K13: dws refuses --blocked operator without an open Desk card in a fresh snapshot.
+printf '{"c1": {"status": "open"}}' >"$root/cards.json"
+DWS_NOW=2030-12-31T09:00:00Z "$(dirname "$DWS")/desk-snapshot" write --cards "$root/cards.json" --reported 1 >/dev/null
+DWS_NOW=2030-12-31T10:00:00Z "$DWS" open w1 --title "one" --stage designed --owner architect --blocked operator --ask c1 --next "rule on X" >/dev/null
 # The row fields the skill names are the fields dws show --json emits. The list
 # is read from the skill's step 4 text (its backticked lower-case words, less the
 # value `operator`), so renaming a field there changes what is checked here.

@@ -93,6 +93,14 @@ the board and the roster as above.
    `install.sh` placed is the one that runs. The page exists only if the
    operator asked for it; never create it unasked.
 
+To mark a row blocked on the operator, the row must name an open Desk card
+(K13). A script cannot read the Desk, so in session read the cards with the
+Artifact data tool into a local JSON file, then run
+`${DIRECTOR_HOME:-$HOME/.director}/bin/desk-snapshot write --cards <file> --reported <count the read reported>`,
+and then `dws set <slug> --blocked operator --ask <card id>`. Without a
+snapshot read in the last 24 hours, `dws` refuses and says UNREAD; do not work
+around it, read the Desk again.
+
 ## Mode: standing, additionally
 
 - Re-sweep when the human asks what is in flight, and on your own after any
