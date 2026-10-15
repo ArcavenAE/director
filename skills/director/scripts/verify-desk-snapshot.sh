@@ -103,7 +103,7 @@ before="$(lines)"
 grep -q "0s\|age\|ago" "$root/out" && ok "the accepted write prints the snapshot's age" || bad "the accepted write prints the snapshot's age" "$(cat "$root/out")"
 "$DWS" show --json 2>/dev/null | python3 -c "
 import json,sys
-rows=[r for r in json.load(sys.stdin) if r['slug']=='a3']
+rows=[r for r in json.load(sys.stdin)['rows'] if r['slug']=='a3']
 assert rows and rows[0]['blocked']=='operator' and 'ask:card-1' in rows[0]['links'], rows" \
   && ok "the row is blocked on operator and carries the ask: link" || bad "the row is blocked on operator and carries the ask: link"
 "$DWS" set base --blocked operator --ask card-5 >/dev/null 2>&1 \

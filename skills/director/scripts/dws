@@ -10,9 +10,9 @@ CLI and the instance-id refusal; W2 adds refresh. The page (W3) comes later.
   $DIRECTOR_STATE/workstreams.lock    one flock around fold, check, append
 
   dws [--actor A] open <slug> --title T [--owner O] [--stage S] [--repos R..]
-                                       [--next N] [--blocked B] [--link L..]
+                                       [--next N] [--blocked B [--ask ID]] [--link L..]
   dws [--actor A] stage <slug> <to> --from <current>
-  dws [--actor A] set <slug> [--owner O] [--next N] [--blocked B] [--repos R..]
+  dws [--actor A] set <slug> [--owner O] [--next N] [--blocked B [--ask ID]] [--repos R..]
   dws [--actor A] link <slug> [--remove] <link>...
   dws [--actor A] park <slug> --from <current>
   dws refresh [<slug>...]
@@ -22,6 +22,12 @@ Links are typed: pr:<owner>/<repo>#<n>, issue:<owner>/<repo>#<n>, bd:<id>
 and ask:<id>. refresh (W2) reads the first three; ask ids wait for W5, and an
 untyped link is shown but never read. refresh names every link it does not
 read on stderr, so nothing is skipped silently.
+
+K13: `--blocked operator` needs `--ask <card id>`, and refuses unless that card is
+open in a Desk snapshot no older than THRESHOLD_HOURS["desk snapshot"] hours. A
+session reads the Desk and runs `desk-snapshot write`; without a usable snapshot
+dws refuses and says UNREAD, and never takes the id on faith. The card goes on the
+row as an ask: link.
 
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
@@ -33,6 +39,12 @@ STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
 LEDGER = os.path.join(STATE, "workstreams.jsonl")
 LOCK = os.path.join(STATE, "workstreams.lock")
 LOCK_TIMEOUT = 5.0
+SNAPSHOT = os.path.join(STATE, "desk-snapshot.json")
+
+# K13: hours a Desk snapshot may age before dws reads it as UNREAD (finding-
+# director-glst; the table of the automation boundary, ADR-007). A diagnostic
+# bound, not a gate on anything else. The operator changes it here.
+THRESHOLD_HOURS = {"desk snapshot": 24}
 
 # Section 3. The order is the sort order; parked sorts last.
 STAGES = ["idea", "defined", "designed", "building", "in review", "merged",
@@ -100,6 +112,58 @@ def checked(field, value):
                           "name the seat or role, never an instance id (they change at "
                           "every respawn). Reword the value if the token is not an id.")
     return stored
+
+
+def parse_time(ts):
+    return datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+
+
+def operator_blocked(value):
+    """True when a blocked value is the operator, in any form dws stores alike."""
+    return stored_form(value).lower() == "operator"
+
+
+def desk_card_open(card_id):
+    """K13: the card id must be open in a fresh Desk snapshot. Returns the
+    snapshot's age text, or raises Refused. Without a usable snapshot it
+    refuses and says UNREAD; it never takes the id on faith."""
+    hint = "a session must read the Desk and run desk-snapshot write"
+    try:
+        with open(SNAPSHOT, encoding="utf-8") as f:
+            snap = json.load(f)
+        read_at = parse_time(snap["read_at"])
+        open_ids = snap["open"]
+        if not isinstance(open_ids, list) or not all(isinstance(i, str) for i in open_ids):
+            raise ValueError("open is not a list of ids")
+    except FileNotFoundError:
+        raise Refused(f"the Desk snapshot is UNREAD: {SNAPSHOT} does not exist; {hint}")
+    except (OSError, ValueError, KeyError, TypeError) as err:
+        raise Refused(f"the Desk snapshot is UNREAD: {SNAPSHOT} cannot be read ({type(err).__name__}); {hint}")
+    age = parse_time(now()) - read_at
+    hours = age.total_seconds() / 3600
+    limit = THRESHOLD_HOURS["desk snapshot"]
+    if hours < 0:
+        raise Refused(f"the Desk snapshot is UNREAD: it was read at {snap['read_at']}, which is in the future; {hint}")
+    if hours > limit:
+        raise Refused(f"the Desk snapshot is UNREAD: it was read {int(hours)}h ago and the limit is {limit}h; {hint}")
+    if card_id not in open_ids:
+        raise Refused(f"card {card_id!r} is not open in the Desk snapshot read at {snap['read_at']}; "
+                      "name an open card, or open one first")
+    return f"card {card_id} is open in the Desk snapshot read {int(hours)}h ago ({snap['read_at']})"
+
+
+def blocked_on_operator(blocked, ask):
+    """Applies K13 to one write. Returns the ask link to add, or None."""
+    if ask is not None and (blocked is None or not operator_blocked(blocked)):
+        raise Refused("--ask goes with --blocked operator only")
+    if blocked is None or not operator_blocked(blocked):
+        return None
+    if ask is None:
+        raise Refused("--blocked operator needs --ask <card id>, an open card on the Desk (K13)")
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$", ask):
+        raise Refused(f"--ask {ask!r} is not a card id")
+    print(f"dws: {desk_card_open(ask)}")
+    return f"ask:{ask}"
 
 
 def fold(path=LEDGER):
@@ -281,8 +345,11 @@ def cmd_open(a):
             ev[field] = checked(field, v)
     if a.repos:
         ev["repos"] = a.repos
-    if a.link:
-        ev["links"] = a.link
+    ask_link = blocked_on_operator(a.blocked, a.ask)
+    if ask_link:
+        ev["blocked"] = "operator"
+    if a.link or ask_link:
+        ev["links"] = list(a.link or []) + ([ask_link] if ask_link and ask_link not in (a.link or []) else [])
 
     def check(rows):
         if a.slug in rows:
@@ -316,9 +383,22 @@ def cmd_set(a):
             ev[field] = checked(field, v)
     if a.repos is not None:
         ev["repos"] = a.repos
-    if len(ev) == 2:
+    ask_link = blocked_on_operator(a.blocked, a.ask)
+    if ask_link:
+        ev["blocked"] = "operator"
+    if len(ev) == 2 and not ask_link:
         raise Refused("set needs at least one of --owner, --next, --blocked, --repos")
-    write(a.actor, ev, lambda rows: need(rows, a.slug))
+    if not ask_link:
+        write(a.actor, ev, lambda rows: need(rows, a.slug))
+        return
+
+    def plan(rows):
+        r = need(rows, a.slug)
+        events = [ev]
+        if ask_link not in r["links"]:
+            events.append({"event": "link", "ws": a.slug, "add": [ask_link]})
+        return events
+    write_many(a.actor, plan)
 
 
 def cmd_link(a):
@@ -548,6 +628,7 @@ def main(argv):
     o.add_argument("--repos", nargs="+")
     o.add_argument("--next")
     o.add_argument("--blocked")
+    o.add_argument("--ask")
     o.add_argument("--link", nargs="+")
     o.set_defaults(fn=cmd_open)
 
@@ -567,6 +648,7 @@ def main(argv):
     t.add_argument("--owner")
     t.add_argument("--next")
     t.add_argument("--blocked")
+    t.add_argument("--ask")
     t.add_argument("--repos", nargs="+")
     t.set_defaults(fn=cmd_set)
 

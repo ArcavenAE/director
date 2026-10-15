@@ -38,8 +38,13 @@ in local or private state.
   not defined on main (design section 1). R-202 asks that each card carry
   the question, each option's text, the recommendation, its expiry and a
   source pointer.
-- **Readers:** the operator; director, in session. Whether a script can read
-  it is open (K5).
+- **Readers:** the operator; director, in session. A script cannot read it
+  (K5, finding-director-glst). A session reads the cards and hands them to
+  `desk-snapshot write`, which validates them and writes
+  `$DIRECTOR_STATE/desk-snapshot.json` with the ids whose status is exactly
+  `open` and the read time. Honor-only: that a session really read the Desk.
+  Enforced: the input's shape and completeness (a duplicate id, a missing
+  status or a count that differs from the read's own report is refused).
 
 ### 2. Workstream ledger
 
@@ -52,6 +57,11 @@ in local or private state.
   (`board-workstream-ledger.md` section 6). Honor-only: the actor itself.
   The table is an allowlist over `--actor`, and a caller that passes
   `--actor refresh` is believed (`board-workstream-ledger.md:194-196`).
+  Enforced (K13): `--blocked operator` needs `--ask <card id>` and is
+  refused unless that card is open in the Desk snapshot of section 1, read
+  within 24 hours (`THRESHOLD_HOURS` in `dws`). With no usable snapshot it
+  refuses and says UNREAD; until a session writes one, every operator-blocked
+  row is refused. The card goes on the row as an `ask:` link.
 - **Readers:** the sweep's "Blocked on you" (`dws show --json`, SKILL.md,
   Mode: sweep); `board-html`.
 
