@@ -158,8 +158,8 @@ matching label gets a STOP naming the exclusion, whatever its review or check
 state. An unreadable rulings file, a line that is not a JSON object, an
 exclusion missing its repo or label, and a view with no label list are each a
 STOP, and so is a missing rulings file, since a missing record cannot be told
-from none declared. The file is created on the operator's ruling, and the operator's
-exclusions are entered in it (an empty file means none declared); a seat that hits the STOP reports it and
+from none declared. The operator creates the file and enters their exclusions
+(an empty file means none declared); a seat that hits the STOP reports it and
 does not create the file. The file lives in the local state directory and is
 never committed. A merge made outside the guard stays honor-only.
 
