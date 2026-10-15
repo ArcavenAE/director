@@ -6,6 +6,15 @@
 # Prints one line and exits:
 #   PROCEED <repo>#<n> @<head sha>: ...   exit 0. Merge with
 #                                         gh pr merge <n> -R <repo> --match-head-commit <sha>
+#   PROCEED-KEEP-BRANCH <repo>#<n> @<head sha>: ... open PR(s) <#c ...>: ...
+#                                         exit 0. Every check passed and the only thing
+#                                         in the way is an open PR based on this head
+#                                         (a stacked child). Merge with
+#                                         gh pr merge <n> -R <repo> --match-head-commit <sha>
+#                                         and WITHOUT --delete-branch: deleting the
+#                                         branch closes the child for good. Its first
+#                                         word is not PROCEED, so a match on the plain
+#                                         line never takes it for leave to delete.
 #   STOP <repo>#<n>: <reason>              exit 1. Stop the merge run and report it.
 #                                         Never downgrade a STOP to a skip.
 #   usage error                            exit 2.
@@ -14,8 +23,10 @@
 # first, since a merged PR reports an UNKNOWN merge state, R-157), not a draft
 # (R-148), its merge state is CLEAN, every reported check passed, a non-author
 # approved the current head after it reached GitHub and no reviewer's latest
-# review, on any commit, requests changes (director#159), and no open PR is
-# based on its head branch (stacked-pr-merge-order). A read that errors,
+# review, on any commit, requests changes (director#159). An open PR based on
+# its head branch (stacked-pr-merge-order) does not stop it: it changes the
+# verdict to PROCEED-KEEP-BRANCH (ruling marvel-894-stacked-guard; the verdict
+# R-180 asks for). A read that errors,
 # times out, comes back empty or unparseable, or lacks a field stops, with its
 # output. UNKNOWN is GitHub still computing mergeability, so it is re-read
 # MERGE_GUARD_RETRIES times (default 3), MERGE_GUARD_DELAY seconds apart
@@ -205,10 +216,15 @@ if [[ -z "$fresh" ]]; then
 fi
 
 # Stacked children: an open PR based on this head would be closed by merging
-# with --delete-branch. An error or an empty read is not "no children".
+# with --delete-branch. Every other check has already passed above, so a child
+# changes the verdict, not the outcome: PROCEED-KEEP-BRANCH, merge without
+# --delete-branch. An error or an empty read is not "no children".
 read_json "gh pr list (stacked children)" pr list -R "$repo" --base "$head_ref" --state open --json number
 jq -e 'type == "array"' >/dev/null <<<"$json" || stop "the stacked-child read is not a list"
 children="$(jq -r '.[].number | "#\(.)"' <<<"$json" | tr '\n' ' ')"
-[[ -z "$children" ]] || stop "open PR(s) based on $head_ref: ${children% }; merge the base without --delete-branch first (stacked-pr-merge-order)"
+if [[ -n "$children" ]]; then
+  echo "PROCEED-KEEP-BRANCH $repo#$num @$head_sha: OPEN, not draft, CLEAN, $nchecks check(s) passing, approved at head by $fresh after $anchor_note; open PR(s) based on $head_ref: ${children% }. Merge with --match-head-commit $head_sha and WITHOUT --delete-branch, then confirm each child retargeted to the default branch (stacked-pr-merge-order)"
+  exit 0
+fi
 
 echo "PROCEED $repo#$num @$head_sha: OPEN, not draft, CLEAN, $nchecks check(s) passing, approved at head by $fresh after $anchor_note, no stacked child, $excl_note"

@@ -133,6 +133,12 @@ for that PR, and act only on its line:
 
 - `PROCEED ... @<sha>`: merge with `--match-head-commit <sha>`, so a push after
   the read cannot slip in.
+- `PROCEED-KEEP-BRANCH ... @<sha>`: every check passed, and an open PR is based
+  on this head (a stacked child). Merge with `--match-head-commit <sha>` and
+  WITHOUT `--delete-branch`, since deleting the base branch closes the child
+  for good. Then confirm each child retargeted to the default branch and
+  retarget it by hand if not (stacked-pr-merge-order). Only the plain `PROCEED`
+  line says a merge may delete its branch.
 - `STOP ...`: stop the merge run there and report the line. Never skip the PR
   and go on to the next. A skip is how a merge order gets inverted (R-152).
 
