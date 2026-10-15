@@ -182,6 +182,12 @@ fixture; view OPEN false CLEAN > "$fx/view.json"; echo '[{"number":9},{"number":
 expect_keep "two open children: PROCEED-KEEP-BRANCH naming both" "#9 #12"
 fixture; view OPEN false CLEAN > "$fx/view.json"; echo '{"number":9}' > "$fx/list.json"
 expect_stop "a child read that is not a list: STOP" "not a list"
+# A child read the guard cannot read as a list of PRs with numbers stops, and never
+# ends in a verdict (review of #311 at 2d4a4c7). Each shape below was exit 0 at that head.
+for shape in '[{}]' '[{"number":9},7]' '[5]' '["x"]' '[null]' '[{"number":null}]' '[{"number":"9"}]' '[{"number":9},{}]' '[[9]]'; do
+  fixture; view OPEN false CLEAN > "$fx/view.json"; printf '%s\n' "$shape" > "$fx/list.json"
+  expect_stop "a child read of $shape: STOP, not a verdict" "stacked-child read"
+done
 # A child never softens any other stop: every other check still runs first.
 fixture; view OPEN true CLEAN > "$fx/view.json"; echo '[{"number":9}]' > "$fx/list.json"
 expect_stop "a draft base with a child: STOP" "draft"
@@ -362,6 +368,11 @@ fi
 fixture
 if guard only-one-arg; then bad "usage error proceeded"
 else rc=$?; [[ $rc -eq 2 ]] && ok "a usage error exits 2" || bad "usage rc" "rc=$rc"; fi
+# The usage text is the header's verdict list: it must show every verdict, whole.
+grep -q "^usage error" "$fx/out" && grep -q "PROCEED-KEEP-BRANCH" "$fx/out" && grep -q "^STOP " "$fx/out" \
+  && grep -q "line never takes it for leave to delete" "$fx/out" \
+  && ok "the usage text shows PROCEED, PROCEED-KEEP-BRANCH, STOP and usage error whole" \
+  || bad "usage text" "$(cat "$fx/out")"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
