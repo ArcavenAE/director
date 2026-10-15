@@ -69,6 +69,10 @@ install_one "$SRC/skills/director/scripts/dsi" "$DIRECTOR_HOME/bin/dsi"
 install_one "$SRC/skills/director/scripts/dsx" "$DIRECTOR_HOME/bin/dsx"
 install_one "$SRC/skills/director/scripts/merge-guard" "$DIRECTOR_HOME/bin/merge-guard"
 install_one "$SRC/skills/director/scripts/relay-log" "$DIRECTOR_HOME/bin/relay-log"
+# dws refuses --blocked operator without an open Desk card, and desk-snapshot is
+# what writes the snapshot it checks (K13), so an install without it would refuse
+# every operator-blocked row.
+install_one "$SRC/skills/director/scripts/desk-snapshot" "$DIRECTOR_HOME/bin/desk-snapshot"
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"

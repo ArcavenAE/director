@@ -12,6 +12,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOARD_HTML="${BOARD_HTML:-$here/board-html}"
 DWS="${DWS:-$here/dws}"
+DESK_SNAPSHOT="${DESK_SNAPSHOT:-$here/desk-snapshot}"
 pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
@@ -21,6 +22,15 @@ trap 'rm -rf "$root"' EXIT
 export DIRECTOR_STATE="$root/state"
 mkdir -p "$DIRECTOR_STATE"
 export DWS_TEST_CLOCK=1
+
+# K13: dws refuses --blocked operator without an open Desk card, so every state
+# dir that opens such a row gets a snapshot with card c1 open, read before the
+# rows below are opened and within the 24 h limit of each of them.
+desk_open() {
+  printf '{"c1": {"status": "open"}}' >"$root/cards.json"
+  DWS_NOW=2030-12-30T12:00:00Z "$DESK_SNAPSHOT" write --cards "$root/cards.json" --reported 1 >/dev/null
+}
+desk_open
 
 cat >"$DIRECTOR_STATE/board.md" <<'MD'
 # director board
@@ -59,8 +69,8 @@ got="$(norm "$DIRECTOR_STATE/board.html")"
 # make them 30h, 20h, 2h and 100h old.
 open_at() { local at="$1"; shift; DWS_NOW="$at" "$DWS" open "$@" >/dev/null; }
 open_at 2030-12-30T06:00:00Z b1 --title "building one" --stage building --owner supervisor --next "ship the build"
-open_at 2030-12-30T16:00:00Z bo --title "blocked old" --stage designed --owner architect --blocked operator --next "rule on X"
-open_at 2030-12-31T10:00:00Z bn --title "blocked new" --stage defined --owner architect --blocked operator --next "ship <b>it</b>"
+open_at 2030-12-30T16:00:00Z bo --title "blocked old" --stage designed --owner architect --blocked operator --ask c1 --next "rule on X"
+open_at 2030-12-31T10:00:00Z bn --title "blocked new" --stage defined --owner architect --blocked operator --ask c1 --next "ship <b>it</b>"
 open_at 2030-12-27T08:00:00Z pk --title "parked" --stage parked --owner supervisor --next "wait"
 open_at 2030-12-31T11:00:00Z ak --title "asks" --stage idea --owner supervisor --next "answer" --link ask:ask-9 ask:b1 bd:aae-orc-zz9
 TZ=UTC touch -t 203012311154 "$DIRECTOR_STATE/workstreams.jsonl"   # ledger 6m old at now
@@ -161,7 +171,7 @@ fi
 # Another state: one hostile payload per field, in a row and in a board.md
 # heading. None may appear raw; each must appear escaped.
 main_state="$DIRECTOR_STATE"
-fresh() { export DIRECTOR_STATE="$root/$1"; mkdir -p "$DIRECTOR_STATE"; }
+fresh() { export DIRECTOR_STATE="$root/$1"; mkdir -p "$DIRECTOR_STATE"; desk_open; }
 fresh hostile
 cat >"$DIRECTOR_STATE/board.md" <<'MD'
 # director board
@@ -170,7 +180,7 @@ cat >"$DIRECTOR_STATE/board.md" <<'MD'
 
 ### <i/f=heading> from a seat
 MD
-open_at 2030-12-31T10:00:00Z h1 --title "<i/f=title>" --stage building --owner "<i/f=owner>" --blocked operator --next "<i/f=next>" --link "ask:<i/f=ask>"
+open_at 2030-12-31T10:00:00Z h1 --title "<i/f=title>" --stage building --owner "<i/f=owner>" --blocked operator --ask c1 --next "<i/f=next>" --link "ask:<i/f=ask>"
 open_at 2030-12-31T10:00:00Z h2 --title "other" --stage building --owner supervisor --blocked "<i/f=blocked>" --next "n"
 DWS_NOW=2030-12-31T12:00:00Z "$BOARD_HTML" >/dev/null 2>"$root/err" || bad "board-html renders hostile text" "$(cat "$root/err")"
 cp "$DIRECTOR_STATE/board.html" "$root/page.html"
@@ -184,7 +194,7 @@ done
 # ---- template placeholders in the data are not substituted ---------------------
 fresh placeholders
 printf '# director board\n\n## __LEDGER_HEAD__ __GENERATED__ __SRC__ in a heading\n- text\n' >"$DIRECTOR_STATE/board.md"
-open_at 2030-12-31T10:00:00Z p1 --title "placeholder" --stage building --owner supervisor --blocked operator --next "__BOARD_JSON__ __GENERATED__ __LEDGER_HEAD__"
+open_at 2030-12-31T10:00:00Z p1 --title "placeholder" --stage building --owner supervisor --blocked operator --ask c1 --next "__BOARD_JSON__ __GENERATED__ __LEDGER_HEAD__"
 DWS_NOW=2030-12-31T12:00:00Z "$BOARD_HTML" >/dev/null 2>"$root/err" || bad "board-html renders placeholder text" "$(cat "$root/err")"
 cp "$DIRECTOR_STATE/board.html" "$root/page.html"
 python3 - "$root/page.html" <<'PY' && ok "placeholder text in a row or in board.md is not substituted" || bad "placeholder text in a row or in board.md is not substituted"

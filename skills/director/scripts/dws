@@ -160,7 +160,7 @@ def blocked_on_operator(blocked, ask):
         return None
     if ask is None:
         raise Refused("--blocked operator needs --ask <card id>, an open card on the Desk (K13)")
-    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$", ask):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", ask):
         raise Refused(f"--ask {ask!r} is not a card id")
     print(f"dws: {desk_card_open(ask)}")
     return f"ask:{ask}"
