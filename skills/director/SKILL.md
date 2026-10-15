@@ -192,8 +192,23 @@ the captures and moves what has hardened into `sim/requirements.md`.
 5. Report a diff: promoted, unchanged, rejected with a reason. A harvest that
    only reports and does not write the register is session-1 behavior in a new
    costume; writing the register is the point.
+6. For an episode that produced a correction or an escalation, add a section
+   headed `Retrospective and coaching` to the report: what the seat should do
+   differently next time. Coaching is recorded under that heading, in the
+   harvest report, and never on a channel of its own, since a second channel is
+   where messages go unread (R-118). An episode with neither a correction nor
+   an escalation needs no such section, and the step is never a gate on a
+   handoff or a shift.
 
 Do not renumber existing requirements. New ones take the next R number.
+
+## Correcting a seat
+
+A correction names the run, the action observed, and its effect, so the seat
+can reproduce it the way it would a bug report; "be more careful" changes
+nothing. This is guidance, not a template. A weak episode is corrected in the
+seat's notes and handoff. A change to a role or identity file goes only as a
+proposal through ratification, and a seat is never retired over one episode.
 
 ## Relaying
 
