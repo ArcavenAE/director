@@ -21,7 +21,7 @@ Lands in:   <where this text ends up (a pane, a file, a public thread) and who
              owns that place. Public destination: ids only, no private
              content.>
 Reply by:   <a date or an event, or "no reply needed">
-Log:        <the relay-log entry: `scripts/relay-log append --to <to> --text-file ...`>
+Log:        <the relay-log entry: `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-log append --to <to> --text-file ...`>
 ```
 
 ## The three questions behind it
