@@ -95,13 +95,16 @@ in local or private state.
 - **Store:** none; it reads GitHub and prints one line.
 - **Writers:** none. `merge-guard` is read-only and never merges.
 - **Enforced:** the verdict itself, which fails closed: any read that errors,
-  comes back empty or lacks a field prints `STOP` (`merge-guard:12-22`). Once
+  comes back empty or lacks a field prints `STOP` (`merge-guard:12-22`). The
+  operator's merge exclusions (section 19) are read first, before any `gh`
+  call, and fail closed: a missing or unreadable rulings file, a line that is
+  not a JSON object, an exclusion without a repo and a label, and a view with
+  no label list each print `STOP` (`merge-guard:27-43`, `:57-73`, `:98-112`). Once
   `--match-head-commit` is passed, GitHub refuses a merge whose head moved.
 - **Honor-only:** everything after the verdict. `merge-guard` never merges
-  (`merge-guard:27-28`); it prints the merge command (`:7-8`). Running the
+  (`merge-guard:42-43`); it prints the merge command (`:7-8`). Running the
   guard before a merge, obeying `STOP`, and passing the flag are SKILL.md
-  instructions (Merging), and a merge made outside the guard is not checked. Operator merge exclusions are not read yet
-  (`merge-guard:29`; K1, #282).
+  instructions (Merging), and a merge made outside the guard is not checked.
 - **Readers:** director, before any merge it makes or relays.
 
 ### 7. Harvest
@@ -201,13 +204,17 @@ in local or private state.
 
 ### 19. Merge exclusions
 
-- **Store:** none yet. R-153 is ruled: exclusions are held as data, by repo
-  and label, and checked before every merge. The data stays in local or
-  private state, never in this repository.
-- **Writers:** none yet. K1 (#282) makes `merge-guard` read them and fail
-  closed; K9 adds the `exclusion` kind.
-- **Honor-only** until K1 lands, and afterwards for any merge made outside
-  the guard.
+- **Store:** `rulings.jsonl` in director's local state directory
+  (`$DIRECTOR_STATE`, or `MERGE_GUARD_RULINGS` to name the file), one JSON
+  object per line, never committed. R-153 is ruled: exclusions are held as
+  data, by repo and label, and checked before every merge. Only
+  `{"kind":"exclusion","repo":R,"label":L}` is read today; K9 adds the
+  ruling, grant and term kinds.
+- **Writers:** director, on the operator's ruling. Honor-only. A seat that
+  meets the missing-file `STOP` reports it and does not create the file.
+- **Enforced:** `merge-guard` is the reader and fails closed on every
+  unreadable case (`merge-guard:57-73`, `:98-112`).
+- **Honor-only** for any merge made outside the guard.
 
 ### 20. Dispatch ledger
 
