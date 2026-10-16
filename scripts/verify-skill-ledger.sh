@@ -7,7 +7,7 @@
 # refresh. Without a ledger or the CLI the sweep runs as before. The commands the
 # skill names exist, and the line form it states is the one the page renders.
 #
-# Guard (passes on main): the step 4 fence is byte-identical to main's.
+# Guard: the step 4 fence is the one pinned below (main's, plus the Drafts line, 5yupe).
 #
 # Usage: scripts/verify-skill-ledger.sh   Exit nonzero on any miss. Touches only a temp dir.
 set -euo pipefail
@@ -36,9 +36,11 @@ PY
 }
 
 # Guard: the printed contract does not change.
-FENCE=f8b035199d1d451f28b415de387b951494856bb991cd72df7ef17ca7ba35fff4
+# 5yupe: the operator ruled change-fence on 2026-10-16. The fence gained one line, "Drafts:",
+# and this hash is the new printed contract; the old one was f8b035199d1d451f.
+FENCE=078551f4cde96bee31644d80b33d0bea24e50d8736d9e00e8493660c0d48aead
 got="$(part fence | shasum -a 256 | cut -d' ' -f1)"
-[[ "$got" == "$FENCE" ]] && ok "the step 4 fence is byte-identical to main's" || bad "the step 4 fence is byte-identical to main's" "$got"
+[[ "$got" == "$FENCE" ]] && ok "the step 4 fence is the pinned one" || bad "the step 4 fence is the pinned one" "$got"
 
 # Markdown wraps anywhere, so match on the text with whitespace collapsed.
 flat() { tr '\n' ' ' | sed -E 's/ +/ /g'; }

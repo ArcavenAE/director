@@ -5,7 +5,7 @@
 # Network-free: gh is a stub that serves canned JSON, logs every call, and
 # misbehaves on request (STUB_MODE).
 #
-# Usage: scripts/draft-sweep/verify-draft-sweep.sh     Exit nonzero on any miss.
+# Usage: skills/director/scripts/verify-draft-sweep.sh    Exit nonzero on any miss.
 # DRAFT_SWEEP_BIN points the suite at another build of the sweep, which is how
 # the negative control runs it against an older version.
 set -euo pipefail
@@ -182,6 +182,15 @@ expect_line "no repo scope set is a GAP, nothing swept" "- GAP draft-sweep: no r
 printf 'owner=org\nrepos=all\n# comment\n' >"$root/sweep.conf"
 run normal DRAFT_SWEEP_OWNER= DRAFT_SWEEP_REPOS= DRAFT_SWEEP_CONFIG="$root/sweep.conf"
 expect_line "config file supplies owner and scope; repos=all widens it" "- DRAFT org/repo-out#3"
+
+# --- the config default follows DIRECTOR_STATE, not a fixed $HOME path (5yupe) ---------
+mkdir -p "$root/state" "$root/home"
+printf 'owner=org\nrepos=all\n' >"$root/state/draft-sweep.conf"
+run normal DRAFT_SWEEP_OWNER= DRAFT_SWEEP_REPOS= DRAFT_SWEEP_CONFIG= DIRECTOR_STATE="$root/state" HOME="$root/home"
+expect_line "with no DRAFT_SWEEP_CONFIG the config is read from DIRECTOR_STATE" "- DRAFT org/repo-out#3"
+run normal DRAFT_SWEEP_OWNER= DRAFT_SWEEP_REPOS= DRAFT_SWEEP_CONFIG= DIRECTOR_STATE="$root/empty" HOME="$root/home"
+expect_line "with no config anywhere the sweep prints its GAP line" "- GAP draft-sweep: no owner set"
+expect_rc0 "no config"
 
 echo "$pass passed, $fail failed"
 ((fail == 0))

@@ -75,7 +75,7 @@ install_one "$SRC/skills/director/scripts/relay-log" "$DIRECTOR_HOME/bin/relay-l
 install_one "$SRC/skills/director/scripts/desk-snapshot" "$DIRECTOR_HOME/bin/desk-snapshot"
 # The draft sweep (5yupe): a read-only list of fleet drafts nobody has reviewed and
 # fleet PRs merged with no review. It runs from beside nothing, so a copy install is whole.
-install_one "$SRC/scripts/draft-sweep/draft-sweep" "$DIRECTOR_HOME/bin/draft-sweep"
+install_one "$SRC/skills/director/scripts/draft-sweep" "$DIRECTOR_HOME/bin/draft-sweep"
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"

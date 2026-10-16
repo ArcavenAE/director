@@ -34,10 +34,11 @@
 #   min_age_hours=<n>               DRAFT_SWEEP_MIN_AGE_HOURS  default 24
 #   limit=<n>                       DRAFT_SWEEP_LIMIT     default 1000 (gh's max)
 #
-# Config file: DRAFT_SWEEP_CONFIG, default ~/.director/state/draft-sweep.conf.
+# Config file: DRAFT_SWEEP_CONFIG, default $DIRECTOR_STATE/draft-sweep.conf (DIRECTOR_STATE
+# defaults to ~/.director/state).
 # DRAFT_SWEEP_NOW (epoch seconds) fixes the clock for tests.
 #
-# Usage: scripts/draft-sweep/draft-sweep
+# Usage: skills/director/scripts/draft-sweep
 set -euo pipefail
 
 gaps=0
@@ -46,7 +47,7 @@ gap() {
   gaps=$((gaps + 1))
 }
 
-conf="${DRAFT_SWEEP_CONFIG:-$HOME/.director/state/draft-sweep.conf}"
+conf="${DRAFT_SWEEP_CONFIG:-${DIRECTOR_STATE:-$HOME/.director/state}/draft-sweep.conf}"
 cfg_owner="" cfg_repos="" cfg_authors="" cfg_since="" cfg_age="" cfg_limit=""
 if [[ -r "$conf" ]]; then
   while IFS='=' read -r key value; do

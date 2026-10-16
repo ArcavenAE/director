@@ -56,13 +56,13 @@ grep -q 'run `scripts/board-html`' "$skill" \
 # The list is the skill's: every installed-path call it makes. Each must exist in the checkout as the fallback.
 BINHOME='${DIRECTOR_HOME:-$HOME/.director}/bin'
 names="$(grep -o -E '\.director\}/bin/[A-Za-z0-9_-]+' "$skill" | sed 's#.*/bin/##' | sort -u | tr '\n' ' ')"
-for n in dsi dsx dws merge-guard relay-log desk-snapshot; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep; do
   case " $names " in *" $n "*) ok "the skill references $n";; *) bad "the skill references $n" "list: $names";; esac
 done
 for n in $names; do
   [[ -x "$here/skills/director/scripts/$n" || "$n" == board-html ]] && ok "every installed-path call resolves in the checkout: $n" || bad "every installed-path call resolves in the checkout: $n"
 done
-for n in dsi dsx dws merge-guard relay-log desk-snapshot; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep; do
   [[ -x "$clean/director/bin/$n" ]] && ok "install puts $n in the bin home, executable" || bad "install puts $n in the bin home, executable"
   grep -qF "$BINHOME/$n" "$skill" && ok "skill calls $n from the bin home" || bad "skill calls $n from the bin home"
   [[ -x "$here/skills/director/scripts/$n" ]] && ok "the fallback scripts/$n exists in the checkout" || bad "the fallback scripts/$n exists in the checkout"
@@ -82,10 +82,21 @@ printf 'run scripts/composer-check now\n' >"$plant"
 grep -qE '(^|[^/A-Za-z])scripts/[A-Za-z]' "$plant" && ok "the widened pattern flags a bare call to a script outside the old list" || bad "the widened pattern flags a bare call to a script outside the old list"
 grep -q 'replay.md' <(find "$here/skills/director" -name '*.md') && ok "replay.md is among the documents scanned" || bad "replay.md is among the documents scanned"
 
+# The sweep mode runs the draft sweep after dsx and shows its lines in a Drafts
+# section of the reply only; they are not appended to board.md and not fed to dws (5yupe).
+grep -qF "$BINHOME/draft-sweep" "$skill" && grep -q '^Drafts' "$skill" \
+  && ok "the sweep mode calls draft-sweep from the bin home and presents a Drafts section" || bad "the sweep mode calls draft-sweep from the bin home and presents a Drafts section"
+grep -q 'shown in the sweep reply only' "$skill" && ok "the skill says the draft lines go to the reply only" || bad "the skill says the draft lines go to the reply only"
+grep -qi 'GAP' <(grep -n -A3 'draft-sweep' "$skill") && ok "the skill says a missing config still shows its GAP line" || bad "the skill says a missing config still shows its GAP line"
+grep -q 'exits 0 whether it finds nothing or a lot' "$skill" && ok "the skill says to read the lines, not the exit code" || bad "the skill says to read the lines, not the exit code"
+grep -qF '$DIRECTOR_STATE/draft-sweep.conf' "$skill" && ! grep -qF '~/.director/state/draft-sweep.conf' "$skill" \
+  && ok "the skill names the config where the script reads it, under DIRECTOR_STATE" || bad "the skill names the config where the script reads it, under DIRECTOR_STATE"
+[[ ! -e "$here/scripts/draft-sweep" ]] && ok "the script lives with the other bin-home scripts, not in scripts/" || bad "the script lives with the other bin-home scripts, not in scripts/"
+
 # A copy install runs from the bin home with no checkout beside it.
 cp_home="$root/copy"; mkdir -p "$cp_home"
 CLAUDE_HOME="$cp_home/claude" DIRECTOR_HOME="$cp_home/director" DIRECTOR_STATE="$cp_home/state" "$here/install.sh" --copy >"$cp_home/out" 2>&1 || true
-for n in dsi dsx dws merge-guard relay-log desk-snapshot; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep; do
   [[ -f "$cp_home/director/bin/$n" && ! -L "$cp_home/director/bin/$n" && -x "$cp_home/director/bin/$n" ]] && ok "copy install puts a real executable $n in the bin home" || bad "copy install puts a real executable $n in the bin home"
 done
 # draft-sweep (5yupe) is installed for the sweep to call; it needs no checkout beside it.
