@@ -56,7 +56,8 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`) are inst
 3. Optionally run `${DIRECTOR_HOME:-$HOME/.director}/bin/dsx` to verify the outside world (PRs, locks, repo
    state). The board has no expiry; dsx is what makes its decay visible.
    Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/draft-sweep` (read-only; it needs the owner and repo
-   scope from `DRAFT_SWEEP_*` or `~/.director/state/draft-sweep.conf`). Its "- " lines are
+   scope from `DRAFT_SWEEP_*` or `$DIRECTOR_STATE/draft-sweep.conf`, which is
+   `~/.director/state` unless DIRECTOR_STATE is set). Its "- " lines are
    shown in the sweep reply only, under Drafts: they are not appended to `board.md` and not fed to `dws`. With no config
    it prints a GAP line; show that line, never skip the step silently.
    It exits 0 whether it finds nothing or a lot, so read its lines, never its exit code.

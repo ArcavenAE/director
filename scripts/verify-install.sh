@@ -89,6 +89,8 @@ grep -qF "$BINHOME/draft-sweep" "$skill" && grep -q '^Drafts' "$skill" \
 grep -q 'shown in the sweep reply only' "$skill" && ok "the skill says the draft lines go to the reply only" || bad "the skill says the draft lines go to the reply only"
 grep -qi 'GAP' <(grep -n -A3 'draft-sweep' "$skill") && ok "the skill says a missing config still shows its GAP line" || bad "the skill says a missing config still shows its GAP line"
 grep -q 'exits 0 whether it finds nothing or a lot' "$skill" && ok "the skill says to read the lines, not the exit code" || bad "the skill says to read the lines, not the exit code"
+grep -qF '$DIRECTOR_STATE/draft-sweep.conf' "$skill" && ! grep -qF '~/.director/state/draft-sweep.conf' "$skill" \
+  && ok "the skill names the config where the script reads it, under DIRECTOR_STATE" || bad "the skill names the config where the script reads it, under DIRECTOR_STATE"
 [[ ! -e "$here/scripts/draft-sweep" ]] && ok "the script lives with the other bin-home scripts, not in scripts/" || bad "the script lives with the other bin-home scripts, not in scripts/"
 
 # A copy install runs from the bin home with no checkout beside it.
