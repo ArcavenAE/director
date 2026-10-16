@@ -574,7 +574,34 @@ const (
 	seenLedger                    // the table was read
 )
 
-// readGlobalSeen is not written yet.
+// readGlobalSeen reads the hub principals the ask reader has kept, keyed
+// "cluster/role". It takes the caller's local JetStream handle and opens the
+// bucket on each call, like readAskReport, and only reads: KeyValue and Get.
+// A missing bucket or a missing globals key is seenNoLedger with no error (a
+// cluster without an ask reader, or a store from before the table was kept);
+// only a failed read or an unreadable value is an error.
 func readGlobalSeen(ctx context.Context, js jetstream.JetStream) (map[string]globalEntry, seenState, error) {
-	return nil, seenNoLedger, errors.New("readGlobalSeen: not implemented")
+	kv, err := js.KeyValue(ctx, askBucket)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrBucketNotFound) {
+			return nil, seenNoLedger, nil
+		}
+		return nil, seenNoLedger, err
+	}
+	e, err := kv.Get(ctx, "globals")
+	if err != nil {
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			return nil, seenNoLedger, nil
+		}
+		return nil, seenNoLedger, err
+	}
+	var g askGlobals
+	if err := json.Unmarshal(e.Value(), &g); err != nil {
+		return nil, seenNoLedger, fmt.Errorf("store globals unreadable: %w", err)
+	}
+	out := make(map[string]globalEntry, len(g.GlobalID))
+	for _, ge := range g.GlobalID {
+		out[ge.Cluster+"/"+ge.Role] = ge
+	}
+	return out, seenLedger, nil
 }
