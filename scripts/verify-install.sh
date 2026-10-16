@@ -88,6 +88,7 @@ grep -qF "$BINHOME/draft-sweep" "$skill" && grep -q '^Drafts' "$skill" \
   && ok "the sweep mode calls draft-sweep from the bin home and presents a Drafts section" || bad "the sweep mode calls draft-sweep from the bin home and presents a Drafts section"
 grep -q 'shown in the sweep reply only' "$skill" && ok "the skill says the draft lines go to the reply only" || bad "the skill says the draft lines go to the reply only"
 grep -qi 'GAP' <(grep -n -A3 'draft-sweep' "$skill") && ok "the skill says a missing config still shows its GAP line" || bad "the skill says a missing config still shows its GAP line"
+grep -q 'exits 0 whether it finds nothing or a lot' "$skill" && ok "the skill says to read the lines, not the exit code" || bad "the skill says to read the lines, not the exit code"
 [[ ! -e "$here/scripts/draft-sweep" ]] && ok "the script lives with the other bin-home scripts, not in scripts/" || bad "the script lives with the other bin-home scripts, not in scripts/"
 
 # A copy install runs from the bin home with no checkout beside it.
