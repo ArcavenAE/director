@@ -39,7 +39,8 @@
 # read before gh is asked anything, from rulings.jsonl (MERGE_GUARD_RULINGS,
 # default $DIRECTOR_STATE/rulings.jsonl, DIRECTOR_STATE default
 # ~/.director/state): one JSON object per line, and only the lines whose kind is
-# "exclusion" are read here. An exclusion is {"kind":"exclusion","repo":R,
+# "exclusion" are read here. The kinds are ruling, grant, exclusion and term (K9);
+# the other three are ignored, and a line with no kind or any other kind STOPs. An exclusion is {"kind":"exclusion","repo":R,
 # "label":L}; R and L compare without case and may be shell patterns (acu.*). A
 # PR in a matching repo that carries a matching label STOPs, whatever its review
 # or check state, before any other check. A rulings file that exists and cannot
@@ -75,6 +76,8 @@ records="$(cat -- "$rulings" 2>"$err")" || stop "the rulings file $rulings canno
 parsed="$(jq -R -c 'select(length > 0) | (fromjson? // error("a rulings line is not JSON: " + .))' <<<"$records" 2>"$err")" \
   || stop "the rulings file $rulings has a line that is not JSON: $(head -c 200 "$err" | tr '\n' ' ')"
 excl="$(jq -r 'if type != "object" then error("a rulings line is not an object: " + tojson)
+    elif (.kind | type) != "string" or ((.kind | IN("ruling", "grant", "exclusion", "term")) | not)
+      then error("a rulings line has no kind, or a kind outside ruling, grant, exclusion and term: " + tojson)
     elif .kind != "exclusion" then empty
     elif ((.repo | type) == "string" and (.repo | length) > 0 and (.label | type) == "string" and (.label | length) > 0)
       then "\(.repo)\t\(.label)"

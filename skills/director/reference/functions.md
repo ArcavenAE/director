@@ -178,11 +178,14 @@ in local or private state.
 
 ### 13. Ruling records
 
-- **Store:** none. Rulings live in design files (for example the "Operator
-  rulings" table in the redesign) and in the relay log.
-- **Writers:** whoever records the ruling, by hand. Honor-only. R-201 asks
-  for records keyed by subject; K9 adds the `ruling` kind to `rulings.jsonl`.
-- **Readers:** director, by search.
+- **Store:** `rulings.jsonl` (see 19), kind `ruling`, written by
+  `dws record ruling` (K9): subject, the operator's words verbatim, by,
+  ruled_at and a source, with an optional `replaces` id pointer. Older rulings
+  live in design files and the relay log.
+- **Writers:** director, through `dws record`. It never creates the file, and
+  nothing stops a hand edit, so a line written by hand is honor-only.
+- **Readers:** `dws records`, which marks a replaced target and counts a pointer
+  to a missing id or another kind; director, by search.
 
 ### 14. Ring and acknowledgement
 
@@ -225,11 +228,13 @@ in local or private state.
   (`$DIRECTOR_STATE`, or `MERGE_GUARD_RULINGS` to name the file), one JSON
   object per line, never committed. R-153 is ruled: exclusions are held as
   data, by repo and label, and checked before every merge. Only
-  `{"kind":"exclusion","repo":R,"label":L}` is read today; K9 adds the
-  ruling, grant and term kinds.
+  `{"kind":"exclusion","repo":R,"label":L}` is read; the ruling, grant and term
+  kinds are ignored, and a line with no kind or another kind STOPs the guard.
 - **Writers:** the operator creates the file and enters the exclusions
-  (`merge-guard:61`); director does not write it. Honor-only. A seat that
-  meets the missing-file `STOP` reports it and does not create the file.
+  (`merge-guard:61`); director does not write exclusions. `dws record` (K9)
+  appends the ruling, grant and term kinds to the same file and refuses the
+  exclusion kind. Honor-only. A seat that meets the missing-file `STOP`
+  reports it and does not create the file.
 - **Enforced:** `merge-guard` is the reader and fails closed on every
   unreadable case (`merge-guard:57-73`, `:98-112`).
 - **Honor-only** for any merge made outside the guard.
