@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,6 +98,22 @@ func TestGlobalIDsSurviveAnAskReaderRestart(t *testing.T) {
 	want := append([]globalEntry(nil), r1.ledger.GlobalID...)
 	if len(want) != 1 || want[0].Cluster != "cluster-b" {
 		t.Fatalf("table before the restart = %+v, want one cluster-b entry", want)
+	}
+
+	// The table has its own key beside meta and ids, not a field of another value.
+	kv, err := js.KeyValue(ctx, askBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kv.Get(ctx, "globals"); err != nil {
+		t.Fatalf("no globals key in %s: %v", askBucket, err)
+	}
+	ids, err := kv.Get(ctx, "ids")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(ids.Value()), "global_ids") {
+		t.Fatalf("the ids value still carries the table: %s", ids.Value())
 	}
 
 	r2 := newAskReader(js, askReaderCfg{Broker: "local", File: filepath.Join(t.TempDir(), "b.json")})
