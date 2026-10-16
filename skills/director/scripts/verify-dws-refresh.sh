@@ -253,5 +253,24 @@ PY
 )"
 [[ "$bad_actor" == 0 ]] && ok "refresh appends only observe and the two factual moves, as refresh" || bad "refresh appends only observe and the two factual moves, as refresh" "$bad_actor"
 
+# K8: every line refresh appends is tagged mirror (the hand-written skip1 line
+# is untagged and is left out).
+mirror_bad="$(python3 - "$LEDGER" <<'PY'
+import json, sys
+n = seen = 0
+for l in open(sys.argv[1]):
+    try:
+        e = json.loads(l)
+    except ValueError:
+        continue
+    if e.get("actor") == "refresh" and e.get("ws") != "skip1":
+        seen += 1
+        if e.get("tag") != "mirror":
+            n += 1
+print(n if seen else "no refresh events")
+PY
+)"
+[[ "$mirror_bad" == 0 ]] && ok "every line refresh appends is tagged mirror" || bad "every line refresh appends is tagged mirror" "$mirror_bad"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
