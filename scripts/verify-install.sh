@@ -22,7 +22,7 @@ run_install() { # $1 = scratch home
 
 targets() { # every target install.sh places, relative to the scratch home
   printf '%s\n' claude/skills/director claude/skills/stansfield claude/commands/director.md \
-    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install
+    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install director/bin/draft-sweep
 }
 
 # Positive control: a clean home installs everything and exits 0.
@@ -88,6 +88,8 @@ CLAUDE_HOME="$cp_home/claude" DIRECTOR_HOME="$cp_home/director" DIRECTOR_STATE="
 for n in dsi dsx dws merge-guard relay-log desk-snapshot; do
   [[ -f "$cp_home/director/bin/$n" && ! -L "$cp_home/director/bin/$n" && -x "$cp_home/director/bin/$n" ]] && ok "copy install puts a real executable $n in the bin home" || bad "copy install puts a real executable $n in the bin home"
 done
+# draft-sweep (5yupe) is installed for the sweep to call; it needs no checkout beside it.
+[[ -f "$cp_home/director/bin/draft-sweep" && ! -L "$cp_home/director/bin/draft-sweep" && -x "$cp_home/director/bin/draft-sweep" ]] && ok "copy install puts a real executable draft-sweep in the bin home" || bad "copy install puts a real executable draft-sweep in the bin home"
 set +e
 "$cp_home/director/bin/merge-guard" >"$cp_home/mg" 2>&1; rc=$?
 [[ $rc -eq 2 ]] && grep -q "merge-guard" "$cp_home/mg" && ok "installed merge-guard runs from the bin home and prints usage" || bad "installed merge-guard runs from the bin home and prints usage" "rc=$rc"
