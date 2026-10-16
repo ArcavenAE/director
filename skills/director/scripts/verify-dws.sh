@@ -288,20 +288,43 @@ PY
 
 # Hand-written lines: one with no tag, one with a value that is not a tag. Both
 # fold as untagged, are never repaired, and nothing is refused.
-before_text="$(cat "$LEDGER")"
 printf '%s\n' '{"ts":"2026-10-16T00:00:00Z","actor":"director","event":"set","ws":"t1","next":"h1"}' \
-  '{"ts":"2026-10-16T00:00:01Z","actor":"director","event":"set","ws":"t1","next":"h2","tag":"bogus"}' >>"$LEDGER"
+  '{"ts":"2026-10-16T00:00:01Z","actor":"director","event":"set","ws":"t1","next":"h2","tag":"bogus"}' \
+  '{"ts":"2026-10-16T00:00:02Z","actor":"director","event":"set","ws":"ghost","next":"g"}' \
+  '{"ts":"2026-10-16T00:00:03Z","actor":"director","event":"open","ws":"t2","title":"T2 again"}' >>"$LEDGER"
+# The text after the untagged lines are in, so the checks below test those lines.
+appended_text="$(cat "$LEDGER")"
 "$DWS" show --json >"$root/tags.json" 2>"$root/tags.err" && rc=0 || rc=$?
-python3 - "$root/tags.json" <<'PY' >"$root/tags.chk" 2>&1 && ok "show --json counts events by tag per row and ledger-wide, untagged apart" || bad "show --json counts events by tag per row and ledger-wide, untagged apart" "$(cat "$root/tags.chk")"
+# The ledger-wide count is taken over every event line in the fold: a line for a slug
+# with no row (ghost) and a hand-written re-open that resets a row's own count are both
+# in it. A per-row count is the row's own events since it was last opened.
+python3 - "$root/tags.json" <<'PY' >"$root/tags.chk" 2>&1 && ok "show --json counts events by tag per row, and ledger-wide over every event line" || bad "show --json counts events by tag per row, and ledger-wide over every event line" "$(cat "$root/tags.chk")"
 import json, sys
 d = json.load(open(sys.argv[1]))
 rows = {r["slug"]: r for r in d["rows"]}
 assert rows["t1"]["tags"] == {"judgment": 5, "untagged": 2}, rows["t1"]["tags"]
-assert rows["t2"]["tags"] == {"judgment": 1, "mirror": 1}, rows["t2"]["tags"]
-assert d["tags"] == {"judgment": 6, "mirror": 1, "untagged": 2}, d["tags"]
+assert rows["t2"]["tags"] == {"untagged": 1}, rows["t2"]["tags"]
+assert d["tags"] == {"judgment": 6, "mirror": 1, "untagged": 4}, d["tags"]
 PY
 [[ "$rc" == 0 ]] && ok "the fold does not refuse an untagged history" || bad "the fold does not refuse an untagged history" "rc $rc"
-[[ "$(head -n 5 "$LEDGER")" == "$(printf '%s' "$before_text" | head -n 5)" ]] && ok "untagged lines are never repaired" || bad "untagged lines are never repaired"
+[[ "$(cat "$LEDGER")" == "$appended_text" ]] && ok "reading never repairs an untagged line" || bad "reading never repairs an untagged line"
+"$DWS" set t1 --next after >/dev/null 2>&1 || true
+[[ "$(head -n "$(printf '%s\n' "$appended_text" | wc -l | tr -d ' ')" "$LEDGER")" == "$appended_text" ]] \
+  && ok "a later write leaves the untagged lines as they were" || bad "a later write leaves the untagged lines as they were"
+
+# A tag the caller puts in an event never reaches the line: stamp sets it from the actor.
+PYTHONDONTWRITEBYTECODE=1 python3 - "$DWS" <<'PY' >"$root/stamp.out" 2>&1 && ok "stamp drops a caller tag and sets the actor's" || bad "stamp drops a caller tag and sets the actor's" "$(cat "$root/stamp.out")"
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("dws_mod2", sys.argv[1])
+spec = importlib.util.spec_from_loader("dws_mod2", loader)
+m = importlib.util.module_from_spec(spec)
+loader.exec_module(m)
+e = m.stamp("director", {"event": "set", "ws": "x", "tag": "mirror"})
+assert e["tag"] == "judgment", e
+r = m.stamp("refresh", {"event": "observe", "ws": "x", "tag": "judgment"})
+assert r["tag"] == "mirror", r
+assert list(e)[:3] == ["ts", "actor", "tag"], list(e)
+PY
 
 # --- K9: rulings.jsonl kinds ruling, grant and term (exclusion stays the operator's)
 export DIRECTOR_STATE="$root/rec"
