@@ -29,6 +29,12 @@ session reads the Desk and runs `desk-snapshot write`; without a usable snapshot
 dws refuses and says UNREAD, and never takes the id on faith. The card goes on the
 row as an ask: link.
 
+K8: every new event carries "tag", set by dws from the actor and never by a caller:
+mirror for refresh (a cited outside fact), judgment for director. proposal is
+defined for the reconciler (K11) and refused on append until it has a writer. A line
+with no tag, or a value that is not a tag, folds as untagged and is never repaired.
+show --json counts events by tag per row and ledger-wide; nothing gates on it.
+
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
 """
@@ -54,6 +60,16 @@ STAGES = ["idea", "defined", "designed", "building", "in review", "merged",
 # factual stage moves of section 5; anything not listed may append nothing.
 REFRESH_MOVES = {("building", "in review"), ("in review", "merged")}
 ACTORS = {"director", "refresh"}
+
+# K8: every new event carries a tag that dws sets itself from the actor; no
+# caller passes one. mirror is a cited outside fact (refresh), judgment is
+# director's own call. proposal (needs a confirm) is defined for K11, which has
+# no writer yet, so dws refuses to append it. A line with no tag, or with a
+# value that is not one of these, folds as "untagged" and is never repaired.
+TAGS = ("mirror", "proposal", "judgment")
+APPENDABLE_TAGS = ("mirror", "judgment")
+ACTOR_TAG = {"refresh": "mirror", "director": "judgment"}
+UNTAGGED = "untagged"
 
 SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 # Section 2: a token like g9-9 anywhere in a value's match key is an instance
@@ -190,6 +206,14 @@ def fold(path=LEDGER):
     return rows, torn
 
 
+def count_tag(row, e):
+    """K8: events applied to the row, by tag. A line with no tag, or with a
+    value that is not a tag, counts as untagged and is never read as judgment."""
+    t = e.get("tag")
+    name = t if isinstance(t, str) and t in TAGS else UNTAGGED
+    row["tags"][name] = row["tags"].get(name, 0) + 1
+
+
 def apply(rows, e):
     slug, ev, ts = e.get("ws"), e.get("event"), e.get("ts", "")
     if ev == "open":
@@ -198,12 +222,14 @@ def apply(rows, e):
             "owner": e.get("owner", ""), "stage": e.get("stage", "idea"),
             "last_moved": ts, "next": e.get("next", ""), "blocked": e.get("blocked", ""),
             "links": list(e.get("links", [])), "opened": ts,
-            "hints": [], "observed": {}, "facts": [],
+            "hints": [], "observed": {}, "facts": [], "tags": {},
         }
+        count_tag(rows[slug], e)
         return
     r = rows.get(slug)
     if r is None:
         return
+    count_tag(r, e)
     if ev in ("stage", "park"):
         r["stage"] = e.get("to", "parked" if ev == "park" else r["stage"])
         r["last_moved"] = max(r["last_moved"], ts)
@@ -285,10 +311,26 @@ def allowed(actor, event):
                       "(building to in review, in review to merged); director makes every other move")
 
 
+def check_tag(tag):
+    if tag not in TAGS:
+        raise Refused(f"tag {tag!r} is not one of {', '.join(TAGS)}")
+    if tag not in APPENDABLE_TAGS:
+        raise Refused(f"the {tag} tag is defined and not appended yet; K11 gives it a writer")
+
+
+def stamp(actor, event):
+    """The event as it is written: ts, actor and the tag dws sets from the
+    actor, then the fields. A tag the caller put in the event is dropped."""
+    fields = {k: v for k, v in event.items() if k != "tag"}
+    allowed(actor, fields)
+    tag = ACTOR_TAG[actor]
+    check_tag(tag)
+    return {"ts": now(), "actor": actor, "tag": tag, **fields}
+
+
 def write(actor, event, check):
     """Fold, check, append under the lock. check(rows) raises Refused."""
-    event = {"ts": now(), "actor": actor, **event}
-    allowed(actor, event)
+    event = stamp(actor, event)
     with Locked():
         rows, _ = fold()
         check(rows)
@@ -301,9 +343,7 @@ def write_many(actor, plan):
     lock, so the stage each move is checked against is the current one."""
     with Locked():
         rows, _ = fold()
-        events = [{"ts": now(), "actor": actor, **e} for e in plan(rows)]
-        for e in events:
-            allowed(actor, e)
+        events = [stamp(actor, e) for e in plan(rows)]
         for e in events:
             append(e)
     if events:
@@ -603,7 +643,11 @@ def cmd_show(a):
     rows, torn = fold()
     ordered = sorted_rows(rows)
     if a.json:
-        json.dump({"ledger": LEDGER, "torn": torn, "rows": ordered}, sys.stdout, indent=2, ensure_ascii=False)
+        total = {}
+        for r in ordered:
+            for k, n in r["tags"].items():
+                total[k] = total.get(k, 0) + n
+        json.dump({"ledger": LEDGER, "torn": torn, "tags": total, "rows": ordered}, sys.stdout, indent=2, ensure_ascii=False)
         print()
     else:
         cols = ("stage", "workstream", "owner", "last moved", "blocked on", "next action", "links")
