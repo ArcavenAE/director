@@ -47,7 +47,7 @@ when the notes have accumulated. Say which mode you are in, once, at the start.
 
 ## Mode: sweep
 
-The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
+The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
 
 1. Run `${DIRECTOR_HOME:-$HOME/.director}/bin/dsi`. It writes `$DIRECTOR_STATE/sessions.json` (props) and
    `roster.md` (scenery). Defaults to `~/.director/state`, 4-day window.
@@ -55,6 +55,11 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`) are installed by `insta
    own prior judgment, authored, not regenerated. Read it before the roster.
 3. Optionally run `${DIRECTOR_HOME:-$HOME/.director}/bin/dsx` to verify the outside world (PRs, locks, repo
    state). The board has no expiry; dsx is what makes its decay visible.
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/draft-sweep` (read-only; it needs the owner and repo
+   scope from `DRAFT_SWEEP_*` or `~/.director/state/draft-sweep.conf`). Its "- " lines are
+   shown in the sweep reply only, under Drafts: they are not appended to `board.md` and not fed to `dws`. With no config
+   it prints a GAP line; show that line, never skip the step silently.
+   It exits 0 whether it finds nothing or a lot, so read its lines, never its exit code.
 4. Present, in this shape and no other:
 
 ```
@@ -66,6 +71,7 @@ Stranded (N)  [dead process, ask never answered]
 7. <session> - <the ask in one line>  (died Nh ago)
 
 Running, not blocked: <names>
+Drafts: <draft-sweep lines, GAP lines included, or "none">
 Uncaptured: <one line each, or "none">
 ```
 
