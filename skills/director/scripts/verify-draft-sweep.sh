@@ -5,7 +5,7 @@
 # Network-free: gh is a stub that serves canned JSON, logs every call, and
 # misbehaves on request (STUB_MODE).
 #
-# Usage: scripts/draft-sweep/verify-draft-sweep.sh     Exit nonzero on any miss.
+# Usage: skills/director/scripts/verify-draft-sweep.sh    Exit nonzero on any miss.
 # DRAFT_SWEEP_BIN points the suite at another build of the sweep, which is how
 # the negative control runs it against an older version.
 set -euo pipefail

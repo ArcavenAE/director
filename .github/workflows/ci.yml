@@ -1,6 +1,6 @@
 # What this workflow does not cover, so a green check is read for what it is:
 #   - scripts/: its verifiers (verify-install.sh, verify-skill-ledger.sh,
-#     director-install and draft-sweep) are not run here.
+#     and director-install) are not run here; draft-sweep and its verifier live in skills/director/scripts/.
 #   - sim/twin/verify-cast-launch.sh is not run here.
 #   - probe/: 23 shell scripts, 8 of them verify-*.sh, most of which need a live broker or
 #     hub and the nats CLI, and a second Go module (probe/leaf-fabric/fabtool)

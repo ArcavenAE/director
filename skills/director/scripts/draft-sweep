@@ -37,7 +37,7 @@
 # Config file: DRAFT_SWEEP_CONFIG, default ~/.director/state/draft-sweep.conf.
 # DRAFT_SWEEP_NOW (epoch seconds) fixes the clock for tests.
 #
-# Usage: scripts/draft-sweep/draft-sweep
+# Usage: skills/director/scripts/draft-sweep
 set -euo pipefail
 
 gaps=0
