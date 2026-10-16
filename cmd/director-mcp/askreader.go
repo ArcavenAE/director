@@ -77,6 +77,12 @@ type askIDs struct {
 	Tombs []idEntry `json:"tombs"`
 }
 
+// askGlobals is the hub principal table, stored under its own key so a reader
+// of one value never has to parse the other (pmxxq).
+type askGlobals struct {
+	GlobalID []globalEntry `json:"global_ids"`
+}
+
 var keyChars = regexp.MustCompile(`^[-A-Za-z0-9_=]+$`)
 
 // rowKey is a KV-safe key for an ask id.
@@ -109,6 +115,15 @@ func loadAskStore(ctx context.Context, kv jetstream.KeyValue) (*askLedger, []str
 			return nil, nil, fmt.Errorf("store ids unreadable: %w", err)
 		}
 		l.IDs, l.Tombs = ids.IDs, ids.Tombs
+	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return nil, nil, err
+	}
+	if e, err := kv.Get(ctx, "globals"); err == nil {
+		var g askGlobals
+		if err := json.Unmarshal(e.Value(), &g); err != nil {
+			return nil, nil, fmt.Errorf("store globals unreadable: %w", err)
+		}
+		l.GlobalID = g.GlobalID
 	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, nil, err
 	}
@@ -312,6 +327,9 @@ func (r *askReader) persist(ctx context.Context, now time.Time) error {
 		return err
 	}
 	if err := r.put(ctx, "ids", askIDs{IDs: l.IDs, Tombs: l.Tombs}); err != nil {
+		return err
+	}
+	if err := r.put(ctx, "globals", askGlobals{GlobalID: l.GlobalID}); err != nil {
 		return err
 	}
 	live := map[string]bool{}
@@ -544,4 +562,46 @@ func runAskReaderCmd(ctx context.Context, url string, cli cliArgs, domain string
 // askReaderContext is a context cancelled by SIGINT or SIGTERM.
 func askReaderContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+}
+
+// seenState says whether the ledger could answer at all. A caller reads the
+// pair (map, state): an entry in the map is seen; no entry under seenLedger is
+// not seen; seenNoLedger is no record, which is not the same as not seen.
+type seenState int
+
+const (
+	seenNoLedger seenState = iota // no ASK_LEDGER bucket, or no globals key in it
+	seenLedger                    // the table was read
+)
+
+// readGlobalSeen reads the hub principals the ask reader has kept, keyed
+// "cluster/role". It takes the caller's local JetStream handle and opens the
+// bucket on each call, like readAskReport, and only reads: KeyValue and Get.
+// A missing bucket or a missing globals key is seenNoLedger with no error (a
+// cluster without an ask reader, or a store from before the table was kept);
+// only a failed read or an unreadable value is an error.
+func readGlobalSeen(ctx context.Context, js jetstream.JetStream) (map[string]globalEntry, seenState, error) {
+	kv, err := js.KeyValue(ctx, askBucket)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrBucketNotFound) {
+			return nil, seenNoLedger, nil
+		}
+		return nil, seenNoLedger, err
+	}
+	e, err := kv.Get(ctx, "globals")
+	if err != nil {
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			return nil, seenNoLedger, nil
+		}
+		return nil, seenNoLedger, err
+	}
+	var g askGlobals
+	if err := json.Unmarshal(e.Value(), &g); err != nil {
+		return nil, seenNoLedger, fmt.Errorf("store globals unreadable: %w", err)
+	}
+	out := make(map[string]globalEntry, len(g.GlobalID))
+	for _, ge := range g.GlobalID {
+		out[ge.Cluster+"/"+ge.Role] = ge
+	}
+	return out, seenLedger, nil
 }

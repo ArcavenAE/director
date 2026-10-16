@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,5 +73,56 @@ func TestAnUnreadableHubLeavesTheGlobalTableAlone(t *testing.T) {
 	after := r.ledger.GlobalID
 	if len(after) != 1 || !after[0].Live || !after[0].LastSeen.Equal(before[0].LastSeen) {
 		t.Fatalf("table after an unreadable hub = %+v, want unchanged %+v", after, before)
+	}
+}
+
+// The hub principals the reader has seen are the only record that a cluster
+// was once present, so a restart must not lose them (pmxxq). The second
+// reader has no hub, so anything it holds came back from the store.
+func TestGlobalIDsSurviveAnAskReaderRestart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, js := provisionAudit(t, ctx, url)
+	gjs, err := jetstream.NewWithDomain(nc, "global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gkv, _ := gjs.KeyValue(ctx, globalPresenceBucket)
+	_, _ = gkv.Put(ctx, "presence.cluster-b.supervisor.01ABC", []byte(`{"cluster":"cluster-b","role":"supervisor","agent_id":"sup-b","state":"idle"}`))
+
+	r1 := newAskReader(js, askReaderCfg{Broker: "local", File: filepath.Join(t.TempDir(), "a.json"), Hub: gjs})
+	if err := r1.Pass(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	want := append([]globalEntry(nil), r1.ledger.GlobalID...)
+	if len(want) != 1 || want[0].Cluster != "cluster-b" {
+		t.Fatalf("table before the restart = %+v, want one cluster-b entry", want)
+	}
+
+	// The table has its own key beside meta and ids, not a field of another value.
+	kv, err := js.KeyValue(ctx, askBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kv.Get(ctx, "globals"); err != nil {
+		t.Fatalf("no globals key in %s: %v", askBucket, err)
+	}
+	ids, err := kv.Get(ctx, "ids")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(ids.Value()), "global_ids") {
+		t.Fatalf("the ids value still carries the table: %s", ids.Value())
+	}
+
+	r2 := newAskReader(js, askReaderCfg{Broker: "local", File: filepath.Join(t.TempDir(), "b.json")})
+	if err := r2.Pass(ctx, time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := r2.ledger.GlobalID
+	if len(got) != 1 || got[0].Cluster != want[0].Cluster || got[0].Role != want[0].Role ||
+		!got[0].FirstSeen.Equal(want[0].FirstSeen) || !got[0].LastSeen.Equal(want[0].LastSeen) {
+		t.Fatalf("table after the restart = %+v, want %+v", got, want)
 	}
 }
