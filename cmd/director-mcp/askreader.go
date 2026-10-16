@@ -73,8 +73,9 @@ type askMeta struct {
 }
 
 type askIDs struct {
-	IDs   []idEntry `json:"ids"`
-	Tombs []idEntry `json:"tombs"`
+	IDs      []idEntry     `json:"ids"`
+	Tombs    []idEntry     `json:"tombs"`
+	GlobalID []globalEntry `json:"global_ids"`
 }
 
 var keyChars = regexp.MustCompile(`^[-A-Za-z0-9_=]+$`)
@@ -108,7 +109,7 @@ func loadAskStore(ctx context.Context, kv jetstream.KeyValue) (*askLedger, []str
 		if err := json.Unmarshal(e.Value(), &ids); err != nil {
 			return nil, nil, fmt.Errorf("store ids unreadable: %w", err)
 		}
-		l.IDs, l.Tombs = ids.IDs, ids.Tombs
+		l.IDs, l.Tombs, l.GlobalID = ids.IDs, ids.Tombs, ids.GlobalID
 	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, nil, err
 	}
@@ -311,7 +312,7 @@ func (r *askReader) persist(ctx context.Context, now time.Time) error {
 	if err := r.put(ctx, "meta", askMeta{LastSeq: l.LastSeq, LastPass: l.LastPass, Down: l.Down, Orphans: l.Orphans, Dropped: l.Dropped, NotRead: r.NotRead, Seen: l.Seen}); err != nil {
 		return err
 	}
-	if err := r.put(ctx, "ids", askIDs{IDs: l.IDs, Tombs: l.Tombs}); err != nil {
+	if err := r.put(ctx, "ids", askIDs{IDs: l.IDs, Tombs: l.Tombs, GlobalID: l.GlobalID}); err != nil {
 		return err
 	}
 	live := map[string]bool{}
