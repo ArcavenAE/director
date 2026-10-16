@@ -364,6 +364,20 @@ else
   echo "SKIP an unreadable rulings file (running as root)"
 fi
 
+# K9: the four kinds are ruling, grant, exclusion and term. A line with no kind,
+# a kind that is not a string, or a kind outside the four STOPs, since it might be
+# a record the guard should have read. A term line is ignored like ruling and grant.
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; printf '{"kind":"term","role":"builder","subject":"s","text":"t","set_by":"supervisor"}\n' > "$fx/rulings.jsonl"
+expect_proceed "a term record is read and ignored: PROCEED"
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '{"repo":"org/repo","label":"acu.update"}' > "$fx/rulings.jsonl"
+expect_stop "a rulings line with no kind: STOP" "kind"
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '{"kind":"exclusions","repo":"org/repo","label":"acu.update"}' > "$fx/rulings.jsonl"
+expect_stop "a rulings line with a kind outside the four: STOP" "kind"
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '{"kind":42}' > "$fx/rulings.jsonl"
+expect_stop "a rulings line whose kind is not a string: STOP" "kind"
+fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '{"kind":null,"repo":"org/repo","label":"acu.update"}' > "$fx/rulings.jsonl"
+expect_stop "a rulings line whose kind is null: STOP" "kind"
+
 # --- usage --------------------------------------------------------------------------
 fixture
 if guard only-one-arg; then bad "usage error proceeded"
