@@ -73,8 +73,13 @@ type askMeta struct {
 }
 
 type askIDs struct {
-	IDs      []idEntry     `json:"ids"`
-	Tombs    []idEntry     `json:"tombs"`
+	IDs   []idEntry `json:"ids"`
+	Tombs []idEntry `json:"tombs"`
+}
+
+// askGlobals is the hub principal table, stored under its own key so a reader
+// of one value never has to parse the other (pmxxq).
+type askGlobals struct {
 	GlobalID []globalEntry `json:"global_ids"`
 }
 
@@ -109,7 +114,16 @@ func loadAskStore(ctx context.Context, kv jetstream.KeyValue) (*askLedger, []str
 		if err := json.Unmarshal(e.Value(), &ids); err != nil {
 			return nil, nil, fmt.Errorf("store ids unreadable: %w", err)
 		}
-		l.IDs, l.Tombs, l.GlobalID = ids.IDs, ids.Tombs, ids.GlobalID
+		l.IDs, l.Tombs = ids.IDs, ids.Tombs
+	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return nil, nil, err
+	}
+	if e, err := kv.Get(ctx, "globals"); err == nil {
+		var g askGlobals
+		if err := json.Unmarshal(e.Value(), &g); err != nil {
+			return nil, nil, fmt.Errorf("store globals unreadable: %w", err)
+		}
+		l.GlobalID = g.GlobalID
 	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, nil, err
 	}
@@ -312,7 +326,10 @@ func (r *askReader) persist(ctx context.Context, now time.Time) error {
 	if err := r.put(ctx, "meta", askMeta{LastSeq: l.LastSeq, LastPass: l.LastPass, Down: l.Down, Orphans: l.Orphans, Dropped: l.Dropped, NotRead: r.NotRead, Seen: l.Seen}); err != nil {
 		return err
 	}
-	if err := r.put(ctx, "ids", askIDs{IDs: l.IDs, Tombs: l.Tombs, GlobalID: l.GlobalID}); err != nil {
+	if err := r.put(ctx, "ids", askIDs{IDs: l.IDs, Tombs: l.Tombs}); err != nil {
+		return err
+	}
+	if err := r.put(ctx, "globals", askGlobals{GlobalID: l.GlobalID}); err != nil {
 		return err
 	}
 	live := map[string]bool{}
