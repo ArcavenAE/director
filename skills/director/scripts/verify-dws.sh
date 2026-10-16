@@ -397,6 +397,15 @@ if rec ruling --subject s --text t --by operator --ruled-at 2026-10-16 >/dev/nul
 elif [[ "$(rl)" == "$n" ]]; then ok "a record with no source is refused"; else bad "a record with no source is refused" "appended"; fi
 if rec ruling --subject s --text t --by operator --ruled-at yesterday --source c >/dev/null 2>&1; then bad "a ruled-at that is not a date is refused" "accepted"
 else ok "a ruled-at that is not a date is refused"; fi
+if rec ruling --subject s --text t --by operator --ruled-at 2026-13-45 --source c >/dev/null 2>&1; then bad "a ruled-at that is not a calendar date is refused" "accepted"
+else ok "a ruled-at that is not a calendar date is refused"; fi
+if rec grant --subject s --scope x --to builder --state draft --text t --source c --expires 2026-02-30T00:00:00Z >/dev/null 2>&1; then bad "an expires that is not a calendar time is refused" "accepted"
+else ok "an expires that is not a calendar time is refused"; fi
+n="$(rl)"
+if rec ruling --id selfref-1 --replaces selfref-1 --subject s --text t --by operator --ruled-at 2026-10-16 --source c >"$root/out" 2>&1; then bad "a record that replaces itself is refused" "accepted"
+elif [[ "$(rl)" == "$n" ]] && grep -qi 'itself' "$root/out"; then ok "a record that replaces itself is refused, nothing appended"
+else bad "a record that replaces itself is refused" "$(cat "$root/out")"; fi
+grep -q 'refused on append to workstreams.jsonl' "$DWS" && ok "the header scopes the proposal refusal to the workstream ledger" || bad "the header scopes the proposal refusal to the workstream ledger"
 rec ruling --id fixed-1 --subject s --text t --by operator --ruled-at 2026-10-16 --source c >/dev/null 2>&1 \
   && ok "an explicit id is accepted" || bad "an explicit id is accepted"
 n="$(rl)"
