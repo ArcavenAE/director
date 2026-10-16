@@ -405,6 +405,12 @@ PY
 )" || true
 [[ "$rc" == 0 && "$chk" == ok ]] && ok "records marks a replaced target, counts a missing or other-kind pointer, keeps an exclusion line as written" || bad "records marks a replaced target, counts a missing or other-kind pointer, keeps an exclusion line as written" "rc $rc: $chk"
 
+# Two records of one kind in one second: the default id takes -2 so it stays unique.
+n="$(rl)"
+for _ in 1 2; do DWS_TEST_CLOCK=1 DWS_NOW=2030-01-01T00:00:00Z rec ruling --subject same --text t --by operator --ruled-at 2030-01-01 --source c >/dev/null 2>&1 || true; done
+if [[ "$(jf $n id)" == "ruling-2030-01-01T00:00:00Z" && "$(jf $((n+1)) id)" == "ruling-2030-01-01T00:00:00Z-2" ]]; then ok "a default id repeated in one second takes -2"
+else bad "a default id repeated in one second takes -2" "$(jf $n id) $(jf $((n+1)) id)"; fi
+
 # Own lock file beside rulings.jsonl; the workstream lock is not used; parallel writes all land whole.
 [[ -e "$DIRECTOR_STATE/rulings.lock" && ! -e "$DIRECTOR_STATE/workstreams.lock" ]] && ok "record locks its own file beside rulings.jsonl" || bad "record locks its own file beside rulings.jsonl" "$(ls "$DIRECTOR_STATE")"
 n="$(rl)"

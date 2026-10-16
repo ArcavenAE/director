@@ -35,6 +35,13 @@ defined for the reconciler (K11) and refused on append until it has a writer. A 
 with no tag, or a value that is not a tag, folds as untagged and is never repaired.
 show --json counts events by tag per row and ledger-wide; nothing gates on it.
 
+K9: `record ruling|grant|term` appends to rulings.jsonl (the file merge-guard reads for
+exclusions; MERGE_GUARD_RULINGS names it, default $DIRECTOR_STATE/rulings.jsonl), under
+its own rulings.lock beside it. It never creates the file, refuses the exclusion kind
+(the operator's, R-153) and any actor but director, and stores text as given.
+`records [--json]` folds the file: replaces is an explicit id pointer; a target is marked
+replaced_by, and a pointer to a missing id or another kind is counted, never guessed.
+
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
 """
@@ -264,9 +271,14 @@ class Locked:
     """One exclusive flock around fold, check and append. A holder that does
     not let go within LOCK_TIMEOUT is a loud failure, not a wait forever."""
 
+    def __init__(self, path=None):
+        self.path = path
+
     def __enter__(self):
-        os.makedirs(STATE, exist_ok=True)
-        self.f = open(LOCK, "a")
+        if self.path is None:
+            os.makedirs(STATE, exist_ok=True)
+        lock = self.path or LOCK
+        self.f = open(lock, "a")
         deadline = time.monotonic() + LOCK_TIMEOUT
         while True:
             try:
@@ -275,7 +287,7 @@ class Locked:
             except BlockingIOError:
                 if time.monotonic() >= deadline:
                     self.f.close()
-                    raise Refused(f"ledger lock {LOCK} held for more than {LOCK_TIMEOUT:.0f}s; nothing written")
+                    raise Refused(f"ledger lock {lock} held for more than {LOCK_TIMEOUT:.0f}s; nothing written")
                 time.sleep(0.05)
 
     def __exit__(self, *exc):
@@ -283,13 +295,14 @@ class Locked:
         self.f.close()
 
 
-def append(event):
+def append(event, path=None):
     """Append one whole line. A torn last line is left as it is; the new event
     starts on its own line so it is not glued to the torn one."""
+    path = path or LEDGER
     line = json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
-    with open(LEDGER, "ab") as f:
+    with open(path, "ab") as f:
         if f.tell() > 0:
-            with open(LEDGER, "rb") as r:
+            with open(path, "rb") as r:
                 r.seek(-1, os.SEEK_END)
                 if r.read(1) != b"\n":
                     line = "\n" + line
@@ -658,6 +671,159 @@ def cmd_show(a):
     if torn:
         print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
 
+# K9: rulings.jsonl, the store of rulings, grants and terms (R-201, R-204, R-184).
+# The file is the one merge-guard reads for exclusions (R-153); exclusions stay
+# the operator's and dws never writes one. The operator creates the file, so dws
+# refuses when it is missing and never creates it. Its lock is its own file beside it.
+RECORD_KINDS = ("ruling", "grant", "exclusion", "term")
+RECORD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
+RECORD_DATE = re.compile(r"\d{4}-\d\d-\d\d(T\d\d:\d\d:\d\dZ)?")
+
+
+def rulings_path():
+    return os.environ.get("MERGE_GUARD_RULINGS") or os.path.join(STATE, "rulings.jsonl")
+
+
+def need_file(path):
+    if not os.path.exists(path):
+        raise Refused(f"no rulings file at {path}; the guard cannot tell no exclusions declared from a record that "
+                      "is gone (R-153). The operator creates the file and enters their exclusions (an empty file "
+                      "means none declared); a seat reports this and does not create the file")
+    if not os.path.isfile(path):
+        raise Refused(f"the rulings path {path} exists and is not a file")
+
+
+def fold_records(path):
+    """The records in file order, each with replaced_by (the ids whose replaces
+    names it), how many lines could not be read, and the replaces pointers that
+    resolve to nothing or to another kind. A pointer is never guessed at."""
+    records, torn = [], 0
+    try:
+        f = open(path, encoding="utf-8")
+    except FileNotFoundError:
+        return records, 0, []
+    with f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                torn += 1
+                continue
+            if not isinstance(e, dict):
+                torn += 1
+                continue
+            records.append({**e, "replaced_by": []})
+    by_id = {}
+    for r in records:
+        if isinstance(r.get("id"), str):
+            by_id.setdefault(r["id"], r)
+    unresolved = []
+    for r in records:
+        ptr = r.get("replaces")
+        if ptr is None:
+            continue
+        target = by_id.get(ptr) if isinstance(ptr, str) else None
+        if target is None:
+            unresolved.append({"id": r.get("id"), "replaces": ptr, "why": "missing"})
+        elif target.get("kind") != r.get("kind"):
+            unresolved.append({"id": r.get("id"), "replaces": ptr, "why": "other kind"})
+        else:
+            target["replaced_by"].append(r.get("id"))
+    return records, torn, unresolved
+
+
+def nonblank(field, value):
+    if value is None or not value.strip():
+        raise Refused(f"--{field.replace('_', '-')} is required and may not be blank")
+    return value
+
+
+def record_date(field, value):
+    if not RECORD_DATE.fullmatch(value):
+        raise Refused(f"{field} {value!r} is not a date (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)")
+    return value
+
+
+def record_id(field, value):
+    if not RECORD_ID.fullmatch(value):
+        raise Refused(f"{field} {value!r} is not an id")
+    return value
+
+
+def cmd_record(a):
+    if a.kind == "exclusion":
+        raise Refused("exclusions stay the operator's (R-153): the operator enters them in the rulings file; "
+                      "dws writes ruling, grant and term only")
+    if a.actor != "director":
+        raise Refused(f"actor {a.actor!r} may not write a record; only director does")
+    # The text is the operator's words and is stored as given, never normalized (R-186).
+    fields = {"source": stored_form(nonblank("source", a.source))}
+    if a.kind == "ruling":
+        fields.update(subject=stored_form(nonblank("subject", a.subject)), text=nonblank("text", a.text),
+                      by=checked("by", nonblank("by", a.by)), ruled_at=record_date("ruled_at", nonblank("ruled_at", a.ruled_at)))
+    elif a.kind == "grant":
+        if a.state not in ("draft", "confirmed"):
+            raise Refused(f"--state {a.state!r} must be draft or confirmed")
+        fields.update(subject=stored_form(nonblank("subject", a.subject)), scope=stored_form(nonblank("scope", a.scope)),
+                      to=checked("to", nonblank("to", a.to)), state=a.state, text=nonblank("text", a.text))
+        if a.expires is not None:
+            fields["expires"] = record_date("expires", a.expires)
+    else:
+        fields.update(role=checked("role", nonblank("role", a.role)), subject=stored_form(nonblank("subject", a.subject)),
+                      text=nonblank("text", a.text), set_by=checked("set_by", nonblank("set_by", a.set_by)))
+    if getattr(a, "card", None) is not None:
+        fields["card"] = record_id("card", a.card)
+    if getattr(a, "link", None):
+        fields["links"] = [stored_form(x) for x in a.link]
+    if a.replaces is not None:
+        fields["replaces"] = record_id("replaces", a.replaces)
+    tag = "proposal" if a.kind == "grant" and a.state == "draft" else "mirror"
+    path = rulings_path()
+    need_file(path)
+    with Locked(os.path.join(os.path.dirname(path) or ".", "rulings.lock")):
+        records, _, _ = fold_records(path)
+        ts = now()
+        taken = {r.get("id") for r in records}
+        if a.id is not None:
+            rid = record_id("id", a.id)
+        else:
+            # The default is <kind>-<UTC ts>; a second record of the same kind in the
+            # same second takes -2, -3 and so on, so the id stays unique.
+            rid, n = f"{a.kind}-{ts}", 1
+            while rid in taken:
+                n += 1
+                rid = f"{a.kind}-{ts}-{n}"
+        if rid in taken:
+            raise Refused(f"id {rid!r} is already in {path}; nothing written")
+        append({"kind": a.kind, "id": rid, "ts": ts, "actor": a.actor, "tag": tag, **fields}, path)
+    print(f"dws: wrote {a.kind} {rid}")
+
+
+def cmd_records(a):
+    path = rulings_path()
+    need_file(path)
+    records, torn, unresolved = fold_records(path)
+    counts = {}
+    for r in records:
+        k = r.get("kind") if r.get("kind") in RECORD_KINDS else "unknown"
+        counts[k] = counts.get(k, 0) + 1
+    if a.kind:
+        records = [r for r in records if r.get("kind") == a.kind]
+    if a.json:
+        json.dump({"file": path, "torn": torn, "counts": counts, "records": records,
+                   "unresolved_replaces": unresolved}, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        for r in records:
+            mark = f"  replaced by {', '.join(map(str, r['replaced_by']))}" if r["replaced_by"] else ""
+            print(f"{r.get('kind', '?')}  {r.get('id', '-')}  {r.get('subject', r.get('repo', ''))}{mark}")
+        for u in unresolved:
+            print(f"unresolved replaces: {u['id']} -> {u['replaces']} ({u['why']})")
+    if torn:
+        print(f"dws: {torn} unreadable line(s) in {path} skipped, not repaired", file=sys.stderr)
+
 
 def main(argv):
     p = argparse.ArgumentParser(prog="dws", description="director workstream ledger (W1)")
@@ -710,7 +876,40 @@ def main(argv):
     w.add_argument("--json", action="store_true")
     w.set_defaults(fn=cmd_show)
 
-    a = p.parse_args(argv)
+    rc = sub.add_parser("record", help="write a ruling, grant or term to rulings.jsonl (K9)")
+    rs = rc.add_subparsers(dest="kind", required=True)
+    for kind in ("ruling", "grant", "term"):
+        k = rs.add_parser(kind)
+        k.add_argument("--source", required=True)
+        k.add_argument("--id")
+        k.add_argument("--replaces")
+        k.add_argument("--subject", required=True)
+        k.add_argument("--text", required=True)
+        if kind == "ruling":
+            k.add_argument("--by", required=True)
+            k.add_argument("--ruled-at", dest="ruled_at", required=True)
+            k.add_argument("--card")
+            k.add_argument("--link", nargs="+")
+        elif kind == "grant":
+            k.add_argument("--scope", required=True)
+            k.add_argument("--to", required=True)
+            k.add_argument("--state", required=True)
+            k.add_argument("--card")
+            k.add_argument("--expires")
+        else:
+            k.add_argument("--role", required=True)
+            k.add_argument("--set-by", dest="set_by", required=True)
+    rs.add_parser("exclusion", add_help=False)
+    rc.set_defaults(fn=cmd_record)
+
+    rr = sub.add_parser("records", help="read rulings.jsonl with replaced marks (K9)")
+    rr.add_argument("--json", action="store_true")
+    rr.add_argument("--kind", choices=RECORD_KINDS)
+    rr.set_defaults(fn=cmd_records)
+
+    a, extra = p.parse_known_args(argv)
+    if extra and not (a.cmd == "record" and a.kind == "exclusion"):
+        p.error("unrecognized arguments: " + " ".join(extra))
     try:
         a.fn(a)
     except Refused as err:
