@@ -240,5 +240,68 @@ want="i2 i1 d1 g1 b2 b1 r1 m1 e1 y1 a2 p1"
 [[ "$order" == "$want" ]] && ok "12 rows sort by stage, oldest first, parked last" || bad "12 rows sort by stage, oldest first, parked last" "got $order"
 "$DWS" show >"$root/text" 2>&1 && head -1 "$root/text" | grep -q . && ok "show prints a text table" || bad "show prints a text table"
 
+# --- K8: every new line carries a tag that dws sets itself ------------------
+# mirror (a cited outside fact: refresh), proposal (needs a confirm: defined,
+# never appended yet) and judgment (director's own call). Old and hand-written
+# lines fold as untagged, a value of their own; the fold never refuses them.
+export DIRECTOR_STATE="$root/tags"
+mkdir -p "$DIRECTOR_STATE"
+LEDGER="$DIRECTOR_STATE/workstreams.jsonl"
+"$DWS" open t1 --title T1 >/dev/null 2>&1
+"$DWS" set t1 --next x >/dev/null 2>&1
+"$DWS" stage t1 designed --from idea >/dev/null 2>&1
+"$DWS" link t1 pr:ArcavenAE/director#1 >/dev/null 2>&1
+"$DWS" park t1 --from designed >/dev/null 2>&1
+tags_of() { python3 -c 'import json,sys
+for l in open(sys.argv[1]):
+    e = json.loads(l)
+    print(e["event"], e.get("actor"), e.get("tag"))' "$LEDGER"; }
+tags_of >"$root/tags.out" 2>&1 || true
+if [[ "$(wc -l <"$root/tags.out" | tr -d ' ')" == 5 ]] && ! grep -v ' director judgment$' "$root/tags.out" | grep -q .; then
+  ok "open, set, stage, link and park by director are tagged judgment"
+else bad "open, set, stage, link and park by director are tagged judgment" "$(tr '\n' ';' <"$root/tags.out")"; fi
+
+"$DWS" open t2 --title T2 --stage building >/dev/null 2>&1
+"$DWS" --actor refresh stage t2 "in review" --from building >/dev/null 2>&1
+last="$(tags_of | tail -1)"
+[[ "$last" == "stage refresh mirror" ]] && ok "a refresh stage move is tagged mirror" || bad "a refresh stage move is tagged mirror" "$last"
+
+# A caller cannot choose the tag: dws has no flag for it.
+if "$DWS" set t1 --next y --tag mirror >/dev/null 2>&1; then bad "dws takes no --tag flag"; else ok "dws takes no --tag flag"; fi
+
+# proposal is defined and refused on append; an unknown value is refused too.
+python3 - "$DWS" <<'PY' >"$root/prop.out" 2>&1 && ok "the proposal tag is defined and refused on append" || bad "the proposal tag is defined and refused on append" "$(cat "$root/prop.out")"
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("dws_mod", sys.argv[1])
+spec = importlib.util.spec_from_loader("dws_mod", loader)
+m = importlib.util.module_from_spec(spec)
+loader.exec_module(m)
+assert set(m.TAGS) == {"mirror", "proposal", "judgment"}, m.TAGS
+for bad_tag in ("proposal", "bogus", None):
+    try:
+        m.check_tag(bad_tag)
+    except m.Refused:
+        continue
+    raise SystemExit("check_tag accepted %r" % (bad_tag,))
+m.check_tag("mirror"); m.check_tag("judgment")
+PY
+
+# Hand-written lines: one with no tag, one with a value that is not a tag. Both
+# fold as untagged, are never repaired, and nothing is refused.
+before_text="$(cat "$LEDGER")"
+printf '%s\n' '{"ts":"2026-10-16T00:00:00Z","actor":"director","event":"set","ws":"t1","next":"h1"}' \
+  '{"ts":"2026-10-16T00:00:01Z","actor":"director","event":"set","ws":"t1","next":"h2","tag":"bogus"}' >>"$LEDGER"
+"$DWS" show --json >"$root/tags.json" 2>"$root/tags.err" && rc=0 || rc=$?
+python3 - "$root/tags.json" <<'PY' >"$root/tags.chk" 2>&1 && ok "show --json counts events by tag per row and ledger-wide, untagged apart" || bad "show --json counts events by tag per row and ledger-wide, untagged apart" "$(cat "$root/tags.chk")"
+import json, sys
+d = json.load(open(sys.argv[1]))
+rows = {r["slug"]: r for r in d["rows"]}
+assert rows["t1"]["tags"] == {"judgment": 5, "untagged": 2}, rows["t1"]["tags"]
+assert rows["t2"]["tags"] == {"judgment": 1, "mirror": 1}, rows["t2"]["tags"]
+assert d["tags"] == {"judgment": 6, "mirror": 1, "untagged": 2}, d["tags"]
+PY
+[[ "$rc" == 0 ]] && ok "the fold does not refuse an untagged history" || bad "the fold does not refuse an untagged history" "rc $rc"
+[[ "$(head -n 5 "$LEDGER")" == "$(printf '%s' "$before_text" | head -n 5)" ]] && ok "untagged lines are never repaired" || bad "untagged lines are never repaired"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
