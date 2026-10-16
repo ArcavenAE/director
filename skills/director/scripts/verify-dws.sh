@@ -303,5 +303,115 @@ PY
 [[ "$rc" == 0 ]] && ok "the fold does not refuse an untagged history" || bad "the fold does not refuse an untagged history" "rc $rc"
 [[ "$(head -n 5 "$LEDGER")" == "$(printf '%s' "$before_text" | head -n 5)" ]] && ok "untagged lines are never repaired" || bad "untagged lines are never repaired"
 
+# --- K9: rulings.jsonl kinds ruling, grant and term (exclusion stays the operator's)
+export DIRECTOR_STATE="$root/rec"
+mkdir -p "$DIRECTOR_STATE"
+RUL="$DIRECTOR_STATE/rulings.jsonl"
+unset MERGE_GUARD_RULINGS
+rec() { "$DWS" record "$@"; }
+rl() { if [[ -f "$RUL" ]]; then wc -l <"$RUL" | tr -d ' '; else echo 0; fi; }
+jf() { python3 -c 'import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+r=rows[int(sys.argv[2])]
+v=r
+for k in sys.argv[3].split("."):
+    v=v.get(k, "__absent__") if isinstance(v, dict) else "__absent__"
+print(json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v)' "$RUL" "$1" "$2" 2>/dev/null || echo "__error__"; }
+
+# A missing file is refused with the guard's wording; nothing is created.
+if rec ruling --subject s --text t --by operator --ruled-at 2026-10-16 --source relay-1 >"$root/out" 2>&1; then
+  bad "record refuses a missing rulings file" "accepted"
+elif [[ -e "$RUL" || -e "$DIRECTOR_STATE/rulings.lock" ]]; then
+  bad "record refuses a missing rulings file" "created $(ls "$DIRECTOR_STATE")"
+elif grep -q "no rulings file at $RUL" "$root/out" && grep -q "does not create the file" "$root/out"; then
+  ok "record refuses a missing rulings file with the guard's wording and creates nothing"
+else bad "record refuses a missing rulings file" "$(cat "$root/out")"; fi
+
+: >"$RUL"
+verbatim=$'  the operator said:  "ship it"\tnot\u00a0before  Friday  '
+rec ruling --subject merge-order --text "$verbatim" --by operator --ruled-at 2026-10-16 --source relay-1 --card card-7 >"$root/out" 2>&1 \
+  && ok "record writes a ruling" || bad "record writes a ruling" "$(cat "$root/out")"
+[[ "$(rl)" == 1 ]] && ok "a ruling appends one line" || bad "a ruling appends one line" "$(rl)"
+chk="$(python3 - "$RUL" "$verbatim" <<'PY' 2>&1
+import json, re, sys
+e = json.loads(open(sys.argv[1]).readline())
+need = ["kind", "id", "ts", "actor", "tag", "source", "subject", "text", "by", "ruled_at"]
+miss = [k for k in need if k not in e]
+assert not miss, miss
+assert e["kind"] == "ruling" and e["actor"] == "director" and e["tag"] == "mirror", e
+assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", e["ts"]), e["ts"]
+assert e["id"] == "ruling-" + e["ts"], e["id"]
+assert e["source"] == "relay-1" and e["by"] == "operator" and e["ruled_at"] == "2026-10-16" and e["card"] == "card-7", e
+assert e["text"] == sys.argv[2], repr(e["text"])
+print("ok")
+PY
+)" || true
+[[ "$chk" == ok ]] && ok "the ruling carries every required field and its text verbatim" || bad "the ruling carries every required field and its text verbatim" "$chk"
+
+# grant: a draft is a proposal, a confirmed grant is a mirror; to is a role, never an instance id.
+rec grant --subject reviewer-allow --scope "gh pr review" --to builder --state draft --text "may review" --source card-9 >/dev/null 2>&1 || true
+[[ "$(jf 1 tag)" == proposal && "$(jf 1 state)" == draft ]] && ok "a draft grant is tagged proposal" || bad "a draft grant is tagged proposal" "$(tail -1 "$RUL")"
+rec grant --subject reviewer-allow --scope "gh pr review" --to builder --state confirmed --text "may review" --source card-9 --replaces "$(jf 1 id)" >/dev/null 2>&1 || true
+[[ "$(jf 2 tag)" == mirror && "$(jf 2 replaces)" == "$(jf 1 id)" ]] && ok "a confirmed grant is tagged mirror and carries replaces" || bad "a confirmed grant is tagged mirror and carries replaces" "$(tail -1 "$RUL")"
+n="$(rl)"
+if rec grant --subject s --scope x --to builder-g5-0 --state draft --text t --source c >"$root/out" 2>&1; then
+  bad "a grant to an instance id is refused" "accepted"
+elif grep -qi 'instance id' "$root/out" && [[ "$(rl)" == "$n" ]]; then ok "a grant to an instance id is refused, nothing appended"
+else bad "a grant to an instance id is refused" "$(cat "$root/out")"; fi
+if rec grant --subject s --scope x --to builder --state maybe --text t --source c >/dev/null 2>&1; then
+  bad "a grant state other than draft or confirmed is refused" "accepted"
+else ok "a grant state other than draft or confirmed is refused"; fi
+
+rec term --role builder --subject lane-c --text "hold the director lane" --set-by supervisor --source relay-2 >/dev/null 2>&1 || true
+[[ "$(jf 3 kind)" == term && "$(jf 3 set_by)" == supervisor && "$(jf 3 tag)" == mirror ]] && ok "record writes a term" || bad "record writes a term" "$(tail -1 "$RUL")"
+
+# exclusion is the operator's; a missing required field, a repeated id and a non-director actor are refused.
+n="$(rl)"
+if rec exclusion --repo org/repo --label acu.x >"$root/out" 2>&1; then bad "record refuses the exclusion kind" "accepted"
+elif grep -q 'R-153' "$root/out" && [[ "$(rl)" == "$n" ]]; then ok "record refuses the exclusion kind and names R-153"
+else bad "record refuses the exclusion kind" "$(cat "$root/out")"; fi
+if rec ruling --subject s --text t --by operator --ruled-at 2026-10-16 >/dev/null 2>&1; then bad "a record with no source is refused" "accepted"
+elif [[ "$(rl)" == "$n" ]]; then ok "a record with no source is refused"; else bad "a record with no source is refused" "appended"; fi
+if rec ruling --subject s --text t --by operator --ruled-at yesterday --source c >/dev/null 2>&1; then bad "a ruled-at that is not a date is refused" "accepted"
+else ok "a ruled-at that is not a date is refused"; fi
+rec ruling --id fixed-1 --subject s --text t --by operator --ruled-at 2026-10-16 --source c >/dev/null 2>&1 \
+  && ok "an explicit id is accepted" || bad "an explicit id is accepted"
+n="$(rl)"
+if rec ruling --id fixed-1 --subject s --text t --by operator --ruled-at 2026-10-16 --source c >"$root/out" 2>&1; then bad "a repeated id is refused" "accepted"
+elif [[ "$(rl)" == "$n" ]] && grep -qi 'already' "$root/out"; then ok "a repeated id is refused, nothing appended"
+else bad "a repeated id is refused" "$(cat "$root/out")"; fi
+if "$DWS" --actor refresh record ruling --subject s --text t --by operator --ruled-at 2026-10-16 --source c >/dev/null 2>&1; then bad "refresh may not write a record" "accepted"
+else ok "refresh may not write a record"; fi
+
+# The fold: replaces is an explicit pointer. A missing id or another kind is counted and reported, never guessed.
+printf '%s\n' '{"kind":"exclusion","repo":"org/repo","label":"acu.*"}' >>"$RUL"
+rec term --role builder --subject lane-c --text "lane c is done" --set-by supervisor --source relay-3 --replaces no-such-id >/dev/null 2>&1 || true
+rec term --role builder --subject lane-c --text "x" --set-by supervisor --source relay-3 --replaces fixed-1 >/dev/null 2>&1 || true
+"$DWS" records --json >"$root/rec.json" 2>"$root/rec.err" && rc=0 || rc=$?
+chk="$(python3 - "$root/rec.json" "$RUL" <<'PY' 2>&1
+import json, sys
+d = json.load(open(sys.argv[1]))
+grants = [r for r in d["records"] if r["kind"] == "grant"]
+assert grants[0]["replaced_by"] == [grants[1]["id"]], grants[0]
+assert grants[1]["replaced_by"] == [], grants[1]
+bad = {u["replaces"]: u["why"] for u in d["unresolved_replaces"]}
+assert bad.get("no-such-id") == "missing", d["unresolved_replaces"]
+assert bad.get("fixed-1") == "other kind", d["unresolved_replaces"]
+assert d["counts"]["exclusion"] == 1 and d["counts"]["ruling"] >= 2 and d["counts"]["term"] >= 1, d["counts"]
+assert d["torn"] == 0
+assert open(sys.argv[2]).read().count('{"kind":"exclusion","repo":"org/repo","label":"acu.*"}\n') == 1
+print("ok")
+PY
+)" || true
+[[ "$rc" == 0 && "$chk" == ok ]] && ok "records marks a replaced target, counts a missing or other-kind pointer, keeps an exclusion line as written" || bad "records marks a replaced target, counts a missing or other-kind pointer, keeps an exclusion line as written" "rc $rc: $chk"
+
+# Own lock file beside rulings.jsonl; the workstream lock is not used; parallel writes all land whole.
+[[ -e "$DIRECTOR_STATE/rulings.lock" && ! -e "$DIRECTOR_STATE/workstreams.lock" ]] && ok "record locks its own file beside rulings.jsonl" || bad "record locks its own file beside rulings.jsonl" "$(ls "$DIRECTOR_STATE")"
+n="$(rl)"
+for i in 1 2 3 4 5 6 7 8; do rec ruling --id par-$i --subject p --text "t$i" --by operator --ruled-at 2026-10-16 --source c >/dev/null 2>&1 & done
+wait
+if [[ "$(( $(rl) - n ))" == 8 ]] && python3 -c 'import json,sys; [json.loads(l) for l in open(sys.argv[1])]' "$RUL"; then ok "eight parallel records all land as whole lines"
+else bad "eight parallel records all land as whole lines" "$(( $(rl) - n )) new"; fi
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
