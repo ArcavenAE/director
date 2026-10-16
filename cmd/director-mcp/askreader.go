@@ -563,3 +563,18 @@ func runAskReaderCmd(ctx context.Context, url string, cli cliArgs, domain string
 func askReaderContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }
+
+// seenState says whether the ledger could answer at all. A caller reads the
+// pair (map, state): an entry in the map is seen; no entry under seenLedger is
+// not seen; seenNoLedger is no record, which is not the same as not seen.
+type seenState int
+
+const (
+	seenNoLedger seenState = iota // no ASK_LEDGER bucket, or no globals key in it
+	seenLedger                    // the table was read
+)
+
+// readGlobalSeen is not written yet.
+func readGlobalSeen(ctx context.Context, js jetstream.JetStream) (map[string]globalEntry, seenState, error) {
+	return nil, seenNoLedger, errors.New("readGlobalSeen: not implemented")
+}
