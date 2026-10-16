@@ -25,6 +25,10 @@ import (
 )
 
 type Bus struct {
+	// violations holds the broker's recent publish permission violations (see
+	// violations.go); the global tier shares it because it shares nc.
+	violations *violationRing
+
 	nc       *nats.Conn
 	js       jetstream.JetStream
 	kv       jetstream.KeyValue
@@ -93,7 +97,18 @@ const localConsumerInactive = 73 * time.Hour
 // session presenting a credential at once; the broker is not hot-reloaded with
 // auth under a live fleet.
 func dial(url string, self Sender) (*nats.Conn, jetstream.JetStream, error) {
+	return dialRing(url, self, nil)
+}
+
+// dialRing is dial with an error handler that records the broker's publish
+// permission violations in ring (nil keeps none). The violation is delivered
+// only on the async error callback; a denied JetStream publish itself returns a
+// bare timeout, so bus.go and global.go read the ring to say why.
+func dialRing(url string, self Sender, ring *violationRing) (*nats.Conn, jetstream.JetStream, error) {
 	opts := []nats.Option{nats.Name("director-mcp/" + self.AgentID)}
+	if ring != nil {
+		opts = append(opts, nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) { ring.note(err) }))
+	}
 	if creds := os.Getenv("DIRECTOR_NATS_CREDS"); creds != "" {
 		opts = append(opts, nats.UserCredentials(creds))
 	} else if user := os.Getenv("DIRECTOR_NATS_USER"); user != "" {
@@ -177,7 +192,8 @@ func newInstanceID() string {
 }
 
 func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (*Bus, error) {
-	nc, js, err := dial(url, self)
+	ring := &violationRing{}
+	nc, js, err := dialRing(url, self, ring)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +207,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		nc.Close()
 		return nil, herr
 	}
-	b := &Bus{nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), state: "idle", globalCfg: gcfg, handled: h}
+	b := &Bus{violations: ring, nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), state: "idle", globalCfg: gcfg, handled: h}
 	if h != nil {
 		h.streamOf = b.streamFor
 		h.onAck = b.noteTierAcked
@@ -868,8 +884,10 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 	msg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
 	res := &sendResult{Tier: "local"}
 	if durable {
+		start := time.Now()
 		ack, err := b.js.PublishMsg(ctx, msg)
 		if err != nil {
+			err = b.violations.explain(subject, start, err)
 			return nil, atStage("publish", fmt.Errorf("publish to %s: %w", subject, err))
 		}
 		res.Stream, res.Sequence = ack.Stream, ack.Sequence
@@ -1088,6 +1106,7 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 		return nil, err
 	}
 	g.handled = b.handled
+	g.violations = b.violations
 	b.global = g
 	b.noteResumed("global", g.resumedFrom, g.consumer, g.floorWhy)
 	return g, nil
