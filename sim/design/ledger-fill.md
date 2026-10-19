@@ -72,7 +72,10 @@ What writes the ledger, and what stopped:
    (board-workstream-ledger.md:139), but `board-html` only calls `dws show
    --json` (board-html:67). Measured by file times: board.md and board.html
    were rewritten at 04:00 today; the ledger's last write was the 10-19 event.
-   The page is rendered regularly; the ledger is not refreshed.
+   The page is rendered regularly; the ledger is not refreshed. (As
+   measured when this design was written. LF5 has since landed in #327:
+   `board-html` now runs `dws refresh --local` before it reads,
+   `board-html:62-68` on main 708c37a.)
 3. **Refresh has nothing to read on most rows.** 135 of 151 rows carry no
    link at all; 9 link a PR, 6 a bd id, 2 an issue, 1 an untyped link, 0 an
    `ask:` card. Even a refresh on every render would move at most 16 rows.
@@ -126,7 +129,7 @@ says nothing about a PR's state that the PR itself does not say better, and
 W2 already reads the PR.
 
 **The one table change (LF4).** Clearing an operator block when its card
-closes is a `set`, which refresh may not append today (dws:326-336; board
+closes is a `set`, which refresh may not append today (`allowed()`, dws:333-343 on main 708c37a; board
 design section 6, "only those" in ruling 2). It is a factual move: the card is
 the one source for "blocked on the operator" (design D, section 4), and K13
 already makes the block depend on the card being open. Q5 (c) ruled the same
@@ -139,12 +142,12 @@ Closing statuses live in one operator-editable table in dws, starting with
 closed, resolved, withdrawn, superseded and relayed. In director's Desk
 practice a card goes to `relayed` only after director relays an answer the
 operator marked ready, so `relayed` means answered; that practice is written
-in director's local notes, not on main, so the ruling confirms it. This needs
-the operator's ruling before LF4 builds.
+in director's local notes, not on main, so the ruling confirms it. Ruled
+yes on 2026-10-19 (section 8, row 1), with this list as the starting table.
 
 **Judging moves stay director's.** accepted, parked, released, deployed, a
 re-open, a new row and a closing of a workstream are never appended by
-refresh, from any source; `allowed()` already refuses them (dws:329-336) and
+refresh, from any source; `allowed()` already refuses them (dws:333-343 on main 708c37a) and
 the tests pin it again for the new sources. An unmoved row, a row with no
 link and an unlinked entry are surfaced for director to act on, or for K11 to
 propose; the fill proposes nothing itself.
@@ -200,7 +203,7 @@ names an open card. The other half is the release: when the card closes, the
 block clears. That half is LF4 above and belongs in this item, since it is
 the Desk event this item exists to read.
 
-Two further edges are missing and are **recommended as a separate item**:
+Two further edges are missing and are **a separate item** (ruled 2026-10-19; #337):
 
 - **row to row** (`blocked ws:<slug>`): `blocked` is free text today; 110
   rows hold a value that is neither empty nor `operator`. A typed form needs a
@@ -222,12 +225,52 @@ folding them in would put a schema review in front of a staleness fix.
 | b. a hook in `relay-log append` | the row moves at the send | couples the relay writer to the ledger and its lock; a relay could fail on a ledger problem |
 | c. `dws refresh --local` from `board-html`, plus the sweep's full refresh | runs whenever the page is rendered, which already happens; no network | the renderer starts a write, so it must not re-render itself |
 
-**Recommended: (c).** It is what the board design already says refresh does
+**Ruled: (c), 2026-10-19** (section 8, row 2). It is what the board design already says refresh does
 (section 5), and the render already runs on its own. `--local` reads only the
 relay log, the Desk snapshot and the ask reader's file, so a render never
 waits on `gh` or `bd`; PR, issue and bd links stay with the full refresh in
 the sweep. When K20 puts drain and reconcile on the standing tick, the same
 call moves there.
+
+**The rate this sets.** The page has no timer. It is rendered when director
+edits `board.md` and runs `board-html` (SKILL.md, sweep step 5), and after
+every `dws` command that writes, while `board.html` exists: each write path
+calls `rerender()` once when it appended anything (`dws:370`, `:381-382`,
+`:386-396`). So the source-only refresh runs once per render: at least once
+per director sweep that touches the board or the ledger, and never while no
+director session runs. A row whose source moved between sweeps moves at the
+next render, not at the event.
+
+**A burst renders once per command, accepted.** N `dws` commands in a row
+give N renders, one after another, because each command waits for its own
+render. One command that appends many events (a full `dws refresh`) renders
+once. This is accepted, not bounded, for three reasons:
+- the writers are director's own commands during a sweep, a handful at a
+  time, not a stream;
+- every render after the first runs a fill with nothing new to read, and a
+  replay appends nothing (LF-C), so it costs a read and a page write;
+- the fill inside a render sets `DWS_NO_RERENDER=1`, so a render never
+  starts another (`dws:386-390`).
+If bursts become a cost, coalescing renders is a later item, not this one.
+
+**The slower render, and what a slow fill does.** Two timeouts apply, and
+they differ:
+- `board-html` gives its fill 60 seconds (`board-html:62-68`). A fill that
+  fails or times out is said on stderr; the page is still written, with the
+  rows as they were.
+- `dws` gives the whole `board-html` 30 seconds when a write starts the
+  render (`dws:394`). The fill runs inside that, so a fill slower than about
+  30 seconds makes the write-started render fail: `dws` prints "written;
+  board-html re-render failed", the ledger write has already landed, and the
+  page is not rebuilt until the next render.
+- On that timeout, `subprocess.run` kills `board-html` only, not the fill
+  it started (per Python's documented behavior; not run). The fill then
+  finishes on its own, under the ledger lock, and its events land without a
+  render; the next render shows them.
+
+So the cost the ruling accepts: a write may wait up to 30 seconds, and a
+render started by director by hand up to 60, before the page is current. A
+slow fill delays the page; it never loses a ledger write.
 
 **No render loop.** `dws` re-renders after a write when board.html exists
 (dws:379-388). board-html calls refresh with `DWS_NO_RERENDER=1`, and dws
@@ -262,10 +305,15 @@ and `bd` that log calls; nothing reads the live state.
 | LF1 | `relay-log append --ws <slug>` (repeatable), the `**Workstream:**` line, slug shape check | `scripts/relay-log`, `verify-relay-log.sh` | none |
 | LF2 | fold: consumed `src` set per row; a director `set` moves `last_moved` (R-197 as written, not a new decision); typed links `relay:R-<n>` and `msg:<id>` accepted by `link` | `scripts/dws`, `verify-dws.sh` | none |
 | LF3 | `dws refresh --local`: the relay reader (writer-form headings only, shared lock, timeout) and the Desk reader (observe only); `dws unlinked`; `DWS_NO_RERENDER` | `scripts/dws`, new `verify-dws-fill.sh` | LF1, LF2 |
-| LF4 | needs the ruling: refresh may append `set blocked ""` on a closed card; the closing-status table; `status` per id in the snapshot | `scripts/dws`, `scripts/desk-snapshot`, `verify-dws-fill.sh`, `verify-desk-snapshot.sh` | LF3, ruling |
+| LF4 | ruled 2026-10-19: refresh may append `set blocked ""` on a closed card; the closing-status table; `status` per id in the snapshot | `scripts/dws`, `scripts/desk-snapshot`, `verify-dws-fill.sh`, `verify-desk-snapshot.sh` | LF3 |
 | LF5 | `board-html` runs `dws refresh --local` before reading rows | `scripts/board-html`, `verify-board-html.sh` | LF3 |
 | LF6 | skill text: step 5 and the relay capture-trigger row name `--ws`; functions.md sections 2, 4 and 13 updated | `SKILL.md`, `reference/functions.md` | LF1 to LF5 |
 | W5 | the ask-ledger source, by `msg:` link | `scripts/dws` | LF3, and the ask reader's file existing (it does not, locally) |
+
+**Status on main 708c37a.** LF1, LF2, LF3, LF5 and LF6 landed in #327
+(cd5865b), which touched each of their files and `verify-dws-fill.sh`. Still
+open: LF4, ruled but not built (`reference/functions.md` section 2 says so on
+main), and W5, waiting on the ask reader's file.
 
 `verify-dws-fill.sh`, named cases:
 
@@ -312,17 +360,18 @@ and `bd` that log calls; nothing reads the live state.
     --local` reports the relay source unreadable within the timeout, writes no
     relay event, and still reads the Desk.
 
-## 8. Rulings needed (operator, via director)
+## 8. Rulings (operator, via director, 2026-10-19)
 
-| # | question | recommendation |
-|---|---|---|
-| 1 | Writer-table change: refresh may clear `blocked operator` when the row's linked Desk card is in a closing status (section 3, LF4) | yes, with the closing-status list confirmed, `relayed` first |
-| 2 | Run `refresh --local` on every render (section 6, option c) | yes |
-| 3 | Row-to-row and row-to-bd edges as a separate item (section 5) | yes |
+| # | question | recommendation | ruled |
+|---|---|---|---|
+| 1 | Writer-table change: refresh may clear `blocked operator` when the row's linked Desk card is in a closing status (section 3, LF4) | yes, with the closing-status list confirmed, `relayed` first | yes, with a confirmed list of closing statuses |
+| 2 | Run `refresh --local` on every render (section 6, option c) | yes | yes |
+| 3 | Row-to-row and row-to-bd edges as a separate item (section 5) | yes | yes, filed as #337 |
 
-Each recommendation is valid until 2026-11-02; the architect role re-checks
-it then. Nothing executes on silence. LF1 to LF3, LF5 and LF6 sit inside the
-writer table as it stands and need no ruling beyond this review.
+The closing-status table LF4 starts with is the one in section 3: closed,
+resolved, withdrawn, superseded and relayed. A wrong entry clears a block
+early, which is why the table is the operator's to edit (section 3).
+LF1 to LF6 now need nothing beyond review.
 
 ## 9. Candidate requirements (provisional)
 
@@ -337,13 +386,14 @@ writer table as it stands and need no ruling beyond this review.
 - **LF-C (JUDGMENT):** replaying the same sources writes nothing; consumption
   is decided by ledger position, never by clock. Extends board design
   section 5.
-- **LF-D (proposed for ruling):** when a row's linked Desk card reaches a
+- **LF-D (RULED 2026-10-19, section 8 row 1):** when a row's linked Desk card reaches a
   closing status, the operator block clears by mirror and the next action
   stays director's. Extends Q5 (c), R-197, R-202.
-- **LF-E (OBSERVED):** the source-only refresh runs on every render, not
-  only when director types it. Earned by: board-html:67 reads the ledger and
-  never refreshes it, while the page was rendered today and the ledger was
-  not refreshed after 2026-10-16.
+- **LF-E (OBSERVED, then RULED 2026-10-19, section 8 row 2):** the
+  source-only refresh runs on every render, not only when director types
+  it. Earned by: board-html:67 read the ledger and never refreshed it, while
+  the page was rendered and the ledger was not refreshed after 2026-10-16.
+  Built as LF5 in #327 (`board-html:62-68` on main 708c37a).
 - **LF-F (RULED, SOUL section 8, ADR-007):** no source moves a row to
   accepted, parked, released or deployed, opens a row or closes one; those
   stay director's, proposed at most.
