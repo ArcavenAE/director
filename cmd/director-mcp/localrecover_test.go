@@ -315,3 +315,27 @@ func TestBrokerOnlyNotFoundRebuilds(t *testing.T) {
 		t.Fatalf("CONTROL FAILED: a not-found answer should rebuild: %v", err)
 	}
 }
+
+// A lookup that fails still starts the window, so a broker that cannot answer
+// is not asked again on every empty poll (director#328 round 1: the check time
+// did not advance on an error).
+func TestBrokerFailedLookupStartsTheWindow(t *testing.T) {
+	old := durableCheckEvery
+	durableCheckEvery = time.Hour
+	defer func() { durableCheckEvery = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	bus, _ := localLossBus(t, ctx)
+	asks := counted(t, bus, context.DeadlineExceeded)
+	bus.localMu.Lock()
+	bus.local.checked = time.Now().Add(-2 * time.Hour)
+	bus.localMu.Unlock()
+	for i := 0; i < 3; i++ {
+		if _, err := bus.receiveTiered(ctx, time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if *asks != 1 {
+		t.Fatalf("a failing lookup was made %d times over three empty polls, want 1 inside the window", *asks)
+	}
+}
