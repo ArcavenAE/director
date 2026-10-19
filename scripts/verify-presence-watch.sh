@@ -36,6 +36,12 @@
 # in the temp dir and prints both clocks every 5 seconds for 5 minutes.
 #
 # Needs nats-server, the nats CLI, jq, go and python3. Exit nonzero on any miss.
+#
+# It bounds its own run. A first failure in the setup, the control or the first
+# sighting stops it at once (the later waits mean nothing without them), each wait
+# prints its limit before it starts, the go build is limited to
+# VERIFY_BUILD_TIMEOUT seconds (default 180), and the whole run to
+# VERIFY_DEADLINE seconds (default 600; a clean run took 194 seconds here).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,6 +53,32 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
+trap 'exit 124' TERM
+
+# The overall deadline: a watchdog that ends the script, so nothing waits forever.
+deadline="${VERIFY_DEADLINE:-600}"
+self=$$
+(
+  while (( SECONDS < deadline )); do
+    kill -0 "$self" 2>/dev/null || exit 0
+    sleep 2
+  done
+  echo "FAIL the overall deadline of ${deadline}s was reached (VERIFY_DEADLINE)" >&2
+  kill -TERM "$self" 2>/dev/null || true
+) &
+pids+=($!)
+progress() { echo "... $* [$SECONDS of ${deadline}s used]"; }
+bounded() { # seconds command...: run, and stop it when the seconds are up
+  local t=$1 p i
+  shift
+  "$@" & p=$!
+  for ((i = 0; i < t; i++)); do
+    if ! kill -0 "$p" 2>/dev/null; then wait "$p"; return $?; fi
+    sleep 1
+  done
+  kill -TERM "$p" 2>/dev/null || true
+  return 124
+}
 
 for c in go python3; do command -v "$c" >/dev/null || { echo "$c not on PATH"; exit 2; }; done
 
@@ -91,6 +123,10 @@ for c in nats-server nats jq; do command -v "$c" >/dev/null || { echo "$c not on
 pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
+stop_here() { # a failure after which the later steps would only wait
+  echo "$pass passed, $((fail)) failed; stopping at the first failed prerequisite"
+  exit 1
+}
 
 # Scratch identity: nothing below reads or writes the real home or state.
 export HOME="$work/home" DIRECTOR_STATE="$work/state"
@@ -121,11 +157,15 @@ nats-server -c "$work/leaf.conf" -l "$work/leaf.log" & pids+=($!)
 
 LEAF=(nats -s "nats://127.0.0.1:$LEAFP")
 HUB=(nats -s "nats://127.0.0.1:$LEAFP" --js-domain global)
+# Both JetStream domains must answer before anything is provisioned: the leaf's
+# own domain starts a moment after its port opens, and a stream add that lands
+# first fails with "no responders".
 for _ in $(seq 1 60); do
-  "${HUB[@]}" account info >/dev/null 2>&1 && break
+  "${HUB[@]}" account info >/dev/null 2>&1 && "${LEAF[@]}" account info >/dev/null 2>&1 && break
   sleep 0.5
 done
 "${HUB[@]}" account info >/dev/null 2>&1 || { echo "the hub domain is not reachable through the leaf"; exit 2; }
+"${LEAF[@]}" account info >/dev/null 2>&1 || { echo "the leaf domain is not reachable"; exit 2; }
 
 # Provision what the broker setup and the hub provisioning create.
 "${LEAF[@]}" stream add AGENT_INBOX --subjects 'agent.*.*.*.inbox' --subjects 'agent.*.*.role.*.inbox' --storage memory --defaults >/dev/null
@@ -139,7 +179,10 @@ done
 if [[ -n "${DIRECTOR_MCP_BIN:-}" ]]; then
   SHIM="$DIRECTOR_MCP_BIN"
 else
-  ( cd "$here/cmd/director-mcp" && go build -o "$work/director-mcp" . )
+  progress "building the shim (limit ${VERIFY_BUILD_TIMEOUT:-180}s)"
+  # shellcheck disable=SC2016  # the program is meant to expand in the child shell
+  bounded "${VERIFY_BUILD_TIMEOUT:-180}" bash -c 'cd "$1/cmd/director-mcp" && go build -o "$2/director-mcp" .' _ "$here" "$work" \
+    || { echo "the go build failed or did not finish in ${VERIFY_BUILD_TIMEOUT:-180}s"; exit 2; }
   SHIM="$work/director-mcp"
 fi
 
@@ -167,18 +210,20 @@ notify notifications/initialized '{}'
 # bucket TTL is 8 seconds, so killing the loop lets the row expire.
 beat_loop() {
   while true; do
-    "${HUB[@]}" kv put GLOBAL_PRESENCE presence.c1.supervisor.s1 \
-      "$(jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{cluster:"c1",role:"supervisor",agent_id:"sup",instance:"s1",state:"working",ts:$ts}')" >/dev/null 2>&1 || true
+    beat_once >/dev/null 2>&1 || true
     sleep 3
   done
 }
 beat_pid=""
+beat_once() { "${HUB[@]}" kv put GLOBAL_PRESENCE presence.c1.supervisor.s1 \
+  "$(jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{cluster:"c1",role:"supervisor",agent_id:"sup",instance:"s1",state:"working",ts:$ts}')" >/dev/null; }
 start_beat() { beat_loop & beat_pid=$!; pids+=("$beat_pid"); }
 stop_beat() { [[ -n "$beat_pid" ]] && kill "$beat_pid" 2>/dev/null || true; beat_pid=""; }
 c1_msgs() { "${HUB[@]}" stream info GLOBAL_TO_c1 -j | jq '.state.messages'; }
 events() { cat "$DIRECTOR_STATE/presence-events.jsonl" 2>/dev/null || true; }
 wait_event() { # kind unit timeout-seconds
   local t=$3 i
+  progress "waiting for the $1 event of $2 (limit ${t}s)"
   for ((i = 0; i < t; i += 5)); do
     jq -e --arg k "$1" --arg u "$2" 'select(.kind==$k and .unit==$u)' <<<"$(events)" >/dev/null 2>&1 && return 0
     sleep 5
@@ -186,7 +231,11 @@ wait_event() { # kind unit timeout-seconds
   return 1
 }
 
-# control: a live, beating row is accepted and lands as one message.
+# control: a live, beating row is accepted and lands as one message. The first
+# beat is written once in the open, so a CLI that cannot write it stops the run
+# here with its own error and not after the later waits.
+progress "control: writing the first beat"
+beat_once || { echo "the first presence write failed (the nats CLI or the bucket); nothing later can pass"; exit 2; }
 start_beat
 sleep 4
 resp="$(call 2 send_message '{"to":"global://c1/supervisor","performative":"INFORM","text":"positive control"}')"
@@ -195,6 +244,7 @@ if [[ "$(jq -r '.status // empty' <<<"$out" 2>/dev/null)" == "accepted for deliv
   ok "control: a send to a live, beating cluster is accepted and stored once"
 else
   bad "positive control" "$out [stream $(c1_msgs)]"
+  stop_here
 fi
 
 # The watch has to see the row before it can miss it: a cluster first seen at
@@ -203,6 +253,7 @@ if wait_event appeared c1 120; then
   ok "control: the watch saw the beating cluster (appeared)"
 else
   bad "control: the watch never saw the beating cluster" "$(events | tail -3)"
+  stop_here
 fi
 
 # 1. The row stops beating and expires; two missed passes later the watch says absent.
@@ -238,6 +289,7 @@ else
 fi
 
 # 4. The held send is released: one more stream message, carrying the hold id.
+progress "waiting for the release (limit 180s)"
 for _ in $(seq 1 36); do
   [[ "$(c1_msgs)" -ge $((before + 1)) ]] && break
   sleep 5
