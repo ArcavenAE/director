@@ -72,7 +72,10 @@ What writes the ledger, and what stopped:
    (board-workstream-ledger.md:139), but `board-html` only calls `dws show
    --json` (board-html:67). Measured by file times: board.md and board.html
    were rewritten at 04:00 today; the ledger's last write was the 10-19 event.
-   The page is rendered regularly; the ledger is not refreshed.
+   The page is rendered regularly; the ledger is not refreshed. (As
+   measured when this design was written. LF5 has since landed in #327:
+   `board-html` now runs `dws refresh --local` before it reads,
+   `board-html:62-68` on main 708c37a.)
 3. **Refresh has nothing to read on most rows.** 135 of 151 rows carry no
    link at all; 9 link a PR, 6 a bd id, 2 an issue, 1 an untyped link, 0 an
    `ask:` card. Even a refresh on every render would move at most 16 rows.
@@ -126,7 +129,7 @@ says nothing about a PR's state that the PR itself does not say better, and
 W2 already reads the PR.
 
 **The one table change (LF4).** Clearing an operator block when its card
-closes is a `set`, which refresh may not append today (dws:326-336; board
+closes is a `set`, which refresh may not append today (`allowed()`, dws:333-343 on main 708c37a; board
 design section 6, "only those" in ruling 2). It is a factual move: the card is
 the one source for "blocked on the operator" (design D, section 4), and K13
 already makes the block depend on the card being open. Q5 (c) ruled the same
@@ -144,7 +147,7 @@ yes on 2026-10-19 (section 8, row 1), with this list as the starting table.
 
 **Judging moves stay director's.** accepted, parked, released, deployed, a
 re-open, a new row and a closing of a workstream are never appended by
-refresh, from any source; `allowed()` already refuses them (dws:329-336) and
+refresh, from any source; `allowed()` already refuses them (dws:333-343 on main 708c37a) and
 the tests pin it again for the new sources. An unmoved row, a row with no
 link and an unlinked entry are surfaced for director to act on, or for K11 to
 propose; the fill proposes nothing itself.
@@ -222,12 +225,27 @@ folding them in would put a schema review in front of a staleness fix.
 | b. a hook in `relay-log append` | the row moves at the send | couples the relay writer to the ledger and its lock; a relay could fail on a ledger problem |
 | c. `dws refresh --local` from `board-html`, plus the sweep's full refresh | runs whenever the page is rendered, which already happens; no network | the renderer starts a write, so it must not re-render itself |
 
-**Recommended: (c).** It is what the board design already says refresh does
+**Ruled: (c), 2026-10-19** (section 8, row 2). It is what the board design already says refresh does
 (section 5), and the render already runs on its own. `--local` reads only the
 relay log, the Desk snapshot and the ask reader's file, so a render never
 waits on `gh` or `bd`; PR, issue and bd links stay with the full refresh in
 the sweep. When K20 puts drain and reconcile on the standing tick, the same
 call moves there.
+
+**The rate this sets.** The page has no timer. It is rendered when director
+edits `board.md` and runs `board-html` (SKILL.md, sweep step 5), and after
+every `dws` write while `board.html` exists (`dws:386-396`). So the
+source-only refresh runs once per render: at least once per director sweep
+that touches the board or the ledger, and never while no director session
+runs. A row whose source moved between sweeps moves at the next render, not
+at the event.
+
+**The slower render, accepted with the ruling.** `board-html` runs the fill
+before it reads, with a 60-second timeout (`board-html:62-68`), so a render
+can wait up to a minute on it. A fill that times out or fails is said on stderr and never
+stops the page; the page then shows the rows as they were. The fill sets
+`DWS_NO_RERENDER=1`, so its own write does not start a second render
+(`dws:386-390`).
 
 **No render loop.** `dws` re-renders after a write when board.html exists
 (dws:379-388). board-html calls refresh with `DWS_NO_RERENDER=1`, and dws
@@ -266,6 +284,11 @@ and `bd` that log calls; nothing reads the live state.
 | LF5 | `board-html` runs `dws refresh --local` before reading rows | `scripts/board-html`, `verify-board-html.sh` | LF3 |
 | LF6 | skill text: step 5 and the relay capture-trigger row name `--ws`; functions.md sections 2, 4 and 13 updated | `SKILL.md`, `reference/functions.md` | LF1 to LF5 |
 | W5 | the ask-ledger source, by `msg:` link | `scripts/dws` | LF3, and the ask reader's file existing (it does not, locally) |
+
+**Status on main 708c37a.** LF1, LF2, LF3, LF5 and LF6 landed in #327
+(cd5865b), which touched each of their files and `verify-dws-fill.sh`. Still
+open: LF4, ruled but not built (`reference/functions.md` section 2 says so on
+main), and W5, waiting on the ask reader's file.
 
 `verify-dws-fill.sh`, named cases:
 
@@ -338,13 +361,14 @@ LF1 to LF6 now need nothing beyond review.
 - **LF-C (JUDGMENT):** replaying the same sources writes nothing; consumption
   is decided by ledger position, never by clock. Extends board design
   section 5.
-- **LF-D (proposed for ruling):** when a row's linked Desk card reaches a
+- **LF-D (RULED 2026-10-19, section 8 row 1):** when a row's linked Desk card reaches a
   closing status, the operator block clears by mirror and the next action
   stays director's. Extends Q5 (c), R-197, R-202.
-- **LF-E (OBSERVED):** the source-only refresh runs on every render, not
-  only when director types it. Earned by: board-html:67 reads the ledger and
-  never refreshes it, while the page was rendered today and the ledger was
-  not refreshed after 2026-10-16.
+- **LF-E (OBSERVED, then RULED 2026-10-19, section 8 row 2):** the
+  source-only refresh runs on every render, not only when director types
+  it. Earned by: board-html:67 read the ledger and never refreshed it, while
+  the page was rendered and the ledger was not refreshed after 2026-10-16.
+  Built as LF5 in #327 (`board-html:62-68` on main 708c37a).
 - **LF-F (RULED, SOUL section 8, ADR-007):** no source moves a row to
   accepted, parked, released or deployed, opens a row or closes one; those
   stay director's, proposed at most.
