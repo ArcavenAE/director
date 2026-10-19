@@ -19,7 +19,7 @@ director software does not exist yet. What exists:
   so a director reaches a remote supervisor without a rename and without
   holding a hub credential (`probe/nats-global-tier/`, design brief 8);
 - the marvel twin: the hand-run fleet declared as one marvel manifest, cast
-  from wardrobe roles, with the check runbook that decides cutover
+  from role library roles, with the check runbook that decides cutover
   (`sim/twin/`, design brief 7).
 
 This repo is the authoritative source for all of it, and the requirements
@@ -138,11 +138,11 @@ Three tools, each with its own scope:
 - **By hand** (next section): the bus seat and `director-mcp-seat`. No tool
   installs `director-mcp-seat` yet.
 - **`director-install`**: `cast-launch`, the launcher marvel runs for
-  wardrobe-cast seats, and `director-mcp`, the shim, built from a commit with
+  seats cast from the role library, and `director-mcp`, the shim, built from a commit with
   `director-install director-mcp --ref <commit>` and undone with `--rollback`.
   It does not install `director-mcp-seat`.
 
-A host that runs wardrobe-cast seats installs the launcher from a commit,
+A host that runs seats cast from the role library installs the launcher from a commit,
 with no checkout needed:
 
 ```sh

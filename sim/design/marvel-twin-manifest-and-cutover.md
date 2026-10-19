@@ -8,8 +8,8 @@ things are defined before cutover: who does what (the manifest) and what
 
 Premises were verified against marvel's code and the live fleet today, with
 marvel-builder consulted on the marvel side (section 1). Requirements cited
-are director `sim/requirements.md`; wardrobe items are the ratified v1 library
-at `wardrobe/contents/` (all ten roles at `status: proposal`, castable under
+are director `sim/requirements.md`; role library items are the ratified v1 library
+in the role library's contents/ directory (all ten roles at `status: proposal`, castable under
 rulings 47 and 61 with `--allow-proposal`).
 
 ## 0. The shape of the program
@@ -99,7 +99,7 @@ from the register; marvel-builder verified items one to six from the code
   agentic-engineering-architect`; the session named `director` is
   `agent://ops/planner`. That is R-73's two-records-to-reconcile in the wild,
   and the one-source projection of R-84 is what removes it.
-- **wardrobe v1 at 838aebe**: roles `director`, `supervisor`, `envoy`,
+- **role library v1 at 838aebe**: roles `director`, `supervisor`, `envoy`,
   `research-supervisor`, `worker`, `merge-queue`, `retrospector`, `author`,
   `reader`, `filer`; processes `team-supervision` (assembles supervisor,
   worker), `ops-maintenance` (reader, filer, author, director),
@@ -133,11 +133,11 @@ Workspace `ops2`, team `fleet`. The twin uses a distinct team token so its
 subjects, presence keys, and durables never collide with the live `ops` team
 on the same broker during S0 and S1; at S2 the name is the fleet's name and
 the old one is simply absent. One manifest role per fleet function, replicas
-1 unless stated. Wardrobe casts are `wardrobe/<kind>/<id>@<version>` at the
+1 unless stated. Role library casts are `<kind>/<id>@<version>` in the role library at the
 tagged commit the launcher reads (precondition 1 of `recommended-shape.md`
 4.12).
 
-| manifest role | wardrobe cast | replicas | adapter | permissions | restart | healthcheck | notes |
+| manifest role | role library cast | replicas | adapter | permissions | restart | healthcheck | notes |
 |---|---|---|---|---|---|---|---|
 | director | roles/director@0.1.1 (attention-routing) | 1 | claude | plan | always | process-alive | holds the seat as a lease, never by name (R-54); last to cut over |
 | supervisor | roles/supervisor@0.1.1 (team-supervision) | 1 | claude | plan | always | process-alive | routes, does not decide (operator definition 2026-09-12); cuts over after every worker role |
@@ -152,7 +152,7 @@ tagged commit the launcher reads (precondition 1 of `recommended-shape.md`
 | retrospector | roles/retrospector@0.1.0 | 0 | claude | plan | always | process-alive | declared, not run until a retro pass is pulled |
 | nats-local | none (a workload, not an agent) | 1 | generic | n/a | always | process-alive | the local tier of R-86, supervised by marvel (R-85); FORWARD: `generic` has no production call site today, so S0 reuses the Phase 0 broker and this row lands with R-85 |
 
-Permissions are the marvel-map projection of the wardrobe floor, provisional
+Permissions are the marvel-map projection of the role library floor, provisional
 until a projector casts (the map's own author line says so). `activity_timeout`
 is left unset on every role: a fixed default over-fires on a long turn, and
 the bus presence beat is the activity signal here.
@@ -188,14 +188,14 @@ human-chosen and projects `-n` and the session key from the same source.
 The character class is the one director#3 fixes: a role name with a `.`, `*`,
 or `>` is refused at mint, never rewritten.
 
-### 2.2 The gaps wardrobe does not cover yet
+### 2.2 The gaps the role library does not cover yet
 
 Four live functions have no v1 role: `builder` (three scoped instances),
 `architect`. Casting them as `worker@0.1.0` is wrong on the spawn axis
 (worker is ephemeral, one task in its own worktree) and `author@0.1.1` is
 wrong on the CAN axis (class fixes on the repos it authors, not a standing
 build seat). The honest manifest names the gap rather than casting a role that
-does not fit. Two proposal PRs in wardrobe, human-ratified, close it:
+does not fit. Two proposal PRs in the role library, human-ratified, close it:
 
 - `roles/builder@0.1.0`, persistent, `permission_floor: read`, faces "one repo
   scope", CAN the worker's build set plus PR authoring, CANNOT self-merge (D5),
@@ -309,7 +309,7 @@ What is stood up on skippy's machine: his own marvel daemon, his own local
 NATS as a declared workload, and the same manifest with `workspace` set to a
 token he chooses, dialing the one global NATS this fleet exposes (a leaf-node
 or gateway connection from his local broker, credentials issued by the global
-side). His supervisor is cast from wardrobe at the same tag.
+side). His supervisor is cast from the role library at the same tag.
 
 Success criteria, each a check:
 
@@ -333,7 +333,7 @@ Success criteria, each a check:
 
 Prerequisites: S0 through S2 on this host; the global broker running with an
 authorization block (director#4) and leaf-node listener; a credential issued
-for his local broker. What he needs from us: the manifest, the wardrobe tag,
+for his local broker. What he needs from us: the manifest, the role library tag,
 the global NATS URL and credential, and the five checks above as a checklist.
 The director seat files the aae-orc ticket for the operator to relay; this
 brief supplies the shape, not the ticket.

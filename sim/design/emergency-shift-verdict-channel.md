@@ -132,12 +132,12 @@ The contract at the boundary, so neither side reaches into the other:
   the shift. marvel never exposes a raw kill to peers; the only thing crossing
   the seam is a verdict marvel judges.
 - recovery-with-guard is succession content: the successor recovers from session
-  remnants through the #295 reconcile path, and the handoff marks the triggering
+  remnants through the reconcile path of the role library's own PR 295, and the handoff marks the triggering
   prompt poisoned so it is not replayed (`aae-orc-abrii`). The verdict channel
   does not carry the prompt; it names the subject and the class.
 
 This keeps the split clean: director owns who-may-judge and the verified
-envelope; marvel owns detect, interrupt, and shift; wardrobe/#295 owns the
+envelope; marvel owns detect, interrupt, and shift; the role library's own PR 295 owns the
 recovery content.
 
 ## Transport
