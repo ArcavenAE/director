@@ -513,10 +513,31 @@ func TestCancelHeldIsAnUnknownToolWhileTheWatchIsOff(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	fx := newWatchFx(t, ctx, 0, true)
+	// The catalog is read from the server the shim builds (newServer), so a
+	// change to its withHoldTools call fails here. Control: with the watch on,
+	// both parts of the hold surface are listed.
+	holdSurface := func() (cancel, failFast bool) {
+		for _, tl := range newServer(fx.bus, t.Logf, false).tools {
+			switch tl.Name {
+			case "cancel_held":
+				cancel = true
+			case "send_message":
+				props, _ := tl.InputSchema["properties"].(map[string]any)
+				_, failFast = props["fail_fast"]
+			}
+		}
+		return
+	}
+	if c, f := holdSurface(); !c || !f {
+		t.Fatalf("CONTROL FAILED: with the watch on the catalog lists cancel_held=%v fail_fast=%v, want both", c, f)
+	}
 	t.Setenv("DIRECTOR_PRESENCE_WATCH", "")
 	fx.restart()
 	if fx.bus.watch != nil {
 		t.Fatal("the flag is off but a watcher was built")
+	}
+	if c, f := holdSurface(); c || f {
+		t.Fatalf("the catalog lists cancel_held=%v fail_fast=%v with the watch off, want neither", c, f)
 	}
 	_, err := dispatchTool(ctx, fx.bus, "cancel_held", json.RawMessage(`{"id":"x"}`))
 	_, want := dispatchTool(ctx, fx.bus, "no_such_tool_at_all", json.RawMessage(`{}`))
@@ -528,8 +549,5 @@ func TestCancelHeldIsAnUnknownToolWhileTheWatchIsOff(t *testing.T) {
 	}
 	if want.Error() != "unknown tool: no_such_tool_at_all" {
 		t.Fatalf("CONTROL FAILED: an unknown tool answered %q", want)
-	}
-	for _, tl := range withHoldTools(nil, fx.bus.watch != nil) {
-		t.Fatalf("the catalog lists %s with the watch off", tl.Name)
 	}
 }
