@@ -910,6 +910,7 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 func (b *Bus) publishGlobal(ctx context.Context, e *Envelope, body []byte) (*sendResult, error) {
 	res, err := b.publishGlobalOnce(ctx, e, body)
 	if err != nil {
+		err = b.namedRefusal(e, err)
 		if held := b.holdRefused(ctx, e, err); held != nil {
 			return nil, held
 		}

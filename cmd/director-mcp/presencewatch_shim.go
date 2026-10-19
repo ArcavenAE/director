@@ -254,6 +254,35 @@ func (b *Bus) startPresenceWatch(logf func(string, ...any)) error {
 	return nil
 }
 
+// namedRefusal, with the watch on, says when the cluster was last seen in a
+// refusal for absence (R-210, #88): "no live presence for <address>, last seen
+// <t>", from the watch's state. A cluster the watch has never seen, one it reads
+// as present, and a refusal where the rows could not be read keep their text.
+func (b *Bus) namedRefusal(e *Envelope, err error) error {
+	p := b.watch
+	var refused *presenceRefusalErr
+	if p == nil || !errors.As(err, &refused) || refused.unreadable {
+		return err
+	}
+	cluster, role, perr := parseGlobalAddress(e.Recipient.Address)
+	if perr != nil || role != roleSupervisor {
+		return err
+	}
+	p.mu.Lock()
+	u := p.w.Unit(cluster)
+	var status string
+	var last, since time.Time
+	if u != nil {
+		status, last, since = u.Status, u.LastSeen, u.Since
+	}
+	p.mu.Unlock()
+	if u == nil || last.IsZero() || status == unitPresent {
+		return err
+	}
+	return &presenceRefusalErr{err: fmt.Errorf("no live presence for %s, last seen %s; the presence watch reads it %s since %s. no session would consume this send, so it is refused rather than stored on a subject nobody reads (R-92 liveness)",
+		e.Recipient.Address, last.Format(time.RFC3339), status, since.Format(time.RFC3339))}
+}
+
 // holdRefused keeps a send that presence refused, when the watch is on and the
 // refusal is for absence or for a hub that did not answer the presence read. It
 // returns the heldErr to hand back in place of the refusal, or nil to refuse as

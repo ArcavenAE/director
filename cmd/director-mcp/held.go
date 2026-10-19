@@ -171,7 +171,12 @@ type holdFailFastKey struct{}
 // the recipient (the four branches of noGlobalPresenceErr, Unreadable included).
 // presenceReadErr is a refusal because the hub did not answer the presence read.
 // These two, and only these, are held; every other failure is not.
-type presenceRefusalErr struct{ err error }
+type presenceRefusalErr struct {
+	err error
+	// unreadable: rows matched and none could be read, so absence was never
+	// established and no claim of absence is added to the text.
+	unreadable bool
+}
 
 func (e *presenceRefusalErr) Error() string { return e.err.Error() }
 func (e *presenceRefusalErr) Unwrap() error { return e.err }

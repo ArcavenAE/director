@@ -319,7 +319,7 @@ func oneDirectorErr(addr string, live []map[string]any, scan presenceScan) error
 // noGlobalPresenceErr states the refusal and nothing beyond what the scan
 // established. Every branch refuses; they differ only in what they claim.
 func noGlobalPresenceErr(addr, prefix string, scan presenceScan) error {
-	return &presenceRefusalErr{noGlobalPresenceText(addr, prefix, scan)}
+	return &presenceRefusalErr{err: noGlobalPresenceText(addr, prefix, scan), unreadable: scan.Unreadable > 0}
 }
 
 func noGlobalPresenceText(addr, prefix string, scan presenceScan) error {
