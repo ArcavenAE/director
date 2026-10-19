@@ -219,15 +219,19 @@ the hub. On the hub the subjects take the domain form,
 the hub's JetStream through the leaf link with `jetstream.NewWithDomain`
 (`global.go:386`). The local subjects use the plain `$JS.API.` prefix.
 
-**The grant does not confine the read to director's mail.** `DIRECT.GET` on a
-shared stream carries the subject in its payload, so a user allowed this
+The look also subscribes to its own reply inbox, `_INBOX.>` or a named
+prefix. Everything else is outside the list, and that includes each of
+these, which a denylist could miss: ack, `Nak`, `Term`, in-progress, any
+consumer create or delete, `STREAM.MSG.DELETE`, `STREAM.PURGE`, any KV put or
+delete, any `CONSUMER.MSG.NEXT`, and any subject not in the table, in either
+its local `$JS.API.` form or its hub `$JS.<domain>.API.` form.
+
+**The grant does not confine the read to director's mail.** Both get verbs,
+`DIRECT.GET` and `STREAM.MSG.GET`, carry the subject (or the sequence) in
+the request payload, not in the request subject. So a user allowed this
 table can read any seat's mail on that stream. The look's code keeps to
 director's subjects, and test 2 checks it; no broker permission does. See
-"Exposure, stated" in section 3.3. The look also subscribes to its own reply inbox, `_INBOX.>` or a
-named prefix. Everything else is outside the list, and that includes each
-of these, which a denylist could miss: ack, `Nak`, `Term`, in-progress, any
-consumer create or delete, `STREAM.MSG.DELETE`, `STREAM.PURGE`, any KV put or
-delete, any `CONSUMER.MSG.NEXT`, and any subject outside `$JS.API`.
+"Exposure, stated" in section 3.3.
 
 The look is safe to run unattended for these reasons, in order of strength:
 1. **It runs no model.** Nothing in it reasons about what it reads.
@@ -347,16 +351,31 @@ count, so they share the unread reader and its field names.
      the look never outputs a body, the id and sender are what make this
      assertion able to fail.
    - **Only allowed `next_by_subj` values.** The test harness subscribes to
-     the direct-get request subjects on the test server and records every
-     request payload. Every recorded request carries `next_by_subj`, and every
-     value is one of the filter subjects that `CONSUMER.INFO` reported for
-     director's kept durables. A request with no `next_by_subj` fails.
-   - **Mutants, both of which must fail:** a build that widens
-     `next_by_subj` to `agent.>`, and a build that walks by bare sequence.
-     The first fails both assertions above: the other seat's gate appears in
-     the digest, and the recorded value is not allowed. The second fails the
-     `next_by_subj` assertion, and the id assertion too, once the walk
-     reaches the other seat's message.
+     both get verbs' request subjects, `DIRECT.GET.<stream>` and
+     `STREAM.MSG.GET.<stream>`, in the local and the domain form, and records
+     every request payload. Every recorded request carries `next_by_subj`,
+     and every value is one of the filter subjects that `CONSUMER.INFO`
+     reported for director's kept durables. A request with no `next_by_subj`
+     fails, and so does a run that records zero get requests while director
+     has unread mail, so the assertion cannot pass on nothing.
+   - **Both stream shapes.** Test 2 runs twice: once with `allow_direct` set
+     on the fixture streams, where the look sends `DIRECT.GET`, and once
+     without it, where it sends `STREAM.MSG.GET`. Main sets `allow_direct`
+     only in the probe scripts, while the live streams have it (MEASURED,
+     section 2), so the look must be correct on either.
+   - **Mutants, all of which must fail:**
+     - a build that widens `next_by_subj` to `agent.>`. It fails both
+       assertions above: the other seat's gate appears in the digest, and
+       the recorded value is not allowed;
+     - a build that walks by bare sequence. It fails the `next_by_subj`
+       assertion, and the id assertion too, once the walk reaches the other
+       seat's message;
+     - a build that walks by bare sequence over `STREAM.MSG.GET` and drops
+       other seats' messages in the client, on the stream without direct
+       get. Its outputs are clean, so the id assertion passes; the recorded
+       requests carry a sequence and no `next_by_subj`, so the
+       `next_by_subj` assertion fails it. This is the case the request
+       recording exists for.
 3. **No write, by sandbox.** Step 1 runs under `look.sb`, which allows only
    the broker connections and writes to `<state>`.
    - A write elsewhere is refused, and the profile's refusal text goes in the
@@ -436,7 +455,14 @@ re-checks it then:
 2. Quiet hours: whether there is a window, and when it is. GATE passes
    through either way.
 3. Granting the read-only NATS user once the broker's authorization block
-   is live.
+   is live. The user can send only the read requests in the 3.5 table, and
+   cannot ack, consume, create or delete consumers, delete messages or write
+   presence. It can, by its grant, read any seat's mail on the shared inbox
+   streams, because both get verbs carry the subject inside the request and
+   the broker cannot confine them to director's subjects. The look reads only
+   director's subjects, by code and by test 2, not by the grant. Confining
+   the grant would need a stream per seat, which this design does not
+   propose.
 
 ## 7. Not covered
 
