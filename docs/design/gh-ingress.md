@@ -1,6 +1,6 @@
 # gh-ingress: GitHub status onto the fleet bus
 
-- **Date:** 2026-10-19, revised the same day.
+- **Date:** 2026-10-19, revised the same day; section 4 revised again for the desk and fleet credential shapes.
 - **Status:** design for review. Nothing is built by this document.
 - **Owner:** director, for `cmd/gh-ingress`.
 
@@ -89,19 +89,91 @@ Each rule above has a red test against a fake GitHub server:
 
 ## 4. Credential
 
-- **Interim.** The core shells out to `gh api graphql`, so it never holds a token. The login gh uses carries whatever scopes its owner granted. For the login in use, those include write scopes (MEASURED; recorded privately). Read-only then rests on the fixed query set alone. The operator is told the measured scopes plainly, in a private record, not here.
-- **Target.** A dedicated read-only credential. The core reads the credential's grants at start and refuses any write grant.
-  - **How the grants are read.**
-    - A classic OAuth token reports `X-OAuth-Scopes`. MEASURED on the gh login (measured only: not checked against GitHub's documentation).
-    - An App installation token carries a `permissions` object in the mint response. INFERRED, not yet measured.
-    - How to read a fine-grained PAT's grants is UNVERIFIED. If none is found, the check fails closed: the core does not run on a credential whose grants it cannot read.
-  - **Date.** No date is set. The operator sets it on the credential card. The card recommends about two weeks after it is ruled.
-  - **The interim:** with the gh login as the source, the grant check runs in report mode. It prints the login's scopes and the word `interim` at start, and does not refuse. It refuses only for a dedicated source. The publishing refusal below means the interim never feeds the bus.
-  - **App.** A GitHub App owned by the ArcavenAE org, installed on the watched repos only, with read-only permissions. A minter holds the App key and writes an installation token. That such a token lasts 1 h, and that an installation can be limited to selected repos, are INFERRED from GitHub's App model, not yet measured, and UNVERIFIED against GitHub's documentation. The minter runs as its own local user on the core's host (round 7, 6-0). The key is 0600 and owned by that user. The core's user can read the token file and never the key, so the same-uid reader the earlier draft named cannot reach the key.
-  - **PAT.** A fine-grained token with the ArcavenAE org as its resource owner, "only select repositories" set to the watch list, and read-only permissions, kept in its own keychain item.
-  - **Permissions,** for either: metadata, contents, pull requests, checks, commit statuses, deployments and actions, all read. INFERRED from the queries in section 2, not yet checked against GitHub's permission tables. The start-up grant check is the test.
-- **This is an exception to the custody rule.** The rule says a component must not hold an artifact that is bearer authority at a third party, and both shapes are. Only the operator's ruling can grant the exception. The design records that it asks for one.
-- **gh-ingress refuses to publish while the core reports a gh login as its credential source,** so a desk shortcut never becomes fleet events.
+The reader needs a GitHub credential that can read and cannot write, and one shape cannot serve everyone. The operator observed that a per-org GitHub App works only where an org owner installs it: one App covers ArcavenAE, a second App could cover a second org, but neither helps a user who has no App, and neither reaches repos outside those orgs. So the credential splits in two:
+
+- **the desk:** any user, on their own machine, reading repos they may not own;
+- **the fleet:** the one reader whose events reach the bus.
+
+Both shapes are recommendations on the operator's credential cards, voted by the design party, and are not yet ruled.
+
+### The interim
+
+The core shells out to `gh api graphql`, so it never holds a token. The login gh uses carries whatever scopes its owner granted. For the login in use, those include write scopes (MEASURED; recorded privately). Read-only then rests on the fixed query set alone. The operator is told the measured scopes plainly, in a private record, not here.
+
+- **The grant check in report mode.** With the gh login as the source, the core prints the login's scopes and the word `interim` at start, and does not refuse. It refuses only for a dedicated source.
+- **No publishing.** The publishing refusal below means the interim never feeds the bus.
+
+### How the grants are read
+
+At start the core reads its credential's grants and refuses any write grant on a dedicated source.
+
+- A classic OAuth token reports `X-OAuth-Scopes`. MEASURED on the gh login (measured only: not checked against GitHub's documentation).
+- An App installation token carries a `permissions` object in the mint response. INFERRED, not yet measured.
+- How to read a fine-grained token's grants is UNVERIFIED. Such a token's scopes are shown as `unknown`, and a dedicated source whose grants cannot be read fails closed.
+
+### The desk: layered, never upward
+
+The design party voted this shape 6-0. The core picks its credential in this order:
+
+1. **A dedicated gh profile, one per resource owner.** It is a separate `GH_CONFIG_DIR`, so the main login's config files are not written. The main login's keychain is another matter: any gh login into the profile, the bootstrap's included, rewrites a shared keychain entry (see "The keychain side effect" under the bootstrap). A write scope on a dedicated profile is refused at start.
+2. **Else the user's own gh login, only with an explicit acknowledgment flag.** Without the flag the core does not start on the login.
+3. **Never a fall-through upward.** A failed, revoked or missing profile token reports `unknown` with its reason and refuses. It never retries on the user's main login.
+
+Each repo then reports `access: none | public | read | unknown:<reason>`, so a repo the credential cannot see reads as that, not as quiet.
+
+- **The no-token diagnostic.** With no credential at all, the core runs REST only, for a short public list. It refuses to start with more than 5 repos, because unauthenticated REST allows 60 calls an hour and no GraphQL (MEASURED).
+- **Storage.** The profile's token is stored with `--insecure-storage`, in plain text in the profile's `hosts.yml`, created with mode 0600 (see the bootstrap's "What is on disk afterwards"). With that flag gh does not write the token to the keyring (gh v2.102.0 `internal/config/config.go:431-434`). That is not the same as leaving the keyring alone: every login also rewrites a shared keychain entry, as the bootstrap's "The keychain side effect" sets out. Any process of the same uid can read that file; the design states this and does not solve it.
+- **A gh version check at start.** A gh upgrade that changes how `GH_CONFIG_DIR` or `--insecure-storage` behaves would otherwise break the profile with no test noticing (INFERRED).
+
+### The desk bootstrap: the tool fetches the no-scope token
+
+The operator asked whether the tool can get the profile's token for the user, as needed (2026-10-19). It can, gated on one test.
+
+- **How it works.** The tool runs GitHub's OAuth device flow against an OAuth App that ArcavenAE registers once, with the device flow enabled. The flow needs only the App's public client id, with no client secret, and requests no scope. A token with no scope grants read-only access to public information. The user approves one page in their browser. They need no membership in the ArcavenAE org. (GitHub docs: "Authorizing OAuth apps" and "Scopes for OAuth apps", read through a fetch summarizer.)
+- **Why an App of the tool's own.** gh's own device flow always requests `repo`, `read:org` and `gist` (gh v2.102.0, `internal/authflow/flow.go:34`, MEASURED in the source).
+- **The hand-off.** The tool passes the token to gh through stdin, with `gh auth login --with-token --insecure-storage` into the dedicated profile. For `--with-token`, gh runs two checks before it stores anything, and either one failing ends the login with nothing written (gh v2.102.0 `pkg/cmd/auth/login/login.go:206-216`, where the store is line 216; MEASURED in the source):
+  1. the minimum-scope check, which passes on an empty scopes header (`pkg/cmd/auth/shared/oauth_scopes.go:72-77`);
+  2. a GraphQL query, `query UserCurrent{viewer{login}}`, to learn whose token it is (`pkg/cmd/auth/shared/login_flow.go:263-275`). An error here fails the login with `error retrieving current user`.
+
+  So the hand-off itself needs GraphQL: a token that GraphQL refuses never reaches gh. The tool holds the token in memory only. It never writes it to disk itself, never puts it in an argument or the environment, and keeps no copy once gh has it. A failed or revoked token offers the device flow again, under the never-upward rule above.
+- **What is on disk afterwards.** gh writes the token, in plain text, under the `oauth_token` key in `hosts.yml` in the profile's config directory (gh v2.102.0 `internal/config/config.go:419-434`; go-gh v2.16.1 `pkg/config/config.go:232` for the file name, and `:334`, which creates it with mode 0600). That file is the one the storage bullet above describes. "The tool keeps nothing" means the tool's own process and files; gh's profile does hold the token.
+- **The keychain side effect.** Every gh login, `--insecure-storage` included, ends in `activateUser` (gh v2.102.0 `internal/config/config.go:452`). That function runs three steps (`:523-553`, MEASURED in the source):
+  1. It deletes the keychain entry with service `gh:<host>` and an empty account (`:525`).
+  2. If the keyring holds a token stored for the logging-in user, it copies that token into the empty-account entry (`:533-534`).
+  3. It records the active user in the profile's `hosts.yml`.
+
+  The service name is `"gh:" + host` (`:577-579`). The keyring is go-keyring v0.2.8 (gh `go.mod:59`), which on macOS runs `/usr/bin/security` against the user's own keychains (gh `docs/macos-keyring.md:15`). It writes an entry by sending `add-generic-password -U -s <service> -a <account> -w <secret>` to `security -i`, with an empty account quoted as `''` (go-keyring v0.2.8 `keyring_darwin.go:76-101`, `internal/shellescape/shellescape.go:30-31`). It deletes one with `delete-generic-password -s <service> -a <account>`, passing `""` for the empty account (`keyring_darwin.go:104-109`). Nothing in that name or path depends on `GH_CONFIG_DIR`, so a login into a dedicated profile touches the same entries as the user's main login. What that does to the main login is INFERRED, not measured, and it turns on one unknown:
+  - **How `security` treats an empty account** is UNVERIFIED, for both the delete and a lookup. If `-a ""` matches only an entry whose account is empty, step 1 removes only that entry. If it matches any account under the service, step 1 can delete the main user's own entry instead, and the main login loses its token.
+  - In the first case, the main login likely keeps working: gh resolves its token from the entry stored for the active user first (`:265-266`), and uses the empty-account entry only when that fails (`:273`).
+  - Either way, the empty-account entry itself is deleted at `:525`, if the delete reaches it. In the only-empty case it is then rewritten with the main token when the bootstrap's GitHub account is the main login's account, and left absent when it is a different account. In the any-account case, which entry the delete removed, and what `:533-534` then writes, is what the measurement below answers.
+  - Shipped gh has no switch to point it at a mock or separate keyring: its mock is used only from `internal/config/test.go:130`.
+
+  So the bootstrap writes to the user's keychain, and the design states that as a cost. Before the bootstrap is built, the effect is measured on a disposable machine ("The keychain measurement", after the section 6 table). If the measurement shows the main login breaking, the recommendation is to drop the bootstrap.
+- **Lifetime.** The token has no expiry and no refresh token. GitHub revokes it after a year unused, and the user can revoke it in their settings at any time (GitHub docs, "Token expiration and revocation", read through a fetch summarizer).
+- **Custody.** After the hand-off, gh holds the token in that file and the tool holds nothing, so the steady state is delegation. For the moment of the hand-off, the tool receives a long-lived token from GitHub and passes it on: a broker step. The custody rule allows brokering a short-lived credential; this one is long-lived, so whether the step fits is the operator's call, and the credential card says so.
+- **The gate.** GitHub's GraphQL docs say a classic token needs `public_repo` to read public repos, and `public_repo` includes write. They say nothing about a token with no scope, and nothing about `viewer`. Two GraphQL reads matter, and they can differ:
+  - `viewer{login}`, which the hand-off needs (above);
+  - the repository views of section 2, which the core needs.
+
+  One operator test answers both, with one approval and the token revoked at the end. It reports REST, a private repo the token must not see, the scopes header and each GraphQL read. It runs no gh login, because of the keychain side effect above. Instead it reports whether gh would take the token, predicted from the two inputs gh's `--with-token` path checks, which it measures directly. Nothing in this subsection is built before it reports, and before the keychain measurement in section 6 has run.
+- **The outcomes, and the way on from each:**
+  - **Both GraphQL reads work.** The bootstrap is built as described.
+  - **`viewer` works, the repository views do not.** gh takes the token, and the core reads through `gh api` REST only: 5,000 calls an hour, public data. Section 2's state view then needs REST equivalents, which is a design change of its own before any build.
+  - **`viewer` is refused.** gh refuses the token, so there is no path through gh. Any REST-only path would have the tool hold the token itself: in a `GH_TOKEN` it sets for every call, or in a file it writes. Either is custody by the tool, so the recommendation is no REST-only fallback for this outcome. The way on is to re-run the same test with a GitHub App that has no permissions and user-token expiry turned off, in place of the OAuth App. Its user token passes through the same two gh checks, so it needs `viewer` too (INFERRED, not tested). Expiry must stay off: with it on, the tool would need a refresh token, which is custody. If that is refused as well, the recommendation is to drop the bootstrap and keep the layered order without it.
+
+### The fleet: Apps in the orgs the operator owns
+
+The design party voted this shape 6-0.
+
+- **The App.** A read-only GitHub App in each org the operator owns, personal-account installs included, installed on the watched repos only. That an installation token lasts 1 h, and that an installation can be limited to selected repos, are INFERRED from GitHub's App model, not yet measured, and UNVERIFIED against GitHub's documentation.
+- **The minter.** A minter holds the App key and writes an installation token. It runs as its own local user on the core's host (round 7, 6-0). The key is 0600 and owned by that user. The core's user can read the token file and never the key, so the same-uid reader the earlier draft named cannot reach the key.
+- **Permissions:** metadata, contents, pull requests, checks, commit statuses, deployments and actions, all read. INFERRED from the queries in section 2, not yet checked against GitHub's permission tables. The start-up grant check is the test.
+- **Nothing outside the owned orgs reaches the bus.** A seat that needs a repo outside them reads it through the desk path, on its own machine, and its reads never become fleet events.
+- **The fine-grained PAT: the recommendation is to drop it** as a fleet option (5-1, not yet ruled). The dissent, recorded: keep a 90-day read-only PAT as a stated fallback where an org owner will not install an App, since it gives a dated, revocable path, with the card naming the one account it ties the reader to.
+- **Date.** No date is set. The operator sets it on the credential card. The card recommends about two weeks after it is ruled.
+- **This is an exception to the custody rule.** The rule says a component must not hold an artifact that is bearer authority at a third party, and an App key is. Only the operator's ruling can grant the exception. The design records that it asks for one.
+
+**gh-ingress refuses to publish while the core reports a gh login or a desk profile as its credential source,** so a desk credential never becomes fleet events.
 
 ## 5. What gh-ingress adds
 
@@ -151,7 +223,13 @@ Each rule above has a red test against a fake GitHub server:
 | the token stays out of env and argv | A canary token is placed in the credential source. A recording spawner shows that no child's argv or environment carries it. `ps -E -o command= -p <pid>` on the core shows no canary in its argv or environment. In the interim the core sets no `GH_TOKEN` or `GITHUB_TOKEN` for `gh`, and `gh` reads its own login. |
 | the minter's files | The App key is 0600 and owned by the minter user, so the core's uid gets EACCES reading it. The token file is 0640, owned by the minter user, in a group whose only member is the core's user. A third uid gets EACCES on both files. Creating the users needs root, so this test runs only in the core repo's `minter-files` CI job, on a disposable GitHub-hosted macOS runner that can `sudo` (INFERRED that hosted runners allow it), and never on a fleet host. The job is created with the repo. Run anywhere else, it reports skipped, never passed. |
 | no unknown readers | A second uid is refused at the socket. `lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN` and `lsof -nP -a -p <pid> -iUDP` both print nothing for the core's pid, so it has no listener of either kind. Its only inet sockets are outbound TCP to the forge, seen with `lsof -nP -a -p <pid> -i`. |
-| no publishing from a gh login | With the credential source set to a gh login and the adapter enabled, gh-ingress refuses and says why. |
+| no publishing from a desk credential | With the credential source set to a gh login, or to a desk profile, and the adapter enabled, gh-ingress refuses and says why. |
+| desk: never upward | A dedicated profile whose token the fake server answers with 401 reports `unknown:<reason>` and refuses. A recording `gh` shim shows no call that runs on the user's main login. Without the acknowledgment flag, the main login as the only source refuses at start. |
+| desk: the no-token diagnostic | With no credential and 6 repos in the list, start-up refuses. With 5, it runs, and the fake server's log shows REST calls only, no `/graphql`. |
+| desk bootstrap: the token stays out of the tool | A fake device-flow server returns a canary token. A recording spawner shows the canary only on the stdin of `gh auth login --with-token --insecure-storage`, never in any child's argv or environment, and a scan of every file the tool wrote finds no piece of the canary. |
+| desk bootstrap: the keychain entry | The keychain measurement below the table. It fails in any of these cases: it cannot single out gh's entry (step 1); a canary appears in any captured output; the main user's own entry changes or disappears; the main login stops resolving. No outcome passes without having read both entries before and after each run. |
+| desk bootstrap: gh refuses a token GraphQL refuses | gh reaches the fake server with `--hostname github.localhost`, which it maps to plain HTTP at `api.github.localhost` for REST and `/graphql` (gh v2.102.0 `internal/ghinstance/host.go:66-67` and `:53-54`). The keychain service is then `gh:github.localhost`, never `gh:github.com`, but the positive control still runs `activateUser` against it. So the row runs only on a disposable CI runner, never on a fleet host. Against a fake server that passes the scopes check (empty `X-OAuth-Scopes`) and answers `/graphql` with an error, the hand-off into a scratch profile exits nonzero with `error retrieving current user`, and the profile's `hosts.yml` holds no `oauth_token`. A positive control with a fake `/graphql` that answers `viewer{login}` exits 0, and `hosts.yml` then holds the canary token. This pins gh's behaviour, so a gh upgrade that changes it fails here. |
+| desk bootstrap: the operator test | The test of section 4 reports `viewer{login}` and the repository views as separate lines. It runs no gh login, so there is no hand-off exit code: it reports whether gh would take the token, predicted from the scopes header and the `viewer{login}` result, which are the two inputs gh's `--with-token` path checks (`login.go:206-216`). It fails if any gh auth command runs. The bootstrap is built only on the first outcome, or on the second once its REST design change exists. |
 | least-privilege token | With a dedicated credential that carries a write grant, start-up fails and names the grant. With the gh login as source, start-up prints the scopes and `interim` and runs (report mode). The interim fails least privilege by design until the operator's date (section 4). |
 | grants fail closed | With a dedicated credential, the grant read is faked to error (a network failure or a 5xx), to return an unknown shape (no scopes header, no `permissions` object, or an unrecognised field), and to return an empty grant set. Start-up refuses in each case, names the reason, and makes no collection request. |
 | viewing never calls the forge | Every CLI verb in section 3, every quota view and window, and `--image` is run 100 times against the fake forge, and its request log does not change. A manual check against GitHub reads `x-ratelimit-used` before and after: unchanged. |
@@ -160,9 +238,34 @@ Each rule above has a red test against a fake GitHub server:
 | dedupe | The same fact read twice gives one `Nats-Msg-Id`. A changed `updated_at` or head SHA gives a new one. A `review.stale` in the same window gives the same id, and in the next window a new one. A webhook GUID in a header does not change the id. |
 | webhook receiver (later) | A bad or missing `X-Hub-Signature-256` gets 401 and changes no state. The header's name and its HMAC-SHA256 scheme are INFERRED from GitHub's webhook model, and get checked in that build's own review. |
 
+### The keychain measurement
+
+Run on a disposable macOS user or runner, never on a fleet host or the operator's account, because the test changes the keychain. Run it against the fake server through `--hostname github.localhost` (as in the next row), so it needs no real token and its entries carry the service `gh:github.localhost`; the code path is the same as for `github.com` (`config.go:523-553`, `:577-579`).
+
+Secrets are never read. Each plant's secret is a canary, and every output the measurement captures is checked for it: a canary seen anywhere stops the measurement as a failure. Two readers are allowed, and step 1 decides which one steps 2 and 3 use:
+- **The lookup:** `security find-generic-password -s gh:github.localhost -a <account>`, with neither `-g` nor `-w`, which prints the item's attributes, `acct` and `mdat` among them, and not its data.
+- **The listing:** `security dump-keychain <the disposable user's keychain>`, with none of `-a`, `-d`, `-i` or `-r`. Every item under the service is listed with its `acct` and `mdat`. That this prints no item data rests on security(1), which offers `-d` for decrypted data and `-r` for raw data (INFERRED from the man page wording; the canary check is the test).
+
+1. **Prove the reader, both ways, before anything else.**
+   - Plant a positive entry exactly the way gh writes one: send `add-generic-password -U -s gh:github.localhost -a '' -w <canary>` to `security -i`, the same form as go-keyring `keyring_darwin.go:86`. A lookup with `-a ""` must find it, with an empty `acct`. If it does not, the measurement fails closed and nothing after it runs.
+   - Plant a negative entry the same way, with account `main-user` and no empty-account entry beside it. Run the same `-a ""` lookup, then plant both entries and run it once more.
+   - **If the `-a ""` lookup never returns the `main-user` entry,** it matches only the empty account. The lookup is the reader for steps 2 and 3: `-a ""` for gh's entry, `-a main-user` for the main user's. Every lookup counts as finding an entry only when the printed `acct` equals the queried account, empty for `-a ""` and `main-user` for `-a main-user`, so a lookup that returns the other entry reads as absent.
+   - **If it returns the `main-user` entry in either run,** it matches any account, and a lookup cannot single out gh's entry. The listing becomes the reader. With both plants present, the listing must show two items under the service, one with an empty `acct` and one with `acct` `main-user`, each with an `mdat`. If it does not, the measurement fails closed and reports that no reader can single out gh's entry.
+2. **Answer the delete question,** with the reader from step 1. With only the `main-user` entry planted, run `security delete-generic-password -s gh:github.localhost -a ""`, the argv of go-keyring `keyring_darwin.go:104-109`, and record whether the `main-user` entry survives. Then plant both entries and repeat, and record which one is gone. This settles whether step 1 of `activateUser` (`config.go:525`) can delete the main user's own entry.
+3. **Measure the login,** with the same reader. Remove the plants. Seed a main login in the default config, stored in the keyring, whose fake `viewer` answers `main-user`. Every token the fake server issues or accepts in this step is a canary too, so the canary check covers the runs where the reader is used. Read both entries: presence and `mdat`. Run the bootstrap into a dedicated `GH_CONFIG_DIR` twice, once with the fake `viewer` answering `main-user` and once answering `other-user`, and read both entries after each run. Record `gh auth status` and `gh api user` on the main config after each run.
+
+**Verdict.** The source says `activateUser` deletes the empty-account entry on every login (`:525`), so a change to it is the expected result. It is reported, with its before and after presence and `mdat`, and is never left unobserved. The measurement fails in any of these cases:
+- it cannot single out gh's entry (step 1);
+- a canary appears in any captured output;
+- the main user's own entry changes or disappears;
+- the main login stops resolving.
+
+No outcome passes without having read both entries before and after each run.
+
 ## 7. Sequencing
 
 1. **Now:** the core, its tests and its CLI. It publishes nowhere, so the broker's authorization work does not gate it. It runs on the interim credential once the operator has ruled the credential card, which states the login's scopes.
+   - The desk path (section 4) is built with the core once the desk credential card is ruled. Its bootstrap is built only after the operator test reports on GraphQL.
 2. **After the broker's authorization block is live on every broker that `events.<fleet>` reaches**, meaning each host's local broker, the hub and any leaf (aae-orc-umw8p, director#4): streams, grants, director-mcp's event tools, and gh-ingress publishing. This also needs the target credential, because of the refusal in section 4.
 3. **Later:** a webhook receiver on an always-on reachable host, with its own review. The poller stays as reconciliation.
 
@@ -213,6 +316,8 @@ Image tests:
 |---|---|---|
 | shared subject and envelope package | aae-orc-5wmeg | |
 | status core (new repo) | to be filed when the operator names the repo | |
+| desk credential path and bootstrap | to be filed when the desk card is ruled and the operator test reports | the status core |
+| fleet App and minter | to be filed when the fleet card is ruled | the status core |
 | gh-ingress adapter | aae-orc-bstdv | the core, aae-orc-5wmeg, aae-orc-aubd6 |
 | streams | aae-orc-aubd6 | aae-orc-umw8p |
 | grant rows, including the heartbeat and registry grants | aae-orc-lgthv | aae-orc-umw8p |
