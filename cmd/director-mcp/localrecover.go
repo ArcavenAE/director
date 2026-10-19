@@ -106,11 +106,15 @@ func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 		return false, nil // no broker context to ask (a bus built around a fake consumer)
 	}
 	durable := "mcp_" + b.self.AgentID + "_" + b.instance
+	// The window starts when the broker is asked, whatever it answers: a broker
+	// that cannot answer is not asked again on every empty poll. (The global
+	// tier's restore, global.go, advances it only on an answer; whether it needs
+	// the same change is a separate item.)
+	b.localMu.Lock()
+	b.local.checked = time.Now()
+	b.localMu.Unlock()
 	err := b.lookupLocal(ctx, durable)
 	if err == nil {
-		b.localMu.Lock()
-		b.local.checked = time.Now()
-		b.localMu.Unlock()
 		return false, nil
 	}
 	if !errors.Is(err, jetstream.ErrConsumerNotFound) {
