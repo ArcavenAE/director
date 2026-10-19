@@ -110,9 +110,17 @@ and the rest) is a context section, kept in file order. A part runs until the
 next bold label, card heading, or a `---` line.
 
 **Options.** Inside the options part, a line `N. ` at column 0 starts option
-N. Indented lines and sub-bullets continue it, with line breaks kept. A
-trailing `RECOMMENDED` or `RECOMMENDED.` on an option's first line is a
-marker; it is removed from the text and checked against the recommendation.
+N. Indented lines and sub-bullets continue it, with line breaks kept. The
+marker is the bracketed token `[RECOMMENDED]` (a final period is allowed)
+ending a line of the option: its first line, a middle line or its last. It is
+removed from the text and checked against the recommendation, and a marker on
+two lines of one option is refused. The bare word is prose, never a marker and
+never a refusal: a sentence that ends in "not RECOMMENDED" reads as text, and
+the tool prints a NOTE when a line ends in the bare word, so a seat that meant
+the marker sees why it did not count. (The first build read the bare word at
+the end of the first line; a review showed prose can end in it, so the marker
+needs a form prose cannot take. Measured: of the eight real cards, one used a
+marker, a trailing `RECOMMENDED.`, so this form costs one line fix.)
 
 **Recommendation.** Its first sentence must name one option as `Option N`
 (any case), and N must exist.
@@ -314,7 +322,8 @@ file and no log line appeared):
 - positive control: a valid two-card file with a fresh snapshot gives two
   `set` writes with every Desk field, slugs `P-1` and `P-2`, `opened` equal to
   `DWS_NOW`, and two log lines;
-- accepted: `**Problem.**`, `**Recommendation:**`, an agreeing `RECOMMENDED`,
+- accepted: `**Problem.**`, `**Recommendation:**`, an agreeing `[RECOMMENDED]` on the first, a middle and the last line of an option, a bare
+  `RECOMMENDED` in prose read as text,
   the event clause with and without an aside, `**Terms.** None.`, a preamble
   `Source:` for every card, preamble prose skipped and counted;
 - refused, one case each: no card heading; no `?`; two questions; each of the
@@ -342,7 +351,7 @@ answers file whose count differs from `--answers-reported` is refused.
 Under (b) each fix is one or two lines by the seat that wrote the file. The
 six-card file: a preamble `Source:` line (the request id it names in prose)
 and a Terms part on card 1. The rule-loading card: a `Source:` line. The
-build-target card: `Pointer:` renamed `**Source.**`, and a Terms part.
+build-target card: `Pointer:` renamed `**Source.**`, a Terms part, and its trailing `RECOMMENDED.` written `[RECOMMENDED]`.
 
 ## 10. Candidate requirements (provisional tags)
 
