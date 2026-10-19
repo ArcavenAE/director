@@ -103,6 +103,16 @@ grep -qF '**Valid until**' "$skill" && grep -qF 'Source:' "$skill" && grep -qF '
 grep -qF 'card-ingest' "$here/skills/director/reference/functions.md" && grep -qi 'direct writes' "$here/skills/director/reference/functions.md" \
   && ok "functions.md names card-ingest and says a Desk write made without it is honor-only" || bad "functions.md names card-ingest and says a direct write is honor-only"
 
+# The ledger fill (#321): the skill tells director to name the workstream when it logs a relay, and
+# what the fill and its list do; functions.md says what is enforced and what stays honor-only.
+fn="$here/skills/director/reference/functions.md"
+grep -F 'relay-log append' "$skill" | grep -qF -- '--ws' \
+  && ok "the relay capture trigger names --ws" || bad "the relay capture trigger names --ws"
+grep -qF 'refresh --local' "$skill" && grep -qF 'dws unlinked' "$skill" \
+  && ok "the skill names refresh --local and dws unlinked in the sweep" || bad "the skill names refresh --local and dws unlinked"
+grep -qF 'refresh --local' "$fn" && grep -qF 'dws unlinked' "$fn" && grep -qF -- '--ws' "$fn" \
+  && ok "functions.md says what the fill reads, what it never matches, and that a missing --ws is honor-only" || bad "functions.md covers the fill"
+
 # A copy install runs from the bin home with no checkout beside it.
 cp_home="$root/copy"; mkdir -p "$cp_home"
 CLAUDE_HOME="$cp_home/claude" DIRECTOR_HOME="$cp_home/director" DIRECTOR_STATE="$cp_home/state" "$here/install.sh" --copy >"$cp_home/out" 2>&1 || true
