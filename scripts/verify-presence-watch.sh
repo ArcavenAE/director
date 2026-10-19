@@ -53,7 +53,13 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
+# A signal that would end the script outright (SIGPIPE from a write to a fifo whose
+# reader is gone, a hangup, an interrupt) skips the EXIT trap, so each one is
+# turned into an exit, which runs cleanup and stops the servers by their pids.
 trap 'exit 124' TERM
+trap 'exit 141' PIPE
+trap 'exit 129' HUP
+trap 'exit 130' INT
 
 # The overall deadline: a watchdog that ends the script, so nothing waits forever.
 deadline="${VERIFY_DEADLINE:-600}"
@@ -185,6 +191,7 @@ else
     || { echo "the go build failed or did not finish in ${VERIFY_BUILD_TIMEOUT:-180}s"; exit 2; }
   SHIM="$work/director-mcp"
 fi
+[[ -x "$SHIM" ]] || { echo "the shim $SHIM is not an executable file"; exit 2; }
 
 # --- drive the shim over its own stdio ---------------------------------------
 mkfifo "$work/in" "$work/out"
