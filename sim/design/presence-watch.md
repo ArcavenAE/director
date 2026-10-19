@@ -249,13 +249,18 @@ withdraw or supersede a held ask, the finding-024 case.
 **Release after the watch turns on.** A restart or a turn-on is a gap, never
 a transition (D3), so a unit that is already present when the watch starts has
 no back event. For release only, the first sighting of a unit after a gap
-counts as back once the unit shows a fresh heartbeat: its row's `ts`
-(`global.go:778`) is later on a following pass than on the first pass after
-the gap. A row that merely exists is not enough. A supervisor that crashed
+counts as back once one of the unit's rows shows a fresh heartbeat: that
+row's `ts` (`global.go:778`) is later on a following pass than on the pass
+where the watch first saw that row. Freshness is measured per row, from the
+row's own first sighting, so an instance that restarts or hands off around
+turn-on and whose key first appears on a later pass is confirmed by its own
+next beat. A row that merely exists is not enough. A supervisor that crashed
 just before turn-on leaves its row inside the TTL for up to 90s (section 2),
 and a release to it would sit unread on the hub stream for up to 72h
-(`global.go:48-56`). A `ts` that has not moved by the fourth pass after the gap
-leaves the unit unconfirmed, and its row then expires into absent as usual.
+(`global.go:48-56`). There is no pass cap: a row whose `ts` never moves is not
+being renewed, so it expires by TTL into absent, and a row that keeps beating
+is confirmed on its next beat. No new judgment number is needed, so nothing is
+added to `thresholds.json` for this rule.
 Once the heartbeat is fresh, every `held` record for the unit is released
 within its `sell_by`, as below. Without this rule, a record held before a
 restart for a cluster that never leaves again would wait until `sell_by` and
@@ -266,7 +271,11 @@ Tests:
 - `TestHeldReleasedOnFirstSightingAfterTurnOn`: hold with the watch on, stop
   the shim, keep the cluster's row beating, start the shim, run the passes,
   and see one stream message.
-- `TestNoReleaseToStaleRowAfterTurnOn`: the same, but the row stops beating
+- `TestReleaseToKeyFirstSeenLateAfterTurnOn`: the old instance's row is
+  gone and a new instance's key first appears on the third pass after the
+  restart; its `ts` moves on its next beat and the held record is released
+  once, not proposed at `sell_by`.
+- `TestNoReleaseToStaleRowAfterTurnOn`: the same as the first, but the row stops beating
   before the restart and stays inside the TTL; no stream message, the record
   stays `held`, and the unit reads absent once the row expires.
 - `TestFirstSightingIsNotReportedAsBack`: after the restart, the event file
