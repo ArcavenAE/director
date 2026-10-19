@@ -152,7 +152,7 @@ fi
 # --- accepted spellings ------------------------------------------------------
 sub "$root/a1.md" '**The problem.**' '**Problem.**'; accepts "accepts **Problem.** for the problem part" "$root/a1.md"
 sub "$root/a2.md" '**Recommendation.**' '**Recommendation:**'; accepts "accepts **Recommendation:**" "$root/a2.md"
-sub "$root/a3.md" 'The cost is a later report.' 'The cost is a later report. RECOMMENDED.'
+sub "$root/a3.md" 'The cost is a later report.' 'The cost is a later report. [RECOMMENDED]'
 clean_state
 if run "$root/a3.md" >/dev/null 2>"$root/err" && python3 - "$(batch_json)" <<'P'
 import json, sys
@@ -215,7 +215,7 @@ python3 - "$BASE" "$root/w1.md" "$root/w2.md" <<'P'
 import sys
 t = open(sys.argv[1]).read()
 wrapped = t.replace("1. *Keep 06:00.* Nothing changes. The cost is a report short of late data.",
-                    "1. *Keep 06:00.* Nothing changes.\n   The cost is a report short of late data. RECOMMENDED.")
+                    "1. *Keep 06:00.* Nothing changes.\n   The cost is a report short of late data. [RECOMMENDED]")
 open(sys.argv[2], "w").write(wrapped)
 open(sys.argv[3], "w").write(wrapped.replace("Option 2.", "Option 1."))
 P
@@ -237,7 +237,7 @@ pos = sys.argv[2]
 mark = {"first": ["", ""], "middle": ["", ""], "last": ["", ""]}
 lines = ["1. *Keep 06:00.* Nothing changes.", "   The cost is a report short of late data.", "   More detail on this option."]
 i = {"first": 0, "middle": 1, "last": 2}[pos]
-lines[i] += " RECOMMENDED."
+lines[i] += " [RECOMMENDED]"
 opt = "\n".join(lines)
 old = "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data."
 agree = t.replace(old, opt).replace("Option 2.", "Option 1.")
@@ -257,7 +257,7 @@ done
 python3 - "$BASE" "$root/rec-twice.md" <<'P'
 import sys
 t = open(sys.argv[1]).read()
-open(sys.argv[2], "w").write(t.replace("1. *Keep 06:00.* Nothing changes. The cost is a report short of late data.", "1. *Keep 06:00.* Nothing changes. RECOMMENDED.\n   The cost is a report short of late data. RECOMMENDED."))
+open(sys.argv[2], "w").write(t.replace("1. *Keep 06:00.* Nothing changes. The cost is a report short of late data.", "1. *Keep 06:00.* Nothing changes. [RECOMMENDED]\n   The cost is a report short of late data. [RECOMMENDED]"))
 P
 refuses "refuses a marker on two lines of one option" "$root/rec-twice.md" "option 1 carries RECOMMENDED on 2 lines"
 # an action card whose Options part is prose, with no numbered line
@@ -271,6 +271,69 @@ t = t.replace("Option 2.", "Option 1.")
 open(sys.argv[2], "w").write(t)
 P
 refuses "an action card whose Options part has no numbered line is refused as 'an action card needs at least one option; found 0'" "$root/prose.md" "an action card needs at least one option; found 0"
+
+# The marker grammar: only the bracketed token [RECOMMENDED], ending a line of the option. The bare
+# word in prose is text: it is never a marker and never a refusal, and the text keeps it.
+for rec in 1 2; do
+  python3 - "$BASE" "$rec" "$root/prose-$rec.md" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+t = t.replace("1. *Keep 06:00.* Nothing changes. The cost is a report short of late data.",
+              "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data and this is not RECOMMENDED")
+t = t.replace("Option 2.", "Option %s." % sys.argv[2])
+open(sys.argv[3], "w").write(t)
+P
+  clean_state
+  if run "$root/prose-$rec.md" >"$root/out" 2>"$root/err" && python3 - "$(batch_json)" <<'P'
+import json, sys
+o = json.load(open(sys.argv[1]))["writes"][0]["data"]["options"]
+assert o[0]["text"].endswith("and this is not RECOMMENDED"), o
+P
+  then ok "prose ending in the word RECOMMENDED is text with the recommendation on option $rec: accepted, text intact"; else bad "prose ending in RECOMMENDED, recommendation on option $rec" "$(cat "$root/err")"; fi
+  grep -q "without brackets" "$root/out" && ok "a bare RECOMMENDED at a line end is noted, not refused (option $rec)" || bad "a bare RECOMMENDED at a line end is noted" "$(cat "$root/out")"
+done
+python3 - "$BASE" "$root/prose-mid.md" <<'P'
+import sys
+t = open(sys.argv[1]).read().replace("Nothing changes.", "Nothing changes. It is RECOMMENDED by nobody, and RECOMMENDED. is also text.")
+open(sys.argv[2], "w").write(t)
+P
+clean_state; run "$root/prose-mid.md" >/dev/null 2>"$root/err" && ok "the word RECOMMENDED inside a sentence is text" || bad "the word RECOMMENDED inside a sentence is text" "$(cat "$root/err")"
+python3 - "$BASE" "$root/dot.md" <<'P'
+import sys
+t = open(sys.argv[1]).read().replace("The cost is a later report.", "The cost is a later report. [RECOMMENDED].")
+open(sys.argv[2], "w").write(t)
+P
+clean_state; run "$root/dot.md" >/dev/null 2>"$root/err" && python3 - "$(batch_json)" <<'P' && ok "[RECOMMENDED]. with a final period is a marker too" || bad "[RECOMMENDED]. is a marker" "$(cat "$root/err")"
+import json, sys
+o = json.load(open(sys.argv[1]))["writes"][0]["data"]["options"]
+assert "RECOMMENDED" not in o[1]["text"], o
+P
+
+# A log append that fails partway leaves the log as it was: no partial line without its batch.
+# RLIMIT_FSIZE stops the append part-way through; the seed log is under the limit, the batch is too.
+clean_state; mkdir -p "$DIRECTOR_STATE"
+python3 - "$LOG" <<'P'
+import json, sys
+with open(sys.argv[1], "w") as f:
+    for i in range(30):
+        f.write(json.dumps({"at": "2026-10-01T00:00:00Z", "checked": True, "batch": "old-%03d.json" % i, "slugs": [], "failed": 0}) + "\n")
+P
+cp "$LOG" "$root/log.before"
+lsize="$(wc -c <"$LOG" | tr -d ' ')"
+python3 - "$CI" "$BASE" "$((lsize + 60))" "$root/err" <<'P'
+import os, resource, subprocess, sys
+ci, base, limit, errf = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+def cap():
+    resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+with open(errf, "w") as e:
+    rc = subprocess.run([ci, "parse", base, "--area", "a", "--owner", "o", "--prefix", "rpt"], stdout=subprocess.DEVNULL, stderr=e, preexec_fn=cap).returncode
+sys.exit(0 if rc != 0 else 1)
+P
+if [[ $? -ne 0 ]]; then bad "an append cut short by the file size limit is refused" "accepted"
+elif ! cmp -s "$LOG" "$root/log.before"; then bad "an append cut short leaves the log byte for byte as it was" "now $(wc -c <"$LOG" | tr -d ' ') bytes, was $lsize"
+elif [[ "$(nbatch)" != 0 ]]; then bad "an append cut short leaves no batch" "$(find "$BATCHDIR" -type f)"
+else ok "an append cut short by the file size limit is refused, the log is restored byte for byte and no batch is left"; fi
+clean_state
 
 # a log that cannot be appended leaves no batch behind
 clean_state; mkdir -p "$LOG"
@@ -331,10 +394,10 @@ sub "$root/r.md" '**Terms.** None.' $'**Terms.** None.\n\n**Kind.** maybe'; refu
 sub "$root/r.md" 'Option 2. Complete' 'Complete'; refuses "refuses a recommendation naming no option" "$root/r.md" "names no option"
 sub "$root/r.md" 'Option 2. Complete' 'Option 5. Complete'; refuses "refuses a recommendation naming a missing option" "$root/r.md" "names option 5; the card has 2"
 sub "$root/r.md" 'Option 2. Complete' 'Option 1 or Option 2. Complete'; refuses "refuses a recommendation naming two options" "$root/r.md" "names options 1 and 2; recommend one"
-sub "$root/r.md" 'The cost is a report short of late data.' 'The cost is a report short of late data. RECOMMENDED.'; refuses "refuses a RECOMMENDED marker that disagrees with the recommendation" "$root/r.md" "RECOMMENDED marks option 1 and the recommendation names option 2"
+sub "$root/r.md" 'The cost is a report short of late data.' 'The cost is a report short of late data. [RECOMMENDED]'; refuses "refuses a RECOMMENDED marker that disagrees with the recommendation" "$root/r.md" "RECOMMENDED marks option 1 and the recommendation names option 2"
 python3 - "$BASE" "$root/r.md" <<'P'
 import sys
-t = open(sys.argv[1]).read().replace("short of late data.", "short of late data. RECOMMENDED.").replace("a later report.", "a later report. RECOMMENDED.")
+t = open(sys.argv[1]).read().replace("short of late data.", "short of late data. [RECOMMENDED]").replace("a later report.", "a later report. [RECOMMENDED]")
 open(sys.argv[2], "w").write(t)
 P
 refuses "refuses two RECOMMENDED markers" "$root/r.md" "RECOMMENDED marks 2 options"

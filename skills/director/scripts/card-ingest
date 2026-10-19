@@ -150,21 +150,25 @@ def parse_options(rec):
             opts.append([int(m.group(1)), m.group(2).rstrip()])
         elif opts and l.strip():
             opts[-1][1] += "\n" + l.rstrip()
-    out, marks, twice = [], [], []
+    out, marks, twice, bare = [], [], [], []
     for n, t in opts:
-        # RECOMMENDED may end any line of the option; it is removed wherever it ends one.
+        # The marker is the bracketed token [RECOMMENDED] ending a line of the option, with an
+        # optional final period; it is removed wherever it ends one. The bare word is prose and
+        # is never a marker or a refusal, so a sentence that ends in it reads as text.
         lines, hits = t.split("\n"), 0
         for i, line in enumerate(lines):
-            mk = re.search(r"\s*\bRECOMMENDED\.?\s*$", line)
+            mk = re.search(r"\s*\[RECOMMENDED\]\.?\s*$", line)
             if mk:
                 hits += 1
                 lines[i] = line[:mk.start()].rstrip()
+            elif re.search(r"\bRECOMMENDED\.?\s*$", line):
+                bare.append(n)
         if hits:
             marks.append(n)
         if hits > 1:
             twice.append((n, hits))
         out.append((n, "\n".join(lines).rstrip()))
-    return out, marks, twice
+    return out, marks, twice, bare
 
 
 def snapshot_state(today_iso):
@@ -237,7 +241,9 @@ def check_card(card, pre, kind_default_source, a, snap, logseen, today):
         errs.append("kind '%s' is neither choice nor action" % kind)
     opts, marks = ([], [])
     if "options" in one and value_of(one["options"]):
-        opts, marks, twice = parse_options(one["options"])
+        opts, marks, twice, bare = parse_options(one["options"])
+        for n in bare:
+            notes.append("option %d ends a line in the word RECOMMENDED without brackets; it is read as text. Write [RECOMMENDED] to mark the option" % n)
         for n, hits in twice:
             errs.append("option %d carries RECOMMENDED on %d lines" % (n, hits))
         nums = [n for n, _ in opts]
