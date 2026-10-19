@@ -319,6 +319,10 @@ func oneDirectorErr(addr string, live []map[string]any, scan presenceScan) error
 // noGlobalPresenceErr states the refusal and nothing beyond what the scan
 // established. Every branch refuses; they differ only in what they claim.
 func noGlobalPresenceErr(addr, prefix string, scan presenceScan) error {
+	return &presenceRefusalErr{err: noGlobalPresenceText(addr, prefix, scan), unreadable: scan.Unreadable > 0}
+}
+
+func noGlobalPresenceText(addr, prefix string, scan presenceScan) error {
 	const refused = "no session would consume this send, so it is refused rather than stored on a subject nobody reads (R-92 liveness)"
 	const refusedUnestablished = "refused rather than stored on a subject nobody reads (R-92 liveness)"
 	switch {
@@ -849,7 +853,7 @@ func (g *globalTier) publish(ctx context.Context, e *Envelope, body []byte) (*je
 	prefix := globalPresencePrefix(cluster, role)
 	live, scan, err := g.records(ctx, prefix)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w (%s)", globalPresenceBucket, err, hubHint(g.cfg))
+		return nil, &presenceReadErr{fmt.Errorf("reading %s: %w (%s)", globalPresenceBucket, err, hubHint(g.cfg))}
 	}
 	if len(live) == 0 {
 		return nil, noGlobalPresenceErr(e.Recipient.Address, prefix, scan)

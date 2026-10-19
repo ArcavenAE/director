@@ -28,6 +28,11 @@ type leafRig struct {
 	leafURL string
 	hub     *exec.Cmd
 	leaf    *exec.Cmd
+	// presenceTTL is the test-only TTL hook: the TTL the hub's presence bucket is
+	// created with, 90s when zero. Provision has no TTL argument on main, and
+	// the presence watch tests need a short TTL (a row that expires inside the
+	// test) and a long one (a row that cannot). Set it before provision.
+	presenceTTL time.Duration
 }
 
 func freePort(t *testing.T) int {
@@ -134,7 +139,11 @@ func (r *leafRig) provision(ctx context.Context) (jetstream.JetStream, jetstream
 	if _, err := gjs.CreateStream(ctx, jetstream.StreamConfig{Name: globalDirectorStream, Subjects: []string{"global.director.>"}}); err != nil {
 		r.t.Fatal(err)
 	}
-	if _, err := gjs.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: globalPresenceBucket, TTL: 90 * time.Second}); err != nil {
+	ttl := r.presenceTTL
+	if ttl == 0 {
+		ttl = 90 * time.Second
+	}
+	if _, err := gjs.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: globalPresenceBucket, TTL: ttl}); err != nil {
 		r.t.Fatal(err)
 	}
 	return js, gjs
@@ -142,8 +151,18 @@ func (r *leafRig) provision(ctx context.Context) (jetstream.JetStream, jetstream
 
 // restartHub stops the hub and starts it again on the same port and store.
 func (r *leafRig) restartHub() {
+	r.stopHub()
+	r.startHub()
+}
+
+// stopHub stops the hub and leaves it down, so a test can act while it is.
+func (r *leafRig) stopHub() {
 	_ = r.hub.Process.Signal(os.Interrupt)
 	_, _ = r.hub.Process.Wait()
+}
+
+// startHub starts the hub again on the same port and store.
+func (r *leafRig) startHub() {
 	r.hub = r.run(r.hubConf)
 	r.waitUp(r.hubURL)
 	r.waitLink()

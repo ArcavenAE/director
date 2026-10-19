@@ -88,6 +88,16 @@ from the row's `owner`, `slug` and `next`, with the owner in the session slot.
 The other blocks are unchanged. With no ledger, or no CLI, build the list from
 the board and the roster as above.
 
+When the presence watch is on (`DIRECTOR_PRESENCE_WATCH=1` on the director's
+shim), `$DIRECTOR_STATE/presence-watch.json` lists each cluster the watch has seen. For each whose status
+is absent, print one line under Drafts, outside the fence above:
+`Away: <cluster> absent since <since> (N held)`, with N the count of records in
+`$DIRECTOR_STATE/held.jsonl` addressed to that cluster whose latest state is held (zero is written as
+"0 held"). Print nothing when no cluster is absent, and do not append the line to `board.md`. It is a
+diagnostic and blocks nothing. A held send past its sell-by is not counted there; the shim has proposed it,
+and the next wait_for_message or inbox_summary result names it in its presence_notice for you to
+release, revise or cancel (the cancel_held tool).
+
 5. Update `board.md` with anything you concluded. It is authored, edited
    rather than overwritten, and it is what survives a context compression.
    With a ledger, also keep it current: `${DIRECTOR_HOME:-$HOME/.director}/bin/dws open <slug> --title ...`

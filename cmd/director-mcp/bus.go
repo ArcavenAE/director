@@ -73,6 +73,8 @@ type Bus struct {
 	cueState func() (state, reason string)
 	// handled is the handled-mode state (K4); nil keeps ack-on-read.
 	handled *handledState
+	// watch is the presence watch (presencewatch_shim.go); nil when off.
+	watch *presenceWatcher
 	// localMu guards consumer and local: a rebuild replaces the consumer
 	// (localrecover.go), and the cue watcher reads it on another goroutine.
 	localMu sync.Mutex
@@ -915,6 +917,19 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 // a local concern, and the hub carries the director channel only (brief 8
 // section 2).
 func (b *Bus) publishGlobal(ctx context.Context, e *Envelope, body []byte) (*sendResult, error) {
+	res, err := b.publishGlobalOnce(ctx, e, body)
+	if err != nil {
+		err = b.namedRefusal(e, err)
+		if held := b.holdRefused(ctx, e, err); held != nil {
+			return nil, held
+		}
+	}
+	return res, err
+}
+
+// publishGlobalOnce is the global send without the hold: the path a release
+// takes, so a release meets the same presence checks and audit mirror as a send.
+func (b *Bus) publishGlobalOnce(ctx context.Context, e *Envelope, body []byte) (*sendResult, error) {
 	g, err := b.globalReady(ctx)
 	if err != nil {
 		return nil, atStage("global", err)
@@ -1391,6 +1406,7 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 			b.stateMu.Unlock()
 			_ = b.writePresence(ctx, s)
 			b.reportGlobalWarn(b.writeGlobalPresence(ctx, s), logf)
+			b.watchTick(ctx)
 		}
 	}
 }

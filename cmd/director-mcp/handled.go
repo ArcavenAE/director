@@ -68,7 +68,10 @@ const thresholdHandledAckWait = "handled_ack_wait"
 // longer than the 30 s JetStream default so a message the session is still
 // working on is not redelivered under it.
 var defaultThresholds = map[string]time.Duration{
-	thresholdHandledAckWait: 30 * time.Minute,
+	thresholdHandledAckWait:     30 * time.Minute,
+	thresholdPresenceFlapWindow: time.Hour,
+	thresholdPresenceFlapQuiet:  15 * time.Minute,
+	thresholdPresenceHoldSellBy: 8 * time.Hour,
 }
 
 // ledgerLockTimeout bounds how long a writer waits for the flock. A holder that
