@@ -415,6 +415,11 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 	if n := bus.presenceNotices(); len(n) > 0 {
 		out["presence_notice"] = n
 	}
+	// A durable the broker lost and the summary rebuilt is reported here as it
+	// is in wait_for_message, so the loss is not absorbed (director#269).
+	if r := bus.takeResumed(); len(r) > 0 {
+		out["resumed"] = r
+	}
 	if bus.handled != nil {
 		rows := res.ReadUnhandled
 		if rows == nil {

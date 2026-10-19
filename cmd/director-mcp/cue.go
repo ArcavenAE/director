@@ -426,7 +426,7 @@ type busCueSource struct{ b *Bus }
 // arrival, one spurious cue. A hub not yet attached is left out, as in
 // remaining().
 func (s busCueSource) count(ctx context.Context) (uint64, error) {
-	info, err := s.b.consumer.Info(ctx)
+	info, err := s.b.cons().Info(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -447,7 +447,7 @@ func (s busCueSource) count(ctx context.Context) (uint64, error) {
 }
 
 func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
-	items, _, _, err := peekWaiting(ctx, s.b.js, s.b.consumer, "local", 1)
+	items, _, _, err := peekWaiting(ctx, s.b.js, s.b.cons(), "local", 1)
 	if err == nil && len(items) > 0 && items[0].Env != nil {
 		return metaOf(items[0].Env), nil
 	}

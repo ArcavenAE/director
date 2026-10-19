@@ -34,10 +34,16 @@ in local or private state.
 - **Store:** the Decision Desk page, holding each operator ask as a card and
   the operator's answer on it.
 - **Writers:** director writes the cards; the operator writes the answers in
-  the page. Honor-only: nothing checks a card's shape. The card rules are
-  not defined on main (design section 1). R-202 asks that each card carry
-  the question, each option's text, the recommendation, its expiry and a
-  source pointer.
+  the page. R-202 asks that each card carry the question, each option's text,
+  the recommendation, its expiry and a source pointer. Enforced: a card
+  written through `card-ingest parse` carries every part, an expiry that is a
+  date no earlier than today with a named re-checker, and a slug that is not
+  already on the Desk; the file is refused whole, with every problem listed,
+  and `card-ingest check` compares the written cards with the batch field by
+  field. Honor-only: that the session sends the batch unchanged, and that the
+  read file is a real Desk read. Direct writes made without the tool stay
+  unchecked. Content stays the author's and the reviewer's: one decision per
+  card, plain language, and that a seat's claim carries its source.
 - **Readers:** the operator; director, in session. A script cannot read it
   (K5, finding-director-glst). A session reads the cards and hands them to
   `desk-snapshot write`, which validates them and writes

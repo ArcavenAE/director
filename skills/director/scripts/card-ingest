@@ -1,0 +1,532 @@
+#!/usr/bin/env python3
+"""card-ingest - turn a seat's card file into a Decision Desk card write, and refuse
+a card that is missing a part.
+
+Design: sim/design/card-ingest.md (issue #320). A script cannot write the Desk
+(finding-director-glst), so the split is:
+
+  card-ingest parse FILE --area A --owner O --prefix P [--update]
+      Validates every card in FILE and, only if all pass, writes
+      $DIRECTOR_STATE/card-ingest/<prefix>-<sha8>.json:
+        {"made_at", "file_sha256", "writes": [{"op": "set"|"update",
+         "collection": "decisions", "doc_id": slug, "data": {...}}]}
+      and appends one line per card to $DIRECTOR_STATE/card-ingest.jsonl under one
+      flock on $DIRECTOR_STATE/card-ingest.lock. The session passes the writes to the
+      Desk tool's batch write, one approval for the file.
+
+  card-ingest check --batch B --read FILE
+      FILE is what the session read back from the decisions collection after the
+      write. Prints PASS <slug> or MISMATCH <slug> <field> (MISSING <slug> for a
+      slug the read does not hold), appends a "checked" line to the log, and exits
+      nonzero on any mismatch or missing slug.
+
+The card file: a heading `## Card N. <question>` or `# Card: <question>`; the parts
+`**IN SHORT.**`, `**Problem.**`, `**Terms.**` (`None.` is a value), `**Options.**`
+(lines `N. ...`), `**Recommendation.**` (its first sentence names `Option N`),
+`**Valid until** YYYY-MM-DD.` plus a named re-checker, and a source, which is a
+`**Source.**` part on the card or a `Source:` line above the first card. Labels match
+after removing `**`, a leading "The ", a trailing "." or ":", and case. Any other
+bold-led section is context and is kept. Refusal is all or nothing per file and lists
+every problem in one pass, each as
+  card-ingest: refused: <file>: card <N>: <reason>
+on stderr, exit 1. The check is structural: it asks whether a card is well-formed,
+never whether the decision is good, and it gates nothing but its own output.
+
+The clock is `now()`; DWS_NOW overrides it only with DWS_TEST_CLOCK=1, as in
+desk-snapshot. The parser takes no time argument.
+"""
+import argparse, datetime, fcntl, hashlib, json, os, re, sys, tempfile
+
+HOME = os.path.expanduser("~")
+STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
+SNAPSHOT = os.path.join(STATE, "desk-snapshot.json")
+BATCHDIR = os.path.join(STATE, "card-ingest")
+LOG = os.path.join(STATE, "card-ingest.jsonl")
+LOCK = os.path.join(STATE, "card-ingest.lock")
+THRESHOLD_HOURS = 24  # THRESHOLD_HOURS["desk snapshot"] in dws
+
+CONTENT_FIELDS = ("title", "question", "context", "options", "rec", "expiry", "source", "kind")
+SILENCE = ("absent a ruling", "takes effect", "if no answer", "default holds")
+CANON = {"in short": "IN SHORT", "problem": "Problem", "terms": "Terms", "options": "Options",
+         "recommendation": "Recommendation", "valid until": "Valid until", "source": "Source", "kind": "Kind"}
+REQUIRED = ("in short", "problem", "terms", "options", "recommendation", "valid until")
+
+HEADING = re.compile(r"^(#{1,3})\s+Card\s*(?:(\d+)\.|:)\s*(.*)$")
+BOLD = re.compile(r"^\*\*(.+?)\*\*(.*)$")
+WORDLINE = re.compile(r"^([A-Za-z][A-Za-z-]*):(\s|$)")
+PREAMBLE_KEY = re.compile(r"^(Source|Kind):\s*(.*)$")
+OPTION = re.compile(r"^(\d+)\.\s+(.*)$")
+EXPIRY = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:\s*\([^)]*\))?(?:\.|,\s*or\s+(?:until\s+)?(.+?),\s*whichever comes first\.?)(?:\s+(.*))?$", re.S)
+PREFIX = re.compile(r"^[a-z0-9-]{3,48}$")
+# A code fence line is the fence token (three or more backticks or tildes) with an optional info
+# string and nothing else; a backtick fence's info string holds no backtick, so a line that starts
+# with inline triple-backtick code is not a fence. A closer is a bare run of the same character.
+FENCE_OPEN = re.compile(r"^\s*(`{3,}(?=[^`]*$)|~{3,})[^\n]*$")
+FENCE_CLOSE = re.compile(r"^\s*(`{3,}|~{3,})\s*$")
+
+
+class Refused(Exception):
+    pass
+
+
+def now():
+    """The clock. DWS_NOW overrides it only with DWS_TEST_CLOCK=1, as in desk-snapshot."""
+    fixed = os.environ.get("DWS_NOW") if os.environ.get("DWS_TEST_CLOCK") == "1" else None
+    return fixed or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def norm_label(raw, rest):
+    """The bold label, normalized, and the text that follows it on the line."""
+    lab = raw.strip()
+    while lab and lab[-1] in ".:":
+        lab = lab[:-1].rstrip()
+    if rest[:1] in (".", ":"):
+        rest = rest[1:]
+    lab = lab.lower()
+    if lab.startswith("the "):
+        lab = lab[4:]
+    return lab, rest
+
+
+def parse_file(text):
+    """Returns (preamble, cards, skipped, file_errors). A card is a dict."""
+    lines = text.split("\n")
+    heads = [(i, m) for i, l in enumerate(lines) for m in [HEADING.match(l)] if m]
+    errors = []
+    if not heads:
+        return {}, [], 0, ["no card heading; a card starts with '## Card 1. <question>' or '# Card: <question>'"]
+    skipped = 0
+    pre = {}
+    for l in lines[:heads[0][0]]:
+        m = PREAMBLE_KEY.match(l)
+        if m:
+            pre[m.group(1).lower()] = m.group(2).strip()
+        elif l.strip():
+            skipped += 1
+    cards = []
+    for k, (i, m) in enumerate(heads):
+        end = heads[k + 1][0] if k + 1 < len(heads) else len(lines)
+        cards.append({"num": int(m.group(2)) if m.group(2) else None, "heading": m.group(3).strip(),
+                      "lines": lines[i + 1:end], "ordinal": k + 1})
+    return pre, cards, skipped, errors
+
+
+def split_parts(lines):
+    """Returns (parts, context, stray, outside). parts: label -> list of {raw, value, extra}."""
+    parts, context = {}, []
+    cur = None          # the section being filled: ("part", label, rec) or ("ctx", rec)
+    stray, outside = [], 0
+    for l in lines:
+        if l.strip() == "---":
+            cur = None
+            continue
+        m = BOLD.match(l)
+        if m:
+            lab, rest = norm_label(m.group(1), m.group(2))
+            rec = {"label_line": l, "value_lines": [rest.strip()] if rest.strip() else [], "raw_lines": [l]}
+            if lab in CANON:
+                parts.setdefault(lab, []).append(rec)
+                cur = rec
+            else:
+                context.append(rec)
+                cur = rec
+            continue
+        if cur is None:
+            if l.strip():
+                outside += 1
+            continue
+        w = WORDLINE.match(l)
+        if w and not OPTION.match(l):
+            stray.append(w.group(1))
+        cur["value_lines"].append(l)
+        cur["raw_lines"].append(l)
+    return parts, context, stray, outside
+
+
+def value_of(rec):
+    return "\n".join(rec["value_lines"]).strip()
+
+
+def parse_options(rec):
+    opts, bad = [], []
+    for l in rec["value_lines"]:
+        m = OPTION.match(l)
+        if m:
+            opts.append([int(m.group(1)), m.group(2).rstrip()])
+        elif opts and l.strip():
+            opts[-1][1] += "\n" + l.rstrip()
+    out, marks, twice, bare, nears, unclosed = [], [], [], [], [], []
+    for n, t in opts:
+        # The marker is the exact token [RECOMMENDED] (an optional final period) ending a line of
+        # the option, outside a code fence. Anything else is text: the bare word, and the near
+        # forms a seat might write (lowercase, spaces inside the brackets, a trailing colon, the
+        # token at the start of a line or mid-line, in backticks). A near form draws a NOTE
+        # naming the exact form and is never a marker and never a refusal. A token inside a
+        # code fence is an example and draws nothing.
+        lines, hits, fence, near = t.split("\n"), 0, None, []
+        for i, line in enumerate(lines):
+            if fence is None:
+                fm = FENCE_OPEN.match(line)
+                if fm:
+                    fence = fm.group(1)
+                    continue
+            else:
+                cm = FENCE_CLOSE.match(line)
+                if cm and cm.group(1)[0] == fence[0] and len(cm.group(1)) >= len(fence):
+                    fence = None
+                continue
+            mk = re.search(r"\s*\[RECOMMENDED\]\.?\s*$", line)
+            if mk:
+                hits += 1
+                lines[i] = line[:mk.start()].rstrip()
+            elif re.search(r"\brecommended\.?\s*$", line, re.I) and not re.search(r"\[\s*recommended\s*\]|\*\*\s*recommended", line, re.I):
+                bare.append(n)
+            else:
+                for nm in re.finditer(r"`?\[\s*recommended\s*\]:?`?|\*\*\s*recommended\s*\.?\s*\*\*", line, re.I):
+                    near.append(nm.group(0))
+        if fence is not None:
+            unclosed.append(n)
+        for form in near:
+            nears.append((n, form))
+        if hits:
+            marks.append(n)
+        if hits > 1:
+            twice.append((n, hits))
+        out.append((n, "\n".join(lines).rstrip()))
+    return out, marks, twice, bare, nears, unclosed
+
+
+def snapshot_state(today_iso):
+    """(snapshot dict or None, problem or None). A snapshot is usable when fresh, readable, with ids."""
+    unread = "no Desk snapshot read in the last 24 hours; UNREAD"
+    try:
+        with open(SNAPSHOT) as f:
+            s = json.load(f)
+        read = datetime.datetime.strptime(s["read_at"], "%Y-%m-%dT%H:%M:%SZ")
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, unread
+    cur = datetime.datetime.strptime(today_iso, "%Y-%m-%dT%H:%M:%SZ")
+    age = (cur - read).total_seconds()
+    if age < 0 or age > THRESHOLD_HOURS * 3600:
+        return None, unread
+    if not isinstance(s.get("ids"), dict):
+        return None, "the Desk snapshot holds no card ids (written before card-ingest); run desk-snapshot write again"
+    return s, None
+
+
+def log_slugs():
+    out = {}
+    try:
+        with open(LOG) as f:
+            for l in f:
+                try:
+                    e = json.loads(l)
+                except ValueError:
+                    continue
+                if isinstance(e, dict) and e.get("slug") and e.get("op") in ("set", "update"):
+                    out[e["slug"]] = max(out.get(e["slug"], ""), e.get("at", ""))
+    except OSError:
+        pass
+    return out
+
+
+def check_card(card, pre, kind_default_source, a, snap, logseen, today):
+    """Returns (errors, data or None, notes)."""
+    errs, notes = [], []
+    parts, context, stray, outside = split_parts(card["lines"])
+    head = card["heading"]
+    if head.count("?") > 1:
+        errs.append("the heading asks %d questions; one decision per card" % head.count("?"))
+    sents = re.split(r"(?<=[.!?])\s+", head)
+    question = sents[-1].strip() if sents else ""
+    if not question.endswith("?"):
+        errs.append("the heading holds no question ending in '?'")
+    for w in stray:
+        errs.append("'%s:' is not a card part; a source is written '**Source.** <pointer>'" % w)
+    for lab, recs in parts.items():
+        if len(recs) > 1:
+            errs.append("two %s parts" % lab)
+    one = {lab: recs[0] for lab, recs in parts.items()}
+    for lab in REQUIRED:
+        if lab not in one:
+            msg = "no %s part" % lab
+            if lab == "terms":
+                msg += "; write '**Terms.** None.' when there are none"
+            errs.append(msg)
+        elif not value_of(one[lab]):
+            errs.append("the %s part is empty" % lab)
+    source = value_of(one["source"]) if "source" in one else pre.get("source", "")
+    if "source" in one and not source:
+        errs.append("the source part is empty")
+    elif "source" not in one and not source:
+        errs.append("no source part; add '**Source.** <pointer>' to the card or 'Source: <pointer>' above the first card")
+    kind = value_of(one["kind"]) if "kind" in one else pre.get("kind", "choice")
+    kind = kind.strip().lower().rstrip(".") if kind else "choice"
+    if kind not in ("choice", "action"):
+        errs.append("kind '%s' is neither choice nor action" % kind)
+    opts, marks = ([], [])
+    if "options" in one and value_of(one["options"]):
+        opts, marks, twice, bare, nears, unclosed = parse_options(one["options"])
+        for n in unclosed:
+            errs.append("option %d ends inside an open code fence; close it with a line of just the fence token before the next option" % n)
+        for n, form in nears:
+            notes.append("option %d has '%s' in its text, which is not the marker; it is read as text. The marker is [RECOMMENDED] ending a line of the option, outside a code fence" % (n, form))
+        for n in bare:
+            notes.append("option %d ends a line in the word RECOMMENDED without brackets; it is read as text. Write [RECOMMENDED] to mark the option" % n)
+        for n, hits in twice:
+            errs.append("option %d carries RECOMMENDED on %d lines" % (n, hits))
+        nums = [n for n, _ in opts]
+        if nums != list(range(1, len(nums) + 1)):
+            errs.append("options are numbered %s; number them 1 to n with no gap" % ", ".join(str(n) for n in nums))
+        need = 1 if kind == "action" else 2
+        if kind in ("choice", "action") and len(opts) < need:
+            errs.append("%s %s card needs at least %s option%s; found %d" % ("an" if kind == "action" else "a", kind, "two" if need == 2 else "one", "s" if need == 2 else "", len(opts)))
+        if len(marks) > 1:
+            errs.append("RECOMMENDED marks %d options" % len(marks))
+        for n, t in opts:
+            if not re.search(r"\bcosts?\b", t, re.I):
+                notes.append("option %d says nothing about its cost" % n)
+    rec = value_of(one["recommendation"]) if "recommendation" in one else ""
+    if rec:
+        first = re.split(r"(?<=[.!?])\s", rec, maxsplit=1)[0]
+        named = sorted({int(x) for x in re.findall(r"\boption\s+(\d+)", first, re.I)})
+        if not named:
+            errs.append("the recommendation's first sentence names no option ('Option N')")
+        elif len(named) > 1:
+            errs.append("the recommendation names options %s; recommend one" % " and ".join(str(n) for n in named))
+        else:
+            if opts and named[0] not in [n for n, _ in opts]:
+                errs.append("the recommendation names option %d; the card has %d" % (named[0], len(opts)))
+            if len(marks) == 1 and marks[0] != named[0]:
+                errs.append("RECOMMENDED marks option %d and the recommendation names option %d" % (marks[0], named[0]))
+    expiry = value_of(one["valid until"]) if "valid until" in one else ""
+    if expiry:
+        m = re.match(r"^(\d{4}-\d{2}-\d{2})", expiry)
+        if not m:
+            errs.append("Valid until does not start with a date (YYYY-MM-DD); an event alone may never arrive, so it is not an expiry")
+        else:
+            try:
+                d = datetime.date.fromisoformat(m.group(1))
+            except ValueError:
+                d = None
+                errs.append("%s is not a calendar date" % m.group(1))
+            em = EXPIRY.match(expiry)
+            if d is not None and d < datetime.date.fromisoformat(today[:10]):
+                errs.append("%s is before today (%s); re-check the recommendation and renew it before posting" % (m.group(1), today[:10]))
+            if d is not None:
+                if not em:
+                    errs.append("after the date, write '.' or ', or until <event>, whichever comes first'")
+                else:
+                    tail = em.group(3) or ""
+                    if not re.search(r"\S.*\bre-checks?\b", tail):
+                        errs.append("Valid until names nobody who re-checks it; write 'The <role> re-checks it then.'")
+    for label, text in (("recommendation", rec), ("expiry", expiry)):
+        low = text.lower()
+        for ph in SILENCE:
+            if ph in low:
+                errs.append("'%s' reads as an action on silence; an expiry is the recommendation's sell-by date, and nothing executes on it" % ph)
+    if outside:
+        notes.append("%d lines outside any part were not read" % outside)
+    num = card["num"]
+    if a.prefix and PREFIX.match(a.prefix):
+        slug = "%s-%d" % (a.prefix, num) if num is not None else a.prefix
+    else:
+        slug = None
+    if slug and snap is not None:
+        st = snap["ids"].get(slug)
+        if a.update:
+            if st is None:
+                errs.append("slug %s is not on the Desk; --update revises an open card, and a new card is ingested without it" % slug)
+            elif st != "open":
+                errs.append("slug %s is on the Desk with status %s; a ruled card is never rewritten. Ingest it under a new prefix whose source names %s" % (slug, st, slug))
+            elif "answered" not in snap:
+                errs.append("the Desk snapshot holds no answers read, so %s cannot be shown unanswered; run desk-snapshot write with --answers" % slug)
+            elif slug in snap["answered"]:
+                errs.append("%s has an answer on the Desk; a card the operator has started answering is not rewritten under them. Ingest it under a new prefix" % slug)
+        else:
+            if st is not None:
+                errs.append("slug %s is on the Desk (status %s, snapshot %s); pass --update to revise an open card" % (slug, st, snap["read_at"]))
+            elif slug in logseen and logseen[slug] > snap["read_at"]:
+                errs.append("slug %s was emitted at %s; read the Desk and run desk-snapshot write first" % (slug, logseen[slug]))
+    if errs:
+        return errs, None, notes
+    ctx = []
+    for lab in ("in short", "problem", "terms"):
+        ctx.append("\n".join(one[lab]["raw_lines"]).rstrip())
+    for rec_ in context:
+        ctx.append("\n".join(rec_["raw_lines"]).rstrip())
+    data = {"title": head, "question": question, "context": "\n\n".join(ctx),
+            "options": [{"key": str(n), "text": t} for n, t in opts],
+            "rec": rec, "expiry": expiry, "source": source, "kind": kind}
+    return [], {"slug": slug, "num": num, "data": data}, notes
+
+
+def atomic_write(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".card-ingest.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(obj, f, indent=1)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def cmd_parse(a):
+    try:
+        with open(a.file, "rb") as f:
+            raw = f.read()
+    except OSError as err:
+        raise Refused(f"cannot read {a.file}: {err.strerror}")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused(f"{a.file} is not valid UTF-8")
+    today = now()
+    fname = a.file
+    problems = []  # (card label or None, reason)
+    if not PREFIX.match(a.prefix or ""):
+        problems.append((None, "the prefix '%s' is not 3 to 48 characters of a-z, 0-9 and '-'" % a.prefix))
+    pre, cards, skipped, ferrs = parse_file(text)
+    for e in ferrs:
+        problems.append((None, e))
+    nums = [c["num"] for c in cards if c["num"] is not None]
+    if cards and nums and len(nums) != len(cards):
+        problems.append((None, "the file has both 'Card:' and 'Card N.' headings; use one form"))
+    elif cards and not nums and len(cards) > 1:
+        problems.append((None, "two 'Card:' headings; number the cards 'Card 1.', 'Card 2.'"))
+    for n in sorted(set(nums)):
+        if nums.count(n) > 1:
+            problems.append((None, "two cards number %d" % n))
+    snap, sproblem = snapshot_state(today)
+    if sproblem:
+        problems.append((None, sproblem))
+    logseen = log_slugs()
+    writes, notes = [], []
+    for c in cards:
+        errs, w, ns = check_card(c, pre, None, a, snap, logseen, today)
+        label = c["num"] if c["num"] is not None else c["ordinal"]
+        for e in errs:
+            problems.append((label, e))
+        for n in ns:
+            notes.append("card %s: %s" % (label, n))
+        if w:
+            writes.append(w)
+    if problems:
+        for label, reason in problems:
+            where = f"{fname}: card {label}: " if label is not None else f"{fname}: "
+            print(f"card-ingest: refused: {where}{reason}", file=sys.stderr)
+        raise SystemExit(1)
+    file_sha = hashlib.sha256(raw).hexdigest()
+    batch = {"made_at": today, "file_sha256": file_sha, "writes": []}
+    lines = []
+    for w in writes:
+        data = dict(w["data"])
+        if a.update:
+            op = "update"
+        else:
+            op = "set"
+            data.update({"area": a.area, "owner": a.owner, "status": "open", "ruling": "", "opened": today})
+        batch["writes"].append({"op": op, "collection": "decisions", "doc_id": w["slug"], "data": data})
+        dsha = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        lines.append({"at": today, "slug": w["slug"], "op": op, "data_sha256": dsha, "file_sha256": file_sha, "card": w["num"] if w["num"] is not None else 1})
+    path = os.path.join(BATCHDIR, f"{a.prefix}-{file_sha[:8]}.json")
+    os.makedirs(STATE, exist_ok=True)
+    with open(LOCK, "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        atomic_write(path, batch)
+        try:
+            size = os.path.getsize(LOG) if os.path.exists(LOG) else 0
+            with open(LOG, "a") as f:
+                for e in lines:
+                    f.write(json.dumps(e, ensure_ascii=False) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except OSError as err:
+            # The batch and its log lines go together: no batch is left without them, and
+            # no line of a partial append is left without its batch.
+            for undo in (lambda: os.unlink(path), lambda: os.truncate(LOG, size)):
+                try:
+                    undo()
+                except OSError:
+                    pass
+            raise Refused(f"cannot append to the log {LOG}: {err.strerror}; no batch was written")
+    if skipped:
+        print(f"card-ingest: skipped {skipped} preamble lines that are not Source: or Kind: lines")
+    for n in notes:
+        print(f"NOTE {n}")
+    print(f"card-ingest: batch {path}")
+    for w in batch["writes"]:
+        print(f"card-ingest: {w['op']} {w['doc_id']}")
+
+
+def cmd_check(a):
+    try:
+        with open(a.batch) as f:
+            batch = json.load(f)
+        with open(a.read) as f:
+            rd = json.load(f)
+    except (OSError, ValueError) as err:
+        raise Refused(f"cannot read the batch or the read file: {err}")
+    docs = {}
+    items = rd.items() if isinstance(rd, dict) else [(r.get("id", r.get("doc_id")), r) for r in rd if isinstance(r, dict)]
+    for k, v in items:
+        if isinstance(v, dict):
+            docs[k] = v.get("data") if isinstance(v.get("data"), dict) else v
+    bad = 0
+    for w in batch["writes"]:
+        slug = w["doc_id"]
+        doc = docs.get(slug)
+        if doc is None:
+            print(f"MISSING {slug}")
+            bad += 1
+            continue
+        fields = CONTENT_FIELDS if w["op"] == "update" else sorted(w["data"])
+        diffs = [fl for fl in fields if doc.get(fl) != w["data"].get(fl)]
+        if diffs:
+            bad += 1
+            for fl in diffs:
+                print(f"MISMATCH {slug} {fl}")
+        else:
+            print(f"PASS {slug}")
+    os.makedirs(STATE, exist_ok=True)
+    with open(LOCK, "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        with open(LOG, "a") as f:
+            f.write(json.dumps({"at": now(), "checked": True, "batch": os.path.basename(a.batch), "slugs": [w["doc_id"] for w in batch["writes"]], "failed": bad}) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+    if bad:
+        raise SystemExit(1)
+
+
+def main(argv):
+    p = argparse.ArgumentParser(prog="card-ingest")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    w = sub.add_parser("parse")
+    w.add_argument("file")
+    w.add_argument("--area", required=True)
+    w.add_argument("--owner", required=True)
+    w.add_argument("--prefix", required=True)
+    w.add_argument("--update", action="store_true")
+    w.set_defaults(fn=cmd_parse)
+    c = sub.add_parser("check")
+    c.add_argument("--batch", required=True)
+    c.add_argument("--read", required=True)
+    c.set_defaults(fn=cmd_check)
+    a = p.parse_args(argv)
+    try:
+        a.fn(a)
+    except Refused as err:
+        print(f"card-ingest: refused: {err}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

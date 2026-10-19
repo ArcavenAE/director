@@ -110,9 +110,49 @@ and the rest) is a context section, kept in file order. A part runs until the
 next bold label, card heading, or a `---` line.
 
 **Options.** Inside the options part, a line `N. ` at column 0 starts option
-N. Indented lines and sub-bullets continue it, with line breaks kept. A
-trailing `RECOMMENDED` or `RECOMMENDED.` on an option's first line is a
-marker; it is removed from the text and checked against the recommendation.
+N. Indented lines and sub-bullets continue it, with line breaks kept. The
+marker is the exact token `[RECOMMENDED]` (a final period is allowed) ending a
+line of the option: its first line, a middle line or its last, outside a code
+fence. It is removed from the text and checked against the recommendation, and
+a marker on two lines of one option is refused. Everything else is text, never
+a marker and never a refusal, and the Desk text keeps what the seat wrote:
+
+- the bare word, as in "and this is not RECOMMENDED";
+- a near form of the token: lowercase `[recommended]`, spaces inside the
+  brackets `[ RECOMMENDED ]`, a trailing colon `[RECOMMENDED]:`, the token at
+  the start of a line or in the middle of one, the token in backticks, and the
+  bold spellings `**RECOMMENDED**` and `**Recommended.**`.
+  These draw a NOTE that names the exact form ("is not the marker; it is read
+  as text. The marker is [RECOMMENDED] ending a line of the option, outside a
+  code fence"), so a seat that meant the marker sees why it did not count. The
+  bare word at a line end, in any case ("Recommended."), draws a NOTE too, including on ordinary prose that happens to end a line with it; that is known, and it is only a NOTE. They are not refused, because a
+  card that says "recommended" in its own words is a well-formed card;
+- a token inside a code fence, which is an example and draws nothing. A fence
+  line is three or more backticks or tildes, then an optional info string (after
+  a backtick fence the info string holds no backtick, so a line that starts with
+  inline code such as ```` ```x``` ```` is not a fence). Any leading whitespace
+  is allowed before a fence line (0, 3, 4 or 8 spaces all count), and a closer
+  may carry trailing spaces. This is wider than CommonMark, where four spaces
+  make an indented code block and not a fence. The width is deliberate: option
+  text is indented continuation (sub-bullets, a fence nested under a list
+  item), so a three-space limit would read a nested fence as plain text and
+  take the token inside it as the marker, which is the silent wrong read this
+  rule exists to prevent. The cost of being wide is a line of indented code that
+  looks like a fence and opens one; an option that then ends inside it is
+  refused loudly, never read silently. A closer is a line of
+  only the same character, at least as long as the opener. Fence state resets at
+  every option boundary, so a fence opened in option 1 cannot swallow the marker
+  of option 2. An option that ends inside an open fence is refused (table in
+  section 5), because a silent read would drop the marker of the next option
+  without a trace. `~~~` is a fence, as in CommonMark.
+
+(The first build read the bare word at the end of the first line; a review
+showed prose can end in it, so the marker needs a form prose cannot take.
+Measured: of the eight real cards, one used a marker, a trailing
+`RECOMMENDED.`, so this form costs one line fix. Review round 4 asked what
+happens to forms near the token; the answer above is NOTE and text, because a
+refusal would block a card over a spelling and a silent read would leave the
+seat believing the option was marked.)
 
 **Recommendation.** Its first sentence must name one option as `Option N`
 (any case), and N must exist.
@@ -198,6 +238,8 @@ so a seat fixes them in one pass. Each line reads
 | names two | `the recommendation names options 1 and 2; recommend one` |
 | marker disagrees | `RECOMMENDED marks option 1 and the recommendation names option 2` |
 | two markers | `RECOMMENDED marks 2 options` |
+| marker twice on one option | `option 1 carries RECOMMENDED on 2 lines` |
+| option ends inside an open fence | `option 1 ends inside an open code fence; close it with a line of just the fence token before the next option` |
 | expiry not a date first | `Valid until does not start with a date (YYYY-MM-DD); an event alone may never arrive, so it is not an expiry` |
 | not a calendar date | `2026-02-30 is not a calendar date` |
 | date already passed | `2026-10-01 is before today (2026-10-19); re-check the recommendation and renew it before posting` |
@@ -314,7 +356,8 @@ file and no log line appeared):
 - positive control: a valid two-card file with a fresh snapshot gives two
   `set` writes with every Desk field, slugs `P-1` and `P-2`, `opened` equal to
   `DWS_NOW`, and two log lines;
-- accepted: `**Problem.**`, `**Recommendation:**`, an agreeing `RECOMMENDED`,
+- accepted: `**Problem.**`, `**Recommendation:**`, an agreeing `[RECOMMENDED]` on the first, a middle and the last line of an option, a bare
+  `RECOMMENDED` in prose read as text,
   the event clause with and without an aside, `**Terms.** None.`, a preamble
   `Source:` for every card, preamble prose skipped and counted;
 - refused, one case each: no card heading; no `?`; two questions; each of the
@@ -342,7 +385,7 @@ answers file whose count differs from `--answers-reported` is refused.
 Under (b) each fix is one or two lines by the seat that wrote the file. The
 six-card file: a preamble `Source:` line (the request id it names in prose)
 and a Terms part on card 1. The rule-loading card: a `Source:` line. The
-build-target card: `Pointer:` renamed `**Source.**`, and a Terms part.
+build-target card: `Pointer:` renamed `**Source.**`, a Terms part, and its trailing `RECOMMENDED.` written `[RECOMMENDED]`.
 
 ## 10. Candidate requirements (provisional tags)
 
