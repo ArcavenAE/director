@@ -152,12 +152,12 @@ def parse_options(rec):
             opts[-1][1] += "\n" + l.rstrip()
     out, marks = [], []
     for n, t in opts:
-        first, _, rest = t.partition("\n")
-        mk = re.search(r"\s*\bRECOMMENDED\.?\s*$", first)
+        # The marker is read at the end of the option's whole text, wrapped or not.
+        mk = re.search(r"\s*\bRECOMMENDED\.?\s*$", t)
         if mk:
             marks.append(n)
-            first = first[:mk.start()].rstrip()
-        out.append((n, first + ("\n" + rest if rest else "")))
+            t = t[:mk.start()].rstrip()
+        out.append((n, t))
     return out, marks
 
 
@@ -237,7 +237,7 @@ def check_card(card, pre, kind_default_source, a, snap, logseen, today):
             errs.append("options are numbered %s; number them 1 to n with no gap" % ", ".join(str(n) for n in nums))
         need = 1 if kind == "action" else 2
         if kind in ("choice", "action") and len(opts) < need:
-            errs.append("a %s card needs at least %s option%s; found %d" % (kind, "two" if need == 2 else "one", "s" if need == 2 else "", len(opts)))
+            errs.append("%s %s card needs at least %s option%s; found %d" % ("an" if kind == "action" else "a", kind, "two" if need == 2 else "one", "s" if need == 2 else "", len(opts)))
         if len(marks) > 1:
             errs.append("RECOMMENDED marks %d options" % len(marks))
         for n, t in opts:
@@ -397,11 +397,19 @@ def cmd_parse(a):
     with open(LOCK, "a") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         atomic_write(path, batch)
-        with open(LOG, "a") as f:
-            for e in lines:
-                f.write(json.dumps(e, ensure_ascii=False) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
+        try:
+            with open(LOG, "a") as f:
+                for e in lines:
+                    f.write(json.dumps(e, ensure_ascii=False) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except OSError as err:
+            # The batch and its log lines go together: no batch is left without them.
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise Refused(f"cannot append to the log {LOG}: {err.strerror}; no batch was written")
     if skipped:
         print(f"card-ingest: skipped {skipped} preamble lines that are not Source: or Kind: lines")
     for n in notes:
