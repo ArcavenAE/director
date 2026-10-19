@@ -249,14 +249,30 @@ withdraw or supersede a held ask, the finding-024 case.
 **Release after the watch turns on.** A restart or a turn-on is a gap, never
 a transition (D3), so a unit that is already present when the watch starts has
 no back event. For release only, the first sighting of a unit after a gap
-counts as back: present on the first two passes after the gap. Then every
-`held` record for it is released within its `sell_by`, as below. Without this,
-a record held before a restart for a cluster that never leaves again would
-wait until `sell_by` and be proposed, not sent. The event file still records
-`present after the gap`, not a return, so no false transition is reported.
-Test: `TestHeldReleasedOnFirstSightingAfterTurnOn` (hold with the watch on;
-stop the shim; the cluster stays present; start the shim; two passes; one
-stream message), with the control `TestFirstSightingIsNotReportedAsBack`.
+counts as back once the unit shows a fresh heartbeat: its row's `ts`
+(`global.go:778`) is later on a following pass than on the first pass after
+the gap. A row that merely exists is not enough. A supervisor that crashed
+just before turn-on leaves its row inside the TTL for up to 90s (section 2),
+and a release to it would sit unread on the hub stream for up to 72h
+(`global.go:48-56`). A `ts` that has not moved by the fourth pass after the gap
+leaves the unit unconfirmed, and its row then expires into absent as usual.
+Once the heartbeat is fresh, every `held` record for the unit is released
+within its `sell_by`, as below. Without this rule, a record held before a
+restart for a cluster that never leaves again would wait until `sell_by` and
+be proposed, not sent. The event file still records `present after the gap`,
+not a return, so no false transition is reported.
+
+Tests:
+- `TestHeldReleasedOnFirstSightingAfterTurnOn`: hold with the watch on, stop
+  the shim, keep the cluster's row beating, start the shim, run the passes,
+  and see one stream message.
+- `TestNoReleaseToStaleRowAfterTurnOn`: the same, but the row stops beating
+  before the restart and stays inside the TTL; no stream message, the record
+  stays `held`, and the unit reads absent once the row expires.
+- `TestFirstSightingIsNotReportedAsBack`: after the restart, the event file
+  holds exactly one `present after the gap` line for the unit and no
+  `back` line, and `presence_notice` reports no return. This fails on main,
+  where no event file exists.
 
 **Release.** On each tick after a unit goes back, the shim re-runs the normal
 `publish` for each `held` record addressed to it, oldest first. So the R-92
