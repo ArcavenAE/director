@@ -152,12 +152,14 @@ fi
 # --- accepted spellings ------------------------------------------------------
 sub "$root/a1.md" '**The problem.**' '**Problem.**'; accepts "accepts **Problem.** for the problem part" "$root/a1.md"
 sub "$root/a2.md" '**Recommendation.**' '**Recommendation:**'; accepts "accepts **Recommendation:**" "$root/a2.md"
-sub "$root/a3.md" '2. *Move to 07:00.*' '2. *Move to 07:00.* RECOMMENDED.'; accepts "accepts an agreeing RECOMMENDED marker on the recommended option" "$root/a3.md"
-python3 - "$root/a3.md" <<'P'
-import sys
-t = open(sys.argv[1]).read()
-open(sys.argv[1], "w").write(t.replace("RECOMMENDED. ", "RECOMMENDED"))
+sub "$root/a3.md" 'The cost is a later report.' 'The cost is a later report. RECOMMENDED.'
+clean_state
+if run "$root/a3.md" >/dev/null 2>"$root/err" && python3 - "$(batch_json)" <<'P'
+import json, sys
+o = json.load(open(sys.argv[1]))["writes"][0]["data"]["options"]
+assert o[1]["text"].endswith("The cost is a later report."), o
 P
+then ok "accepts an agreeing RECOMMENDED marker, and removes it from the option text"; else bad "accepts an agreeing RECOMMENDED marker" "$(cat "$root/err")"; fi
 sub "$root/a4.md" '2026-11-02. The reporting' '2026-11-02, or until the schedule change merges, whichever comes first. The reporting'; accepts "accepts the event clause" "$root/a4.md"
 sub "$root/a5.md" '2026-11-02. The reporting' '2026-11-02 (the schedule review), or until the schedule change merges, whichever comes first. The reporting'; accepts "accepts the event clause with an aside after the date" "$root/a5.md"
 sub "$root/a6.md" '2026-11-02. The reporting' '2026-11-02 (a Monday). The reporting'; accepts "accepts an aside after a plain date" "$root/a6.md"
@@ -259,10 +261,10 @@ sub "$root/r.md" '**Terms.** None.' $'**Terms.** None.\n\n**Kind.** maybe'; refu
 sub "$root/r.md" 'Option 2. Complete' 'Complete'; refuses "refuses a recommendation naming no option" "$root/r.md" "names no option"
 sub "$root/r.md" 'Option 2. Complete' 'Option 5. Complete'; refuses "refuses a recommendation naming a missing option" "$root/r.md" "names option 5; the card has 2"
 sub "$root/r.md" 'Option 2. Complete' 'Option 1 or Option 2. Complete'; refuses "refuses a recommendation naming two options" "$root/r.md" "names options 1 and 2; recommend one"
-sub "$root/r.md" '1. *Keep 06:00.*' '1. *Keep 06:00.* RECOMMENDED.'; refuses "refuses a RECOMMENDED marker that disagrees with the recommendation" "$root/r.md" "RECOMMENDED marks option 1 and the recommendation names option 2"
+sub "$root/r.md" 'The cost is a report short of late data.' 'The cost is a report short of late data. RECOMMENDED.'; refuses "refuses a RECOMMENDED marker that disagrees with the recommendation" "$root/r.md" "RECOMMENDED marks option 1 and the recommendation names option 2"
 python3 - "$BASE" "$root/r.md" <<'P'
 import sys
-t = open(sys.argv[1]).read().replace("1. *Keep 06:00.*", "1. *Keep 06:00.* RECOMMENDED.").replace("2. *Move to 07:00.*", "2. *Move to 07:00.* RECOMMENDED.")
+t = open(sys.argv[1]).read().replace("short of late data.", "short of late data. RECOMMENDED.").replace("a later report.", "a later report. RECOMMENDED.")
 open(sys.argv[2], "w").write(t)
 P
 refuses "refuses two RECOMMENDED markers" "$root/r.md" "RECOMMENDED marks 2 options"
@@ -346,9 +348,14 @@ refuses "refuses with no snapshot, as UNREAD" "$BASE" "UNREAD"
 cp "$root/snap.keep" "$DIRECTOR_STATE/desk-snapshot.json"
 DWS_NOW="2026-10-18T11:00:00Z" "$SNAP" write --cards "$root/cards.json" --reported 5 --answers "$root/answers.json" --answers-reported 1 >/dev/null
 refuses "refuses a snapshot read 25 hours ago, as UNREAD" "$BASE" "no Desk snapshot read in the last 24 hours; UNREAD"
+write_snapshot
 python3 - "$DIRECTOR_STATE/desk-snapshot.json" <<'P'
 import json, sys
-s = json.load(open(sys.argv[1])); s.pop("ids"); json.dump(s, open(sys.argv[1], "w"))
+with open(sys.argv[1]) as f:
+    s = json.load(f)
+s.pop("ids")
+with open(sys.argv[1], "w") as f:
+    json.dump(s, f)
 P
 refuses "refuses a snapshot with no ids (written before this tool), asking for a fresh one" "$BASE" "desk-snapshot write"
 write_snapshot
