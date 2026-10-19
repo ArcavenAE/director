@@ -125,12 +125,21 @@ a marker and never a refusal, and the Desk text keeps what the seat wrote:
   These draw a NOTE that names the exact form ("is not the marker; it is read
   as text. The marker is [RECOMMENDED] ending a line of the option, outside a
   code fence"), so a seat that meant the marker sees why it did not count. The
-  bare word at a line end, in any case ("Recommended."), draws a NOTE too. They are not refused, because a
+  bare word at a line end, in any case ("Recommended."), draws a NOTE too, including on ordinary prose that happens to end a line with it; that is known, and it is only a NOTE. They are not refused, because a
   card that says "recommended" in its own words is a well-formed card;
 - a token inside a code fence, which is an example and draws nothing. A fence
   line is three or more backticks or tildes, then an optional info string (after
   a backtick fence the info string holds no backtick, so a line that starts with
-  inline code such as ```` ```x``` ```` is not a fence). A closer is a line of
+  inline code such as ```` ```x``` ```` is not a fence). Any leading whitespace
+  is allowed before a fence line (0, 3, 4 or 8 spaces all count), and a closer
+  may carry trailing spaces. This is wider than CommonMark, where four spaces
+  make an indented code block and not a fence. The width is deliberate: option
+  text is indented continuation (sub-bullets, a fence nested under a list
+  item), so a three-space limit would read a nested fence as plain text and
+  take the token inside it as the marker, which is the silent wrong read this
+  rule exists to prevent. The cost of being wide is a line of indented code that
+  looks like a fence and opens one; an option that then ends inside it is
+  refused loudly, never read silently. A closer is a line of
   only the same character, at least as long as the opener. Fence state resets at
   every option boundary, so a fence opened in option 1 cannot swallow the marker
   of option 2. An option that ends inside an open fence is refused (table in
