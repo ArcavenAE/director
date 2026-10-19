@@ -41,6 +41,24 @@ func TestWatchGapIsNotATransition(t *testing.T) {
 		t.Fatalf("status = %q, want present", w.Unit("c1/a").Status)
 	}
 
+	// a new instance first sighted on the gap pass, with its cluster absent before
+	// the gap, reads the same as the old instance returning: the cluster is
+	// present after the gap, and neither the instance nor the cluster reports
+	// back, now or on the next pass (design D3, "never infers that a cluster left
+	// and returned inside a gap"). The control is the old instance, above.
+	w, c = absentUnit(t)
+	ev = c.skip(w, 10*time.Minute, 10*time.Minute, supRow("c1", "i2"))
+	next := pass(w, c, supRow("c1", "i2"))
+	if !has(ev, "c1/i2", "present-after-gap") || !has(ev, "c1", "present-after-gap") {
+		t.Fatalf("a new instance on the gap pass should read present-after-gap for itself and its cluster, got %+v", ev)
+	}
+	if count(ev, "back")+count(next, "back") != 0 || len(next) != 0 {
+		t.Fatalf("no back may follow, got gap pass %+v then %+v", ev, next)
+	}
+	if n := len(w.Unit("c1").Transitions); n != 1 {
+		t.Fatalf("the cluster has %d transitions, want only its one absent", n)
+	}
+
 	// absent before the gap, still unseen after it: reported as absent before the gap, once.
 	w, c = absentUnit(t)
 	ev = c.skip(w, 10*time.Minute, 10*time.Minute)

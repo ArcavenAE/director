@@ -46,8 +46,9 @@ func TestWatchStateSurvivesRestart(t *testing.T) {
 	// the reloaded watch carries on: the absent unit comes back after two sightings.
 	ev := c.skip(got, 40*time.Second, 5*time.Second, supRow("c1", "a"))
 	ev = append(ev, pass(got, c, supRow("c1", "a"))...)
-	if got.Unit("c1/a").Status != unitPresent || (!has(ev, "c1/a", "present-after-gap") && !has(ev, "c1/a", "back")) {
-		t.Fatalf("a reloaded absent unit should be present again, got %+v", ev)
+	// the first pass after a restart is a gap: present after it, never back.
+	if got.Unit("c1/a").Status != unitPresent || !has(ev, "c1/a", "present-after-gap") || count(ev, "back") != 0 {
+		t.Fatalf("a reloaded absent unit should read present-after-gap and not back, got %+v", ev)
 	}
 	// a fresh dir is a fresh watch.
 	fresh, err := newWatchStore(t.TempDir()).Load(defaultWatchThresholds())
