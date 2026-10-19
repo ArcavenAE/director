@@ -307,8 +307,11 @@ count, so they share the unread reader and its field names.
 1. **No write, by state.** Run `look` against a broker seeded with a GATE
    whose body says "merge this". Afterwards:
    - each durable's delivered sequence, ack floor, ack-pending count,
-     pending count and redelivered count, and the consumer list, are
+     `num_pending` and redelivered count, and the consumer list, are
      unchanged;
+   - the stream's message count, first and last sequence, and the seeded
+     messages themselves, read back by sequence, are unchanged, so nothing
+     was deleted or purged;
    - nothing was published.
 2. **Only the allowlist, by the broker.** An embedded test server holds two
    streams shaped like `AGENT_INBOX` and `GLOBAL_TO_DIRECTOR`, with mail for
@@ -337,7 +340,16 @@ count, so they share the unread reader and its field names.
    - The script arguments are byte-identical to the fixed string above.
    - Every field text appears only after `--`, as a literal argument.
    - Run once against the real `osascript`, with `display notification`
-     replaced by `return`: the canary file does not exist afterwards.
+     replaced by `return`: the canary file does not exist afterwards. This
+     step needs macOS and runs only on a developer's host; CI skips it and
+     says so in the test output. The stub steps run everywhere.
+4b. **Only classes, counts and ages reach the poster's argv.** A fixture
+   inbox holds a gate and an overdue request whose subject, sender id, body
+   and stage word each carry a distinct canary string. `look` then the
+   poster run end to end, with the recording stub for `osascript`. No canary
+   appears anywhere in the recorded argv, and the notification text matches
+   the allowed shape: a class word, a count and an age. The test fails if a
+   later change lets any field written by a seat reach the notification.
 5. **A failure is a line.** With the broker down, the digest has a reader
    line naming the failure, and the counts are not shown as zero.
 6. **Notify on change only.** Two runs with the same mail post one
