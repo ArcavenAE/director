@@ -234,18 +234,43 @@ call moves there.
 
 **The rate this sets.** The page has no timer. It is rendered when director
 edits `board.md` and runs `board-html` (SKILL.md, sweep step 5), and after
-every `dws` write while `board.html` exists (`dws:386-396`). So the
-source-only refresh runs once per render: at least once per director sweep
-that touches the board or the ledger, and never while no director session
-runs. A row whose source moved between sweeps moves at the next render, not
-at the event.
+every `dws` command that writes, while `board.html` exists: each write path
+calls `rerender()` once when it appended anything (`dws:370`, `:381-382`,
+`:386-396`). So the source-only refresh runs once per render: at least once
+per director sweep that touches the board or the ledger, and never while no
+director session runs. A row whose source moved between sweeps moves at the
+next render, not at the event.
 
-**The slower render, accepted with the ruling.** `board-html` runs the fill
-before it reads, with a 60-second timeout (`board-html:62-68`), so a render
-can wait up to a minute on it. A fill that times out or fails is said on stderr and never
-stops the page; the page then shows the rows as they were. The fill sets
-`DWS_NO_RERENDER=1`, so its own write does not start a second render
-(`dws:386-390`).
+**A burst renders once per command, accepted.** N `dws` commands in a row
+give N renders, one after another, because each command waits for its own
+render. One command that appends many events (a full `dws refresh`) renders
+once. This is accepted, not bounded, for three reasons:
+- the writers are director's own commands during a sweep, a handful at a
+  time, not a stream;
+- every render after the first runs a fill with nothing new to read, and a
+  replay appends nothing (LF-C), so it costs a read and a page write;
+- the fill inside a render sets `DWS_NO_RERENDER=1`, so a render never
+  starts another (`dws:386-390`).
+If bursts become a cost, coalescing renders is a later item, not this one.
+
+**The slower render, and what a slow fill does.** Two timeouts apply, and
+they differ:
+- `board-html` gives its fill 60 seconds (`board-html:62-68`). A fill that
+  fails or times out is said on stderr; the page is still written, with the
+  rows as they were.
+- `dws` gives the whole `board-html` 30 seconds when a write starts the
+  render (`dws:394`). The fill runs inside that, so a fill slower than about
+  30 seconds makes the write-started render fail: `dws` prints "written;
+  board-html re-render failed", the ledger write has already landed, and the
+  page is not rebuilt until the next render.
+- On that timeout, `subprocess.run` kills `board-html` only, not the fill
+  it started (per Python's documented behavior; not run). The fill then
+  finishes on its own, under the ledger lock, and its events land without a
+  render; the next render shows them.
+
+So the cost the ruling accepts: a write may wait up to 30 seconds, and a
+render started by director by hand up to 60, before the page is current. A
+slow fill delays the page; it never loses a ledger write.
 
 **No render loop.** `dws` re-renders after a write when board.html exists
 (dws:379-388). board-html calls refresh with `DWS_NO_RERENDER=1`, and dws
