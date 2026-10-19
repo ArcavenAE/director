@@ -164,11 +164,58 @@ func (w *PresenceWatch) transition(u *watchUnit, name string, now time.Time, ev 
 	}
 }
 
+// maxGaps bounds the gap lists kept in the state file.
+const maxGaps = 100
+
+const (
+	// hostSleepSlack is how far wall time may run ahead of the monotonic clock
+	// between passes before the difference is called a host sleep.
+	hostSleepSlack = 30 * time.Second
+	// passLate is how long after the last pass the next one counts as late: the
+	// presence TTL, as the ask reader's own gap rule has it (askledger.go).
+	passLate = 90 * time.Second
+)
+
+// noteGap records a span the watch did not observe and says whether one began
+// since the last pass. A host sleep is wall time that the monotonic clock did not
+// see (R-209). Otherwise a pass more than 90 seconds after the last, or the first
+// pass of a process that loaded earlier state, is the watch's own downtime. On
+// gaps the run counters reset, so no transition is inferred across the gap.
+func (w *PresenceWatch) noteGap(now time.Time, mono time.Duration, ev *[]watchEvent) bool {
+	if w.LastPass.IsZero() {
+		return false
+	}
+	wall := now.Sub(w.LastPass)
+	var kind string
+	switch {
+	case w.haveMono && wall-(mono-w.lastMono) > hostSleepSlack:
+		kind = "host-sleep"
+		w.Sleeps = append(w.Sleeps, watchGap{From: w.LastPass, To: now})
+		if len(w.Sleeps) > maxGaps {
+			w.Sleeps = w.Sleeps[len(w.Sleeps)-maxGaps:]
+		}
+	case !w.haveMono || wall > passLate:
+		kind = "watch-down"
+		w.Downs = append(w.Downs, watchGap{From: w.LastPass, To: now})
+		if len(w.Downs) > maxGaps {
+			w.Downs = w.Downs[len(w.Downs)-maxGaps:]
+		}
+	default:
+		return false
+	}
+	*ev = append(*ev, watchEvent{At: now, Kind: kind, From: w.LastPass, To: now, Text: fmt.Sprintf("%s %s to %s", kind, w.LastPass.Format(time.RFC3339), now.Format(time.RFC3339))})
+	for _, u := range w.Units {
+		u.SeenRun, u.MissRun = 0, 0
+	}
+	return true
+}
+
 // Observe records one pass at wall time now and monotonic reading mono (the
 // time since the process started, which stops while the host sleeps), and
 // returns the events it produced.
 func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchScan) []watchEvent {
 	var ev []watchEvent
+	gap := w.noteGap(now, mono, &ev)
 	w.LastPass, w.lastMono, w.haveMono = now, mono, true
 
 	if scan.KeysErr {
@@ -229,6 +276,7 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 				u.Unknown = true
 			}
 		case isSeen:
+			isNew := u == nil
 			if u == nil {
 				u = &watchUnit{Kind: "supervisor", Cluster: cl, Instance: inst, Status: unitPresent, Since: now}
 				if c := w.Units[cl]; c != nil && c.Status != unitPresent {
@@ -242,7 +290,13 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 			u.MissRun = 0
 			u.SeenRun++
 			u.LastSeen, u.LastState = now, rec.State
-			if u.Status != unitPresent && u.SeenRun >= 2 {
+			switch {
+			case gap && !isNew:
+				// seen on the first pass after a gap: present after it, as observed
+				// at this end, and never a return.
+				u.Status, u.Since = unitPresent, now
+				ev = append(ev, watchEvent{At: now, Kind: "present-after-gap", Unit: name})
+			case u.Status != unitPresent && u.SeenRun >= 2:
 				from := u.Status
 				u.Status, u.Since = unitPresent, now
 				if from == unitAbsent {
@@ -256,6 +310,8 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 			u.SeenRun = 0
 			u.MissRun++
 			switch {
+			case gap && u.Status == unitAbsent:
+				ev = append(ev, watchEvent{At: now, Kind: "absent-before-gap", Unit: name})
 			case u.Status == unitPresent && u.MissRun >= 2:
 				if asleep, until := asleepUntil(u.LastState); asleep {
 					u.Status, u.Since, u.AsleepUntil = unitAsleep, u.LastSeen, until
@@ -270,7 +326,7 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 			}
 		}
 	}
-	w.deriveClusters(now, &ev)
+	w.deriveClusters(now, gap, &ev)
 	for _, u := range w.Units {
 		if u.Flapping && len(u.Transitions) > 0 && now.Sub(u.Transitions[len(u.Transitions)-1]) >= w.th.FlapQuiet {
 			u.Flapping = false
@@ -281,7 +337,7 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 
 // deriveClusters keeps one unit per cluster from its supervisor instances: present
 // when any instance is, else absent when any instance is, else asleep.
-func (w *PresenceWatch) deriveClusters(now time.Time, ev *[]watchEvent) {
+func (w *PresenceWatch) deriveClusters(now time.Time, gap bool, ev *[]watchEvent) {
 	type agg struct{ present, absent, asleep, unknown, n int }
 	by := map[string]*agg{}
 	var last = map[string]time.Time{}
@@ -340,7 +396,9 @@ func (w *PresenceWatch) deriveClusters(now time.Time, ev *[]watchEvent) {
 		switch status {
 		case unitPresent:
 			u.Since = now
-			if from == unitAbsent {
+			if gap {
+				*ev = append(*ev, watchEvent{At: now, Kind: "present-after-gap", Unit: cl})
+			} else if from == unitAbsent {
 				w.transition(u, cl, now, ev, "back", "")
 			} else {
 				*ev = append(*ev, watchEvent{At: now, Kind: "back", Unit: cl})
@@ -356,7 +414,27 @@ func (w *PresenceWatch) deriveClusters(now time.Time, ev *[]watchEvent) {
 }
 
 // AbsenceDuration is how long the unit has been absent at now, less any host
-// sleep inside that span (R-209).
+// sleep inside that span (R-209). It is zero for a unit that is not absent.
 func (w *PresenceWatch) AbsenceDuration(unit string, now time.Time) time.Duration {
-	return 0
+	u := w.Units[unit]
+	if u == nil || u.Status != unitAbsent {
+		return 0
+	}
+	d := now.Sub(u.Since)
+	for _, g := range w.Sleeps {
+		from, to := g.From, g.To
+		if from.Before(u.Since) {
+			from = u.Since
+		}
+		if to.After(now) {
+			to = now
+		}
+		if to.After(from) {
+			d -= to.Sub(from)
+		}
+	}
+	if d < 0 {
+		d = 0
+	}
+	return d
 }
