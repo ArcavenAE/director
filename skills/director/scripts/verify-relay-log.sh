@@ -94,5 +94,38 @@ if RELAY_LOG="$repo/notes/relay-log.md" "$RL" append --to x --text y >"$root/tr"
 [[ ! -e "$repo/notes/relay-log.md" ]] && ok "and nothing was created there" || bad "and nothing was created there"
 RELAY_LOG="$repo/ign/relay-log.md" "$RL" append --to x --text y >/dev/null 2>&1 && ok "an ignored path in a work tree is accepted" || bad "an ignored path in a work tree is accepted"
 
+# --- --ws: the workstream an entry is about (ledger fill, LF1) ------------------------
+# The id is written by the writer and checked for shape only; the ledger is never opened.
+wsl="$root/ws-log.md"
+RELAY_LOG="$wsl" "$RL" append --to agent://t/ws --ws alpha --ws beta.2 --text "about two rows" >/dev/null 2>&1 \
+  && ok "append accepts --ws, repeated" || bad "append accepts --ws, repeated"
+python3 - "$wsl" <<'P' && ok "the entry carries one **Workstream:** line right after its heading, naming each slug" || bad "the Workstream line sits right after the heading" "$(cat "$wsl")"
+import re, sys
+t = open(sys.argv[1]).read().split("\n")
+assert re.match(r"^## R-1 \(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\) -> agent://t/ws$", t[0]), t[0]
+assert t[1] == "**Workstream:** alpha, beta.2", t[1]
+assert t[2] == "**Text, verbatim:**", t[2]
+P
+RELAY_LOG="$wsl" "$RL" append --to agent://t/ws --text "no ws given" >/dev/null 2>&1
+python3 - "$wsl" <<'P' && ok "an entry written without --ws has no Workstream line" || bad "an entry without --ws has no Workstream line"
+import sys
+t = open(sys.argv[1]).read()
+second = t.split("## R-2 ", 1)[1]
+assert "**Workstream:**" not in second.split("**Outcome:**")[0], second
+P
+n0="$(wc -c <"$wsl" | tr -d ' ')"
+for bad_ws in 'Bad Slug' 'UPPER' '-lead' 'a/b' ''; do
+  if RELAY_LOG="$wsl" "$RL" append --to x --ws "$bad_ws" --text y >"$root/wsout" 2>&1; then bad "--ws '$bad_ws' is refused"; else
+    grep -qi 'ws' "$root/wsout" && ok "--ws '$bad_ws' is refused and says why" || bad "--ws '$bad_ws' refusal names the flag" "$(cat "$root/wsout")"; fi
+done
+[[ "$(wc -c <"$wsl" | tr -d ' ')" == "$n0" ]] && ok "a refused --ws writes nothing" || bad "a refused --ws writes nothing"
+# A **Workstream:** line typed inside the text stays quoted, as a forged heading does.
+RELAY_LOG="$wsl" "$RL" append --to x --text "**Workstream:** victim" >/dev/null 2>&1
+grep -q '^\*\*Workstream:\*\* victim' "$wsl" && bad "a Workstream line typed in the text stays quoted" || ok "a Workstream line typed in the text stays quoted, not a field"
+# An unknown slug is written: relay-log does not read the ledger, and works with no ledger, no dws and a held ledger lock.
+mkdir -p "$root/noledger"
+( export DIRECTOR_STATE="$root/noledger/none"; PATH="/usr/bin:/bin"; RELAY_LOG="$wsl" "$RL" append --to x --ws nosuch --text unknown >/dev/null 2>&1 ) \
+  && grep -q '^\*\*Workstream:\*\* nosuch$' "$wsl" && ok "an unknown slug is written; relay-log needs no ledger" || bad "an unknown slug is written"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
