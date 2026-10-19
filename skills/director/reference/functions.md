@@ -68,6 +68,18 @@ in local or private state.
   within 24 hours (`THRESHOLD_HOURS` in `dws`). With no usable snapshot it
   refuses and says UNREAD; until a session writes one, every operator-blocked
   row is refused. The card goes on the row as an `ask:` link.
+  Enforced (ledger fill, #321): `dws refresh --local` moves rows from the
+  relay log and the Desk snapshot, as `refresh`, appending `observe` events
+  only, each carrying the `src` it consumed, so replaying the same sources
+  writes nothing; it reads no network, holds one lock at a time and
+  reads a relay entry only by an id its writer recorded (`relay-log --ws` or a
+  `relay:R-<n>` link), never from message text. A director `set` moves last
+  moved (R-197). `dws unlinked` lists what the fill could not tie to a row,
+  with each source's last read time or UNREAD, and writes nothing. Honor-only:
+  that director names the stream with `--ws` or links the entry; an entry
+  with neither is listed and moves no row. Not built, awaiting a ruling:
+  clearing an operator block when the linked card closes. Not built, no source
+  file yet: the ask ledger as a source (`msg:` links are typed and wait).
 - **Readers:** the sweep's "Blocked on you" (`dws show --json`, SKILL.md,
   Mode: sweep); `board-html`.
 
@@ -90,7 +102,10 @@ in local or private state.
   SKILL.md, Capture triggers). Enforced: the caller cannot set the time. The
   writer stamps each entry from the clock under one `flock`, its parser has no
   time argument and refuses one, and it refuses a log path that git would
-  track. `verify-relay-log.sh` checks each of these (R-192; K6). Honor-only:
+  track. `--ws <slug>` (repeatable) writes one `**Workstream:**` field line
+  after the heading, checked for shape only, so the entry can move that
+  ledger row (section 2); the ledger is never opened, and a `**Workstream:**`
+  line typed in the text stays quoted and links nothing. `verify-relay-log.sh` checks each of these (R-192; K6). Honor-only:
   calling the writer at all. An entry typed into the file by hand is not
   checked.
 - **Readers:** director, in harvest; `reference/relay.md` cites it.
