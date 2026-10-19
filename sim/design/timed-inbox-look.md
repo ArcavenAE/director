@@ -1,7 +1,9 @@
 # A timed look at director's inbox: read and surface, never act
 
 Status: design for review, 2026-10-19. Owner: the architect role. Docs only;
-no code lands until this is reviewed.
+no code lands until this is reviewed. The three operator decisions in
+section 6 were ruled on 2026-10-19; section 6 records them, and section 3.4
+carries the rulings and the operator's added request (3.4.1).
 
 - Commission: the operator's queue, item B4: "a timed inbox drain for
   director. Today director drains only when the operator speaks." The
@@ -125,7 +127,8 @@ classes:
   no `reply_by` has no sell-by and is never urgent.
 - **other:** everything else, shown only as a count.
 
-The urgent set is every gate, plus every request whose `reply_by` has passed.
+The urgent set is every gate not cleared (3.4.1), plus every request whose
+`reply_by` has passed.
 The body is read only to find that `GATE` line; nothing else of it is kept.
 
 **The digest** is one file under the user's state directory, mode 0600,
@@ -135,6 +138,7 @@ overwritten each run. Each run writes it in full:
 as of 2026-10-19T12:15:00Z (last look; host slept 11:40-12:10)
 waiting: local 3, global 1; oldest 2h14m
 GATE      01M59...  from agent://<team>/<seat>  age 2h14m
+cleared   01M59...  from agent://<team>/<seat>  age 6h02m  desk <desk-id> at 2026-10-19T10:40:00Z
 REQUEST   01M59...  from agent://<team>/<seat>  age 47m  sell-by 2026-10-20 (not passed)
 other     2
 reader: ok
@@ -157,10 +161,9 @@ trains a person to ignore it.
 
 **The reminder** (vote E4, 5-0): a GATE that stays unread notifies again
 every N hours.
-- N is the operator's: card 1. The panel's suggestion is 4 h, never under
-  1 h, with a cap of 3 repeats: 4 notifications in all for one gate, the
-  first one included.
-- **The cap is a choice, and card 1 offers "no cap" too.** With a cap, a gate
+- N is 4 h with a cap of 3 repeats, ruled by the operator (card 1,
+  2026-10-19): 4 notifications in all for one gate, the first one included.
+- **The cap, as ruled.** With a cap, a gate
   still unread after the last repeat stays in the digest and never notifies
   again, so it is silenced for good. The reason to cap anyway: a reminder
   that never stops trains a person to dismiss it, and then the next new gate
@@ -177,7 +180,10 @@ every N hours.
   the window and counts toward its cap as usual. The cap applies only to
   gates. The one summary at the end of a quiet window is not a gate
   reminder, counts toward no cap, and posts at most once per window.
-- **Quiet hours** (card 2) hold every notification except a gate. A held
+- **Quiet hours** (card 2, ruled 2026-10-19: a window) hold every
+  notification except a gate. The window's times are on their own card,
+  derived from the operator's least active hours on the Desk, as the
+  operator asked. Until that card is ruled the job runs with no window. A held
   notification is not posted, and it is not queued one by one. At the end of
   the window, if the urgent set is still not empty, one notification posts
   with the counts as they stand then. Gate reminders are gates, so they
@@ -186,6 +192,136 @@ every N hours.
 **Liveness.** Each run writes a heartbeat file with the time and the counts,
 even when the counts are zero. A second check flags a heartbeat older than
 two intervals (30 minutes), so a stuck job fails loud.
+
+#### 3.4.1 A gate as a Desk item, so it can be cleared
+
+The operator, ruling card 1: "it can also go to a deck item or a new class
+of deck items so that we can clear it." Today a gate the cap has silenced
+waits in the digest with no way to say "seen, leave it", and a gate the
+operator has already handled keeps notifying until the cap.
+
+- **Who writes the item.** Director, never the job. The job cannot reach the
+  Desk: artifact data is reachable from a session, not from a script
+  (director finding-director-glst). On its sweep, director reads
+  `notify.json` and writes one Desk item for each gate that has none yet,
+  under the existing rule that every operator decision goes to the Desk on
+  first sight.
+- **A new kind.** The item's `kind` is `gate`, beside `choice` and `action`.
+  It carries the gate's id, sender, tier, stream and sequence, its age, and
+  one answer, **clear**. It carries no body: the Desk item points at the
+  message, as the digest does.
+- **What clearing does.** Clearing tells the job to stop reminding. It is
+  not an ack: the bus message stays unread, and the gate's own decision is
+  still whatever the operator writes on its decision card. Director reads
+  the answer on its next sweep and hands the clear answers it read to a
+  script, `director-mcp look-clear` (3.4.2), which validates them and
+  writes `cleared.json`. The session reads; the script writes the file,
+  as with `desk-snapshot write`.
+  The poster skips a cleared key, and the digest shows it under a "cleared"
+  line instead of the urgent set.
+- **The same pattern as the Desk snapshot.** A session reads the Desk and
+  hands what it read to a script that writes a local file (director
+  `desk-snapshot`, K13). The job only reads `cleared.json` and never writes
+  it.
+- **Rule: recording a clear writes nothing to the Desk.** The only party
+  that can write the Desk is the session, and what a session does there is
+  honor-only, as for every Desk answer. So this is a rule, not a test: the
+  sweep's clear step reads the Desk and writes no Desk data, and it never
+  closes or changes the gate's decision card. What can be tested is the
+  script's side (test 7a2): `look-clear` has no Desk access at all, and its
+  only effect is `cleared.json`.
+- **Who may clear.** Only the operator. Director cannot check this: a Desk
+  answer row carries the choice, a note and a time, and no author (read
+  2026-10-19), and on main every Desk answer is honor-only ("Direct writes
+  made without the tool stay unchecked", director
+  `skills/director/reference/functions.md`). So a clear written by anyone
+  else who can write the Desk would end that gate's reminders, and director
+  would not know. This is stated, not solved. Two things bound it: a clear
+  ends reminders only, and it leaves the gate visible (next item). If the
+  Desk store later gives an answer's author, director records it and refuses
+  a clear from anyone but the operator.
+- **A cleared gate stays distinguishable from a passed one.** A passed gate
+  was decided and acked: its message is read and it leaves the urgent set. A
+  cleared gate's message stays unread, its decision card stays open, its key
+  sits in `cleared.json`, and the digest lists it under "cleared" with the
+  Desk id and the time. `cleared.json` also records the author as
+  `"unverified"`, so no reader takes the clear for the operator's checked
+  word. Nothing removes a key or rewrites a gate's reminder state.
+- **Before director has swept,** nothing changes: the gate notifies on its
+  ruled schedule. Clearing can only end reminders, never start or speed
+  them up.
+
+#### 3.4.2 `look-clear`, exactly
+
+```
+director-mcp look-clear --state <state> --items FILE --items-reported N
+                        --answers FILE --answers-reported N [--limit 1000]
+```
+
+- **Input.** The shape of `desk-snapshot write`'s input, with two
+  differences set out at the end of this list. `--items` is what the
+  session's Desk read returned for gate items: a JSON object of id to item,
+  or a list of items that each carry `id` or `doc_id`. `--answers` is a JSON
+  list of answer records, each naming its item in `card` or `card_id` (both
+  only if they agree), with `choice`, `ready` and the Desk's `updatedAt`.
+  Each `--*-reported` is the count the Desk read itself reported. The file
+  must hold exactly that many, and a count at `--limit` may be truncated,
+  so it is refused. The script also reads `<state>/notify.json` and
+  `<state>/cleared.json`.
+- **What counts as a clear.** An answer whose item has `kind` exactly
+  `gate`, whose `choice` is exactly `clear`, and whose `ready` is `true`.
+  The item's tier, stream and sequence give the key.
+- **Refused whole: exit 1, nothing written.** Anything that makes the input
+  itself doubtful: a file that does not parse; a count that differs from
+  its `--*-reported`, or sits at `--limit`; two items with the same id or
+  the same gate key; an item that carries neither `id` nor `doc_id`, or
+  both with different values; an answer that names no item, or carries
+  `card` and `card_id` with different values; two answers for the same
+  item; an `updatedAt` that is missing or not a time; `notify.json` or
+  `cleared.json` present and not parsing. As with `desk-snapshot`, a doubt about the read is never
+  resolved by guessing which half to trust.
+- **Skipped, alone: the rest are applied.** A single answer that is
+  well-formed but does not apply. Each skip is one stdout line with the
+  item id and the reason, never answer text:
+  - its item is not in `--items` (`unknown desk id`);
+  - its item is not `kind: gate` (`not a gate`);
+  - its `choice` is not `clear`, or `ready` is not `true` (`not a clear`);
+  - its gate is not open: the key is in neither `notify.json`'s `urgent`
+    nor its `cleared`, so the gate was acked or never seen (`gate not
+    open`). A clear never applies to a gate that has passed, so a passed
+    gate cannot be written as cleared.
+- **Against the stored file.** `cleared.json` is only ever added to.
+  - A key already present with the same `desk_id`: kept as it is, and the
+    stored `at` and `desk_updated_at` do not move.
+  - A key already present with a different `desk_id`: the stored entry
+    stays, and the answer is skipped (`already cleared by <stored desk
+    id>`).
+  - An answer whose `updatedAt` is earlier than the stored
+    `desk_updated_at` for its key: skipped (`older than stored`). A clear
+    cannot be undone by an older read.
+- **Exit codes.** 0 when the file was written, or when nothing changed
+  (every answer skipped or already stored); 1 when the input was refused
+  whole or the state could not be read or written. A skip is never an error
+  exit.
+- **The write.** A temp file in `<state>`, created mode 0600, written,
+  `fsync`ed and then renamed over `cleared.json`, as `desk-snapshot` does.
+  A crash leaves the old file or the new one, never half of one.
+- **How this differs from `desk-snapshot`, and why.**
+  - **Stricter on items.** `desk-snapshot` takes an item's `id` and falls
+    back to `doc_id`, so an item with both, and two different values, is
+    read by its `id` without a word. `look-clear` refuses that input
+    whole. Its output silences a gate's reminders, so an item it cannot
+    name for certain must not be guessed at; `desk-snapshot`'s output only
+    marks a card open or not.
+  - **Looser on unknown cards.** `desk-snapshot` refuses an answer whose
+    card is not in the cards it was given. `look-clear` skips it
+    (`unknown desk id`), because it is handed only the gate items while
+    the Desk's answers collection holds answers for every kind of card.
+    An answer for a choice or action card is normal input here, not a
+    sign of a bad read.
+- **Whoever runs it is a claim.** As with `desk-snapshot`, the script
+  checks the input's shape and completeness, not that a session really read
+  the Desk, nor who wrote the answer (3.4.1, "Who may clear").
 
 ### 3.5 Never acting, by mechanism (vote E2, 5-0)
 
@@ -242,12 +378,12 @@ The look is safe to run unattended for these reasons, in order of strength:
    does not rely on a list of forbidden calls.
 3. **Its credential can send nothing else.** A dedicated read-only user with
    the same allowlist as its publish permission, on each broker.
-   - This needs the broker's authorization block (aae-orc-umw8p), and the
-     grant is the operator's: card 3. The grant is the same table, so test 2
-     tests the grant too.
+   - The operator ruled the grant on 2026-10-19 (card 3, section 6). It
+     waits only on the broker's authorization block (aae-orc-umw8p). The grant
+     is the same table, so test 2 tests the grant too.
    - "Nothing else" is about writes. For reads, this user can read every
      seat's mail on the two shared streams, as section 3.3's "Exposure,
-     stated" sets out. Card 3 says so.
+     stated" sets out. The card 3 ruling was made with that stated.
 
 **The interim credential, stated plainly.** Until that user exists, `look`
 connects as director-mcp does on that host, with the same connection
@@ -305,8 +441,9 @@ gets no credential: its environment is built empty apart from `PATH` and
 | file | written by | format |
 |---|---|---|
 | `digest.txt` | look | the text shown in 3.4, rewritten in full each run, 0600 |
-| `notify.json` | look | `{"as_of", "urgent": [{"tier", "stream", "seq", "class", "id", "sender", "age_s", "stage"}], "reader": "ok" or the failure}`, 0600 |
+| `notify.json` | look | `{"as_of", "urgent": [{"tier", "stream", "seq", "class", "id", "sender", "age_s", "stage"}], "cleared": [same fields plus "desk_id", "cleared_at"], "reader": "ok" or the failure}`, 0600. A cleared gate is in `cleared`, never in `urgent` |
 | `reminders.json` | poster | `{"<tier>/<stream>/<seq>": {"first", "last", "count"}}`, 0600 |
+| `cleared.json` | `look-clear`, from the Desk answers director's sweep read (3.4.1) | `{"<tier>/<stream>/<seq>": {"at", "desk_id", "desk_updated_at", "author": "unverified"}}`, 0600; the job only reads it |
 | `heartbeat.json` | look | `{"at", "local": n, "global": n, "reader"}`, written every run, even with zero counts and even when the reader failed, 0600 |
 | `look.sb` | installer | the sandbox profile |
 | `look.log` | launchd | stdout and stderr of both steps |
@@ -419,6 +556,52 @@ count, so they share the unread reader and its field names.
    window covering repeats 2 and 3, the gate still stops after 4
    notifications. The end-of-window summary leaves every gate's count
    unchanged.
+7a2. **Cleared on the Desk.** With a gate's key in `cleared.json`:
+   - the poster posts no further reminder for it;
+   - the bus message is still unread (an unread count before and after is
+     the same);
+   - **it is out of the urgent set and still visible:** the gate is absent
+     from `notify.json`'s `urgent` and present in its `cleared`, and the
+     digest lists it under "cleared" only, with the Desk id and time, never
+     in the urgent lines;
+   - **it never reads as passed:** a fixture with one passed gate (acked, so
+     absent from every list) and one cleared gate gives two different
+     outputs. The cleared one appears in `cleared`, and the passed one in no
+     list. The test fails if the cleared gate is missing from every list,
+     or if the passed gate appears in any list;
+   - **`look-clear` writes only `cleared.json`:** fed a recorded clear
+     answer, it changes no file but `cleared.json`. The check is a listing
+     of every file under the scratch `HOME` and the scratch `TMPDIR`, with
+     each file's SHA-256, taken before and after, so a rewrite of the same
+     size in the same second still shows. The only difference allowed is
+     `cleared.json`'s, and no temp file is left behind. It takes no Desk url
+     and no credential, so it has no Desk to write to. That the session
+     writes nothing to the Desk is the rule in 3.4.1, not this test;
+   - **`look-clear`'s refusals and skips** (3.4.2), one fixture each:
+     - **every whole-input refusal, one fixture each:** an `--items` file
+       that does not parse; an `--answers` file that does not parse; an
+       items count that differs from `--items-reported`; an answers count
+       that differs from `--answers-reported`; an items count equal to
+       `--limit`; an answers count equal to `--limit`, in its own run; an
+       item with neither `id` nor `doc_id`; an item whose `id` and `doc_id`
+       disagree; an answer with neither `card` nor `card_id`; an answer
+       whose `card` and `card_id` disagree;
+       two items with the same id; two items with the same gate key; two
+       answers for one item; an answer with no `updatedAt`; an answer whose
+       `updatedAt` is not a time; a `notify.json` that does not parse; a
+       `cleared.json` that does not parse. Each exits 1, leaves
+       `cleared.json` byte-identical (or absent, if it was absent), and
+       leaves no `look-clear` temp file in `<state>`;
+     - an unknown desk id, a non-gate item, a `choice` other than `clear`,
+       a `ready` that is not `true`, a gate not open, a key cleared by another desk id, and an older
+       `updatedAt` are each skipped with their reason. A valid clear in the
+       same input is still written, and the run exits 0;
+     - the same input run twice leaves `cleared.json` byte-identical the
+       second time;
+   - each key carries `"author": "unverified"`.
+   A key in `cleared.json` that matches no gate changes nothing. A malformed
+   `cleared.json` is a reader line in the digest and leaves every gate on
+   its schedule, so a bad file cannot silence one.
 7b. **Classification.** A `REQUEST` whose body starts with `GATE (ready)` is a
    gate. An `INFORM` whose body has a `GATE` line is a gate. A `REQUEST` with
    no `reply_by` is never urgent. One past its `reply_by` is urgent.
@@ -447,14 +630,17 @@ count, so they share the unread reader and its field names.
 
 ## 6. Decisions for the operator
 
-Each goes on its own card, valid until 2026-10-30, and the architect role
-re-checks it then:
-1. The gate reminder interval N, and whether it has a cap. Suggested: 4 h,
-   never under 1 h, cap 3 repeats (4 notifications). "No cap" is an option,
-   with its cost (3.4).
+All three are ruled. The one card still open is the quiet-hours times,
+valid until 2026-11-16; the architect role re-checks it then:
+1. The gate reminder interval N, and whether it has a cap. **Ruled
+   2026-10-19: every 4 hours, at most 3 repeats**, with the operator's
+   request for a Desk item that clears a gate (3.4.1).
 2. Quiet hours: whether there is a window, and when it is. GATE passes
-   through either way.
-3. Granting the read-only NATS user once the broker's authorization block
+   through either way. **Ruled 2026-10-19: a window**, its times derived
+   from the operator's least active hours on the Desk; the times are on a
+   follow-up card.
+3. **Ruled 2026-10-19: grant, when the broker's authorization block lands.**
+   Granting the read-only NATS user once the broker's authorization block
    is live. The user can send only the read requests in the 3.5 table, and
    cannot ack, consume, create or delete consumers, delete messages or write
    presence. It can, by its grant, read any seat's mail on the shared inbox
