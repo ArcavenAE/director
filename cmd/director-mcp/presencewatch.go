@@ -279,7 +279,12 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 			isNew := u == nil
 			if u == nil {
 				u = &watchUnit{Kind: "supervisor", Cluster: cl, Instance: inst, Status: unitPresent, Since: now}
-				if c := w.Units[cl]; c != nil && c.Status != unitPresent {
+				if c := w.Units[cl]; c != nil && c.Status != unitPresent && gap {
+					// first sighted on the pass after a gap, under a cluster that was
+					// absent before it: present after the gap, as an old instance
+					// returning would read. No return is inferred across the gap.
+					ev = append(ev, watchEvent{At: now, Kind: "present-after-gap", Unit: name})
+				} else if c != nil && c.Status != unitPresent {
 					u.Status = unitAbsent // a new instance under an absent cluster needs two sightings
 				} else {
 					ev = append(ev, watchEvent{At: now, Kind: "appeared", Unit: name})
