@@ -240,7 +240,7 @@ done
 fresh fill
 export RELAY_LOG="$root/fill-relay.md"
 printf '# director board\n' >"$DIRECTOR_STATE/board.md"
-open_at 2030-12-01T12:00:00Z fl1 --title "fill row" --stage building --owner supervisor --next n
+open_at 2026-10-01T12:00:00Z fl1 --title "fill row" --stage building --owner supervisor --next n
 "$here/relay-log" append --to agent://t/x --ws fl1 --text "a send about the fill row" >/dev/null 2>&1
 fstamp="$(sed -n 's/^## R-1 (\([^)]*\)).*/\1/p' "$RELAY_LOG")"
 DWS_NOW=2099-01-01T00:00:00Z "$BOARD_HTML" >/dev/null 2>"$root/err" || bad "board-html renders with a relay entry waiting" "$(cat "$root/err")"
