@@ -98,13 +98,33 @@ Every value is printable text with no control or escape characters. Then:
 | field | allowed |
 |---|---|
 | `id` | lower-case letters, digits, `-` and `.`, at most 80 characters |
-| `stage` | one of the ten ledger stages, or one of marvel's session states (`limited` included). marvel adds `(<tag>)` to a failed row that will not be replaced, and the tag is the start of free reason text, so it is written as `(terminal)` |
+| `stage` | ledger rows: one of the ten ledger stages. Session rows: the grammar below |
 | `age_h` | a number |
 | `area` | one of the Desk's area labels |
 | `cluster` | one of the cluster names in director's own cluster list |
-| `health` | a closed set: `healthy`, `unhealthy`, `unknown`, each optionally with `(stalled)`, `(logged-out)` or `(parked)`. A parked reason is free text, so it is dropped: `healthy (parked: x)` is written as `healthy (parked)` |
+| `health` | the grammar below |
 | `last_active` | marvel's age words, a dash, or the stale form, plus an optional `*`; at most 40 characters |
 | `title` | at most 120 characters, and none of the refusals below |
+
+**Session STATE and HEALTH, matched to marvel main** (`cmd/marvel/main.go`,
+the session row builder, and `internal/api` for the values):
+- STATE is one base word, `pending`, `running`, `limited`, `succeeded`,
+  `failed`, `crashloop-backoff` or `crashed`, then at most one suffix:
+  - `failed (<tag>)`: marvel adds the start of the row's reason text, which
+    is free text, so the writer writes `failed (terminal)`;
+  - `succeeded (exit N)` or `crashed (exit N)`, with N one to three digits,
+    written as printed.
+  Nothing else follows the base word.
+- HEALTH is one base word, `healthy`, `unhealthy` or `unknown`, then in
+  this order, each at most once:
+  - ` (stalled)`;
+  - then at most one of ` (logged-out)` or ` (parked: <reason>)`. marvel
+    sets them from one harness reading, so both never appear. The reason is
+    free text and runs to the last `)` of the cell; the writer drops it and
+    writes ` (parked)`.
+  So `healthy (stalled) (parked: <reason>)` is written as
+  `healthy (stalled) (parked)`.
+- A suffix marvel adds later, or any other order, fails the grammar.
 
 Refused in any free-text value (`id`, `title`, `last_active`):
 - a path shape: `~/`, `/Users/`, `/home/`, `/private/`, `/tmp/`, `/var/`, or
@@ -118,9 +138,20 @@ Refused in any free-text value (`id`, `title`, `last_active`):
   as whole words and without regard to case). The file itself is never
   written anywhere.
 
-A row whose `id`, `stage` or `cluster` fails is not written, and the panel's
-`refusal` counts it by reason, never by value. A `title` that fails is
-replaced by `(title withheld: <reason>)`, so the row still counts. Titles
+**What each failure does.** Every failure is counted in the panel's
+`refusal` by field and reason, never by value.
+
+| field fails | outcome |
+|---|---|
+| `id`, `stage` or `cluster` | the row is not written: it cannot be placed or named |
+| `health` | the row is written with `health` = `unreadable` |
+| `last_active` | the row is written with `last_active` = `unreadable` |
+| `area` | the row is written with `area` = `unlabelled` |
+| `title` | the row is written with `(title withheld: <reason>)` |
+| `age_h` not a number | the row is written with `age_h` empty |
+
+A written placeholder is a fixed word, so nothing from the failed value
+reaches the page. Titles
 are otherwise written as typed.
 
 Never a row: tokens, keys, socket paths, settings values, message bodies,
@@ -200,7 +231,15 @@ last ran, in words, so a silent writer shows.
      the value.
    - A session `id` with a `/`, or a `cluster` not on director's list, writes
      nothing for that row.
-   - A HEALTH of `healthy (parked: /Users/a)` is written as `healthy (parked)`.
+   - A HEALTH of `healthy (parked: /Users/a)` is written as `healthy (parked)`,
+     and `healthy (stalled) (parked: a (b) c)` as `healthy (stalled) (parked)`.
+   - STATE `crashed (exit 3)` is written as printed, `failed (budget)` as
+     `failed (terminal)`, and `running (exit 3)` fails the grammar and drops
+     the row.
+   - A HEALTH of `healthy (parked: x) (stalled)` (wrong order) writes
+     `unreadable`; a `last_active` over 40 characters writes `unreadable`; an
+     unknown area writes `unlabelled`. Each is counted in `refusal`, and the
+     page never shows the failed text.
 3. **Header check and split.**
    - A sessions table with a renamed, missing or extra column draws no rows
      and sets `refusal`.
