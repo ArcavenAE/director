@@ -10,9 +10,10 @@ card:
 
   $DIRECTOR_STATE/desk-snapshot.json
       {"read_at": T, "cards": N, "open": [ids, sorted], "by_status": {...},
-       "source_sha256": H}
+       "ids": {id: status, ...}, ["answered": [ids, sorted],] "source_sha256": H}
 
   desk-snapshot write --cards FILE --reported N [--limit 1000]
+                      [--answers FILE --answers-reported N]
   desk-snapshot show
 
 FILE is what the session's Desk read wrote: a JSON object of card id to card, or
@@ -22,6 +23,13 @@ reported; the file must hold exactly that many cards, and a count at --limit (th
 read limit) may be truncated, so it is refused. A card counts as open only when
 its status is exactly "open"; relayed, closed, split, yours, withdrawn, resolved
 and superseded are not open. The helper refuses on any doubt and writes nothing.
+"ids" holds every card with its status (no card text), so a card that is relayed or
+closed is told from one that never existed; card-ingest reads it to refuse a slug already
+on the Desk. --answers is optional: a JSON list (or object of lists) of answer records,
+each naming its card in "card" or "card_id", with the same count and limit checks as the
+cards; "answered" is then the sorted distinct cards that have an answer, and an empty list
+means the answers were read and none were found. Without --answers there is no "answered"
+key, which card-ingest reads as unknown. `dws` reads only "open", so it is unaffected.
 Whoever runs it is a claim, as with dws --actor: the helper checks the input's
 shape and completeness, not that a session really read the Desk.
 """
@@ -77,6 +85,23 @@ def parse_cards(raw):
     return out
 
 
+def parse_answers(raw, cards):
+    """Returns (count, sorted distinct card ids). Raises Refused on a shape it cannot trust."""
+    if not isinstance(raw, list):
+        raise Refused("the answers file is not a list of answer records")
+    answered = set()
+    for r in raw:
+        if not isinstance(r, dict):
+            raise Refused("an answer in the list is not an object")
+        cid = r.get("card", r.get("card_id"))
+        if not isinstance(cid, str) or not cid.strip():
+            raise Refused("an answer names no card (a 'card' or 'card_id' string)")
+        if cid not in cards:
+            raise Refused(f"an answer names card {cid}, which the cards read does not hold")
+        answered.add(cid)
+    return len(raw), sorted(answered)
+
+
 def cmd_write(a):
     try:
         with open(a.cards, "rb") as f:
@@ -94,12 +119,33 @@ def cmd_write(a):
         raise Refused(f"the Desk read reported {a.reported} cards and the file holds {len(cards)}; the read is incomplete or the wrong file")
     if a.reported >= a.limit:
         raise Refused(f"{a.reported} cards is at the read limit {a.limit}; the read may be truncated. Read again with a higher limit")
+    answered = None
+    if a.answers is not None:
+        if a.answers_reported is None:
+            raise Refused("--answers needs --answers-reported, the count the answers read itself reported")
+        try:
+            with open(a.answers, "rb") as f:
+                araw = json.loads(f.read())
+        except OSError as err:
+            raise Refused(f"cannot read the answers file {a.answers}: {err.strerror}")
+        except ValueError as err:
+            raise Refused(f"the answers file is not JSON: {err}")
+        n, answered = parse_answers(araw, cards)
+        if n != a.answers_reported:
+            raise Refused(f"the answers read reported {a.answers_reported} answers and the file holds {n}; the read is incomplete or the wrong file")
+        if a.answers_reported >= a.limit:
+            raise Refused(f"{a.answers_reported} answers is at the read limit {a.limit}; the read may be truncated. Read again with a higher limit")
+    elif a.answers_reported is not None:
+        raise Refused("--answers-reported needs --answers")
     by_status = {}
     for st in cards.values():
         by_status[st] = by_status.get(st, 0) + 1
     snap = {"read_at": now(), "cards": len(cards),
             "open": sorted(c for c, st in cards.items() if st == "open"),
-            "by_status": by_status, "source_sha256": hashlib.sha256(data).hexdigest()}
+            "by_status": by_status, "ids": dict(sorted(cards.items())),
+            "source_sha256": hashlib.sha256(data).hexdigest()}
+    if answered is not None:
+        snap["answered"] = answered
     os.makedirs(STATE, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".desk-snapshot.")
     try:
@@ -133,6 +179,8 @@ def main(argv):
     w.add_argument("--cards", required=True)
     w.add_argument("--reported", type=int, required=True)
     w.add_argument("--limit", type=int, default=1000)
+    w.add_argument("--answers")
+    w.add_argument("--answers-reported", type=int)
     w.set_defaults(fn=cmd_write)
     s = sub.add_parser("show")
     s.set_defaults(fn=cmd_show)
