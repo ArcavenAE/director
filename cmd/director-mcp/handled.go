@@ -314,6 +314,20 @@ type heldMsg struct {
 	at        time.Time
 }
 
+// lowestPending is the lowest stream sequence among the held messages of one
+// tier, or 0 when none is held.
+func (h *handledState) lowestPending(tier string) uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var low uint64
+	for _, m := range h.pending {
+		if m.tier == tier && m.seq > 0 && (low == 0 || m.seq < low) {
+			low = m.seq
+		}
+	}
+	return low
+}
+
 // unhandledRow is one delivered message not yet in the ledger, for
 // inbox_summary's read-unhandled section.
 type unhandledRow struct {
