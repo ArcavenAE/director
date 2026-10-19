@@ -58,6 +58,11 @@ PREAMBLE_KEY = re.compile(r"^(Source|Kind):\s*(.*)$")
 OPTION = re.compile(r"^(\d+)\.\s+(.*)$")
 EXPIRY = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:\s*\([^)]*\))?(?:\.|,\s*or\s+(?:until\s+)?(.+?),\s*whichever comes first\.?)(?:\s+(.*))?$", re.S)
 PREFIX = re.compile(r"^[a-z0-9-]{3,48}$")
+# A code fence line is the fence token (three or more backticks or tildes) with an optional info
+# string and nothing else; a backtick fence's info string holds no backtick, so a line that starts
+# with inline triple-backtick code is not a fence. A closer is a bare run of the same character.
+FENCE_OPEN = re.compile(r"^\s*(`{3,}(?=[^`]*$)|~{3,})[^\n]*$")
+FENCE_CLOSE = re.compile(r"^\s*(`{3,}|~{3,})\s*$")
 
 
 class Refused(Exception):
@@ -150,7 +155,7 @@ def parse_options(rec):
             opts.append([int(m.group(1)), m.group(2).rstrip()])
         elif opts and l.strip():
             opts[-1][1] += "\n" + l.rstrip()
-    out, marks, twice, bare, nears = [], [], [], [], []
+    out, marks, twice, bare, nears, unclosed = [], [], [], [], [], []
     for n, t in opts:
         # The marker is the exact token [RECOMMENDED] (an optional final period) ending a line of
         # the option, outside a code fence. Anything else is text: the bare word, and the near
@@ -158,22 +163,29 @@ def parse_options(rec):
         # token at the start of a line or mid-line, in backticks). A near form draws a NOTE
         # naming the exact form and is never a marker and never a refusal. A token inside a
         # code fence is an example and draws nothing.
-        lines, hits, fenced, near = t.split("\n"), 0, False, []
+        lines, hits, fence, near = t.split("\n"), 0, None, []
         for i, line in enumerate(lines):
-            if line.lstrip().startswith("```"):
-                fenced = not fenced
-                continue
-            if fenced:
+            if fence is None:
+                fm = FENCE_OPEN.match(line)
+                if fm:
+                    fence = fm.group(1)
+                    continue
+            else:
+                cm = FENCE_CLOSE.match(line)
+                if cm and cm.group(1)[0] == fence[0] and len(cm.group(1)) >= len(fence):
+                    fence = None
                 continue
             mk = re.search(r"\s*\[RECOMMENDED\]\.?\s*$", line)
             if mk:
                 hits += 1
                 lines[i] = line[:mk.start()].rstrip()
-            elif re.search(r"\bRECOMMENDED\.?\s*$", line) and not re.search(r"\[\s*RECOMMENDED\s*\]", line, re.I):
+            elif re.search(r"\brecommended\.?\s*$", line, re.I) and not re.search(r"\[\s*recommended\s*\]|\*\*\s*recommended", line, re.I):
                 bare.append(n)
             else:
-                for nm in re.finditer(r"`?\[\s*recommended\s*\]:?`?", line, re.I):
+                for nm in re.finditer(r"`?\[\s*recommended\s*\]:?`?|\*\*\s*recommended\s*\.?\s*\*\*", line, re.I):
                     near.append(nm.group(0))
+        if fence is not None:
+            unclosed.append(n)
         for form in near:
             nears.append((n, form))
         if hits:
@@ -181,7 +193,7 @@ def parse_options(rec):
         if hits > 1:
             twice.append((n, hits))
         out.append((n, "\n".join(lines).rstrip()))
-    return out, marks, twice, bare, nears
+    return out, marks, twice, bare, nears, unclosed
 
 
 def snapshot_state(today_iso):
@@ -254,7 +266,9 @@ def check_card(card, pre, kind_default_source, a, snap, logseen, today):
         errs.append("kind '%s' is neither choice nor action" % kind)
     opts, marks = ([], [])
     if "options" in one and value_of(one["options"]):
-        opts, marks, twice, bare, nears = parse_options(one["options"])
+        opts, marks, twice, bare, nears, unclosed = parse_options(one["options"])
+        for n in unclosed:
+            errs.append("option %d ends inside an open code fence; close it with a line of just the fence token before the next option" % n)
         for n, form in nears:
             notes.append("option %d has '%s' in its text, which is not the marker; it is read as text. The marker is [RECOMMENDED] ending a line of the option, outside a code fence" % (n, form))
         for n in bare:

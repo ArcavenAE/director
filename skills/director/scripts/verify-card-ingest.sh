@@ -298,13 +298,16 @@ t = open(sys.argv[1]).read().replace("Nothing changes.", "Nothing changes. It is
 open(sys.argv[2], "w").write(t)
 P
 # case_prose_mid: 0 when the word inside a sentence is text, 1 when the card is refused or changed.
-case_prose_mid() { clean_state; run "$root/prose-mid.md" >/dev/null 2>"$root/err" && python3 - "$(batch_json)" <<'P'
+case_prose_mid() {
+  clean_state; : >"$root/why"
+  run "$root/prose-mid.md" >/dev/null 2>"$root/why" || return 1
+  python3 - "$(batch_json)" <<'P' 2>>"$root/why"
 import json, sys
 t = json.load(open(sys.argv[1]))["writes"][0]["data"]["options"][0]["text"]
 assert "It is RECOMMENDED by nobody, and RECOMMENDED. is also text." in t, t
 P
 }
-case_prose_mid && ok "the word RECOMMENDED inside a sentence is text" || bad "the word RECOMMENDED inside a sentence is text" "$(cat "$root/err")"
+case_prose_mid && ok "the word RECOMMENDED inside a sentence is text" || bad "the word RECOMMENDED inside a sentence is text" "$(cat "$root/why")"
 python3 - "$BASE" "$root/dot.md" <<'P'
 import sys
 t = open(sys.argv[1]).read().replace("The cost is a later report.", "The cost is a later report. [RECOMMENDED].")
@@ -356,6 +359,64 @@ near_case "in the middle of a line" '1. *Keep 06:00.* [RECOMMENDED] The cost is 
 near_case "in backticks" '1. *Keep 06:00.* The cost is a late report. `[RECOMMENDED]`'
 near_case "a wrapped line, lowercase" '1. *Keep 06:00.* Nothing changes.\n   The cost is a late report. [recommended]'
 near_case "inside a code fence" '1. *Keep 06:00.* Nothing changes.\n   ```\n   write [RECOMMENDED]\n   ```\n   The cost is a late report.' nonote
+
+# More near forms: bold and capitalised spellings draw a NOTE and are text.
+near_case "bold upper case" '1. *Keep 06:00.* The cost is a late report. **RECOMMENDED**'
+near_case "bold capitalised with a period" '1. *Keep 06:00.* The cost is a late report. **Recommended.**'
+python3 - "$BASE" "$root/capword.md" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+old = "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data."
+open(sys.argv[2], "w").write(t.replace(old, "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data. Recommended.", 1))
+P
+clean_state
+if run "$root/capword.md" >"$root/out" 2>"$root/err" && grep -q 'without brackets' "$root/out"; then ok "a line ending in Recommended. in any case draws the bare-word NOTE and is text"; else bad "a capitalised Recommended. draws a NOTE" "$(cat "$root/out" "$root/err")"; fi
+
+# Code fences. A fence line is made of the fence token (three or more backticks, or tildes), then an
+# optional info string, and nothing else; a closer is the same character, at least as long, with no
+# info string. State resets at every option, and an option that ends inside an open fence is refused,
+# so a fence can never swallow the next option's marker. A line that merely starts with inline
+# triple-backtick code is not a fence.
+fence_case() {  # label  opt1  opt2  rec  want   (want: accept | refuse:<text>)
+  local label="$1" o1="$2" o2="$3" rec="$4" want="$5"
+  python3 - "$BASE" "$root/fence-case.md" "$o1" "$o2" "$rec" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+a = "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data."
+b = "2. *Move to 07:00.* One schedule line changes. The cost is a later report."
+assert a in t and b in t
+t = t.replace(a, sys.argv[3].replace("\\n", "\n")).replace(b, sys.argv[4].replace("\\n", "\n"))
+t = t.replace("Option 2.", "Option %s." % sys.argv[5])
+open(sys.argv[2], "w").write(t)
+P
+  clean_state
+  local rc=0; run "$root/fence-case.md" >"$root/out" 2>"$root/err" || rc=$?
+  if [[ "$want" == accept ]]; then
+    [[ $rc -eq 0 ]] && ok "fence: $label" || bad "fence: $label" "$(cat "$root/err")"
+  else
+    [[ $rc -eq 1 ]] && grep -qF -- "${want#refuse:}" "$root/err" && ok "fence: $label" || bad "fence: $label" "rc $rc: $(cat "$root/err")"
+  fi
+}
+O2='2. *Move to 07:00.* One schedule line changes. The cost is a later report.'
+O1='1. *Keep 06:00.* Nothing changes. The cost is a late report.'
+fence_case "a fence opened in option 1 and closed in option 2 is refused, naming option 1" \
+  "1. *Keep 06:00.* The cost is a late report.\n   \`\`\`\n   some code" "2. *Move to 07:00.* More code. The cost is an hour.\n   \`\`\`\n   text [RECOMMENDED]" 1 \
+  "option 1 ends inside an open code fence"
+fence_case "a fence left open in the last option is refused" \
+  "$O1" "2. *Move to 07:00.* The cost is an hour.\n   \`\`\`\n   [RECOMMENDED]" 1 "option 2 ends inside an open code fence"
+fence_case "a tilde fence holds a token that is never the marker" \
+  "1. *Keep 06:00.* Nothing changes.\n   ~~~\n   write [RECOMMENDED]\n   ~~~\n   The cost is a late report." "$O2" 2 accept
+fence_case "a tilde fence left open is refused" \
+  "1. *Keep 06:00.* The cost is a late report.\n   ~~~\n   [RECOMMENDED]" "$O2" 2 "option 1 ends inside an open code fence"
+fence_case "a closer of the other character does not close a fence" \
+  "1. *Keep 06:00.* The cost is a late report.\n   \`\`\`\n   code\n   ~~~" "$O2" 2 "option 1 ends inside an open code fence"
+fence_case "a fence with an info string opens and closes, and the token inside is text" \
+  "1. *Keep 06:00.* Nothing changes.\n   \`\`\`bash\n   echo [RECOMMENDED]\n   \`\`\`\n   The cost is a late report." "$O2" 2 accept
+fence_case "a line that starts with inline triple-backtick code is not a fence: the marker after it is read" \
+  "1. *Keep 06:00.* The cost is a late report.\n   \`\`\`x\`\`\` is inline code [RECOMMENDED]" "$O2" 2 \
+  "RECOMMENDED marks option 1 and the recommendation names option 2"
+fence_case "a longer closer closes a shorter opener" \
+  "1. *Keep 06:00.* Nothing changes.\n   \`\`\`\n   [RECOMMENDED]\n   \`\`\`\`\n   The cost is a late report." "$O2" 2 accept
 
 # A log append that fails partway leaves the log as it was: no partial line without its batch.
 # RLIMIT_FSIZE stops the append part-way through; the seed log is under the limit, the batch is too.
@@ -610,7 +671,9 @@ P
 
 # --- the cases above must be able to fail: run them against mutants of the tool -------------------
 # A case that passes at head and cannot fail under a mutant is a pin, not a test. Each mutant is a
-# scratch copy of card-ingest with one line changed; the case that guards it must report failure.
+# scratch copy of card-ingest with one line changed. A mutant counts as caught only when the case
+# fails with the exact exit and the exact message that mutant should cause: a mutant that merely
+# breaks the tool (a syntax error exits 1 too) is not a catch, and a meta case below shows it.
 mutant() {  # NAME OLD NEW ; leaves the path in $MUT
   MUT="$root/mutant-$1"
   python3 - "$here/card-ingest" "$MUT" "$2" "$3" <<'P'
@@ -621,30 +684,56 @@ open(sys.argv[2], "w").write(t.replace(sys.argv[3], sys.argv[4], 1))
 P
   chmod +x "$MUT"
 }
-if [[ "$CI" == "$here/card-ingest" ]]; then
-  # M1: the bare word anywhere in a line is the marker (the first form, widened). The prose case must fail.
-  mutant bareword 'mk = re.search(r"\s*\[RECOMMENDED\]\.?\s*$", line)' 'mk = re.search(r"\s*RECOMMENDED", line)'
-  real="$CI"; CI="$MUT"; rc=0; case_prose_mid || rc=$?; CI="$real"
-  [[ $rc -ne 0 ]] && ok "mutant M1 (the bare word anywhere is the marker) is caught by the prose case" || bad "mutant M1 is not caught by the prose case"
-  # M2: the partial log append is not undone. The RLIMIT case must fail.
-  mutant notruncate 'lambda: os.truncate(LOG, size)' 'lambda: None'
-  real="$CI"; CI="$MUT"; rc=0; case_rlimit || rc=$?; CI="$real"
-  [[ $rc -eq 1 ]] && ok "mutant M2 (no truncate after a partial append) is caught by the RLIMIT case" || bad "mutant M2 is not caught by the RLIMIT case" "rc $rc"
-  # M3: the batch is kept when its log append fails. The RLIMIT case must fail.
-  mutant keepbatch 'lambda: os.unlink(path)' 'lambda: None'
-  real="$CI"; CI="$MUT"; rc=0; case_rlimit || rc=$?; CI="$real"
-  [[ $rc -eq 1 ]] && ok "mutant M3 (the batch kept after a failed append) is caught by the RLIMIT case" || bad "mutant M3 is not caught by the RLIMIT case" "rc $rc"
-  # M4: a fenced token is read as the marker. The fence case must fail.
-  mutant nofence 'if fenced:' 'if False:'
-  real="$CI"; CI="$MUT"
-  python3 - "$BASE" "$root/fence.md" <<'P'
+# The fence fixtures the mutant cases run on.
+python3 - "$BASE" "$root/fence-ok.md" "$root/fence-open.md" <<'P'
 import sys
 t = open(sys.argv[1]).read()
-old = "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data."
-open(sys.argv[2], "w").write(t.replace(old, "1. *Keep 06:00.* Nothing changes.\n   ```\n   write [RECOMMENDED]\n   ```\n   The cost is a late report.", 1))
+a = "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data."
+assert a in t
+open(sys.argv[2], "w").write(t.replace(a, "1. *Keep 06:00.* Nothing changes.\n   ~~~\n   write [RECOMMENDED]\n   ~~~\n   The cost is a late report.", 1))
+open(sys.argv[3], "w").write(t.replace(a, "1. *Keep 06:00.* The cost is a late report.\n   ```\n   some code", 1))
 P
-  rc=0; clean_state; run "$root/fence.md" >/dev/null 2>&1 || rc=$?; CI="$real"
-  [[ $rc -ne 0 ]] && ok "mutant M4 (a fenced token is the marker) is caught by the fence case" || bad "mutant M4 is not caught by the fence case"
+# case_fence_ok: 0 when a tilde-fenced token is text; 1 otherwise, with the tool's stderr in why.
+case_fence_ok() { clean_state; run "$root/fence-ok.md" >/dev/null 2>"$root/why"; }
+# case_fence_open: 0 when an unclosed fence is refused for being unclosed; 1 otherwise, why says what happened.
+case_fence_open() {
+  clean_state; local rc=0; run "$root/fence-open.md" >/dev/null 2>"$root/why" || rc=$?
+  [[ $rc -eq 1 ]] && grep -q 'option 1 ends inside an open code fence' "$root/why" && return 0
+  echo "exit $rc: $(cat "$root/why")" >"$root/why.tmp"; mv "$root/why.tmp" "$root/why"; return 1
+}
+# caught NAME CASE WANT: run CASE against the mutant; it must fail (exit 1) and its why must hold WANT.
+caught() {
+  local name="$1" fn="$2" want="$3" rc=0
+  local real="$CI"; CI="$MUT"; "$fn" >/dev/null 2>&1 || rc=$?; CI="$real"
+  [[ $rc -eq 1 ]] && grep -qF -- "$want" "$root/why"
+}
+if [[ "$CI" == "$here/card-ingest" ]]; then
+  mutant bareword 'mk = re.search(r"\s*\[RECOMMENDED\]\.?\s*$", line)' 'mk = re.search(r"\s*RECOMMENDED", line)'
+  caught M1 case_prose_mid "RECOMMENDED marks option 1 and the recommendation names option 2" \
+    && ok "mutant M1 (the bare word anywhere is the marker): the prose case fails with the marker disagreement" || bad "mutant M1 is not caught by the prose case with the marker disagreement" "$(cat "$root/why")"
+  mutant notruncate 'lambda: os.truncate(LOG, size)' 'lambda: None'
+  caught M2 case_rlimit "now 3030 bytes, was 2970" 2>/dev/null \
+    && ok "mutant M2 (no truncate after a partial append): the RLIMIT case fails with the grown log" || bad "mutant M2 is not caught by the RLIMIT case with the grown log" "$(cat "$root/why" 2>/dev/null)"
+  mutant keepbatch 'lambda: os.unlink(path)' 'lambda: None'
+  caught M3 case_rlimit "card-ingest/rpt-" \
+    && ok "mutant M3 (the batch kept after a failed append): the RLIMIT case fails naming the batch left behind" || bad "mutant M3 is not caught by the RLIMIT case naming the batch" "$(cat "$root/why" 2>/dev/null)"
+  mutant nofence 'fence = fm.group(1)' 'fence = None'
+  caught M4 case_fence_ok "RECOMMENDED marks option 1 and the recommendation names option 2" \
+    && ok "mutant M4 (a fence is not entered): the fenced-token case fails with the marker disagreement" || bad "mutant M4 is not caught by the fenced-token case" "$(cat "$root/why" 2>/dev/null)"
+  mutant noclose 'if fence is not None:
+            unclosed.append(n)' 'if False:
+            unclosed.append(n)'
+  caught M5 case_fence_open "exit 0" \
+    && ok "mutant M5 (an unclosed fence is not refused): the unclosed-fence case fails with exit 0" || bad "mutant M5 is not caught by the unclosed-fence case" "$(cat "$root/why" 2>/dev/null)"
+  # M0, a meta case: a tool that does not even parse exits 1 as a refusal would, and must NOT count
+  # as a catch for any mutant above, because its message is a traceback and not the expected one.
+  mutant broken 'fence = fm.group(1)' 'fence = ((:'
+  ! caught M0 case_fence_ok "RECOMMENDED marks option 1 and the recommendation names option 2" \
+    && ok "mutant M0 (a syntax error) is not accepted as a catch: the exact message is required" || bad "mutant M0, a syntax error, was accepted as a catch"
+  ! caught M0 case_prose_mid "RECOMMENDED marks option 1 and the recommendation names option 2" \
+    && ok "mutant M0 is not accepted as a catch of the prose case either" || bad "mutant M0 was accepted as a catch of the prose case"
+else
+  echo "SKIP the mutant cases: CI_BIN names another tool ($CI), and mutants are built from $here/card-ingest"
 fi
 
 echo "card-ingest: $pass passed, $fail failed"
