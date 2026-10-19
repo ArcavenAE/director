@@ -89,3 +89,20 @@ a probe before it hardens.
   chain with bmad driving the process, and map it onto spectacle's document
   types. The gather fix and a structural gate come first; a support audit with
   a positive control keeps the brief faithful. Votes and dissent recorded.
+- `presence-watch.md` (design for review 2026-10-19): director's watch on
+  global presence. It polls the presence bucket on the shim's heartbeat, with
+  absent and back defined over two passes, flapping and declared sleep, and
+  director's own sleep subtracted (R-209). A held-message store makes R-141's
+  hold-by-default real for global sends, with release on return. Issue #319;
+  R-92, R-141, R-209 to R-212. Candidate PW-A to PW-G.
+- `card-ingest.md` (design for review 2026-10-19): one tool that parses a
+  seat's card file into Desk card writes and refuses, all or nothing, a card
+  missing a part. It defines the card contract, the exact refusals, the
+  expiry grammar, the slug and update rules, and the split between the
+  enforced parse and the session's Desk write. Issue #320; R-202 and the
+  surfacing filters. Candidate CI-A to CI-F.
+- `ledger-fill.md` (design for review 2026-10-19): why the workstream
+  ledger went stale, measured, and how relay-log and Desk events move its
+  rows as `refresh` observes, inside the writer table plus one stated change.
+  It adds a join key on relay-log append, a read-only unlinked list, replay
+  idempotence, and K13's other half. Issue #321. Candidate LF-A to LF-G.
