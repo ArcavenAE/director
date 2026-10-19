@@ -120,14 +120,22 @@ a marker and never a refusal, and the Desk text keeps what the seat wrote:
 - the bare word, as in "and this is not RECOMMENDED";
 - a near form of the token: lowercase `[recommended]`, spaces inside the
   brackets `[ RECOMMENDED ]`, a trailing colon `[RECOMMENDED]:`, the token at
-  the start of a line or in the middle of one, and the token in backticks.
+  the start of a line or in the middle of one, the token in backticks, and the
+  bold spellings `**RECOMMENDED**` and `**Recommended.**`.
   These draw a NOTE that names the exact form ("is not the marker; it is read
   as text. The marker is [RECOMMENDED] ending a line of the option, outside a
   code fence"), so a seat that meant the marker sees why it did not count. The
-  bare word at a line end draws a NOTE too. They are not refused, because a
+  bare word at a line end, in any case ("Recommended."), draws a NOTE too. They are not refused, because a
   card that says "recommended" in its own words is a well-formed card;
-- a token inside a code fence (a line starting with three backticks opens and
-  closes one), which is an example and draws nothing.
+- a token inside a code fence, which is an example and draws nothing. A fence
+  line is three or more backticks or tildes, then an optional info string (after
+  a backtick fence the info string holds no backtick, so a line that starts with
+  inline code such as ```` ```x``` ```` is not a fence). A closer is a line of
+  only the same character, at least as long as the opener. Fence state resets at
+  every option boundary, so a fence opened in option 1 cannot swallow the marker
+  of option 2. An option that ends inside an open fence is refused (table in
+  section 5), because a silent read would drop the marker of the next option
+  without a trace. `~~~` is a fence, as in CommonMark.
 
 (The first build read the bare word at the end of the first line; a review
 showed prose can end in it, so the marker needs a form prose cannot take.
@@ -222,6 +230,7 @@ so a seat fixes them in one pass. Each line reads
 | marker disagrees | `RECOMMENDED marks option 1 and the recommendation names option 2` |
 | two markers | `RECOMMENDED marks 2 options` |
 | marker twice on one option | `option 1 carries RECOMMENDED on 2 lines` |
+| option ends inside an open fence | `option 1 ends inside an open code fence; close it with a line of just the fence token before the next option` |
 | expiry not a date first | `Valid until does not start with a date (YYYY-MM-DD); an event alone may never arrive, so it is not an expiry` |
 | not a calendar date | `2026-02-30 is not a calendar date` |
 | date already passed | `2026-10-01 is before today (2026-10-19); re-check the recommendation and renew it before posting` |
