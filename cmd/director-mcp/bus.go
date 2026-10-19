@@ -73,6 +73,8 @@ type Bus struct {
 	cueState func() (state, reason string)
 	// handled is the handled-mode state (K4); nil keeps ack-on-read.
 	handled *handledState
+	// watch is the presence watch (presencewatch_shim.go); nil when off.
+	watch *presenceWatcher
 }
 
 // localConsumerInactive is the local durable's inactive threshold. The inbox
@@ -1347,6 +1349,7 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 			b.stateMu.Unlock()
 			_ = b.writePresence(ctx, s)
 			b.reportGlobalWarn(b.writeGlobalPresence(ctx, s), logf)
+			b.watchTick(ctx)
 		}
 	}
 }
