@@ -58,12 +58,28 @@ def now_utc() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def fill_ledger():
+    """Run the source-only refresh (ledger fill, LF5) so the rows move whenever the page is
+    rendered, not only when director types dws refresh. DWS_NO_RERENDER=1 stops dws from
+    launching this renderer again after its write. A fill that fails is said on stderr and
+    never stops the page."""
+    try:
+        r = subprocess.run([sys.executable, str(DWS), "refresh", "--local"], capture_output=True, text=True,
+                           env=dict(os.environ, DWS_NO_RERENDER="1"), timeout=60)
+    except (OSError, subprocess.SubprocessError) as err:
+        print(f"board-html: the ledger fill did not run: {err}", file=sys.stderr)
+        return
+    if r.returncode != 0:
+        print(f"board-html: the ledger fill failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[:300]}", file=sys.stderr)
+
+
 def load_ledger():
     """The ledger rows from dws show --json, or None when there is no ledger
     file (the page is then today's page). A ledger that cannot be read is an
     error, not a silent fallback."""
     if not LEDGER.exists():
         return None
+    fill_ledger()
     r = subprocess.run([sys.executable, str(DWS), "show", "--json"], capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"board-html: dws show failed: {r.stderr.strip() or r.returncode}")

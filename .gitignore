@@ -16,3 +16,7 @@ sim/notes/
 probe/nats-phase-0/leaf-kinu.conf
 
 .DS_Store
+
+# Python bytecode, never tracked.
+__pycache__/
+*.pyc

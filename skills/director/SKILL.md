@@ -94,6 +94,14 @@ the board and the roster as above.
    for each new stream of work, `${DIRECTOR_HOME:-$HOME/.director}/bin/dws stage <slug> <to> --from <current>`
    for a stage that changed, and `${DIRECTOR_HOME:-$HOME/.director}/bin/dws refresh` to read last moved and
    the two factual stage moves from the PR, issue and bd links.
+   Rows also move from the records you already write: when you log a relay
+   about a stream, add `--ws <slug>` to the `relay-log append`, and
+   `${DIRECTOR_HOME:-$HOME/.director}/bin/dws refresh --local` (which
+   `board-html` runs on every render) moves that row from the entry, with no
+   network. For an entry already written, link it afterwards with
+   `dws link <slug> relay:R-<n>`. Nothing is matched from message text. Read
+   `${DIRECTOR_HOME:-$HOME/.director}/bin/dws unlinked` for what the fill
+   could not tie to a row, and act on it: it moves no row and proposes nothing.
    If `$DIRECTOR_STATE/board.html` exists, run
    `${DIRECTOR_HOME:-$HOME/.director}/bin/board-html` after the edit so the
    rendered view stays current. Use that installed path, so the renderer
@@ -327,7 +335,7 @@ in session 1 every capture without a trigger silently failed to happen.
 | You could not act as the software would, so you quietly changed the expectation (dropped an ask you could not route, treated a dead session as done, narrowed a task the peer could not accept). The evidence is an absence, so name it or it is lost | `sim/notes/observations.md` (O-N), tagged COULD NOT DO IT |
 | A tool warning, quirk, or workaround fought you, BEFORE you apply the workaround | `sim/notes/friction.md` (FR-N) |
 | You leaned on a harness internal to get the job done | `sim/notes/shortcuts.md` |
-| You sent a message to a session | `sim/notes/relay-log.md` (R-N: to, verbatim text, outcome), written with `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-log append --to <address> --text-file - --outcome <outcome>`, which stamps the entry from the clock; never type the time |
+| You sent a message to a session | `sim/notes/relay-log.md` (R-N: to, verbatim text, outcome), written with `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-log append --to <address> [--ws <slug>] --text-file - --outcome <outcome>`, which stamps the entry from the clock; never type the time. `--ws` names the workstream the message is about, so its row moves |
 | A struggle has recurred enough to name a firm requirement | `sim/specs/` |
 | A session's output would otherwise be lost | `$DIRECTOR_STATE/board.md`, under Uncaptured |
 

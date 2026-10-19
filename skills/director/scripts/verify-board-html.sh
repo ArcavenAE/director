@@ -22,6 +22,9 @@ trap 'rm -rf "$root"' EXIT
 export DIRECTOR_STATE="$root/state"
 mkdir -p "$DIRECTOR_STATE"
 export DWS_TEST_CLOCK=1
+# The fill reads a relay log; no test reads the real one (ledger fill, LF5).
+export RELAY_LOG="$root/no-relay-log.md"
+export PYTHONDONTWRITEBYTECODE=1
 
 # K13: dws refuses --blocked operator without an open Desk card, so every state
 # dir that opens such a row gets a snapshot with card c1 open, read before the
@@ -229,6 +232,36 @@ for c in "e24:none" "e26:unmoved 26h" "e48:unmoved 2d" "d48:none" "d49:unmoved 2
   slug="${c%%:*}"; want="${c#*:}"; got="$(flag "$slug")"
   [[ "$got" == "$want" ]] && ok "unmoved at the boundary: $slug is $want" || bad "unmoved at the boundary: $slug is $want" "$got"
 done
+
+# ---- the fill runs on every render (ledger fill, LF5) -----------------------------------
+# board-html runs `dws refresh --local` before it reads the rows, with DWS_NO_RERENDER=1 so
+# the render does not render itself. A relay entry written with --ws moves its row without
+# anyone typing dws refresh.
+fresh fill
+export RELAY_LOG="$root/fill-relay.md"
+printf '# director board\n' >"$DIRECTOR_STATE/board.md"
+open_at 2026-10-01T12:00:00Z fl1 --title "fill row" --stage building --owner supervisor --next n
+"$here/relay-log" append --to agent://t/x --ws fl1 --text "a send about the fill row" >/dev/null 2>&1
+fstamp="$(sed -n 's/^## R-1 (\([^)]*\)).*/\1/p' "$RELAY_LOG")"
+DWS_NOW=2099-01-01T00:00:00Z "$BOARD_HTML" >/dev/null 2>"$root/err" || bad "board-html renders with a relay entry waiting" "$(cat "$root/err")"
+lm="$("$DWS" show --json | python3 -c 'import json,sys;print({r["slug"]: r for r in json.load(sys.stdin)["rows"]}["fl1"]["last_moved"])')"
+[[ "$lm" == "$fstamp" ]] && ok "a render moves a row from a relay entry linked with --ws, with nobody typing dws refresh" || bad "a render runs the fill" "last moved $lm, entry $fstamp"
+grep -q 'fl1' "$DIRECTOR_STATE/board.html" && ok "and the page was still written" || bad "the page was written"
+n="$(wc -l <"$DIRECTOR_STATE/workstreams.jsonl" | tr -d ' ')"
+DWS_NOW=2099-01-01T00:00:00Z "$BOARD_HTML" >/dev/null 2>&1
+[[ "$(wc -l <"$DIRECTOR_STATE/workstreams.jsonl" | tr -d ' ')" == "$n" ]] && ok "a second render over the same sources appends nothing" || bad "a second render appends nothing"
+# a fill that fails does not stop the page
+cp "$DWS" "$root/dws-broken"; printf '#!/bin/sh\nexit 3\n' >"$root/dws-broken"; chmod +x "$root/dws-broken"
+mkdir -p "$root/bh"; cp "$BOARD_HTML" "$root/bh/board-html"; cp "$DWS" "$root/bh/dws"
+python3 - "$root/bh/dws" <<'PY'
+import sys
+t = open(sys.argv[1]).read()
+open(sys.argv[1], "w").write(t.replace("def cmd_refresh_local(a):", "def cmd_refresh_local(a):\n    sys.exit(3)", 1))
+PY
+rm -f "$DIRECTOR_STATE/board.html"
+DWS_NOW=2099-01-01T00:00:00Z "$root/bh/board-html" >/dev/null 2>"$root/err" && [[ -f "$DIRECTOR_STATE/board.html" ]] \
+  && ok "a fill that fails does not stop the page being written" || bad "a failing fill stops the page" "$(cat "$root/err")"
+grep -qi 'fill' "$root/err" && ok "and the failure is said on stderr" || bad "the failure is said on stderr" "$(cat "$root/err")"
 export DIRECTOR_STATE="$main_state"
 
 echo "$pass passed, $fail failed"
