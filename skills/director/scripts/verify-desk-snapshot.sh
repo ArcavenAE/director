@@ -123,7 +123,7 @@ printf '[{"card": "ghost"}]' >"$root/answers-ghost.json"
 snap_refuses "an answer for a card the read does not hold is refused" "ghost" \
   "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-ghost.json" --answers-reported 1
 printf '[{"card": "card-1", "card_id": "card-5"}]' >"$root/answers-differ.json"
-snap_refuses "an answer whose card and card_id differ is refused, not read as the first" "card_id" \
+snap_refuses "an answer whose card and card_id differ is refused, not read as the first" "an answer names card 'card-1' in 'card' and 'card-5' in 'card_id'; give one card, or two that agree" \
   "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-differ.json" --answers-reported 1
 printf '[{"card": "card-1", "card_id": "card-1"}]' >"$root/answers-agree.json"
 "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-agree.json" --answers-reported 1 >/dev/null 2>&1 \

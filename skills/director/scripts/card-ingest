@@ -150,15 +150,21 @@ def parse_options(rec):
             opts.append([int(m.group(1)), m.group(2).rstrip()])
         elif opts and l.strip():
             opts[-1][1] += "\n" + l.rstrip()
-    out, marks = [], []
+    out, marks, twice = [], [], []
     for n, t in opts:
-        # The marker is read at the end of the option's whole text, wrapped or not.
-        mk = re.search(r"\s*\bRECOMMENDED\.?\s*$", t)
-        if mk:
+        # RECOMMENDED may end any line of the option; it is removed wherever it ends one.
+        lines, hits = t.split("\n"), 0
+        for i, line in enumerate(lines):
+            mk = re.search(r"\s*\bRECOMMENDED\.?\s*$", line)
+            if mk:
+                hits += 1
+                lines[i] = line[:mk.start()].rstrip()
+        if hits:
             marks.append(n)
-            t = t[:mk.start()].rstrip()
-        out.append((n, t))
-    return out, marks
+        if hits > 1:
+            twice.append((n, hits))
+        out.append((n, "\n".join(lines).rstrip()))
+    return out, marks, twice
 
 
 def snapshot_state(today_iso):
@@ -231,7 +237,9 @@ def check_card(card, pre, kind_default_source, a, snap, logseen, today):
         errs.append("kind '%s' is neither choice nor action" % kind)
     opts, marks = ([], [])
     if "options" in one and value_of(one["options"]):
-        opts, marks = parse_options(one["options"])
+        opts, marks, twice = parse_options(one["options"])
+        for n, hits in twice:
+            errs.append("option %d carries RECOMMENDED on %d lines" % (n, hits))
         nums = [n for n, _ in opts]
         if nums != list(range(1, len(nums) + 1)):
             errs.append("options are numbered %s; number them 1 to n with no gap" % ", ".join(str(n) for n in nums))
@@ -398,17 +406,20 @@ def cmd_parse(a):
         fcntl.flock(lk, fcntl.LOCK_EX)
         atomic_write(path, batch)
         try:
+            size = os.path.getsize(LOG) if os.path.exists(LOG) else 0
             with open(LOG, "a") as f:
                 for e in lines:
                     f.write(json.dumps(e, ensure_ascii=False) + "\n")
                 f.flush()
                 os.fsync(f.fileno())
         except OSError as err:
-            # The batch and its log lines go together: no batch is left without them.
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+            # The batch and its log lines go together: no batch is left without them, and
+            # no line of a partial append is left without its batch.
+            for undo in (lambda: os.unlink(path), lambda: os.truncate(LOG, size)):
+                try:
+                    undo()
+                except OSError:
+                    pass
             raise Refused(f"cannot append to the log {LOG}: {err.strerror}; no batch was written")
     if skipped:
         print(f"card-ingest: skipped {skipped} preamble lines that are not Source: or Kind: lines")
