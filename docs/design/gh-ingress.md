@@ -14,8 +14,8 @@ There are three parts, and only the first talks to GitHub.
 
 | part | what it is | where |
 |---|---|---|
-| status core | A Rust process that polls GitHub and keeps a local view. It reads with `ghstate list --json` and streams changes with `ghstate watch --json`. | a new small repository, still to be named |
-| gh-ingress (this design) | A Go adapter that consumes `ghstate watch --json` and publishes INFORM events. | `cmd/gh-ingress` in director |
+| status core | A Rust process that polls GitHub and keeps a local view. It reads with `<core> list --json` and streams changes with `<core> watch --json`. | a new small repository, still to be named |
+| gh-ingress (this design) | A Go adapter that consumes `<core> watch --json` and publishes INFORM events. | `cmd/gh-ingress` in director |
 | any other consumer | A Stream Deck key or dial, a shell prompt, tmux, or a seat on the same host. Each reads the CLI. | wherever it lives |
 
 The core imports no NATS, marvel or desk-plugin code. It works with or without each of them, and each works with or without the others.
@@ -27,22 +27,23 @@ gh-ingress is Go so that the subject builder and the envelope type stay shared w
 | what | how | cost |
 |---|---|---|
 | membership: opened, closed, merged, new comments | REST lists by `updated_at`, per watched repo, with `If-None-Match` | A 304 did not count against the REST limit when measured: one conditional call left the used count unchanged. GitHub's documentation on this is not verified here. |
-| state: open-PR `mergeable` and CI, default-branch CI, last deployment status | One batched GraphQL query per cycle, carrying `rateLimit` | 1 point for the open-PR view, measured on 78 open PRs. 1 point for the default-branch and deployment view, measured on 43 repos. |
+| state: open-PR `mergeable` and CI, default-branch CI, last deployment status | One batched GraphQL query per cycle, carrying `rateLimit` | MEASURED 2026-10-19: 1 point for the open-PR view on 78 open PRs, and 1 point for the default-branch and deployment view on 43 repos. |
 | a PR whose head SHA changed this cycle | A live read of that PR | A few points, only when heads move. |
-| a base branch that moved (default, release, or a stacked PR's parent) | A live read of the open PRs on that base, because `mergeable` can change with no head SHA change | ETag'd branch reads, free on 304. |
+| a base branch that moved (default, release, or a stacked PR's parent) | A live read of the open PRs on that base, because `mergeable` can change with no head SHA change | ETag'd branch reads. Free on a 304 is INFERRED: the one measured conditional call was a list, not a branch read. |
 
 Rules:
 - Opened, closed and merged come only from the REST lists. Absence from a search result is never an event.
 - A `mergeable` of UNKNOWN is re-read on the next cycle and never published.
-- "A run in progress" counts only check suites that carry a workflow run. Suites registered for apps that never run sit at QUEUED forever.
-- **Busy signal:** the `rate_limit` read, which is free (measured), with exponential backoff to a cap.
+- "A run in progress" counts only check suites that carry a workflow run. Suites registered for apps that never run sit at QUEUED. MEASURED 2026-10-19: all 58 QUEUED or IN_PROGRESS suites on default-branch heads lacked a workflow run.
+- **Busy signal:** the `rate_limit` read, with exponential backoff to a cap. MEASURED 2026-10-19: three reads in a row left `used` at 526.
 - **Fast poll:** only for a repo with a real run in progress, with a ceiling so a stuck run drops back.
+- **Pacing ceilings.** Each call class (membership, state, live reads, quota) has an owner-set ceiling per reset window. A class that reaches its ceiling makes no more calls until the window rolls over, and says so in the health record.
 - **Pagination** past 100 results is built from the first version. More than 100 open PRs is a health warning, never a silent truncation.
 - **UNKNOWN is bounded.** A PR whose `mergeable` stays UNKNOWN for 3 cycles is reported as a health warning naming the PR, and is still never published as a state.
 
 **Cost per cycle, measured 2026-10-19 at 10:26Z.** There were 81 open PRs across 23 repos, on 23 distinct base branches, none of them a non-default base. The open-PR search cost 1 point. A 60 s cycle then spends:
 - 1 GraphQL point for the open-PR view and 1 for the default-branch view;
-- one ETag'd read for each of the 23 bases, and one ETag'd membership list for each watched repo (43). These are free on a 304 (measured once, above);
+- one ETag'd read for each of the 23 bases, and one ETag'd membership list for each watched repo (43). These are free on a 304: MEASURED once for a list, INFERRED for branch reads;
 - a few points for live reads, only when a head or a base moved.
 
 That is about 120 GraphQL points an hour, against 5,000. The REST spend is only the lists and branches that changed.
@@ -58,11 +59,21 @@ Each rule above has a red test against a fake GitHub server:
 6. 101 open PRs are all read across two pages, and a health warning is raised.
 7. A 403 or a secondary rate limit backs off exponentially to the cap, and the generation time stays where it was.
 8. A failed cycle leaves the generation time unchanged, and a reader shows `unknown` after 3 cycles.
+9. A class that reaches its pacing ceiling makes no further requests in the fake server's log until the window rolls over, and the health record names the class.
+10. A fast poll on a run that stays IN_PROGRESS past the ceiling drops back to the normal cycle.
 
 ## 3. The core's guarantees
 
 - **Fixed queries.** The query set is compiled in and read-only. The only parameter is a repo from the allowlist. There is no proxy and no pass-through.
-- **Allowlist.** The watch list is a file owned by the token's owner, read at start and on SIGHUP. No socket or bus message can add to it. The core refuses to start if the file is group- or world-writable.
+- **Allowlist.** The watch list is a file, read at start and on SIGHUP. No socket or bus message can add to it. The core refuses to start, or to reload, unless the file is owned by the core's own uid and is writable by no one else. A 0644 file owned by another uid is refused.
+  - A repo name that would not survive as one subject token (section 5) is refused at load, with a warning naming it.
+- **CLI.** All verbs read the local view. None of them causes a forge call:
+  - `<core> list --json`, `<core> watch --json`;
+  - `<core> key <repo>`, `<core> watch-key <repo>`, `<core> open <repo>`;
+  - `<core> select`, the Select Function provider;
+  - `<core> quota <view> <window> [--image]`.
+
+  `<core>` is a placeholder until the operator names the repository.
 - **Derived fields only.** The view holds typed fields: state words, run numbers, timestamps, head SHA, `author_association`. It holds no token, no bodies and no titles. Free text shown on a display has control characters stripped and is truncated.
 - **Access.** The view is a 0600 file, written by atomic rename, or a socket in a 0700 directory with a peer-uid check. There is no network listener. Every process under the same uid can read it; it holds only derived status.
 - **Staleness.** Its generation timestamp is never refreshed on a failed cycle. A reader shows `unknown` after 3 cycles, never the last good value.
@@ -70,7 +81,9 @@ Each rule above has a red test against a fake GitHub server:
 ## 4. Credential
 
 - **Interim.** The core shells out to `gh api graphql`, so it never holds a token. The login gh uses carries whatever scopes its owner granted, which for an interactive login usually includes write scopes. Read-only then rests on the fixed query set alone. The operator is told the measured scopes plainly, in a private record, not here.
-- **Target.** A dedicated read-only credential. The core reads the credential's grants at start and refuses any write grant. The operator chooses the date.
+- **Target.** A dedicated read-only credential. The core reads the credential's grants at start and refuses any write grant.
+  - **Date.** No date is set. The operator sets it on the credential card. The card recommends about two weeks after it is ruled.
+  - **The interim:** with the gh login as the source, the grant check runs in report mode. It prints the login's scopes and the word `interim` at start, and does not refuse. It refuses only for a dedicated source. The publishing refusal below means the interim never feeds the bus.
   - **App.** A GitHub App owned by the ArcavenAE org, installed on the watched repos only, with read-only permissions. A minter holds the App key and writes a 1 h installation token. The minter runs as its own local user on the core's host (round 7, 6-0). The key is 0600 and owned by that user. The core's user can read the token file and never the key, so the same-uid reader the earlier draft named cannot reach the key.
   - **PAT.** A fine-grained token with the ArcavenAE org as its resource owner, "only select repositories" set to the watch list, and read-only permissions, kept in its own keychain item.
   - **Permissions,** for either: metadata, contents, pull requests, checks, commit statuses, deployments and actions, all read. INFERRED from the queries in section 2, not yet checked against GitHub's permission tables. The start-up grant check is the test.
@@ -80,6 +93,7 @@ Each rule above has a red test against a fake GitHub server:
 ## 5. What gh-ingress adds
 
 - **Subjects.** `events.<fleet>.gh.<org>.<repo>.<number|repo>.<kind>.<action>`, built by the shared package. Repo-level kinds cover default-branch CI and deployment status.
+- **Subject tokens.** Every GitHub-derived token placed in a subject (org, repo, number, kind, action) is checked against `[A-Za-z0-9_-]`. A failure is dropped, logged and counted in the health record. It is never hashed or rewritten (vote V4, 6-0). A dotted repo name such as `a.b` would split the subject, so it is never published; the core warns about it at load (section 3).
 - **`Nats-Msg-Id`** is derived from the fact: object id, kind, action, and `updated_at` or head SHA, plus the window number for derived ages such as `review.stale`. A webhook delivery GUID, if one exists later, goes in a header only.
 - **The watch list.** The core's allowlist is the ceiling. A fleet registry may narrow what gh-ingress publishes, never widen what the core fetches.
 - **Heartbeat.** Published every cycle on a subject only gh-ingress may publish. It carries the core's last successful generation time, not the adapter's own liveness, so a live adapter over a stale core reads as stale.
@@ -109,18 +123,22 @@ Each rule above has a red test against a fake GitHub server:
 
 | constraint | test that fails if the design is wrong |
 |---|---|
-| core without marvel | No `MARVEL_SOCKET` and no marvel daemon: `ghstate list --json` returns the view. |
+| core without marvel | No `MARVEL_SOCKET` and no marvel daemon: `<core> list --json` returns the view. |
 | core without NATS | No broker reachable and the adapter disabled: the view is returned, the log shows no connect attempt, and the core's dependency tree has no NATS client. |
-| core without a desk plugin | Plugin absent: `ghstate watch` prints a change line within one cycle. |
+| core without a desk plugin | Plugin absent: `<core> watch` prints a change line within one cycle. |
 | each present | The view bytes are identical with marvel, NATS and the plugin present. |
-| no caller-chosen fetch: an unlisted repo | `ghstate key other/repo` and an adapter request for it each leave the fake server's log at zero requests. |
+| no caller-chosen fetch: an unlisted repo | `<core> key other/repo` and an adapter request for it each leave the fake server's log at zero requests. |
 | no caller-chosen fetch: a raw query | No CLI flag, socket message or bus message takes query text. A test sends GraphQL text through each input, and the log shows only the compiled queries. A source check fails on any `mutation`. |
 | no caller-chosen fetch: a URL | A URL passed through each input is refused, and the log shows no request to it. |
-| no stranger widens the list | A bus or socket "add" leaves the list and the request log unchanged. A group-writable file stops start-up. |
+| no stranger widens the list | A bus or socket "add" leaves the list and the request log unchanged. A group- or world-writable file stops start-up. So does a file whose owner uid is not the core's, tested over an injected `stat` result because a test cannot `chown` without root. |
 | nothing sensitive leaves | Canary strings in fixture titles and bodies, plus token-shaped strings, never appear in the view, logs, CLI output or events. A positive control proves the scan works. |
-| no unknown readers | A second uid is refused. `lsof -nP -iTCP -sTCP:LISTEN` shows nothing for the core's pid. |
+| no unknown readers | A second uid is refused at the socket. `lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN` and `lsof -nP -a -p <pid> -iUDP` both print nothing for the core's pid, so it has no listener of either kind. Its only inet sockets are outbound TCP to the forge, seen with `lsof -nP -a -p <pid> -i`. |
 | no publishing from a gh login | With the credential source set to a gh login and the adapter enabled, gh-ingress refuses and says why. |
-| least-privilege token | A scope check at start refuses any write grant. The interim fails this by design until the operator's date. |
+| least-privilege token | With a dedicated credential that carries a write grant, start-up fails and names the grant. With the gh login as source, start-up prints the scopes and `interim` and runs (report mode). The interim fails least privilege by design until the operator's date (section 4). |
+| viewing never calls the forge | Every CLI verb in section 3, every quota view and window, and `--image` is run 100 times against the fake forge, and its request log does not change. A manual check against GitHub reads `x-ratelimit-used` before and after: unchanged. |
+| an image carries no active content | `<core> quota ... --image` output passes the same rules BetterDials applies (BetterDials `docs/design/cli-key.md` tests 11 to 15). A fixture that injects `script`, `foreignObject`, `on*`, an external `href`, CSS `url()` or `@import` into a chart label shows that the drawing escapes it. |
+| subject tokens | A repo `a.b` in a fixture publishes nothing, and logs and counts one drop. A repo `a-b_1` publishes. |
+| dedupe | The same fact read twice gives one `Nats-Msg-Id`. A changed `updated_at` or head SHA gives a new one. A `review.stale` in the same window gives the same id, and in the next window a new one. A webhook GUID in a header does not change the id. |
 | webhook receiver (later) | A bad or missing `X-Hub-Signature-256` gets 401 and changes no state. |
 
 ## 7. Sequencing
@@ -137,14 +155,28 @@ Each rule above has a red test against a fake GitHub server:
 - a typed status record;
 - a quota record made of named buckets, each with its own window.
 
-Only GitHub is built first, and the seam is tested with a fake second provider. GitLab's admin pages describe per-minute rate-limit headers, and Forgejo's config reference names no API limit. Both were read through a summarizer and not collected, so both are unverified. Forgejo's quota is therefore treated as unknown: it is reported as unreported, never as zero or unlimited, and the core paces at an owner-set ceiling.
+Only GitHub is built first. The seam is tested with a fake second provider. The test fails if the core needs any GitHub-specific field to handle the fake provider's records, or if a provider with no quota buckets shows anything but `unreported`. GitLab's admin pages describe per-minute rate-limit headers, and Forgejo's config reference names no API limit. Both were read through a summarizer and not collected, so both are unverified. Forgejo's quota is therefore treated as unknown: it is reported as unreported, never as zero or unlimited, and the core paces at an owner-set ceiling.
 
 gh-ingress publishes only what the core's providers deliver. Subjects already carry the forge token (`gh` today), so another forge is a new family, not a change to this one.
 
-**Quota.** The core samples its identity's quota once a minute; on GitHub that read is free. It keeps a local, owner-only series and flags unexplained spend: a drop larger than its own counted calls, inside one reset window.
-- Process attribution is optional, off by default, local only, and records no command lines.
-- gh-ingress may publish a quota health summary (remaining, reset, the flag) on its heartbeat. It never publishes the series detail or any attribution.
-- Viewing quota never causes a forge call.
+**Quota.** The core samples its identity's quota once a minute; on GitHub that read is free (MEASURED, section 2).
+- **The series:** an append-only file, mode 0600, owned by the core's user. It holds 7 days at 1-minute resolution, plus a 3 s ring for the last hour.
+- **Unexplained spend:** a drop in remaining larger than the core's own counted calls (retries included), beyond a tolerance, inside one reset window and never across a reset. It is shown as "unexplained spend", with no verdict on who caused it. The tolerance is set from real sampling before the flag is trusted.
+- **Process attribution:**
+  - optional and off by default;
+  - local only, own uid only;
+  - records the process name and uid, never command lines or environment;
+  - every result is labelled `candidate`.
+- **The bus:** gh-ingress may publish a quota health summary (remaining, reset, the flag) on its heartbeat. It never publishes the series detail or any attribution.
+- **Viewing** never causes a forge call (section 6).
+- **BetterDials as a quota console:** views and windows are `<core> select` entries, a press opens settings or a local report, and charts arrive through BetterDials' bounded `image` field. The design is in BetterDials `docs/design/cli-key.md` section 5a.
+
+Tests:
+1. The series file is created 0600, and a sample older than 7 days is trimmed.
+2. A fixture where remaining drops by 50 while the core counted 10 raises the flag. A drop across a reset does not. A retried 5xx is counted as the core's own spend.
+3. With attribution off, no `lsof` or `nettop` is spawned (recording spawner).
+4. With attribution on, output is labelled `candidate` and carries name and uid only. A canary placed in a fixture process's arguments never appears.
+5. The heartbeat summary carries remaining, reset and the flag, and no series or attribution field.
 
 ## 9. Work items
 
