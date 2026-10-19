@@ -440,6 +440,11 @@ func (w *PresenceWatch) deriveClusters(now time.Time, gap bool, ev *[]watchEvent
 	}
 }
 
+// Releasable reports whether mail held for the cluster may go out: one of its
+// supervisor instances is present and its row is beating, that is, its ts has
+// moved since the watch first saw that row (design section 4).
+func (w *PresenceWatch) Releasable(cluster string) bool { return false }
+
 // AbsenceDuration is how long the unit has been absent at now, less any host
 // sleep inside that span (R-209). It is zero for a unit that is not absent.
 func (w *PresenceWatch) AbsenceDuration(unit string, now time.Time) time.Duration {

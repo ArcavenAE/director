@@ -68,6 +68,8 @@ type presenceWatcher struct {
 	mono  func() time.Duration
 
 	pending []string // notices not yet reported
+
+	hold *heldStore
 }
 
 func newPresenceWatcher(store *watchStore, w *PresenceWatch, scan func(context.Context) watchScan, logf func(string, ...any)) *presenceWatcher {
@@ -232,4 +234,9 @@ func (g *globalTier) watchScan(ctx context.Context) watchScan {
 		sc.Rows = append(sc.Rows, row)
 	}
 	return sc
+}
+
+// toolCancelHeld withdraws a held send, or replaces it with a later one.
+func toolCancelHeld(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
+	return nil, errors.New("cancel_held is not built")
 }

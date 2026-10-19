@@ -25,6 +25,7 @@ type watchFx struct {
 	ctx context.Context
 	rig *leafRig
 	kv  jetstream.KeyValue
+	gjs jetstream.JetStream
 	bus *Bus
 	dir string
 	clk *wclock
@@ -52,15 +53,35 @@ func newWatchFx(t *testing.T, ctx context.Context, ttl time.Duration, on bool) *
 		t.Fatal(err)
 	}
 	t.Cleanup(bus.close)
-	fx := &watchFx{t: t, ctx: ctx, rig: rig, kv: kv, bus: bus, dir: dir, clk: newWclock()}
-	if err := bus.startPresenceWatch(nil); err != nil {
-		t.Fatal(err)
-	}
-	if bus.watch != nil {
-		bus.watch.now = func() time.Time { return fx.clk.wall }
-		bus.watch.mono = func() time.Duration { return fx.clk.mono }
-	}
+	fx := &watchFx{t: t, ctx: ctx, rig: rig, kv: kv, gjs: gjs, bus: bus, dir: dir, clk: newWclock()}
+	fx.wire()
 	return fx
+}
+
+// wire starts the watch on the current bus and gives it the injected clock.
+func (fx *watchFx) wire() {
+	fx.t.Helper()
+	if err := fx.bus.startPresenceWatch(nil); err != nil {
+		fx.t.Fatal(err)
+	}
+	if fx.bus.watch != nil {
+		fx.bus.watch.now = func() time.Time { return fx.clk.wall }
+		fx.bus.watch.mono = func() time.Duration { return fx.clk.mono }
+	}
+}
+
+// restart is a new shim process on the same state directory and the same hub:
+// the old bus closes, a new one attaches, and the watch loads what the old one saved.
+func (fx *watchFx) restart() {
+	fx.t.Helper()
+	fx.bus.close()
+	bus, err := connect(fx.ctx, fx.rig.leafURL, Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}, &globalConfig{Domain: "global", Cluster: "kinu", Role: roleDirector})
+	if err != nil {
+		fx.t.Fatal(err)
+	}
+	fx.t.Cleanup(bus.close)
+	fx.bus = bus
+	fx.wire()
 }
 
 // tick advances the injected clock one heartbeat and runs the watch.
