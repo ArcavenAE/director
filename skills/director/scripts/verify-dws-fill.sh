@@ -317,6 +317,26 @@ entry 2701 2026-10-18T10:00:00Z agent://t/n pl1
 DWS_NOW=2099-01-01T00:00:00Z netrun "$root/plant/dws" refresh --local >"$root/plant.out" 2>&1 || true
 [[ -s "$NETLOG" ]] && ok "test 12 control: the socket guard flags a planted urllib connect" || bad "test 12 control: a planted urllib connect goes unseen by the socket guard" "$(cat "$root/plant.out")"
 
+# test 12 control, children: a planted subprocess of curl, by absolute path and by bare name, is
+# invisible to the PATH stubs (they only stand in for gh and bd) and to the socket guard (the connect
+# is made by another process). Spawns are recorded to SPAWNLOG by the guard, and the strong layer
+# below runs the same plants under a profile that denies the network to every process.
+SPAWNLOG="$root/spawnlog"
+for how in abs bare; do
+  python3 - "$DWS" "$root/plant/dws-curl-$how" "$how" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+hook = "def cmd_refresh_local(a):\n"
+exe = "/usr/bin/curl" if sys.argv[3] == "abs" else "curl"
+planted = hook + "    import subprocess\n    subprocess.run(['%s', '-sv', '--max-time', '2', 'http://127.0.0.1:9/'], check=True)\n" % exe
+open(sys.argv[2], "w").write(t.replace(hook, planted, 1))
+P
+  chmod +x "$root/plant/dws-curl-$how"
+  : >"$SPAWNLOG"
+  DWS_NOW=2099-01-01T00:00:00Z netrun "$root/plant/dws-curl-$how" refresh --local >/dev/null 2>&1 || true
+  [[ -s "$SPAWNLOG" ]] && ok "test 12 control: the spawn record flags a planted subprocess of curl ($how)" || bad "test 12 control: a planted curl ($how) goes unseen by the spawn record"
+done
+
 # --- test 13: no render loop -------------------------------------------------------------------------
 fresh_state
 mkdir -p "$root/copy"
