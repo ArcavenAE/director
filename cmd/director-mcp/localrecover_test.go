@@ -204,8 +204,17 @@ func TestBrokerLostLocalDurableKeepsAHeldMessageMarkable(t *testing.T) {
 	if out, err := bus.markHandled(ctx, "local", "h3", "handled", ""); err != nil || out["acked"] != true {
 		t.Fatalf("CONTROL FAILED: h3 should mark and ack on the rebuilt durable: %v %v", out, err)
 	}
+	// The new durable redelivered h1 (the handled state swapped in a live ack
+	// handle), so the broker holds it ack-pending; a rebuild that started after
+	// h2 would leave 0 here and h1's old handle dead.
+	if n := ackPending(t, ctx, bus.consumer); n != 1 {
+		t.Fatalf("ack-pending on the rebuilt durable = %d, want 1 (h1 redelivered)", n)
+	}
 	out, err := bus.markHandled(ctx, "local", "h1", "handled", "")
 	if err != nil || out["acked"] != true {
 		t.Fatalf("the held h1 must still ack after the rebuild (the rebuild must redeliver it): %v %v", out, err)
+	}
+	if n := ackPending(t, ctx, bus.consumer); n != 0 {
+		t.Fatalf("ack-pending after marking h1 = %d, want 0", n)
 	}
 }

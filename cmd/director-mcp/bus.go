@@ -73,6 +73,10 @@ type Bus struct {
 	cueState func() (state, reason string)
 	// handled is the handled-mode state (K4); nil keeps ack-on-read.
 	handled *handledState
+	// localMu guards consumer and local: a rebuild replaces the consumer
+	// (localrecover.go), and the cue watcher reads it on another goroutine.
+	localMu sync.Mutex
+	local   localState
 }
 
 // localConsumerInactive is the local durable's inactive threshold. The inbox
@@ -257,6 +261,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	if ferr != nil && floor == 0 {
 		localWhy = "listing this seat's local durables failed: " + ferr.Error()
 	}
+	baseCfg := cfg // a rebuild starts from this, with its own start sequence
 	if floor > 0 {
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
 		cfg.OptStartSeq = floor + 1
@@ -267,6 +272,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		return nil, fmt.Errorf("durable consumer: %w", err)
 	}
 	b.consumer = cons
+	b.local = localState{cfg: baseCfg, acked: floor, checked: time.Now()}
 	b.noteResumed("local", floor, cons, localWhy)
 	return b, nil
 }
@@ -1027,13 +1033,24 @@ func (b *Bus) refuseArgs(ctx context.Context, raw json.RawMessage, refusal error
 // its budget.
 func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, uint64, error) {
 	deadline := time.Now().Add(timeout)
+	rebuilt := false
 	for {
 		left := time.Until(deadline)
 		if left <= 0 {
 			left = time.Millisecond // always one fetch, so a zero budget still reads
 		}
-		msgs, err := b.consumer.Fetch(1, jetstream.FetchMaxWait(left))
+		msgs, err := b.cons().Fetch(1, jetstream.FetchMaxWait(left))
 		if err != nil {
+			// A durable the broker no longer has is rebuilt once and the fetch
+			// retried (director#269).
+			if !rebuilt {
+				rebuilt = true
+				if ok, rerr := b.recoverLocal(ctx, err); rerr != nil {
+					return nil, 0, rerr
+				} else if ok {
+					continue
+				}
+			}
 			return nil, 0, err
 		}
 		skipped := false
@@ -1049,6 +1066,7 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			}
 			if b.handled == nil {
 				_ = m.Ack()
+				b.noteLocalAcked(seq)
 				return &e, seq, nil
 			}
 			deliver, herr := b.handled.settle(ctx, m, "local", &e, seq)
@@ -1061,10 +1079,29 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			skipped = true
 		}
 		if err := msgs.Error(); err != nil {
+			if !rebuilt {
+				rebuilt = true
+				if ok, rerr := b.recoverLocal(ctx, err); rerr != nil {
+					return nil, 0, rerr
+				} else if ok {
+					continue
+				}
+			}
 			return nil, 0, err
 		}
 		if !skipped || time.Until(deadline) <= 0 {
-			return nil, 0, nil // timed out, no message: a clean empty, not an error
+			// Timed out with no message. An empty poll on a durable the broker no
+			// longer has looks the same, so it asks, at most once per
+			// durableCheckEvery.
+			if !skipped && !rebuilt {
+				rebuilt = true
+				if ok, rerr := b.recheckLocal(ctx); rerr != nil {
+					return nil, 0, rerr
+				} else if ok && time.Until(deadline) > 0 {
+					continue
+				}
+			}
+			return nil, 0, nil // a clean empty, not an error
 		}
 	}
 }
@@ -1072,6 +1109,10 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 // noteTierAcked tells the global tier an ack landed, so its acked floor
 // follows acks made by mark_handled and not only reads.
 func (b *Bus) noteTierAcked(tier string, seq uint64) {
+	if tier == "local" {
+		b.noteLocalAcked(seq)
+		return
+	}
 	if tier != "global" {
 		return
 	}
@@ -1213,7 +1254,7 @@ func (b *Bus) takeWaiting(ctx context.Context, res *pollResult, notices *string)
 	for _, tier := range order {
 		var items []drained
 		if tier == "local" {
-			items, _, _ = pullNoWait(ctx, b.consumer, 1, "local", b.handled)
+			items, _, _ = b.pullLocalNoWait(ctx, 1)
 		} else {
 			g, err := b.globalReady(ctx)
 			if err != nil {

@@ -278,7 +278,7 @@ func (b *Bus) drainWaiting(ctx context.Context, n int, res *batchResult) error {
 // drainLocal takes up to n waiting local messages into res.
 func (b *Bus) drainLocal(ctx context.Context, n int, res *batchResult) error {
 	items, disc, err := drainAll(func(k int) ([]drained, int, error) {
-		return pullNoWait(ctx, b.consumer, k, "local", b.handled)
+		return b.pullLocalNoWait(ctx, k)
 	}, n)
 	res.Items = append(res.Items, items...)
 	res.Discarded += disc
@@ -322,7 +322,7 @@ func (b *Bus) receiveBatch(ctx context.Context, timeout time.Duration, max int) 
 // is left out rather than guessed.
 func (b *Bus) remaining(ctx context.Context) map[string]uint64 {
 	out := map[string]uint64{}
-	if info, err := b.consumer.Info(ctx); err == nil {
+	if info, err := b.cons().Info(ctx); err == nil {
 		out["local"] = info.NumPending + uint64(info.NumAckPending)
 	}
 	if b.globalCfg != nil {
@@ -561,7 +561,16 @@ type summaryResult struct {
 // acks nothing.
 func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, error) {
 	res := summaryResult{Expected: map[string]uint64{}, Read: map[string]int{}, MaybeConsumed: map[string]int{}}
-	items, exp, maybe, err := peekWaiting(ctx, b.js, b.consumer, "local", limit)
+	items, exp, maybe, err := peekWaiting(ctx, b.js, b.cons(), "local", limit)
+	if err != nil {
+		// A durable the broker no longer has is rebuilt once and the summary
+		// read again (director#269).
+		if ok, rerr := b.recoverLocal(ctx, err); rerr != nil {
+			err = rerr
+		} else if ok {
+			items, exp, maybe, err = peekWaiting(ctx, b.js, b.cons(), "local", limit)
+		}
+	}
 	if err != nil {
 		return res, fmt.Errorf("local inbox summary: %w", err)
 	}
