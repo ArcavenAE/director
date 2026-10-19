@@ -38,7 +38,7 @@ Rules:
 - **Busy signal:** the `rate_limit` read, with exponential backoff to a cap. MEASURED 2026-10-19: three reads in a row left `used` at 526.
 - **Fast poll:** only for a repo with a real run in progress, with a ceiling so a stuck run drops back.
 - **Pacing ceilings.** Each call class (membership, state, live reads, quota) has an owner-set ceiling per reset window. A class that reaches its ceiling makes no more calls until the window rolls over, and says so in the health record.
-- **Pagination** past 100 results is built from the first version. More than 100 open PRs is a health warning, never a silent truncation.
+- **Pagination** past 100 results is built from the first version. That GraphQL caps `first` at 100 is INFERRED from GitHub's API limits, not measured here. More than 100 open PRs is a health warning, never a silent truncation.
 - **UNKNOWN is bounded.** A PR whose `mergeable` stays UNKNOWN for 3 cycles is reported as a health warning naming the PR, and is still never published as a state.
 
 **Cost per cycle, measured 2026-10-19 at 10:26Z.** There were 81 open PRs across 23 repos, on 23 distinct base branches, none of them a non-default base. The open-PR search cost 1 point. A 60 s cycle then spends:
@@ -46,7 +46,7 @@ Rules:
 - one ETag'd read for each of the 23 bases, and one ETag'd membership list for each watched repo (43). These are free on a 304: MEASURED once for a list, INFERRED for branch reads;
 - a few points for live reads, only when a head or a base moved.
 
-That is about 120 GraphQL points an hour, against 5,000. The REST spend is only the lists and branches that changed.
+That is about 120 GraphQL points an hour, against 5,000. The REST lists cost nothing while unchanged: the 304 was MEASURED for a list. Free 304s on branch reads are INFERRED. If that is wrong, the 23 base reads cost about 1,380 REST calls an hour at a 60 s cycle, against 5,000. Collection test 11 measures it before the cadence is fixed.
 
 ### Tests for the collection rules
 
@@ -61,6 +61,9 @@ Each rule above has a red test against a fake GitHub server:
 8. A failed cycle leaves the generation time unchanged, and a reader shows `unknown` after 3 cycles.
 9. A class that reaches its pacing ceiling makes no further requests in the fake server's log until the window rolls over, and the health record names the class.
 10. A fast poll on a run that stays IN_PROGRESS past the ceiling drops back to the normal cycle.
+11. **A manual measurement, run once before release.** A conditional branch read that returns 304 leaves `x-ratelimit-used` unchanged. If it does not, the cycle for base reads lengthens until they fit the REST ceiling.
+12. **Reload.** On SIGHUP, a list file that has turned group-writable, or that another uid now owns, is refused: the old list stays in force and the health record says why. A valid new file takes effect, and its removed repos stop being fetched.
+13. **Dotted repo at load.** A list entry `org/a.b` is refused with a warning naming it. The fake server logs no request for it, and other entries still load.
 
 ## 3. The core's guarantees
 
@@ -80,7 +83,7 @@ Each rule above has a red test against a fake GitHub server:
 
 ## 4. Credential
 
-- **Interim.** The core shells out to `gh api graphql`, so it never holds a token. The login gh uses carries whatever scopes its owner granted, which for an interactive login usually includes write scopes. Read-only then rests on the fixed query set alone. The operator is told the measured scopes plainly, in a private record, not here.
+- **Interim.** The core shells out to `gh api graphql`, so it never holds a token. The login gh uses carries whatever scopes its owner granted. For the login in use, those include write scopes (MEASURED; recorded privately). Read-only then rests on the fixed query set alone. The operator is told the measured scopes plainly, in a private record, not here.
 - **Target.** A dedicated read-only credential. The core reads the credential's grants at start and refuses any write grant.
   - **How the grants are read.**
     - A classic OAuth token reports `X-OAuth-Scopes`. MEASURED on the gh login.
@@ -88,7 +91,7 @@ Each rule above has a red test against a fake GitHub server:
     - How to read a fine-grained PAT's grants is not verified. If none is found, the check fails closed: the core does not run on a credential whose grants it cannot read.
   - **Date.** No date is set. The operator sets it on the credential card. The card recommends about two weeks after it is ruled.
   - **The interim:** with the gh login as the source, the grant check runs in report mode. It prints the login's scopes and the word `interim` at start, and does not refuse. It refuses only for a dedicated source. The publishing refusal below means the interim never feeds the bus.
-  - **App.** A GitHub App owned by the ArcavenAE org, installed on the watched repos only, with read-only permissions. A minter holds the App key and writes a 1 h installation token. The minter runs as its own local user on the core's host (round 7, 6-0). The key is 0600 and owned by that user. The core's user can read the token file and never the key, so the same-uid reader the earlier draft named cannot reach the key.
+  - **App.** A GitHub App owned by the ArcavenAE org, installed on the watched repos only, with read-only permissions. A minter holds the App key and writes an installation token. That such a token lasts 1 h, and that an installation can be limited to selected repos, are INFERRED from GitHub's App model and not yet measured. The minter runs as its own local user on the core's host (round 7, 6-0). The key is 0600 and owned by that user. The core's user can read the token file and never the key, so the same-uid reader the earlier draft named cannot reach the key.
   - **PAT.** A fine-grained token with the ArcavenAE org as its resource owner, "only select repositories" set to the watch list, and read-only permissions, kept in its own keychain item.
   - **Permissions,** for either: metadata, contents, pull requests, checks, commit statuses, deployments and actions, all read. INFERRED from the queries in section 2, not yet checked against GitHub's permission tables. The start-up grant check is the test.
 - **This is an exception to the custody rule.** The rule says a component must not hold an artifact that is bearer authority at a third party, and both shapes are. Only the operator's ruling can grant the exception. The design records that it asks for one.
@@ -144,10 +147,10 @@ Each rule above has a red test against a fake GitHub server:
 | no publishing from a gh login | With the credential source set to a gh login and the adapter enabled, gh-ingress refuses and says why. |
 | least-privilege token | With a dedicated credential that carries a write grant, start-up fails and names the grant. With the gh login as source, start-up prints the scopes and `interim` and runs (report mode). The interim fails least privilege by design until the operator's date (section 4). |
 | viewing never calls the forge | Every CLI verb in section 3, every quota view and window, and `--image` is run 100 times against the fake forge, and its request log does not change. A manual check against GitHub reads `x-ratelimit-used` before and after: unchanged. |
-| an image carries no active content | `<core> quota ... --image` output passes the image rules in section 8 (a desk-controller plugin's own design defines the same rules). A fixture that injects `script`, `foreignObject`, `on*`, an external `href`, CSS `url()` or `@import` into a chart label shows that the drawing escapes it. |
+| an image carries no active content | `<core> quota ... --image` output passes the image rules in section 8, and is checked by image tests 1 to 4 there. |
 | subject tokens | A repo `a.b` in a fixture publishes nothing, and logs and counts one drop. A repo `a-b_1` publishes. |
 | dedupe | The same fact read twice gives one `Nats-Msg-Id`. A changed `updated_at` or head SHA gives a new one. A `review.stale` in the same window gives the same id, and in the next window a new one. A webhook GUID in a header does not change the id. |
-| webhook receiver (later) | A bad or missing `X-Hub-Signature-256` gets 401 and changes no state. |
+| webhook receiver (later) | A bad or missing `X-Hub-Signature-256` gets 401 and changes no state. The header's name and its HMAC-SHA256 scheme are INFERRED from GitHub's webhook model, and get checked in that build's own review. |
 
 ## 7. Sequencing
 
@@ -177,7 +180,7 @@ gh-ingress publishes only what the core's providers deliver. Subjects already ca
   - every result is labelled `candidate`.
 - **The bus:** gh-ingress may publish a quota health summary (remaining, reset, the flag) on its heartbeat. It never publishes the series detail or any attribution.
 - **Viewing** never causes a forge call (section 6).
-- **A desk controller as a quota console:** views and windows are `<core> select` entries, a press opens settings or a local report, and charts arrive as bounded images (section 8, image rules). The controller's own design defines the same rules.
+- **A desk controller as a quota console:** views and windows are `<core> select` entries, a press opens settings or a local report, and charts arrive as bounded images (section 8, image rules). The core checks its own output against the image rules below, so a consumer receives no active content.
 
 Tests:
 1. The series file is created 0600, and a sample older than 7 days is trimmed.
@@ -187,6 +190,14 @@ Tests:
 5. The heartbeat summary carries remaining, reset and the flag, and no series or attribution field.
 6. A quota view for an identity that is not configured is refused, and the fake forge's log shows zero calls.
 7. With the sampler stopped, every quota view reads `unknown` after 3 cycles, and an `--image` output carries no chart.
+
+**Image rules.** `--image` prints either a PNG data URI, or an SVG data URI in base64 or percent-encoded UTF-8. The SVG holds no `script`, no `foreignObject`, no `on*` attribute, no `href` or `xlink:href` except to a fragment, no CSS `url()` except to a fragment, and no `@import`. Each image is at most 64 KiB. Label text drawn into a chart is escaped as character data.
+
+Image tests:
+1. A fixture whose labels carry each forbidden construct produces an SVG that holds none of them, checked by parsing the output, in both encodings.
+2. A positive control: the same checker rejects a hand-written SVG holding each construct.
+3. Output stays under 64 KiB at the largest window and view.
+4. A stale series yields no image (quota test 7).
 
 ## 9. Work items
 
