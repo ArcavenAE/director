@@ -145,6 +145,9 @@ func dispatchTool(ctx context.Context, bus *Bus, name string, rawArgs json.RawMe
 	case "report_status":
 		return toolReportStatus(ctx, bus, rawArgs)
 	case "cancel_held":
+		if bus.watch == nil {
+			return nil, errors.New("unknown tool: " + name) // behind the watch's flag, as main answers
+		}
 		return toolCancelHeld(ctx, bus, rawArgs)
 	case "mark_handled":
 		if bus.handled == nil {
