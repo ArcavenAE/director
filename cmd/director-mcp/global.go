@@ -379,6 +379,10 @@ type globalTier struct {
 	acked   uint64
 	notice  string
 	checked time.Time // last time the durable's existence was confirmed
+
+	// lookup is a test seam for the hub lookup of the durable; nil in
+	// production (lookupConsumer).
+	lookup func(ctx context.Context, durable string) error
 }
 
 // attachGlobal builds the second JetStream context over the SAME connection
@@ -603,6 +607,15 @@ func (g *globalTier) recheck(ctx context.Context, agentID, instance string) (boo
 	return g.restore(ctx, agentID, instance)
 }
 
+// lookupConsumer is the hub lookup of this session's durable.
+func (g *globalTier) lookupConsumer(ctx context.Context, durable string) error {
+	if g.lookup != nil {
+		return g.lookup(ctx, durable)
+	}
+	_, err := g.js.Consumer(ctx, g.cfg.streamName(), durable)
+	return err
+}
+
 // restore asks the hub whether this session's durable exists. When the hub
 // answers that it does not, the durable is recreated to resume after the last
 // acked sequence and a notice is queued for the caller, so the loss is
@@ -610,7 +623,7 @@ func (g *globalTier) recheck(ctx context.Context, agentID, instance string) (boo
 // recreated the durable. A hub that cannot be asked changes nothing.
 func (g *globalTier) restore(ctx context.Context, agentID, instance string) (bool, error) {
 	durable := globalDurable(agentID, instance)
-	_, err := g.js.Consumer(ctx, g.cfg.streamName(), durable)
+	err := g.lookupConsumer(ctx, durable)
 	if err == nil {
 		g.mu.Lock()
 		g.checked = time.Now()
