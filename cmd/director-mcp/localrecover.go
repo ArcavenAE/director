@@ -108,8 +108,7 @@ func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 	durable := "mcp_" + b.self.AgentID + "_" + b.instance
 	// The window starts when the broker is asked, whatever it answers: a broker
 	// that cannot answer is not asked again on every empty poll. (The global
-	// tier's restore, global.go, advances it only on an answer; whether it needs
-	// the same change is a separate item.)
+	// tier's restore, global.go, does the same.)
 	b.localMu.Lock()
 	b.local.checked = time.Now()
 	b.localMu.Unlock()
