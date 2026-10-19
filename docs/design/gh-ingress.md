@@ -57,7 +57,7 @@ Each rule above has a red test against a fake GitHub server:
 4. A suite at QUEUED with no workflow run is not "in progress"; a suite with a run is.
 5. A base head that moves with no PR head change triggers a live read of the open PRs on that base, a stacked PR's parent included.
 6. 101 open PRs are all read across two pages, and a health warning is raised.
-7. A 403 or a secondary rate limit backs off exponentially to the cap, and the generation time stays where it was.
+7. A 403, a secondary rate limit, or a 429 backs off exponentially to the cap, and the generation time stays where it was. When `Retry-After` is present, no request reaches the fake server before it elapses.
 8. A failed cycle leaves the generation time unchanged, and a reader shows `unknown` after 3 cycles.
 9. A class that reaches its pacing ceiling makes no further requests in the fake server's log until the window rolls over, and the health record names the class.
 10. A fast poll on a run that stays IN_PROGRESS past the ceiling drops back to the normal cycle.
@@ -82,6 +82,10 @@ Each rule above has a red test against a fake GitHub server:
 
 - **Interim.** The core shells out to `gh api graphql`, so it never holds a token. The login gh uses carries whatever scopes its owner granted, which for an interactive login usually includes write scopes. Read-only then rests on the fixed query set alone. The operator is told the measured scopes plainly, in a private record, not here.
 - **Target.** A dedicated read-only credential. The core reads the credential's grants at start and refuses any write grant.
+  - **How the grants are read.**
+    - A classic OAuth token reports `X-OAuth-Scopes`. MEASURED on the gh login.
+    - An App installation token carries a `permissions` object in the mint response. INFERRED, not yet measured.
+    - How to read a fine-grained PAT's grants is not verified. If none is found, the check fails closed: the core does not run on a credential whose grants it cannot read.
   - **Date.** No date is set. The operator sets it on the credential card. The card recommends about two weeks after it is ruled.
   - **The interim:** with the gh login as the source, the grant check runs in report mode. It prints the login's scopes and the word `interim` at start, and does not refuse. It refuses only for a dedicated source. The publishing refusal below means the interim never feeds the bus.
   - **App.** A GitHub App owned by the ArcavenAE org, installed on the watched repos only, with read-only permissions. A minter holds the App key and writes a 1 h installation token. The minter runs as its own local user on the core's host (round 7, 6-0). The key is 0600 and owned by that user. The core's user can read the token file and never the key, so the same-uid reader the earlier draft named cannot reach the key.
@@ -127,11 +131,15 @@ Each rule above has a red test against a fake GitHub server:
 | core without NATS | No broker reachable and the adapter disabled: the view is returned, the log shows no connect attempt, and the core's dependency tree has no NATS client. |
 | core without a desk plugin | Plugin absent: `<core> watch` prints a change line within one cycle. |
 | each present | The view bytes are identical with marvel, NATS and the plugin present. |
+| NATS present, marvel absent | The broker carries a hand-written authorization block, and there is no marvel binary or socket. gh-ingress publishes its subjects, and a second user is denied publish on the heartbeat subject. The grant rows marvel renders (aae-orc-lgthv) are one way to write that block; none of them is required. |
+| the display contract | Every `<core> key` line exits 0 and starts with a word from `passing`, `failing`, `running` or `unknown`. This holds in every state, stale and error included. The same fixture file also passes BetterDials' `parse_status_line` (cli-key.md test 1). |
 | no caller-chosen fetch: an unlisted repo | `<core> key other/repo` and an adapter request for it each leave the fake server's log at zero requests. |
-| no caller-chosen fetch: a raw query | No CLI flag, socket message or bus message takes query text. A test sends GraphQL text through each input, and the log shows only the compiled queries. A source check fails on any `mutation`. |
+| no caller-chosen fetch: a raw query | No CLI flag, socket message or bus message takes query text. A test sends GraphQL text through each input, and the log shows only the compiled queries. |
+| no write call | The HTTP layer issues only GET, plus POST to `/graphql` with a compiled document. The fake server fails the test on any other method or path, so a REST write fails it as well as a GraphQL `mutation`. In the interim, a recording `gh` shim on `PATH` logs every argv. The test fails on any argv other than `api graphql` with a compiled query, or `api -X GET` on an allowlisted path. A source check for `mutation` stays as a second line. |
 | no caller-chosen fetch: a URL | A URL passed through each input is refused, and the log shows no request to it. |
 | no stranger widens the list | A bus or socket "add" leaves the list and the request log unchanged. A group- or world-writable file stops start-up. So does a file whose owner uid is not the core's, tested over an injected `stat` result because a test cannot `chown` without root. |
-| nothing sensitive leaves | Canary strings in fixture titles and bodies, plus token-shaped strings, never appear in the view, logs, CLI output or events. A positive control proves the scan works. |
+| nothing sensitive leaves | Token-shaped strings, and canary strings in fixture titles, bodies, branch names, commit status descriptions, check names and deployment descriptions, never appear in the view, logs, CLI output or events. A positive control proves the scan works. |
+| the minter's files | The App key is 0600 and owned by the minter user, so the core's uid gets EACCES reading it. The token file is 0640, owned by the minter user, in a group whose only member is the core's user. A third uid gets EACCES on both files. |
 | no unknown readers | A second uid is refused at the socket. `lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN` and `lsof -nP -a -p <pid> -iUDP` both print nothing for the core's pid, so it has no listener of either kind. Its only inet sockets are outbound TCP to the forge, seen with `lsof -nP -a -p <pid> -i`. |
 | no publishing from a gh login | With the credential source set to a gh login and the adapter enabled, gh-ingress refuses and says why. |
 | least-privilege token | With a dedicated credential that carries a write grant, start-up fails and names the grant. With the gh login as source, start-up prints the scopes and `interim` and runs (report mode). The interim fails least privilege by design until the operator's date (section 4). |
@@ -143,7 +151,7 @@ Each rule above has a red test against a fake GitHub server:
 
 ## 7. Sequencing
 
-1. **Now:** the core, its tests and its CLI. It publishes nowhere, so the broker's authorization work does not gate it. It runs on the interim credential once the operator has seen the scope note.
+1. **Now:** the core, its tests and its CLI. It publishes nowhere, so the broker's authorization work does not gate it. It runs on the interim credential once the operator has ruled the credential card, which states the login's scopes.
 2. **After the broker's authorization block is live on every broker that `events.<fleet>` reaches**, meaning each host's local broker, the hub and any leaf (aae-orc-umw8p, director#4): streams, grants, director-mcp's event tools, and gh-ingress publishing. This also needs the target credential, because of the refusal in section 4.
 3. **Later:** a webhook receiver on an always-on reachable host, with its own review. The poller stays as reconciliation.
 
@@ -177,6 +185,8 @@ Tests:
 3. With attribution off, no `lsof` or `nettop` is spawned (recording spawner).
 4. With attribution on, output is labelled `candidate` and carries name and uid only. A canary placed in a fixture process's arguments never appears.
 5. The heartbeat summary carries remaining, reset and the flag, and no series or attribution field.
+6. A quota view for an identity that is not configured is refused, and the fake forge's log shows zero calls.
+7. With the sampler stopped, every quota view reads `unknown` after 3 cycles, and an `--image` output carries no chart.
 
 ## 9. Work items
 
