@@ -73,7 +73,7 @@ working tree involved:
      `~/.director/bin/director-mcp-seat` at the installed copy BEFORE that
      clone is retired or re-cloned after the rewrite; until then, retiring
      the clone breaks the shim for every seat that names it.
-   - Optional: the launcher and the pinned wardrobe clone, which nothing on
+   - Optional: the launcher and the pinned role library clone, which nothing on
      mokuzai runs yet.
    - Later: moving skippy's manifests from inline role text to cast-launch is
      launch-parity phase 2's decision (aae-orc#421 names phase 2 as owner of
@@ -122,7 +122,7 @@ working tree involved:
    the operator. Revisit at the first-user milestone, or when a third host or
    a non-operator user appears:
    - a brew formula for the code (launcher, shim, board);
-   - sideshow for role content, which is wardrobe's shape.
+   - sideshow for role content, which is the role library's shape.
 
 ## Premises checked (one command each)
 
