@@ -1,7 +1,9 @@
 # A timed look at director's inbox: read and surface, never act
 
 Status: design for review, 2026-10-19. Owner: the architect role. Docs only;
-no code lands until this is reviewed.
+no code lands until this is reviewed. The three operator decisions in
+section 6 were ruled on 2026-10-19; section 6 records them, and section 3.4
+carries the rulings and the operator's added request (3.4.1).
 
 - Commission: the operator's queue, item B4: "a timed inbox drain for
   director. Today director drains only when the operator speaks." The
@@ -157,10 +159,9 @@ trains a person to ignore it.
 
 **The reminder** (vote E4, 5-0): a GATE that stays unread notifies again
 every N hours.
-- N is the operator's: card 1. The panel's suggestion is 4 h, never under
-  1 h, with a cap of 3 repeats: 4 notifications in all for one gate, the
-  first one included.
-- **The cap is a choice, and card 1 offers "no cap" too.** With a cap, a gate
+- N is 4 h with a cap of 3 repeats, ruled by the operator (card 1,
+  2026-10-19): 4 notifications in all for one gate, the first one included.
+- **The cap, as ruled.** With a cap, a gate
   still unread after the last repeat stays in the digest and never notifies
   again, so it is silenced for good. The reason to cap anyway: a reminder
   that never stops trains a person to dismiss it, and then the next new gate
@@ -177,7 +178,10 @@ every N hours.
   the window and counts toward its cap as usual. The cap applies only to
   gates. The one summary at the end of a quiet window is not a gate
   reminder, counts toward no cap, and posts at most once per window.
-- **Quiet hours** (card 2) hold every notification except a gate. A held
+- **Quiet hours** (card 2, ruled 2026-10-19: a window) hold every
+  notification except a gate. The window's times are on their own card,
+  derived from the operator's own activity on the Desk, as the operator
+  asked. Until that card is ruled the job runs with no window. A held
   notification is not posted, and it is not queued one by one. At the end of
   the window, if the urgent set is still not empty, one notification posts
   with the counts as they stand then. Gate reminders are gates, so they
@@ -186,6 +190,36 @@ every N hours.
 **Liveness.** Each run writes a heartbeat file with the time and the counts,
 even when the counts are zero. A second check flags a heartbeat older than
 two intervals (30 minutes), so a stuck job fails loud.
+
+#### 3.4.1 A gate as a Desk item, so it can be cleared
+
+The operator, ruling card 1: "it can also go to a deck item or a new class
+of deck items so that we can clear it." Today a gate the cap has silenced
+waits in the digest with no way to say "seen, leave it", and a gate the
+operator has already handled keeps notifying until the cap.
+
+- **Who writes the item.** Director, never the job. The job cannot reach the
+  Desk: artifact data is reachable from a session, not from a script
+  (director finding-director-glst). On its sweep, director reads
+  `notify.json` and writes one Desk item for each gate that has none yet,
+  under the existing rule that every operator decision goes to the Desk on
+  first sight.
+- **A new kind.** The item's `kind` is `gate`, beside `choice` and `action`.
+  It carries the gate's id, sender, tier, stream and sequence, its age, and
+  one answer, **clear**. It carries no body: the Desk item points at the
+  message, as the digest does.
+- **What clearing does.** Clearing tells the job to stop reminding. It is
+  not an ack: the bus message stays unread, and the gate's own decision is
+  still whatever the operator writes on its decision card. Director reads
+  the answer on its next sweep and writes the gate's key to `cleared.json`.
+  The poster skips a cleared key, and the digest shows it under a "cleared"
+  line instead of the urgent set.
+- **The same pattern as the Desk snapshot.** A session reads the Desk and
+  writes a local file a script reads (director `desk-snapshot`, K13). The
+  job only reads `cleared.json` and never writes it.
+- **Before director has swept,** nothing changes: the gate notifies on its
+  ruled schedule. Clearing can only end reminders, never start or speed
+  them up.
 
 ### 3.5 Never acting, by mechanism (vote E2, 5-0)
 
@@ -307,6 +341,7 @@ gets no credential: its environment is built empty apart from `PATH` and
 | `digest.txt` | look | the text shown in 3.4, rewritten in full each run, 0600 |
 | `notify.json` | look | `{"as_of", "urgent": [{"tier", "stream", "seq", "class", "id", "sender", "age_s", "stage"}], "reader": "ok" or the failure}`, 0600 |
 | `reminders.json` | poster | `{"<tier>/<stream>/<seq>": {"first", "last", "count"}}`, 0600 |
+| `cleared.json` | director, from Desk answers (3.4.1) | `{"<tier>/<stream>/<seq>": {"at", "desk_id"}}`, 0600; the job only reads it |
 | `heartbeat.json` | look | `{"at", "local": n, "global": n, "reader"}`, written every run, even with zero counts and even when the reader failed, 0600 |
 | `look.sb` | installer | the sandbox profile |
 | `look.log` | launchd | stdout and stderr of both steps |
@@ -419,6 +454,12 @@ count, so they share the unread reader and its field names.
    window covering repeats 2 and 3, the gate still stops after 4
    notifications. The end-of-window summary leaves every gate's count
    unchanged.
+7a2. **Cleared on the Desk.** With a gate's key in `cleared.json`, the poster
+   posts no further reminder for it, the digest lists it under "cleared",
+   and the bus message is still unread (an unread count before and after
+   is the same). A key in `cleared.json` that matches no gate changes
+   nothing. A malformed `cleared.json` is a reader line in the digest and
+   leaves every gate on its schedule, so a bad file cannot silence one.
 7b. **Classification.** A `REQUEST` whose body starts with `GATE (ready)` is a
    gate. An `INFORM` whose body has a `GATE` line is a gate. A `REQUEST` with
    no `reply_by` is never urgent. One past its `reply_by` is urgent.
@@ -449,12 +490,15 @@ count, so they share the unread reader and its field names.
 
 Each goes on its own card, valid until 2026-10-30, and the architect role
 re-checks it then:
-1. The gate reminder interval N, and whether it has a cap. Suggested: 4 h,
-   never under 1 h, cap 3 repeats (4 notifications). "No cap" is an option,
-   with its cost (3.4).
+1. The gate reminder interval N, and whether it has a cap. **Ruled
+   2026-10-19: every 4 hours, at most 3 repeats**, with the operator's
+   request for a Desk item that clears a gate (3.4.1).
 2. Quiet hours: whether there is a window, and when it is. GATE passes
-   through either way.
-3. Granting the read-only NATS user once the broker's authorization block
+   through either way. **Ruled 2026-10-19: a window**, its times derived
+   from the operator's least active hours; the times are on a follow-up
+   card.
+3. **Ruled 2026-10-19: grant, when the broker's authorization block lands.**
+   Granting the read-only NATS user once the broker's authorization block
    is live. The user can send only the read requests in the 3.5 table, and
    cannot ack, consume, create or delete consumers, delete messages or write
    presence. It can, by its grant, read any seat's mail on the shared inbox
