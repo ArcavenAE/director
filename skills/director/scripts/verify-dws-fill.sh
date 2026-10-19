@@ -37,6 +37,26 @@ for t in gh bd; do
   chmod +x "$root/stubs/$t"
 done
 export PATH="$root/stubs:$PATH"
+# A socket-layer guard for the network claim: a sitecustomize that records, then refuses, every
+# connect, connect_ex and name lookup in a python process started with it on PYTHONPATH. It
+# sees a library call (urllib, http.client, a raw socket) that no stubbed binary would.
+NETLOG="$root/netlog"
+mkdir -p "$root/netguard"
+cat >"$root/netguard/sitecustomize.py" <<'PYG'
+import os, socket
+_log = os.environ["NETLOG"]
+def _note(what, arg):
+    with open(_log, "a") as f:
+        f.write("%s %r\n" % (what, arg))
+    raise OSError("network refused by the verifier: " + what)
+socket.socket.connect = lambda self, addr, *a, **k: _note("connect", addr)
+socket.socket.connect_ex = lambda self, addr, *a, **k: _note("connect_ex", addr)
+socket.getaddrinfo = lambda host, *a, **k: _note("getaddrinfo", host)
+socket.gethostbyname = lambda host: _note("gethostbyname", host)
+socket.gethostbyname_ex = lambda host: _note("gethostbyname_ex", host)
+PYG
+# netrun CMD...: run CMD with the guard on, so any network use lands in $NETLOG.
+netrun() { NETLOG="$NETLOG" PYTHONPATH="$root/netguard${PYTHONPATH:+:$PYTHONPATH}" "$@"; }
 
 lines() { if [[ -f "$LEDGER" ]]; then wc -l <"$LEDGER" | tr -d ' '; else echo 0; fi; }
 field() { "$DWS" show --json | python3 -c 'import json,sys;rows={r["slug"]:r for r in json.load(sys.stdin)["rows"]};print(rows[sys.argv[1]][sys.argv[2]])' "$1" "$2"; }
@@ -168,7 +188,19 @@ grep -qE 'not in writer form: *[0-9]+|[0-9]+ headings not in writer form' "$root
 fresh_state
 open_at 2026-10-05T10:00:00Z j1 --title "judge me" --owner director --stage "in review" --link pr:o/r#1
 entry 3000 2026-10-18T10:00:00Z agent://t/z j1
+# Sources that suggest each judging move: a PR link on an in-review row, a relay entry whose
+# header and text say accepted, parked, released and deployed, and a Desk card that is closed
+# on a row blocked on the operator (the held LF4 move).
+open_at 2026-10-05T10:00:00Z j2 --title "blocked on a closed card" --owner director --blocked operator --ask c9 --link ask:c9 2>/dev/null || true
+cat >>"$LEDGER" <<'J'
+{"ts":"2026-10-05T10:00:00Z","actor":"director","tag":"judgment","event":"open","ws":"j2","title":"blocked on a closed card","owner":"director","blocked":"operator","links":["ask:c9"]}
+J
+{ echo; echo "## R-3001 (2026-10-18T11:00:00Z) -> agent://t/accepted-parked-released-deployed"; echo "**Workstream:** j1, j2"; echo "**Text, verbatim:**"; echo "> accepted, parked, released, deployed, merged, open a new row"; echo "**Outcome:** pending"; } >>"$RELAY_LOG"
+printf '{"c9": {"status": "closed"}}' >"$root/cards7.json"
+DWS_NOW=2099-01-01T00:00:00Z "$SNAP" write --cards "$root/cards7.json" --reported 1 >/dev/null
 NOW=2099-01-01T00:00:00Z refresh_local >/dev/null 2>&1
+[[ "$(field j2 blocked)" == "operator" ]] && ok "test 7: a closed linked card does not clear the operator block (LF4 is held)" || bad "test 7: the block was cleared" "$(field j2 blocked)"
+[[ "$(field j1 stage)" == "in review" ]] && ok "test 7: no stage moved on any suggestion" || bad "test 7: a stage moved" "$(field j1 stage)"
 python3 - "$LEDGER" <<'P' && ok "test 7: the fill appends observe events only (no stage, park, open, set or link)" || bad "test 7: the fill appended a judging event"
 import json, sys
 ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
@@ -250,12 +282,18 @@ grep -A1 'blocked on the operator' "$root/unl" | grep -q 'ob'   && ok "unlinked 
 [[ "$(lines)" == "$n" ]] && ok "unlinked writes nothing" || bad "unlinked writes nothing"
 
 # --- test 12: --local reaches no network ------------------------------------------------------------
+# Two instruments: the stubbed gh and bd, which see a subprocess, and the socket guard, which sees
+# any connect or name lookup made from python itself. Rows carry pr, issue and bd links, a Desk
+# card and a relay entry, so every source the fill could reach is suggested to it.
 fresh_state
-open_at 2026-10-05T10:00:00Z g1 --title "net" --owner director --link pr:o/r#1 bd:aae-orc-zz1 issue:o/r#2
+open_at 2026-10-05T10:00:00Z g1 --title "net" --owner director --link pr:o/r#1 bd:aae-orc-zz1 issue:o/r#2 ask:c1
 entry 2700 2026-10-18T10:00:00Z agent://t/n g1
-: >"$CALLS"
-NOW=2099-01-01T00:00:00Z refresh_local >/dev/null 2>&1
-[[ ! -s "$CALLS" ]] && ok "test 12: the stubbed gh and bd were never called by refresh --local" || bad "test 12: network calls" "$(cat "$CALLS")"
+printf '{"c1": {"status": "open"}}' >"$root/cards12.json"
+DWS_NOW=2099-01-01T00:00:00Z "$SNAP" write --cards "$root/cards12.json" --reported 1 >/dev/null
+: >"$CALLS"; : >"$NETLOG"
+NOW=2099-01-01T00:00:00Z netrun bash -c 'DWS_NOW=2099-01-01T00:00:00Z "$0" refresh --local' "$DWS" >/dev/null 2>&1
+[[ ! -s "$CALLS" ]] && ok "test 12: the stubbed gh and bd were never called by refresh --local" || bad "test 12: subprocess network calls" "$(cat "$CALLS")"
+[[ ! -s "$NETLOG" ]] && ok "test 12: no connect or name lookup was made from python" || bad "test 12: socket-layer network use" "$(cat "$NETLOG")"
 [[ "$(field g1 last_moved)" == "2026-10-18T10:00:00Z" ]] && ok "test 12: and the local sources still moved the row" || bad "test 12: positive" "$(field g1 last_moved)"
 
 # test 12 control: the detector must see a connect that goes through no stubbed binary. A copy of
@@ -270,12 +308,14 @@ assert hook in t
 planted = hook + "    import urllib.request\n    try:\n        urllib.request.urlopen('http://127.0.0.1:9/', timeout=1)\n    except Exception:\n        pass\n"
 open(sys.argv[2], "w").write(t.replace(hook, planted, 1))
 P
+chmod +x "$root/plant/dws"
 fresh_state
 open_at 2026-10-05T10:00:00Z pl1 --title "plant" --owner director
 entry 2701 2026-10-18T10:00:00Z agent://t/n pl1
 : >"$CALLS"
-DWS_NOW=2099-01-01T00:00:00Z "$root/plant/dws" refresh --local >/dev/null 2>&1 || true
-[[ -s "$CALLS" ]] && ok "test 12 control: the detection flags a planted urllib connect" || bad "test 12 control: a planted urllib connect goes unseen by the detection"
+: >"$NETLOG"
+DWS_NOW=2099-01-01T00:00:00Z netrun "$root/plant/dws" refresh --local >"$root/plant.out" 2>&1 || true
+[[ -s "$NETLOG" ]] && ok "test 12 control: the socket guard flags a planted urllib connect" || bad "test 12 control: a planted urllib connect goes unseen by the socket guard" "$(cat "$root/plant.out")"
 
 # --- test 13: no render loop -------------------------------------------------------------------------
 fresh_state

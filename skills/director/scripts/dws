@@ -955,7 +955,7 @@ def cmd_unlinked(a):
     for c in open_cards:
         print(f"  {c}")
     print("sources:")
-    print("  relay: " + (f"newest entry {relay['newest'] or 'none'}; {relay['legacy']} headings not in writer form" if relay["ok"] else f"UNREAD ({relay['why']})"))
+    print("  relay: " + (f"newest entry stamped {relay['newest'] or 'none'} (the log's own time, not when it was read); {relay['legacy']} headings not in writer form" if relay["ok"] else f"UNREAD ({relay['why']})"))
     print("  Desk: " + (f"snapshot read {snap['read_at']}" if snap else desk_why))
     print("  ask ledger: not read (W5 is not built)")
 
