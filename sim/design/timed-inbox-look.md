@@ -167,6 +167,11 @@ every N hours.
 - A repeat re-displays an existing item. It is a reminder, which the
   automation boundary allows, and it never escalates to a send, an ack or a
   merge.
+- **Quiet hours and the cap.** Quiet hours never hold a gate, so they never
+  touch a gate's reminder count: a gate notifies on its own schedule inside
+  the window and counts toward its cap as usual. The cap applies only to
+  gates. The one summary at the end of a quiet window is not a gate
+  reminder, counts toward no cap, and posts at most once per window.
 - **Quiet hours** (card 2) hold every notification except a gate. A held
   notification is not posted, and it is not queued one by one. At the end of
   the window, if the urgent set is still not empty, one notification posts
@@ -182,6 +187,14 @@ two intervals (30 minutes), so a stuck job fails loud.
 A prompt line saying "do not act" is a request, not a control. "No publish"
 is also the wrong property: every JetStream read is itself a request
 published to a `$JS.API` subject. The property is an allowlist instead.
+
+**No allowlisted request advances a consumer.** None of the subjects below
+delivers a message through a consumer. `CONSUMER.INFO` and `CONSUMER.NAMES`
+read consumer state. `DIRECT.GET` and `STREAM.MSG.GET` read the stream by
+sequence or subject, outside any consumer. So a durable's delivered
+sequence, ack floor, pending count and redelivery count cannot move because
+of the look, and test 1 checks all four. Advancing a consumer needs
+`CONSUMER.MSG.NEXT` or an ack, and both are outside the list.
 
 **The allowlist.** The look may send a request to these subjects and no
 others, on each tier:
@@ -242,9 +255,24 @@ nothing: it writes files and exits.
 the sandbox, because posting a notification talks to the user's
 notification service, which the step-1 profile refuses. The poster reads
 `notify.json`, compares it with `reminders.json`, and posts at most one
-notification with `/usr/bin/osascript -e 'display notification ...'`. The
-text is built only from classes, counts and ages, never from a body, so
-there is nothing in it to quote. The poster opens no broker connection and
+notification with `/usr/bin/osascript`. The text is built only from classes,
+counts and ages, never from a body or a sender, but it is still passed as an
+argument and never written into the script:
+
+```sh
+/usr/bin/osascript \
+  -e 'on run argv' \
+  -e 'display notification (item 1 of argv) with title (item 2 of argv)' \
+  -e 'end run' \
+  -- "$text" "director look"
+```
+
+The script is a fixed string, so nothing a seat writes can become
+AppleScript. MEASURED 2026-10-19 on macOS 26.5.2: with a payload of
+`x" & (do shell script "touch <scratch file>") & "`, the interpolated form
+`osascript -e "return \"$text\""` created the file, and the argv form
+returned the payload as literal text and created nothing. The same held for
+a payload carrying `"`, `\` and `" & do shell script "..." & "`. The poster opens no broker connection and
 gets no credential: its environment is built empty apart from `PATH` and
 `HOME`.
 
@@ -278,7 +306,8 @@ count, so they share the unread reader and its field names.
 
 1. **No write, by state.** Run `look` against a broker seeded with a GATE
    whose body says "merge this". Afterwards:
-   - the durable's ack floor, its ack-pending count and the consumer list are
+   - each durable's delivered sequence, ack floor, ack-pending count,
+     pending count and redelivered count, and the consumer list, are
      unchanged;
    - nothing was published.
 2. **Only the allowlist, by the broker.** An embedded test server holds two
@@ -301,6 +330,14 @@ count, so they share the unread reader and its field names.
      that environment.
 4. **No body leaves.** A canary placed in a message body appears in neither
    the digest, the notification text nor the logs.
+4a. **No injection through the poster.** The poster is given a `notify.json`
+   whose class, sender and stage fields each carry `"`, `\`, and
+   `x" & (do shell script "touch <canary path>") & "`. A recording stub
+   stands in for `/usr/bin/osascript` and logs its argv.
+   - The script arguments are byte-identical to the fixed string above.
+   - Every field text appears only after `--`, as a literal argument.
+   - Run once against the real `osascript`, with `display notification`
+     replaced by `return`: the canary file does not exist afterwards.
 5. **A failure is a line.** With the broker down, the digest has a reader
    line naming the failure, and the counts are not shown as zero.
 6. **Notify on change only.** Two runs with the same mail post one
@@ -312,7 +349,11 @@ count, so they share the unread reader and its field names.
    tiers each get their own count.
 7a. **Quiet hours.** A request newly past its `reply_by` inside the window
    posts nothing. At the window's end, one notification posts if the urgent
-   set is still not empty. A gate inside the window posts as usual.
+   set is still not empty. A gate inside the window posts as usual, and its
+   repeats inside the window count toward its cap: with a cap of 3 and a
+   window covering repeats 2 and 3, the gate still stops after 4
+   notifications. The end-of-window summary leaves every gate's count
+   unchanged.
 7b. **Classification.** A `REQUEST` whose body starts with `GATE (ready)` is a
    gate. An `INFORM` whose body has a `GATE` line is a gate. A `REQUEST` with
    no `reply_by` is never urgent. One past its `reply_by` is urgent.
