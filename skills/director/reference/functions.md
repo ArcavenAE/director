@@ -270,15 +270,40 @@ in local or private state.
   be lost (SKILL.md, Capture triggers). Honor-only.
 - **Readers:** director and the operator.
 
+### 25. Presence watch and the held store
+
+- **Store:** under `$DIRECTOR_STATE`, `presence-watch.json` (the current state per
+  cluster and supervisor instance, rewritten whole), `presence-events.jsonl`
+  (append-only: every transition, gap, flap and foreign key) and `held.jsonl`
+  (append-only: one line per state change of a held send; its current state is
+  the last line).
+- **Writers:** the director shim, on its 30 second heartbeat, only when
+  `DIRECTOR_PRESENCE_WATCH=1` and the session holds the global director role
+  (`presencewatch_shim.go`). The held store is written by the same process
+  (`held.go`) under a file lock with an fsync. Enforced: with the flag off the
+  shim writes none of these, and a send that presence refuses is refused as before.
+  Honor-only: that nothing else writes them.
+- **Readers:** director, through `presence_notice` on `wait_for_message` and
+  `inbox_summary`, the sweep's `Away:` line (SKILL.md, Mode: sweep), and the
+  verifier `scripts/verify-presence-watch.sh`. A shim started with the flag off
+  while held records exist lists them as held, and sends none.
+- **What it is not:** a gate. It reports and releases; it blocks nothing
+  (SOUL section 8, ADR-007). A held send goes out only when its recipient has
+  returned and its presence row is beating, and only within its sell-by; past
+  that it is proposed for review, never sent on a clock.
+
 ## Thresholds
 
 Design D puts every threshold in one operator-editable table, out of any
-required check (section 4, the automation boundary). Today there are two:
+required check (section 4, the automation boundary). Today there are two places:
 
 - `board-html` carries `UNMOVED_HOURS` in the script, the hours a row may sit
   in a stage before the page says unmoved. `idea`, `accepted` and `parked`
   have no row, so they never flag (K7).
 - the director-mcp shim reads `thresholds.json` beside the seat's state, with
-  one row, `handled_ack_wait` (30 minutes by default; `handled.go`).
+  four rows: `handled_ack_wait` (30 minutes by default; `handled.go`) and the
+  presence watch's `presence_flap_window` (1 hour), `presence_flap_quiet` (15
+  minutes) and `presence_hold_sell_by` (8 hours), all in `handled.go`. The flap
+  count, 4, is fixed in `presencewatch.go` until a count row is wanted.
 
 Joining them is not part of K2.
