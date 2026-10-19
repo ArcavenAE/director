@@ -144,7 +144,13 @@ func TestWatchUnreadableIsUnknownNotAbsent(t *testing.T) {
 	if u := w.Unit("c1/a"); !u.Unknown || u.Status != unitPresent {
 		t.Fatalf("want present and unknown, got %+v", u)
 	}
-	// the row reads again: unknown clears, nothing is reported as back.
+	// the row reads again: unknown clears, nothing is reported as back. The
+	// control is the same sightings for a unit that is absent, which do report back.
+	wc, cc := absentUnit(t)
+	pass(wc, cc, supRow("c1", "a"))
+	if !has(pass(wc, cc, supRow("c1", "a")), "c1/a", "back") {
+		t.Fatal("CONTROL FAILED: two sightings of an absent unit must report back")
+	}
 	ev := pass(w, c, supRow("c1", "a"))
 	if w.Unit("c1/a").Unknown || has(ev, "c1/a", "back") {
 		t.Fatalf("a row that reads again should clear unknown quietly, got %+v", ev)
@@ -178,7 +184,19 @@ func TestWatchKeysErrorMarksAllUnknownOnce(t *testing.T) {
 			t.Fatalf("%s should read present and unknown, got %+v", name, u)
 		}
 	}
-	// the hub reads again: one sighted event, no absent and no back.
+	// the hub reads again: one sighted event, no absent and no back. The control
+	// is a pass after a recovery in which a unit has gone missing and another has
+	// returned, which does report both.
+	wc, cc := absentUnit(t)
+	pass(wc, cc, supRow("c1", "a"))
+	if ev := pass(wc, cc, supRow("c1", "a")); count(ev, "back") == 0 {
+		t.Fatalf("CONTROL FAILED: a return must report back, got %+v", ev)
+	}
+	wm, cm := established(t)
+	pass(wm, cm)
+	if ev := pass(wm, cm); count(ev, "absent") == 0 {
+		t.Fatalf("CONTROL FAILED: a disappearance must report absent, got %+v", ev)
+	}
 	ev := pass(w, c, supRow("c1", "a"), supRow("c2", "b"))
 	if count(ev, "sighted") != 1 || count(ev, "absent")+count(ev, "back") != 0 {
 		t.Fatalf("recovery should say sighted once and nothing else, got %+v", ev)

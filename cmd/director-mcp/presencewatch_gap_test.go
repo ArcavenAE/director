@@ -85,6 +85,14 @@ func TestWatchWallAheadOfMonotonicRecordsHostSleep(t *testing.T) {
 		t.Fatalf("CONTROL FAILED: a wall jump the monotonic clock also made is not a host sleep, got %+v", ev)
 	}
 
+	// control: the same unit missing for two ordinary passes does report a
+	// transition, so transitionsIn can see one.
+	w, c = established(t)
+	pass(w, c)
+	if n := transitionsIn(pass(w, c)); n == 0 {
+		t.Fatal("CONTROL FAILED: two missed passes must report a transition")
+	}
+
 	w, c = established(t)
 	from := c.wall
 	ev := c.skip(w, 10*time.Minute, 30*time.Second, supRow("c1", "a"))

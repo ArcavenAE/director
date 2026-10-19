@@ -65,14 +65,20 @@ func TestWatchStateSurvivesRestart(t *testing.T) {
 func TestWatchRestartRecordsDownGap(t *testing.T) {
 	dir := t.TempDir()
 	st := newWatchStore(dir)
-	w, c := established(t)
+	// the saved unit is absent, so a return was possible across the restart.
+	w, c := absentUnit(t)
 	last := c.wall
 	if err := st.Save(w); err != nil {
 		t.Fatal(err)
 	}
-	// control: a pass of the same process 30 seconds later records no gap.
+	// control: the same absent unit in the same process, a pass on time later,
+	// records no gap, and two sightings do report back. The restart below must
+	// report neither a gap-free pass nor a back.
 	if ev := pass(w, c, supRow("c1", "a")); count(ev, "watch-down") != 0 {
 		t.Fatalf("CONTROL FAILED: a pass on time should record no gap, got %+v", ev)
+	}
+	if ev := pass(w, c, supRow("c1", "a")); !has(ev, "c1/a", "back") {
+		t.Fatalf("CONTROL FAILED: two sightings of the absent unit must report back, got %+v", ev)
 	}
 
 	// a new process loads the state and passes 40 seconds after the saved pass.
