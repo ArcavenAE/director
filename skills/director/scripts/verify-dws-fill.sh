@@ -258,6 +258,25 @@ NOW=2099-01-01T00:00:00Z refresh_local >/dev/null 2>&1
 [[ ! -s "$CALLS" ]] && ok "test 12: the stubbed gh and bd were never called by refresh --local" || bad "test 12: network calls" "$(cat "$CALLS")"
 [[ "$(field g1 last_moved)" == "2026-10-18T10:00:00Z" ]] && ok "test 12: and the local sources still moved the row" || bad "test 12: positive" "$(field g1 last_moved)"
 
+# test 12 control: the detector must see a connect that goes through no stubbed binary. A copy of
+# dws with a urllib connect planted at the top of the local fill is run the way the real one is;
+# the detection used above must flag it, or test 12 proves nothing about a library call.
+mkdir -p "$root/plant"
+python3 - "$DWS" "$root/plant/dws" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+hook = "def cmd_refresh_local(a):\n"
+assert hook in t
+planted = hook + "    import urllib.request\n    try:\n        urllib.request.urlopen('http://127.0.0.1:9/', timeout=1)\n    except Exception:\n        pass\n"
+open(sys.argv[2], "w").write(t.replace(hook, planted, 1))
+P
+fresh_state
+open_at 2026-10-05T10:00:00Z pl1 --title "plant" --owner director
+entry 2701 2026-10-18T10:00:00Z agent://t/n pl1
+: >"$CALLS"
+DWS_NOW=2099-01-01T00:00:00Z "$root/plant/dws" refresh --local >/dev/null 2>&1 || true
+[[ -s "$CALLS" ]] && ok "test 12 control: the detection flags a planted urllib connect" || bad "test 12 control: a planted urllib connect goes unseen by the detection"
+
 # --- test 13: no render loop -------------------------------------------------------------------------
 fresh_state
 mkdir -p "$root/copy"
