@@ -26,11 +26,12 @@ The poll runs every 60 seconds.
 | membership (opened, closed, merged, new comments) | REST lists by `updated_at`, per watched repo, with `If-None-Match` | a 304 does not count against the REST limit (measured: the used count did not move across a conditional call) |
 | open-PR state (`mergeable`, CI rollup) | one GraphQL search for open PRs in the watched orgs | 1 point for all 78 open PRs on 2026-10-19 (measured), from GraphQL's own 5,000 an hour |
 | a PR whose head SHA changed this cycle | a live GraphQL read of that PR | a few points, only when heads move |
-| a repo whose default branch moved | a live read of that repo's open PRs, because `mergeable` can change with no head SHA change | ETag'd branch read (free on 304), then a few points |
+| a base branch that moved (any distinct base among open PRs: default, release, or a stacked PR's parent) | a live read of the open PRs on that base, because `mergeable` can change with no head SHA change | ETag'd branch reads (free on 304), then a few points |
 
 Rules:
 
 - Opened, closed and merged come only from the REST lists. Absence from a search result is never an event: the search index can lag.
+- A `mergeable` of UNKNOWN means GitHub is recomputing. It is re-read on the next cycle and never published as a state.
 - Pagination past 100 results is built from the first version. More than 100 open PRs is a health warning, never a silent truncation.
 - Open measurement: the search-index lag on one PR, taken before the cadence is fixed.
 - A seat that acts on its own push reads its own PR directly. Point reads stay allowed; what the plane removes is polling on a clock.
