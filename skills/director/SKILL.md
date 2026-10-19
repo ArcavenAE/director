@@ -108,6 +108,56 @@ and then `dws set <slug> --blocked operator --ask <card id>`. Without a
 snapshot read in the last 24 hours, `dws` refuses and says UNREAD; do not work
 around it, read the Desk again.
 
+## Card standard: one parse from a card file to the Desk
+
+A seat writes the card for an operator decision as a file, and the card goes
+to the Desk through one parse, not by retyping. A card missing a part goes
+back to the seat that wrote it, not to the operator. The check is structural
+(is this card well-formed?), never whether the decision is good. A minimal
+valid card:
+
+```markdown
+Source: bus 01EXAMPLE, the request for this card
+
+## Card 1. Should the nightly report run at 06:00 or 07:00?
+
+**IN SHORT.** The report runs at 06:00 and often misses late data. Moving
+it to 07:00 catches that data and lands after the morning stand-up starts.
+
+**The problem.** Late data arrives between 06:00 and 06:40 on most days.
+
+**Terms.** None.
+
+**Options.**
+1. *Keep 06:00.* Nothing changes. The cost is a report short of late data.
+2. *Move to 07:00.* One schedule line changes. The cost is a later report.
+
+**Recommendation.** Option 2. Complete data matters more than an hour.
+
+**Valid until** 2026-11-02. The reporting seat re-checks it then.
+```
+
+Labels match after dropping a leading "The", a trailing "." or ":", and case.
+To mark the recommended option, end one of its lines with [RECOMMENDED]; the bare word and other spellings are read as text, with a note.
+The seven parts are required: IN SHORT, problem, terms (`None.` is a value),
+options, recommendation, valid until and a source, which is a `**Source.**`
+part or a `Source:` line above the first card. The recommendation's first
+sentence names one option. The expiry is a date, or a date with an event
+clause (`, or until <event>, whichever comes first`), names who re-checks it,
+is not already past, and carries no wording that acts on silence.
+
+To write the cards, run
+`${DIRECTOR_HOME:-$HOME/.director}/bin/card-ingest parse <file> --area <area> --owner <seat> --prefix <prefix>`,
+which refuses with every problem in one pass or writes a batch file. Pass the
+batch's writes to the Desk tool's batch write, one approval for the file. Then
+read the written cards back into a file and run
+`${DIRECTOR_HOME:-$HOME/.director}/bin/card-ingest check --batch <batch> --read <file>`,
+and refresh the snapshot with `desk-snapshot write`. The parse needs a
+snapshot read in the last 24 hours, so a slug already on the Desk is refused.
+`--update` revises an open card that has no answer, and nothing else; a
+revision of a ruled card is a new card under a new prefix whose source names
+the old slug.
+
 ## Mode: standing, additionally
 
 - Re-sweep when the human asks what is in flight, and on your own after any

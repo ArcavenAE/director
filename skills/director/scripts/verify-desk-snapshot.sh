@@ -96,6 +96,46 @@ printf '[{"id": "x1", "status": "open"}, {"doc_id": "x2", "data": {"status": "cl
   || bad "desk-snapshot reads the list shape"
 "$SNAP" write --cards "$cards" --reported 5 >/dev/null 2>&1
 
+# --- card-ingest inputs (design card-ingest.md, B2): every id with its status, and answers
+"$SNAP" write --cards "$cards" --reported 5 >/dev/null 2>&1
+python3 - "$SNAPFILE" <<'P' && ok "the snapshot holds every card id with its status, and no answers key without an answers read" || bad "the snapshot holds every card id with its status"
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s["ids"] == {"card-1": "open", "card-2": "relayed", "card-3": "closed", "card-4": "split", "card-5": "open"}, s
+assert "answered" not in s, s
+assert s["open"] == ["card-1", "card-5"], s
+P
+printf '[{"card": "card-1", "choice": "1"}, {"card_id": "card-5"}, {"card": "card-1"}]' >"$root/answers.json"
+"$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers.json" --answers-reported 3 >"$root/out" 2>&1 \
+  && python3 -c "import json;s=json.load(open('$SNAPFILE'));assert s['answered']==['card-1','card-5'],s" \
+  && ok "an answers read records the sorted distinct cards that have an answer" \
+  || bad "an answers read records the answered cards" "$(cat "$root/out")"
+snap_refuses "an answers file whose count differs from --answers-reported is refused" "answers" \
+  "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers.json" --answers-reported 2
+snap_refuses "an answers read at the read limit is refused as possibly truncated" "limit" \
+  "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers.json" --answers-reported 3 --limit 3
+snap_refuses "--answers without --answers-reported is refused" "answers-reported" \
+  "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers.json"
+printf '[{"choice": "1"}]' >"$root/answers-nocard.json"
+snap_refuses "an answer that names no card is refused" "answer" \
+  "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-nocard.json" --answers-reported 1
+printf '[{"card": "ghost"}]' >"$root/answers-ghost.json"
+snap_refuses "an answer for a card the read does not hold is refused" "ghost" \
+  "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-ghost.json" --answers-reported 1
+printf '[{"card": "card-1", "card_id": "card-5"}]' >"$root/answers-differ.json"
+snap_refuses "an answer whose card and card_id differ is refused, not read as the first" "an answer names card 'card-1' in 'card' and 'card-5' in 'card_id'; give one card, or two that agree" \
+  "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-differ.json" --answers-reported 1
+printf '[{"card": "card-1", "card_id": "card-1"}]' >"$root/answers-agree.json"
+"$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-agree.json" --answers-reported 1 >/dev/null 2>&1 \
+  && python3 -c "import json;s=json.load(open('$SNAPFILE'));assert s['answered']==['card-1'],s" \
+  && ok "an answer whose card and card_id agree is read once" || bad "an answer whose card and card_id agree is read once"
+printf '[]' >"$root/answers-none.json"
+"$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-none.json" --answers-reported 0 >/dev/null 2>&1 \
+  && python3 -c "import json;s=json.load(open('$SNAPFILE'));assert s['answered']==[],s" \
+  && ok "an answers read of zero answers records an empty answered list (read, none found)" \
+  || bad "an answers read of zero answers records an empty answered list"
+"$SNAP" write --cards "$cards" --reported 5 >/dev/null 2>&1
+
 # --- dws against a fresh snapshot --------------------------------------------
 before="$(lines)"
 "$DWS" open a3 --title t --blocked operator --ask card-1 >"$root/out" 2>&1 \
