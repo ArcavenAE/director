@@ -623,11 +623,14 @@ func (g *globalTier) lookupConsumer(ctx context.Context, durable string) error {
 // recreated the durable. A hub that cannot be asked changes nothing.
 func (g *globalTier) restore(ctx context.Context, agentID, instance string) (bool, error) {
 	durable := globalDurable(agentID, instance)
+	// The window starts when the hub is asked, whatever it answers: a hub that
+	// cannot answer is not asked again on every empty poll (as in #328 for the
+	// local tier). Only a not-found rebuilds.
+	g.mu.Lock()
+	g.checked = time.Now()
+	g.mu.Unlock()
 	err := g.lookupConsumer(ctx, durable)
 	if err == nil {
-		g.mu.Lock()
-		g.checked = time.Now()
-		g.mu.Unlock()
 		return false, nil
 	}
 	if !errors.Is(err, jetstream.ErrConsumerNotFound) {
