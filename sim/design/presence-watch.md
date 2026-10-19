@@ -274,12 +274,18 @@ Tests:
 - `TestHeldReleasedOnFirstSightingAfterTurnOn`: hold with the watch on, stop
   the shim, keep the cluster's row beating, start the shim, run the passes,
   and see one stream message.
-- `TestReleaseToKeyFirstSeenLateAfterTurnOn`: the old instance crashed just
-  before the restart, so its row stays inside the TTL with a `ts` that never
-  moves through pass 3 and beyond. The unit therefore reads present from pass
-  1, with no back event. A new instance's key first appears on pass 3, and its
-  `ts` moves on its next beat. Assert one release and nothing proposed. Only
-  per-row freshness can release here: the stale row never confirms, and the
+- `TestReleaseToKeyFirstSeenLateAfterTurnOn`: the scratch bucket is created
+  with an injected TTL of 300s, so the old row cannot expire inside the test.
+  The old instance's last beat lands just before the restart, and its row stays
+  readable with a `ts` that never moves through pass 4. The unit therefore
+  reads present from pass 1, with no back event. A new instance's key first
+  appears on pass 3, and its `ts` moves on its next beat, before pass 4.
+  Assert three things:
+  - no stream message is sent on passes 1 to 3, or before the new key's first
+    beat (this is what fails a rule that releases on existence alone at pass 2);
+  - exactly one stream message after that beat;
+  - nothing proposed.
+  Only per-row freshness can pass it: the stale row never confirms, and the
   new row is confirmed against its own first sighting.
 - `TestNoReleaseToStaleRowAfterTurnOn`: the same as the first, but the row stops beating
   before the restart and stays inside the TTL; no stream message, the record
