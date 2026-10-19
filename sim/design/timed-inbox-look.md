@@ -258,7 +258,8 @@ director-mcp look-clear --state <state> --items FILE --items-reported N
                         --answers FILE --answers-reported N [--limit 1000]
 ```
 
-- **Input.** The same shape as `desk-snapshot write`. `--items` is what the
+- **Input.** The shape of `desk-snapshot write`'s input, with two
+  differences set out at the end of this list. `--items` is what the
   session's Desk read returned for gate items: a JSON object of id to item,
   or a list of items that each carry `id` or `doc_id`. `--answers` is a JSON
   list of answer records, each naming its item in `card` or `card_id` (both
@@ -276,8 +277,8 @@ director-mcp look-clear --state <state> --items FILE --items-reported N
   the same gate key; an item that carries neither `id` nor `doc_id`, or
   both with different values; an answer that names no item, or carries
   `card` and `card_id` with different values; two answers for the same
-  item; an `updatedAt` that is missing or not a time; `notify.json` or `cleared.json` present and not
-  parsing. As with `desk-snapshot`, a doubt about the read is never
+  item; an `updatedAt` that is missing or not a time; `notify.json` or
+  `cleared.json` present and not parsing. As with `desk-snapshot`, a doubt about the read is never
   resolved by guessing which half to trust.
 - **Skipped, alone: the rest are applied.** A single answer that is
   well-formed but does not apply. Each skip is one stdout line with the
@@ -305,6 +306,19 @@ director-mcp look-clear --state <state> --items FILE --items-reported N
 - **The write.** A temp file in `<state>`, created mode 0600, written,
   `fsync`ed and then renamed over `cleared.json`, as `desk-snapshot` does.
   A crash leaves the old file or the new one, never half of one.
+- **How this differs from `desk-snapshot`, and why.**
+  - **Stricter on items.** `desk-snapshot` takes an item's `id` and falls
+    back to `doc_id`, so an item with both, and two different values, is
+    read by its `id` without a word. `look-clear` refuses that input
+    whole. Its output silences a gate's reminders, so an item it cannot
+    name for certain must not be guessed at; `desk-snapshot`'s output only
+    marks a card open or not.
+  - **Looser on unknown cards.** `desk-snapshot` refuses an answer whose
+    card is not in the cards it was given. `look-clear` skips it
+    (`unknown desk id`), because it is handed only the gate items while
+    the Desk's answers collection holds answers for every kind of card.
+    An answer for a choice or action card is normal input here, not a
+    sign of a bad read.
 - **Whoever runs it is a claim.** As with `desk-snapshot`, the script
   checks the input's shape and completeness, not that a session really read
   the Desk, nor who wrote the answer (3.4.1, "Who may clear").
@@ -568,9 +582,10 @@ count, so they share the unread reader and its field names.
        that does not parse; an `--answers` file that does not parse; an
        items count that differs from `--items-reported`; an answers count
        that differs from `--answers-reported`; an items count equal to
-       `--limit`, and, in the same test, an answers count equal to it; an
-       item with neither `id` nor `doc_id`; an answer with neither `card`
-       nor `card_id`; an answer whose `card` and `card_id` disagree;
+       `--limit`; an answers count equal to `--limit`, in its own run; an
+       item with neither `id` nor `doc_id`; an item whose `id` and `doc_id`
+       disagree; an answer with neither `card` nor `card_id`; an answer
+       whose `card` and `card_id` disagree;
        two items with the same id; two items with the same gate key; two
        answers for one item; an answer with no `updatedAt`; an answer whose
        `updatedAt` is not a time; a `notify.json` that does not parse; a
