@@ -16,7 +16,7 @@ pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 
-root="$(mktemp -d)"
+root="$(mktemp -d "${TMPDIR:-/tmp}/card-ingest.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 export DIRECTOR_STATE="$root/state"
 mkdir -p "$DIRECTOR_STATE"
@@ -208,6 +208,31 @@ import json, sys
 d = json.load(open(sys.argv[1]))["writes"][0]["data"]
 assert d["kind"] == "action" and len(d["options"]) == 1, d
 P
+
+# a wrapped option whose last line ends in RECOMMENDED: the marker is read at the end of the
+# option's whole text, checked against the recommendation, and removed from the text
+python3 - "$BASE" "$root/w1.md" "$root/w2.md" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+wrapped = t.replace("1. *Keep 06:00.* Nothing changes. The cost is a report short of late data.",
+                    "1. *Keep 06:00.* Nothing changes.\n   The cost is a report short of late data. RECOMMENDED.")
+open(sys.argv[2], "w").write(wrapped)
+open(sys.argv[3], "w").write(wrapped.replace("Option 2.", "Option 1."))
+P
+refuses "refuses a wrapped option 1 ending in RECOMMENDED when option 2 is recommended" "$root/w1.md" "RECOMMENDED marks option 1 and the recommendation names option 2"
+clean_state
+if run "$root/w2.md" >/dev/null 2>"$root/err" && python3 - "$(batch_json)" <<'P'
+import json, sys
+o = json.load(open(sys.argv[1]))["writes"][0]["data"]["options"]
+assert "RECOMMENDED" not in o[0]["text"] and o[0]["text"].endswith("late data."), o
+P
+then ok "an agreeing marker at the end of a wrapped option is accepted and removed from the text"; else bad "a wrapped agreeing marker is removed" "$(cat "$root/err")"; fi
+# a log that cannot be appended leaves no batch behind
+clean_state; mkdir -p "$LOG"
+if run "$BASE" >/dev/null 2>"$root/err"; then bad "a log-append failure is refused" "accepted"
+elif [[ "$(nbatch)" != 0 ]]; then bad "a log-append failure leaves no batch file" "$(find "$BATCHDIR" -type f)"
+else ok "a log-append failure leaves no batch file behind"; fi
+rmdir "$LOG"; clean_state
 
 # --- refusals, one case each -------------------------------------------------
 printf 'Source: x\n\nJust some text.\n' >"$root/r.md"; refuses "refuses a file with no card heading" "$root/r.md" "no card heading"

@@ -26,7 +26,7 @@ and superseded are not open. The helper refuses on any doubt and writes nothing.
 "ids" holds every card with its status (no card text), so a card that is relayed or
 closed is told from one that never existed; card-ingest reads it to refuse a slug already
 on the Desk. --answers is optional: a JSON list (or object of lists) of answer records,
-each naming its card in "card" or "card_id", with the same count and limit checks as the
+each naming its card in "card" or "card_id" (both, only if they agree), with the same count and limit checks as the
 cards; "answered" is then the sorted distinct cards that have an answer, and an empty list
 means the answers were read and none were found. Without --answers there is no "answered"
 key, which card-ingest reads as unknown. `dws` reads only "open", so it is unaffected.
@@ -93,6 +93,8 @@ def parse_answers(raw, cards):
     for r in raw:
         if not isinstance(r, dict):
             raise Refused("an answer in the list is not an object")
+        if "card" in r and "card_id" in r and r["card"] != r["card_id"]:
+            raise Refused(f"an answer names card {r['card']!r} in 'card' and {r['card_id']!r} in 'card_id'; give one card, or two that agree")
         cid = r.get("card", r.get("card_id"))
         if not isinstance(cid, str) or not cid.strip():
             raise Refused("an answer names no card (a 'card' or 'card_id' string)")
