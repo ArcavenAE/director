@@ -260,7 +260,10 @@ and a release to it would sit unread on the hub stream for up to 72h
 (`global.go:48-56`). There is no pass cap: a row whose `ts` never moves is not
 being renewed, so it expires by TTL into absent, and a row that keeps beating
 is confirmed on its next beat. No new judgment number is needed, so nothing is
-added to `thresholds.json` for this rule.
+added to `thresholds.json` for this rule. `ts` is the supervisor host's wall
+clock, so a backward clock step on that host delays confirmation until its
+`ts` passes the value first seen. It never causes a release to a row that is
+not beating.
 Once the heartbeat is fresh, every `held` record for the unit is released
 within its `sell_by`, as below. Without this rule, a record held before a
 restart for a cluster that never leaves again would wait until `sell_by` and
@@ -271,10 +274,13 @@ Tests:
 - `TestHeldReleasedOnFirstSightingAfterTurnOn`: hold with the watch on, stop
   the shim, keep the cluster's row beating, start the shim, run the passes,
   and see one stream message.
-- `TestReleaseToKeyFirstSeenLateAfterTurnOn`: the old instance's row is
-  gone and a new instance's key first appears on the third pass after the
-  restart; its `ts` moves on its next beat and the held record is released
-  once, not proposed at `sell_by`.
+- `TestReleaseToKeyFirstSeenLateAfterTurnOn`: the old instance crashed just
+  before the restart, so its row stays inside the TTL with a `ts` that never
+  moves through pass 3 and beyond. The unit therefore reads present from pass
+  1, with no back event. A new instance's key first appears on pass 3, and its
+  `ts` moves on its next beat. Assert one release and nothing proposed. Only
+  per-row freshness can release here: the stale row never confirms, and the
+  new row is confirmed against its own first sighting.
 - `TestNoReleaseToStaleRowAfterTurnOn`: the same as the first, but the row stops beating
   before the restart and stays inside the TTL; no stream message, the record
   stays `held`, and the unit reads absent once the row expires.
