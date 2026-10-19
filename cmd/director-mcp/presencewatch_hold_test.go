@@ -506,3 +506,30 @@ func TestFirstSightingIsNotReportedAsBack(t *testing.T) {
 		}
 	}
 }
+
+// With the watch off, cancel_held answers as a tool that does not exist, which
+// is what main answers (design: cancel_held sits behind the watch's flag).
+func TestCancelHeldIsAnUnknownToolWhileTheWatchIsOff(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	fx := newWatchFx(t, ctx, 0, true)
+	t.Setenv("DIRECTOR_PRESENCE_WATCH", "")
+	fx.restart()
+	if fx.bus.watch != nil {
+		t.Fatal("the flag is off but a watcher was built")
+	}
+	_, err := dispatchTool(ctx, fx.bus, "cancel_held", json.RawMessage(`{"id":"x"}`))
+	_, want := dispatchTool(ctx, fx.bus, "no_such_tool_at_all", json.RawMessage(`{}`))
+	if err == nil || want == nil {
+		t.Fatalf("cancel_held err %v, unknown tool err %v: both must fail", err, want)
+	}
+	if got, exp := err.Error(), "unknown tool: cancel_held"; got != exp {
+		t.Fatalf("cancel_held with the watch off answered %q, want main's %q", got, exp)
+	}
+	if want.Error() != "unknown tool: no_such_tool_at_all" {
+		t.Fatalf("CONTROL FAILED: an unknown tool answered %q", want)
+	}
+	for _, tl := range withHoldTools(nil, fx.bus.watch != nil) {
+		t.Fatalf("the catalog lists %s with the watch off", tl.Name)
+	}
+}
