@@ -89,7 +89,24 @@ Rules:
 2. **After the broker's authorization block is live** (aae-orc-umw8p, director#4): streams, grants, director-mcp's event tools, and gh-ingress publishing. This also needs the target credential, because of the refusal in section 4.
 3. **Later:** a webhook receiver on an always-on reachable host, with its own review. The poller stays as reconciliation.
 
-## 8. Work items
+## 8. Other forges and quota
+
+**Providers.** The core reaches forges through a provider seam:
+- fixed read-only operations per forge;
+- an auth source named by reference;
+- a typed status record;
+- a quota record made of named buckets, each with its own window.
+
+Only GitHub is built first, and the seam is tested with a fake second provider. GitLab documents per-minute rate-limit headers. Forgejo documents none, so its quota is reported as unreported, never as zero or unlimited, and the core paces at an owner-set ceiling.
+
+gh-ingress publishes only what the core's providers deliver. Subjects already carry the forge token (`gh` today), so another forge is a new family, not a change to this one.
+
+**Quota.** The core samples its identity's quota once a minute; on GitHub that read is free. It keeps a local, owner-only series and flags unexplained spend: a drop larger than its own counted calls, inside one reset window.
+- Process attribution is optional, off by default, local only, and records no command lines.
+- gh-ingress may publish a quota health summary (remaining, reset, the flag) on its heartbeat. It never publishes the series detail or any attribution.
+- Viewing quota never causes a forge call.
+
+## 9. Work items
 
 | item | ticket | depends on |
 |---|---|---|
