@@ -54,7 +54,10 @@ ADR-007, `diagnostic-not-gate.md`).
   it: the director credential may publish to `$KV.GLOBAL_PRESENCE.>`, and each
   leaf has the bucket's KV API (`probe/nats-global-tier/hub/nats-server.conf:31`,
   `56`, `82`). So any client holding one of those credentials can write a key
-  of any shape. The watch states that assumption and does not rely on it (D4).
+  of any shape. The watch states that assumption and narrows what it trusts
+  (D4), but it cannot close it. A key of the right shape with a value that
+  parses, written by a director or leaf credential, still counts as presence.
+  That residual is #323's to close.
 - **TTL and beat.** The probe hub creates the bucket with `--ttl 90s`
   (`probe/nats-global-tier/hub/provision.sh:24`); the live hub's setting is
   inferred to match and should be read once (`nats kv info GLOBAL_PRESENCE`).
@@ -153,9 +156,9 @@ director session runs.
   one instance segment, and its value parses as a presence record. Any other
   key under `presence.<cluster>.` is *foreign*: it never makes a unit present
   or keeps it present, and the watch lists each foreign key once in the event
-  file and the next `presence_notice`. Closing the hub permissions so that only
-  the shim's own subject can be written is a separate hardening item (section
-  5), not part of this design.
+  file and the next `presence_notice`. This stops malformed and wrong-role
+  rows only. A forged row of the right shape is indistinguishable from the
+  shim's and counts; section 5 names who closes that.
 - **Absent:** no readable key for the unit on two consecutive passes. With a
   90s TTL and a 30s beat, that is about two and a half minutes after the last
   beat (inferred arithmetic). One missed pass is not reported.
@@ -243,6 +246,18 @@ a record is its last line.
 A `cancel_held` tool takes an id, and an optional replacement, so director can
 withdraw or supersede a held ask, the finding-024 case.
 
+**Release after the watch turns on.** A restart or a turn-on is a gap, never
+a transition (D3), so a unit that is already present when the watch starts has
+no back event. For release only, the first sighting of a unit after a gap
+counts as back: present on the first two passes after the gap. Then every
+`held` record for it is released within its `sell_by`, as below. Without this,
+a record held before a restart for a cluster that never leaves again would
+wait until `sell_by` and be proposed, not sent. The event file still records
+`present after the gap`, not a return, so no false transition is reported.
+Test: `TestHeldReleasedOnFirstSightingAfterTurnOn` (hold with the watch on;
+stop the shim; the cluster stays present; start the shim; two passes; one
+stream message), with the control `TestFirstSightingIsNotReportedAsBack`.
+
 **Release.** On each tick after a unit goes back, the shim re-runs the normal
 `publish` for each `held` record addressed to it, oldest first. So the R-92
 and R-78 checks run again at release time, the audit mirror runs, and the
@@ -283,10 +298,18 @@ look.
   visible only as that cluster's supervisor rows gone. A cluster's workers
   live in its own broker's `AGENT_STATE`, which director on another host does
   not read (inferred from the per-cluster broker layout).
-- It does not harden the hub. The hub lets the director credential and each
-  leaf write any key in `GLOBAL_PRESENCE` (section 2). Narrowing those
-  permissions to the shim's own subjects is a separate item. Until it is done,
-  D4's shape rule keeps foreign keys from counting as presence.
+- It does not harden the hub, and the residual is real. The hub lets the
+  director credential and each leaf write any key in `GLOBAL_PRESENCE`
+  (section 2). D4's shape rule stops malformed rows. A row of the right shape
+  with a parseable value, written by any holder of those credentials, still
+  makes a unit present, and the watch cannot tell it from the shim's. Narrowing
+  subjects on today's shared credentials does not close this: everything on a
+  cluster's local bus shares its leaf credential (R-77). A credential per
+  writing principal would close it: each supervisor's shim writes only its own
+  key prefix, and director's credential writes no cluster's keys. That is
+  #323, a separate item. Its form is a design plus a hub config change, owned
+  by the global tier's design (the architect role) and built by a builder like
+  this one. The watch ships without it and says so.
 - It does not hold mail for any seat but director. R-141 is fleet-wide; making
   every shim hold by default changes send semantics for every seat and is a
   separate ruling. Brief 11's outbox is the transport-level answer and
@@ -332,8 +355,9 @@ bus. Each refusal assertion has a positive control first, as
    scratch row; see absent; write it again; see back),
    `TestWatchOnWritesStateOffWritesNothing`: a positive control first (the
    flag on, one pass, and the state file and one event exist), then the same
-   pass with the flag off writes neither. The control fails on main, where no
-   watch exists. Also `TestWatchHubRestartIsBlindNotAbsent` (`restartHub`) and
+   pass with the flag off, in a fresh state dir that already holds the seat's
+   other files, leaves that dir byte for byte as it was. The control fails on
+   main, where no watch exists. Also `TestWatchHubRestartIsBlindNotAbsent` (`restartHub`) and
    `TestWatchForeignKeyNeverCountsAsPresent` (a scratch client writes
    `presence.<cluster>.worker.x` and a malformed supervisor value; the unit
    stays absent, and both keys are listed as foreign).
