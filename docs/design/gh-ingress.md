@@ -27,13 +27,13 @@ gh-ingress is Go so that the subject builder and the envelope type stay shared w
 | what | how | cost |
 |---|---|---|
 | membership: opened, closed, merged, new comments | REST lists by `updated_at`, per watched repo, with `If-None-Match` | A 304 did not count against the REST limit when measured: one conditional call left the used count unchanged. GitHub's documentation on this is not verified here. |
-| state: open-PR `mergeable` and CI, default-branch CI, last deployment status | One batched GraphQL query per cycle, carrying `rateLimit` | MEASURED 2026-10-19: 1 point for the open-PR view on 78 open PRs, and 1 point for the default-branch and deployment view on 43 repos. |
+| state: open-PR `mergeable` and CI, default-branch CI, last deployment status | Two GraphQL queries per cycle, the open-PR view and the default-branch view, each carrying `rateLimit` | MEASURED 2026-10-19: 1 point for the open-PR view on 78 open PRs, and 1 point for the default-branch and deployment view on 43 repos. |
 | a PR whose head SHA changed this cycle | A live read of that PR | A few points, only when heads move. |
-| a base branch that moved (default, release, or a stacked PR's parent) | A live read of the open PRs on that base, because `mergeable` can change with no head SHA change | ETag'd branch reads. Free on a 304 is INFERRED: the one measured conditional call was a list, not a branch read. |
+| a base branch that moved (default, release, or a stacked PR's parent) | A live read of the open PRs on that base, because `mergeable` can change with no head SHA change (INFERRED from how merge checks work, not measured) | ETag'd branch reads. Free on a 304 is INFERRED: the one measured conditional call was a list, not a branch read. |
 
 Rules:
 - Opened, closed and merged come only from the REST lists. Absence from a search result is never an event.
-- A `mergeable` of UNKNOWN is re-read on the next cycle and never published.
+- A `mergeable` of UNKNOWN is re-read on the next cycle and never published. That UNKNOWN means GitHub is still computing is INFERRED, not measured.
 - "A run in progress" counts only check suites that carry a workflow run. Suites registered for apps that never run sit at QUEUED. MEASURED 2026-10-19: all 58 QUEUED or IN_PROGRESS suites on default-branch heads lacked a workflow run.
 - **Busy signal:** the `rate_limit` read, with exponential backoff to a cap. MEASURED 2026-10-19: three reads in a row left `used` at 526.
 - **Fast poll:** only for a repo with a real run in progress, with a ceiling so a stuck run drops back.
@@ -142,6 +142,7 @@ Each rule above has a red test against a fake GitHub server:
 | no caller-chosen fetch: a URL | A URL passed through each input is refused, and the log shows no request to it. |
 | no stranger widens the list | A bus or socket "add" leaves the list and the request log unchanged. A group- or world-writable file stops start-up. So does a file whose owner uid is not the core's. The test injects a `stat` result with owner set to another uid and mode 0644, and asserts that start-up and reload both refuse, so an owner check that only runs when the file is writable fails it. A test cannot `chown` without root, which is why the result is injected. |
 | nothing sensitive leaves | Token-shaped strings, and canary strings in fixture titles, bodies, branch names, commit status descriptions, check names and deployment descriptions, never appear in the view, logs, CLI output or events. A positive control proves the scan works. |
+| the token stays out of env and argv | A canary token is placed in the credential source. A recording spawner shows that no child's argv or environment carries it. `ps -E -o command= -p <pid>` on the core shows no canary in its argv or environment. In the interim the core sets no `GH_TOKEN` or `GITHUB_TOKEN` for `gh`, and `gh` reads its own login. |
 | the minter's files | The App key is 0600 and owned by the minter user, so the core's uid gets EACCES reading it. The token file is 0640, owned by the minter user, in a group whose only member is the core's user. A third uid gets EACCES on both files. Creating the users needs root, so this test runs only in a disposable macOS CI job that can `sudo` (that hosted runners allow it is INFERRED), and never on a fleet host. Run anywhere else, it reports skipped, never passed. |
 | no unknown readers | A second uid is refused at the socket. `lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN` and `lsof -nP -a -p <pid> -iUDP` both print nothing for the core's pid, so it has no listener of either kind. Its only inet sockets are outbound TCP to the forge, seen with `lsof -nP -a -p <pid> -i`. |
 | no publishing from a gh login | With the credential source set to a gh login and the adapter enabled, gh-ingress refuses and says why. |
@@ -188,7 +189,7 @@ Tests:
 2. A fixture where remaining drops by 50 while the core counted 10 raises the flag. A drop across a reset does not. A retried 5xx is counted as the core's own spend.
 3. With attribution off, no `lsof` or `nettop` is spawned (recording spawner).
 4. With attribution on, output is labelled `candidate` and carries name and uid only. A canary placed in a fixture process's arguments never appears.
-5. The heartbeat summary carries remaining, reset and the flag, and no series or attribution field.
+5. The heartbeat summary carries remaining, reset and the flag, and no series or attribution field. With attribution on and a canary process name in its fixture, the canary appears in no bus event, health row or log file. It appears only in the local attribution output.
 6. A quota view for an identity that is not configured is refused, and the fake forge's log shows zero calls.
 7. With the sampler stopped, every quota view reads `unknown` after 3 cycles, and an `--image` output carries no chart.
 
