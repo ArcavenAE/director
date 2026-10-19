@@ -248,8 +248,16 @@ func TestWatchFourTransitionsInAnHourIsFlapping(t *testing.T) {
 	if count(cycle1, "flapping") != 0 {
 		t.Fatalf("two transitions reported flapping: %+v", cycle1)
 	}
-	if n := count(cycle2, "flapping"); n != 1 {
-		t.Fatalf("flapping reported %d times in the second cycle, want once: %+v", n, cycle2)
+	// the supervisor and its cluster each make the same four transitions, so each
+	// reports flapping once.
+	nf := 0
+	for _, k := range kinds(cycle2, "c1/a") {
+		if k == "flapping" {
+			nf++
+		}
+	}
+	if nf != 1 || count(cycle2, "flapping") != 2 {
+		t.Fatalf("flapping reported %d times for the supervisor and %d in all in the second cycle, want 1 and 2: %+v", nf, count(cycle2, "flapping"), cycle2)
 	}
 	if !w.Unit("c1/a").Flapping {
 		t.Fatal("unit should be flapping")
