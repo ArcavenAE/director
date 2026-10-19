@@ -297,7 +297,14 @@ import sys
 t = open(sys.argv[1]).read().replace("Nothing changes.", "Nothing changes. It is RECOMMENDED by nobody, and RECOMMENDED. is also text.")
 open(sys.argv[2], "w").write(t)
 P
-clean_state; run "$root/prose-mid.md" >/dev/null 2>"$root/err" && ok "the word RECOMMENDED inside a sentence is text" || bad "the word RECOMMENDED inside a sentence is text" "$(cat "$root/err")"
+# case_prose_mid: 0 when the word inside a sentence is text, 1 when the card is refused or changed.
+case_prose_mid() { clean_state; run "$root/prose-mid.md" >/dev/null 2>"$root/err" && python3 - "$(batch_json)" <<'P'
+import json, sys
+t = json.load(open(sys.argv[1]))["writes"][0]["data"]["options"][0]["text"]
+assert "It is RECOMMENDED by nobody, and RECOMMENDED. is also text." in t, t
+P
+}
+case_prose_mid && ok "the word RECOMMENDED inside a sentence is text" || bad "the word RECOMMENDED inside a sentence is text" "$(cat "$root/err")"
 python3 - "$BASE" "$root/dot.md" <<'P'
 import sys
 t = open(sys.argv[1]).read().replace("The cost is a later report.", "The cost is a later report. [RECOMMENDED].")
@@ -352,28 +359,40 @@ near_case "inside a code fence" '1. *Keep 06:00.* Nothing changes.\n   ```\n   w
 
 # A log append that fails partway leaves the log as it was: no partial line without its batch.
 # RLIMIT_FSIZE stops the append part-way through; the seed log is under the limit, the batch is too.
-clean_state; mkdir -p "$DIRECTOR_STATE"
-python3 - "$LOG" <<'P'
+# CI_RLIMIT_SLACK (default 60) is how many bytes past the seed log the cap allows; a slack large
+# enough that the cap never bites makes the case fail loudly, never stop the run.
+# case_rlimit: 0 restored and no batch; 1 the log or the batch was left behind; 2 the cap never bit.
+case_rlimit() {
+  clean_state; mkdir -p "$DIRECTOR_STATE"
+  python3 - "$LOG" <<'P'
 import json, sys
 with open(sys.argv[1], "w") as f:
     for i in range(30):
         f.write(json.dumps({"at": "2026-10-01T00:00:00Z", "checked": True, "batch": "old-%03d.json" % i, "slugs": [], "failed": 0}) + "\n")
 P
-cp "$LOG" "$root/log.before"
-lsize="$(wc -c <"$LOG" | tr -d ' ')"
-python3 - "$CI" "$BASE" "$((lsize + 60))" "$root/err" <<'P'
-import os, resource, subprocess, sys
+  cp "$LOG" "$root/log.before"
+  lsize="$(wc -c <"$LOG" | tr -d ' ')"
+  local prc
+  prc="$(python3 - "$CI" "$BASE" "$((lsize + ${CI_RLIMIT_SLACK:-60}))" "$root/err" <<'P'
+import resource, subprocess, sys
 ci, base, limit, errf = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 def cap():
     resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
 with open(errf, "w") as e:
-    rc = subprocess.run([ci, "parse", base, "--area", "a", "--owner", "o", "--prefix", "rpt"], stdout=subprocess.DEVNULL, stderr=e, preexec_fn=cap).returncode
-sys.exit(0 if rc != 0 else 1)
+    print(subprocess.run([ci, "parse", base, "--area", "a", "--owner", "o", "--prefix", "rpt"], stdout=subprocess.DEVNULL, stderr=e, preexec_fn=cap).returncode)
 P
-if [[ $? -ne 0 ]]; then bad "an append cut short by the file size limit is refused" "accepted"
-elif ! cmp -s "$LOG" "$root/log.before"; then bad "an append cut short leaves the log byte for byte as it was" "now $(wc -c <"$LOG" | tr -d ' ') bytes, was $lsize"
-elif [[ "$(nbatch)" != 0 ]]; then bad "an append cut short leaves no batch" "$(find "$BATCHDIR" -type f)"
-else ok "an append cut short by the file size limit is refused, the log is restored byte for byte and no batch is left"; fi
+)" || prc=2
+  [[ "$prc" != 0 ]] || return 2
+  cmp -s "$LOG" "$root/log.before" || { echo "now $(wc -c <"$LOG" | tr -d ' ') bytes, was $lsize" >"$root/why"; return 1; }
+  [[ "$(nbatch)" == 0 ]] || { find "$BATCHDIR" -type f >"$root/why"; return 1; }
+  return 0
+}
+rc=0; case_rlimit || rc=$?
+case "$rc" in
+  0) ok "an append cut short by the file size limit is refused, the log is restored byte for byte and no batch is left";;
+  2) bad "an append cut short by the file size limit is refused" "the cap did not cut the append short (parse exited 0), so the case tests nothing";;
+  *) bad "an append cut short leaves the log byte for byte as it was and no batch" "$(cat "$root/why")";;
+esac
 clean_state
 
 # a log that cannot be appended leaves no batch behind
@@ -588,6 +607,45 @@ json.dump({w["doc_id"]: {"data": d}}, open(sys.argv[2], "w"))
 P
 "$CI" check --batch "$(batch_json)" --read "$root/read-upd.json" >"$root/out" 2>&1 \
   && ok "check compares an update on its content fields only, so the Desk's own opened and status stay" || bad "check of an update" "$(cat "$root/out")"
+
+# --- the cases above must be able to fail: run them against mutants of the tool -------------------
+# A case that passes at head and cannot fail under a mutant is a pin, not a test. Each mutant is a
+# scratch copy of card-ingest with one line changed; the case that guards it must report failure.
+mutant() {  # NAME OLD NEW ; leaves the path in $MUT
+  MUT="$root/mutant-$1"
+  python3 - "$here/card-ingest" "$MUT" "$2" "$3" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+assert sys.argv[3] in t, "the tool no longer holds the text this mutant changes: %r" % sys.argv[3]
+open(sys.argv[2], "w").write(t.replace(sys.argv[3], sys.argv[4], 1))
+P
+  chmod +x "$MUT"
+}
+if [[ "$CI" == "$here/card-ingest" ]]; then
+  # M1: the bare word anywhere in a line is the marker (the first form, widened). The prose case must fail.
+  mutant bareword 'mk = re.search(r"\s*\[RECOMMENDED\]\.?\s*$", line)' 'mk = re.search(r"\s*RECOMMENDED", line)'
+  real="$CI"; CI="$MUT"; rc=0; case_prose_mid || rc=$?; CI="$real"
+  [[ $rc -ne 0 ]] && ok "mutant M1 (the bare word anywhere is the marker) is caught by the prose case" || bad "mutant M1 is not caught by the prose case"
+  # M2: the partial log append is not undone. The RLIMIT case must fail.
+  mutant notruncate 'lambda: os.truncate(LOG, size)' 'lambda: None'
+  real="$CI"; CI="$MUT"; rc=0; case_rlimit || rc=$?; CI="$real"
+  [[ $rc -eq 1 ]] && ok "mutant M2 (no truncate after a partial append) is caught by the RLIMIT case" || bad "mutant M2 is not caught by the RLIMIT case" "rc $rc"
+  # M3: the batch is kept when its log append fails. The RLIMIT case must fail.
+  mutant keepbatch 'lambda: os.unlink(path)' 'lambda: None'
+  real="$CI"; CI="$MUT"; rc=0; case_rlimit || rc=$?; CI="$real"
+  [[ $rc -eq 1 ]] && ok "mutant M3 (the batch kept after a failed append) is caught by the RLIMIT case" || bad "mutant M3 is not caught by the RLIMIT case" "rc $rc"
+  # M4: a fenced token is read as the marker. The fence case must fail.
+  mutant nofence 'if fenced:' 'if False:'
+  real="$CI"; CI="$MUT"
+  python3 - "$BASE" "$root/fence.md" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+old = "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data."
+open(sys.argv[2], "w").write(t.replace(old, "1. *Keep 06:00.* Nothing changes.\n   ```\n   write [RECOMMENDED]\n   ```\n   The cost is a late report.", 1))
+P
+  rc=0; clean_state; run "$root/fence.md" >/dev/null 2>&1 || rc=$?; CI="$real"
+  [[ $rc -ne 0 ]] && ok "mutant M4 (a fenced token is the marker) is caught by the fence case" || bad "mutant M4 is not caught by the fence case"
+fi
 
 echo "card-ingest: $pass passed, $fail failed"
 [[ "$fail" == 0 ]]

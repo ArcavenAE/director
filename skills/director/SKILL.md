@@ -138,7 +138,7 @@ it to 07:00 catches that data and lands after the morning stand-up starts.
 ```
 
 Labels match after dropping a leading "The", a trailing "." or ":", and case.
-To mark the recommended option, end one of its lines with [RECOMMENDED]; the bare word is read as text.
+To mark the recommended option, end one of its lines with [RECOMMENDED]; the bare word and other spellings are read as text, with a note.
 The seven parts are required: IN SHORT, problem, terms (`None.` is a value),
 options, recommendation, valid until and a source, which is a `**Source.**`
 part or a `Source:` line above the first card. The recommendation's first

@@ -150,25 +150,38 @@ def parse_options(rec):
             opts.append([int(m.group(1)), m.group(2).rstrip()])
         elif opts and l.strip():
             opts[-1][1] += "\n" + l.rstrip()
-    out, marks, twice, bare = [], [], [], []
+    out, marks, twice, bare, nears = [], [], [], [], []
     for n, t in opts:
-        # The marker is the bracketed token [RECOMMENDED] ending a line of the option, with an
-        # optional final period; it is removed wherever it ends one. The bare word is prose and
-        # is never a marker or a refusal, so a sentence that ends in it reads as text.
-        lines, hits = t.split("\n"), 0
+        # The marker is the exact token [RECOMMENDED] (an optional final period) ending a line of
+        # the option, outside a code fence. Anything else is text: the bare word, and the near
+        # forms a seat might write (lowercase, spaces inside the brackets, a trailing colon, the
+        # token at the start of a line or mid-line, in backticks). A near form draws a NOTE
+        # naming the exact form and is never a marker and never a refusal. A token inside a
+        # code fence is an example and draws nothing.
+        lines, hits, fenced, near = t.split("\n"), 0, False, []
         for i, line in enumerate(lines):
+            if line.lstrip().startswith("```"):
+                fenced = not fenced
+                continue
+            if fenced:
+                continue
             mk = re.search(r"\s*\[RECOMMENDED\]\.?\s*$", line)
             if mk:
                 hits += 1
                 lines[i] = line[:mk.start()].rstrip()
-            elif re.search(r"\bRECOMMENDED\.?\s*$", line):
+            elif re.search(r"\bRECOMMENDED\.?\s*$", line) and not re.search(r"\[\s*RECOMMENDED\s*\]", line, re.I):
                 bare.append(n)
+            else:
+                for nm in re.finditer(r"`?\[\s*recommended\s*\]:?`?", line, re.I):
+                    near.append(nm.group(0))
+        for form in near:
+            nears.append((n, form))
         if hits:
             marks.append(n)
         if hits > 1:
             twice.append((n, hits))
         out.append((n, "\n".join(lines).rstrip()))
-    return out, marks, twice, bare
+    return out, marks, twice, bare, nears
 
 
 def snapshot_state(today_iso):
@@ -241,7 +254,9 @@ def check_card(card, pre, kind_default_source, a, snap, logseen, today):
         errs.append("kind '%s' is neither choice nor action" % kind)
     opts, marks = ([], [])
     if "options" in one and value_of(one["options"]):
-        opts, marks, twice, bare = parse_options(one["options"])
+        opts, marks, twice, bare, nears = parse_options(one["options"])
+        for n, form in nears:
+            notes.append("option %d has '%s' in its text, which is not the marker; it is read as text. The marker is [RECOMMENDED] ending a line of the option, outside a code fence" % (n, form))
         for n in bare:
             notes.append("option %d ends a line in the word RECOMMENDED without brackets; it is read as text. Write [RECOMMENDED] to mark the option" % n)
         for n, hits in twice:

@@ -111,16 +111,31 @@ next bold label, card heading, or a `---` line.
 
 **Options.** Inside the options part, a line `N. ` at column 0 starts option
 N. Indented lines and sub-bullets continue it, with line breaks kept. The
-marker is the bracketed token `[RECOMMENDED]` (a final period is allowed)
-ending a line of the option: its first line, a middle line or its last. It is
-removed from the text and checked against the recommendation, and a marker on
-two lines of one option is refused. The bare word is prose, never a marker and
-never a refusal: a sentence that ends in "not RECOMMENDED" reads as text, and
-the tool prints a NOTE when a line ends in the bare word, so a seat that meant
-the marker sees why it did not count. (The first build read the bare word at
-the end of the first line; a review showed prose can end in it, so the marker
-needs a form prose cannot take. Measured: of the eight real cards, one used a
-marker, a trailing `RECOMMENDED.`, so this form costs one line fix.)
+marker is the exact token `[RECOMMENDED]` (a final period is allowed) ending a
+line of the option: its first line, a middle line or its last, outside a code
+fence. It is removed from the text and checked against the recommendation, and
+a marker on two lines of one option is refused. Everything else is text, never
+a marker and never a refusal, and the Desk text keeps what the seat wrote:
+
+- the bare word, as in "and this is not RECOMMENDED";
+- a near form of the token: lowercase `[recommended]`, spaces inside the
+  brackets `[ RECOMMENDED ]`, a trailing colon `[RECOMMENDED]:`, the token at
+  the start of a line or in the middle of one, and the token in backticks.
+  These draw a NOTE that names the exact form ("is not the marker; it is read
+  as text. The marker is [RECOMMENDED] ending a line of the option, outside a
+  code fence"), so a seat that meant the marker sees why it did not count. The
+  bare word at a line end draws a NOTE too. They are not refused, because a
+  card that says "recommended" in its own words is a well-formed card;
+- a token inside a code fence (a line starting with three backticks opens and
+  closes one), which is an example and draws nothing.
+
+(The first build read the bare word at the end of the first line; a review
+showed prose can end in it, so the marker needs a form prose cannot take.
+Measured: of the eight real cards, one used a marker, a trailing
+`RECOMMENDED.`, so this form costs one line fix. Review round 4 asked what
+happens to forms near the token; the answer above is NOTE and text, because a
+refusal would block a card over a spelling and a silent read would leave the
+seat believing the option was marked.)
 
 **Recommendation.** Its first sentence must name one option as `Option N`
 (any case), and N must exist.
