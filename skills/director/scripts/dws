@@ -385,8 +385,9 @@ def write_many(actor, plan):
 
 def rerender():
     """After a write, re-render the page when board.html exists (opt-in by
-    existence, the rule the renderer already follows)."""
-    if not os.path.exists(os.path.join(STATE, "board.html")):
+    existence, the rule the renderer already follows). board-html launches the
+    fill with DWS_NO_RERENDER=1, so a render never re-renders itself."""
+    if os.environ.get("DWS_NO_RERENDER") or not os.path.exists(os.path.join(STATE, "board.html")):
         return
     renderer = os.path.join(os.path.dirname(os.path.abspath(__file__)), "board-html")
     try:
@@ -626,6 +627,8 @@ def decide(row, seen_by_link):
 
 
 def cmd_refresh(a):
+    if a.local:
+        return cmd_refresh_local(a)
     """Read each row's linked sources and record what they say (W2). Network
     reads happen outside the lock; the moves are decided under it, against
     the stage as it is then. Appends as actor refresh whatever --actor says."""
@@ -639,7 +642,12 @@ def cmd_refresh(a):
         row = rows[slug]
         for link in row["links"]:
             if not LINK.match(link):
-                why = "ask ids are read in W5" if ASK.match(link) else "untyped; use pr:, issue: or bd:<id>"
+                if link.startswith("relay:"):
+                    why = "relay entries are read by refresh --local"
+                elif link.startswith("msg:"):
+                    why = "ask ledger rows are read in W5"
+                else:
+                    why = "Desk cards are read by refresh --local" if ASK.match(link) else "untyped; use pr:, issue: or bd:<id>"
                 warnings.append(f"{slug}: {link} not read ({why})")
                 continue
             last = row["observed"].get(link)
@@ -685,6 +693,271 @@ def cmd_refresh(a):
                 print(f"{e['ws']}: hint: {h}")
     for w in warnings:
         print(f"dws refresh: {w}", file=sys.stderr)
+
+
+
+# ---- ledger fill (sim/design/ledger-fill.md, issue #321) ---------------------------------------
+# refresh --local reads only local records: the relay log, the Desk snapshot. An event is tied
+# to a row by an id its writer recorded (relay-log --ws, a relay:R-<n> link, an ask:<card>
+# link) and never by reading message text (R-186, authority-never-in-content). Each event it
+# appends carries src, the fact it consumed; the fold keeps that set per row and the fill skips
+# any src already there, so replaying the same sources writes nothing.
+RELAY_LOCK_TIMEOUT = 5.0
+RELAY_HEAD = re.compile(r"^## R-([0-9]+) \((\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\) -> (.+)$")
+RELAY_OUTCOME = re.compile(r"^### R-([0-9]+) outcome \((\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\)$")
+WS_FIELD = re.compile(r"^\*\*Workstream:\*\* (.+)$")
+
+
+def relay_path():
+    """The relay log, found as relay-log finds it: $RELAY_LOG, else the checkout's
+    sim/notes/relay-log.md when this script runs through a symlink into a checkout."""
+    env = os.environ.get("RELAY_LOG")
+    if env:
+        return env
+    here = os.path.dirname(os.path.realpath(__file__))
+    root = os.path.abspath(os.path.join(here, "..", "..", ".."))
+    d = os.path.join(root, "sim", "notes")
+    if os.path.exists(os.path.join(root, ".git")) and os.path.isdir(d):
+        return os.path.join(d, "relay-log.md")
+    return None
+
+
+def read_relay():
+    """What the relay log says, headings and field lines only; entry text is never read
+    into the result. Returns a dict with ok, why, entries (R-n -> list of entries in writer
+    form), outcomes, legacy (headings that begin '## R-' and are not in writer form) and
+    newest. The read is under a shared flock on relay-log's own lock file, with a timeout:
+    a writer holds it exclusively while it numbers and appends."""
+    out = {"ok": False, "why": "", "entries": {}, "outcomes": [], "legacy": 0, "newest": None}
+    path = relay_path()
+    if not path:
+        out["why"] = "no relay log path (set RELAY_LOG)"
+        return out
+    if not os.path.isfile(path):
+        out["why"] = f"no relay log at {path}"
+        return out
+    lock = None
+    if os.path.exists(path + ".lock"):
+        try:
+            lock = open(path + ".lock", "r")
+        except OSError:
+            lock = None
+    try:
+        if lock is not None:
+            deadline = time.monotonic() + RELAY_LOCK_TIMEOUT
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        out["why"] = f"relay lock {path}.lock held for more than {RELAY_LOCK_TIMEOUT:.0f}s"
+                        return out
+                    time.sleep(0.05)
+        try:
+            with open(path, "rb") as f:
+                text = f.read().decode("utf-8", errors="replace")
+        except OSError as err:
+            out["why"] = f"relay log unreadable: {err.strerror}"
+            return out
+    finally:
+        if lock is not None:
+            lock.close()
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        m = RELAY_HEAD.match(line)
+        if m:
+            ws = []
+            fm = WS_FIELD.match(lines[i + 1]) if i + 1 < len(lines) else None
+            if fm:
+                ws = [w for w in (x.strip() for x in fm.group(1).split(",")) if SLUG.match(w)]
+            out["entries"].setdefault(int(m.group(1)), []).append({"n": int(m.group(1)), "stamp": m.group(2), "to": m.group(3).strip(), "ws": ws})
+            if out["newest"] is None or m.group(2) > out["newest"]:
+                out["newest"] = m.group(2)
+            continue
+        m = RELAY_OUTCOME.match(line)
+        if m:
+            out["outcomes"].append((int(m.group(1)), m.group(2)))
+        elif line.startswith("## R-"):
+            out["legacy"] += 1
+    out["ok"] = True
+    return out
+
+
+def unique_entry(relay, n):
+    """The one writer-form entry numbered n, or None when there is none or two."""
+    es = relay["entries"].get(n, [])
+    return es[0] if len(es) == 1 else None
+
+
+def relay_events(row, relay, t_now):
+    """The observe events the relay log gives one row that the row has not consumed."""
+    nums = {}
+    for n, es in relay["entries"].items():
+        e = unique_entry(relay, n)
+        if e and row["slug"] in e["ws"]:
+            nums[n] = e
+    for link in row["links"]:
+        if RELAY_LINK.match(link):
+            n = int(link[len("relay:R-"):])
+            e = unique_entry(relay, n)
+            if e:
+                nums[n] = e
+    facts = []
+    for n, e in sorted(nums.items()):
+        facts.append((f"relay:R-{n}@{e['stamp']}", e["stamp"]))
+    for n, st in relay["outcomes"]:
+        if n in nums:
+            facts.append((f"relay:R-{n}/outcome@{st}", st))
+    events = []
+    for src, st in facts:
+        if src in row["consumed"]:
+            continue
+        events.append({"event": "observe", "ws": row["slug"], "src": src, "moved_at": min(st, t_now), "checked_at": t_now})
+    return events
+
+
+def desk_snapshot():
+    """(snapshot, None) when fresh and readable, else (None, why). The same bound as K13."""
+    try:
+        with open(SNAPSHOT, encoding="utf-8") as f:
+            snap = json.load(f)
+        read_at = parse_time(snap["read_at"])
+        open_ids = snap["open"]
+        if not isinstance(open_ids, list):
+            raise ValueError("open is not a list")
+    except FileNotFoundError:
+        return None, "UNREAD: no snapshot"
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, "UNREAD: the snapshot cannot be read"
+    hours = (parse_time(now()) - read_at).total_seconds() / 3600
+    if hours < 0 or hours > THRESHOLD_HOURS["desk snapshot"]:
+        return None, f"UNREAD: the snapshot read at {snap['read_at']} is outside {THRESHOLD_HOURS['desk snapshot']}h"
+    return snap, None
+
+
+def card_status(snap, card):
+    ids = snap.get("ids")
+    if isinstance(ids, dict):
+        st = ids.get(card)
+        return st if isinstance(st, str) else None
+    return "open" if card in snap["open"] else None
+
+
+def desk_events(row, snap, t_now, gaps):
+    events = []
+    for link in row["links"]:
+        if not ASK.match(link):
+            continue
+        card = link[4:]
+        st = card_status(snap, card)
+        if st is None:
+            gaps.append(f"{row['slug']}: card {card} is not on the Desk (snapshot read {snap['read_at']})")
+            continue
+        src = f"desk:{card}@{snap['read_at']}"
+        if src in row["consumed"]:
+            continue
+        events.append({"event": "observe", "ws": row["slug"], "link": link,
+                       "seen": {"kind": "desk", "state": st, "read_at": snap["read_at"]},
+                       "src": src, "checked_at": t_now})
+    return events
+
+
+def cmd_refresh_local(a):
+    """The source-only refresh (ledger fill): the relay log and the Desk snapshot, no network.
+    Reads happen outside the ledger lock and one lock is held at a time; the events are decided
+    under the ledger lock against the row as it is then."""
+    rows, _ = fold()
+    slugs = a.slugs or [r["slug"] for r in sorted_rows(rows)]
+    for slug in slugs:
+        need(rows, slug)
+    t_now = now()
+    relay = read_relay()
+    snap, desk_why = desk_snapshot()
+    gaps = []
+    if not relay["ok"]:
+        gaps.append(f"relay source unreadable: {relay['why']}")
+    if snap is None:
+        gaps.append(f"Desk {desk_why}")
+    if relay["ok"] and relay["legacy"]:
+        gaps.append(f"{relay['legacy']} relay headings not in writer form were not read")
+
+    def plan(current):
+        events = []
+        for slug in slugs:
+            row = current.get(slug)
+            if row is None:
+                continue
+            if relay["ok"]:
+                events.extend(relay_events(row, relay, t_now))
+            if snap is not None:
+                events.extend(desk_events(row, snap, t_now, gaps))
+        return events
+
+    events = write_many("refresh", plan)
+    for e in events:
+        if e.get("moved_at"):
+            print(f"{e['ws']}: moved {e['moved_at']} ({e['src']})")
+        elif e.get("link"):
+            print(f"{e['ws']}: {e['link']} is {e['seen']['state']} on the Desk"
+                  + (f"; hint: card {e['link'][4:]} is {e['seen']['state']}, the next action is director's" if e["seen"]["state"] in ("yours", "split") else ""))
+    for g in gaps:
+        print(f"dws refresh --local: {g}", file=sys.stderr)
+
+
+def cmd_unlinked(a):
+    """What the fill could not tie to a row, listed and never guessed. Writes nothing."""
+    rows, _ = fold()
+    relay = read_relay()
+    snap, desk_why = desk_snapshot()
+    linked_n = {int(l[len("relay:R-"):]) for r in rows.values() for l in r["links"] if RELAY_LINK.match(l)}
+    names = {r["slug"] for r in rows.values()}
+    entries = [e for n in sorted(relay["entries"]) for e in relay["entries"][n]]
+    if a.since:
+        entries = [e for e in entries if e["stamp"][:10] >= a.since]
+    unlinked_entries = [e for e in entries if not e["ws"] and e["n"] not in linked_n]
+    unknown = sorted({(w, e["n"]) for e in entries for w in e["ws"] if w not in names})
+    not_writer = sorted((r["slug"], l) for r in rows.values() for l in r["links"]
+                        if RELAY_LINK.match(l) and unique_entry(relay, int(l[len("relay:R-"):])) is None)
+    no_link = sorted(r["slug"] for r in rows.values() if not r["links"])
+    op_nocard = sorted(r["slug"] for r in rows.values() if operator_blocked(r["blocked"]) and not any(ASK.match(l) for l in r["links"]))
+    cards_linked = {l[4:] for r in rows.values() for l in r["links"] if ASK.match(l)}
+    open_cards = sorted(c for c in (snap["open"] if snap else []) if c not in cards_linked)
+    sources = {
+        "relay": ({"newest_entry": relay["newest"], "legacy_headings": relay["legacy"]} if relay["ok"] else {"UNREAD": relay["why"]}),
+        "desk": ({"read_at": snap["read_at"]} if snap else {"UNREAD": desk_why}),
+        "ask_ledger": {"not_read": "W5 is not built"},
+    }
+    if a.json:
+        json.dump({"relay_entries_without_workstream": [{"n": e["n"], "stamp": e["stamp"], "to": e["to"]} for e in unlinked_entries],
+                   "unknown_workstream_names": [{"ws": w, "entry": n} for w, n in unknown],
+                   "relay_links_not_in_writer_form": [{"ws": w, "link": l} for w, l in not_writer],
+                   "rows_with_no_link": no_link, "rows_blocked_on_operator_with_no_card": op_nocard,
+                   "open_desk_cards_no_row_links": open_cards, "sources": sources}, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+        return
+    print("relay entries in writer form with no workstream:")
+    for e in unlinked_entries:
+        print(f"  R-{e['n']} {e['stamp']} -> {e['to']}")
+    print("workstream names that match no row:")
+    for w, n in unknown:
+        print(f"  {w} (R-{n})")
+    print("relay links not in writer form:")
+    for w, l in not_writer:
+        print(f"  {w} {l} (no writer-form entry has this number)")
+    print(f"rows with no link: {len(no_link)}")
+    for w in no_link:
+        print(f"  {w}")
+    print("rows blocked on the operator with no card link:")
+    for w in op_nocard:
+        print(f"  {w}")
+    print("open Desk cards that no row links:")
+    for c in open_cards:
+        print(f"  {c}")
+    print("sources:")
+    print("  relay: " + (f"newest entry {relay['newest'] or 'none'}; {relay['legacy']} headings not in writer form" if relay["ok"] else f"UNREAD ({relay['why']})"))
+    print("  Desk: " + (f"snapshot read {snap['read_at']}" if snap else desk_why))
+    print("  ask ledger: not read (W5 is not built)")
 
 
 def cmd_show(a):
@@ -909,7 +1182,13 @@ def main(argv):
 
     f = sub.add_parser("refresh")
     f.add_argument("slugs", nargs="*")
+    f.add_argument("--local", action="store_true", help="read only the relay log and the Desk snapshot; no network")
     f.set_defaults(fn=cmd_refresh)
+
+    ul = sub.add_parser("unlinked", help="what the fill could not tie to a row; writes nothing")
+    ul.add_argument("--json", action="store_true")
+    ul.add_argument("--since", help="only relay entries stamped on or after YYYY-MM-DD")
+    ul.set_defaults(fn=cmd_unlinked)
 
     w = sub.add_parser("show")
     w.add_argument("--json", action="store_true")

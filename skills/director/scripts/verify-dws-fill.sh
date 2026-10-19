@@ -244,7 +244,7 @@ cat >>"$LEDGER" <<'J'
 J
 "$DWS" unlinked >"$root/unl" 2>&1
 grep -q 'n1' "$root/unl" && ok "unlinked lists a row with no link" || bad "unlinked: a row with no link" "$(cat "$root/unl")"
-grep -qE 'operator.*ob|ob.*operator' "$root/unl" && ok "unlinked lists a row blocked on the operator with no card link" || bad "unlinked: operator block with no card" "$(cat "$root/unl")"
+grep -A1 'blocked on the operator' "$root/unl" | grep -q 'ob'   && ok "unlinked lists a row blocked on the operator with no card link" || bad "unlinked: operator block with no card" "$(cat "$root/unl")"
 "$DWS" unlinked --json >"$root/unl.json" 2>&1 && python3 -c 'import json,sys;json.load(open(sys.argv[1]))' "$root/unl.json" && ok "unlinked --json is JSON" || bad "unlinked --json is JSON" "$(cat "$root/unl.json")"
 "$DWS" unlinked >/dev/null 2>&1; n="$(lines)"; "$DWS" unlinked >/dev/null 2>&1
 [[ "$(lines)" == "$n" ]] && ok "unlinked writes nothing" || bad "unlinked writes nothing"
@@ -284,7 +284,6 @@ python3 - "$RELAY_LOG.lock" <<'P' &
 import fcntl, sys, time
 f = open(sys.argv[1], "a")
 fcntl.flock(f, fcntl.LOCK_EX)
-print("held", flush=True)
 time.sleep(6.5)
 P
 holder=$!
