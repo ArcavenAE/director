@@ -241,7 +241,7 @@ def apply(rows, e):
             "owner": e.get("owner", ""), "stage": e.get("stage", "idea"),
             "last_moved": ts, "next": e.get("next", ""), "blocked": e.get("blocked", ""),
             "links": list(e.get("links", [])), "opened": ts,
-            "hints": [], "observed": {}, "facts": [], "tags": {},
+            "hints": [], "observed": {}, "facts": [], "tags": {}, "consumed": [],
         }
         count_tag(rows[slug], e)
         return
@@ -258,12 +258,19 @@ def apply(rows, e):
         for k in ("owner", "next", "blocked", "repos"):
             if k in e:
                 r[k] = e[k]
+        # R-197: an authored update counts as movement. It never moves the clock back.
+        r["last_moved"] = max(r["last_moved"], ts)
     elif ev == "link":
         for link in e.get("add", []):
             if link not in r["links"]:
                 r["links"].append(link)
         r["links"] = [x for x in r["links"] if x not in e.get("remove", [])]
     elif ev == "observe":
+        # A src names the fact an event consumed (ledger fill, section 6); the fill
+        # skips any src already here, so replaying a source writes nothing.
+        src = e.get("src")
+        if isinstance(src, str) and src not in r["consumed"]:
+            r["consumed"] = sorted(r["consumed"] + [src])
         # refresh records what it saw; a linked artifact that moved moves the
         # row's last-moved time (section 5). A row-level observe (no link)
         # carries the hints from that refresh.
@@ -466,7 +473,23 @@ def cmd_set(a):
     write_many(a.actor, plan)
 
 
+RELAY_LINK = re.compile(r"^relay:R-[0-9]+$")
+MSG_LINK = re.compile(r"^msg:[A-Za-z0-9][A-Za-z0-9._:-]*$")
+
+
+def typed_link(link):
+    """relay: and msg: links are typed (ledger fill): a malformed one is refused, so a
+    typo cannot sit on a row looking like a join key. Other links are untouched."""
+    if link.startswith("relay:") and not RELAY_LINK.match(link):
+        raise Refused(f"link {link!r} is not relay:R-<n>")
+    if link.startswith("msg:") and not MSG_LINK.match(link):
+        raise Refused(f"link {link!r} is not msg:<message id>")
+    return link
+
+
 def cmd_link(a):
+    for link in a.links:
+        typed_link(link)
     ev = {"event": "link", "ws": a.slug, ("remove" if a.remove else "add"): a.links}
     write(a.actor, ev, lambda rows: need(rows, a.slug))
 
