@@ -34,7 +34,7 @@ gh-ingress is Go so that the subject builder and the envelope type stay shared w
 Rules:
 - Opened, closed and merged come only from the REST lists. Absence from a search result is never an event.
 - A `mergeable` of UNKNOWN is re-read on the next cycle and never published. That UNKNOWN means GitHub is still computing is INFERRED, not measured.
-- "A run in progress" counts only check suites that carry a workflow run. Suites registered for apps that never run sit at QUEUED. MEASURED 2026-10-19: all 58 QUEUED or IN_PROGRESS suites on default-branch heads lacked a workflow run.
+- "A run in progress" counts only check suites that carry a workflow run. Suites registered for apps that never run sit at QUEUED. MEASURED 2026-10-19: all 58 QUEUED or IN_PROGRESS suites on default-branch heads lacked a workflow run (measured only: not checked against GitHub's documentation).
 - **Busy signal:** the `rate_limit` read, with exponential backoff to a cap. MEASURED 2026-10-19: three reads in a row left `used` at 526, so it does not count against the primary limit. Per a reviewer's reading of GitHub's documentation, it can still count toward the secondary limits, which `used` does not show.
 - **Secondary limits.** GitHub also enforces secondary limits on REST: 900 points a minute and 100 concurrent requests, per GitHub's REST rate-limit documentation as checked by a reviewer on 2026-10-19. A secondary-limit response is a 403 or a 429, handled by collection test 7.
 - **Fast poll:** only for a repo with a real run in progress, with a ceiling so a stuck run drops back.
@@ -92,7 +92,7 @@ Each rule above has a red test against a fake GitHub server:
 - **Interim.** The core shells out to `gh api graphql`, so it never holds a token. The login gh uses carries whatever scopes its owner granted. For the login in use, those include write scopes (MEASURED; recorded privately). Read-only then rests on the fixed query set alone. The operator is told the measured scopes plainly, in a private record, not here.
 - **Target.** A dedicated read-only credential. The core reads the credential's grants at start and refuses any write grant.
   - **How the grants are read.**
-    - A classic OAuth token reports `X-OAuth-Scopes`. MEASURED on the gh login.
+    - A classic OAuth token reports `X-OAuth-Scopes`. MEASURED on the gh login (measured only: not checked against GitHub's documentation).
     - An App installation token carries a `permissions` object in the mint response. INFERRED, not yet measured.
     - How to read a fine-grained PAT's grants is UNVERIFIED. If none is found, the check fails closed: the core does not run on a credential whose grants it cannot read.
   - **Date.** No date is set. The operator sets it on the credential card. The card recommends about two weeks after it is ruled.
