@@ -206,6 +206,7 @@ so a seat fixes them in one pass. Each line reads
 | names two | `the recommendation names options 1 and 2; recommend one` |
 | marker disagrees | `RECOMMENDED marks option 1 and the recommendation names option 2` |
 | two markers | `RECOMMENDED marks 2 options` |
+| marker twice on one option | `option 1 carries RECOMMENDED on 2 lines` |
 | expiry not a date first | `Valid until does not start with a date (YYYY-MM-DD); an event alone may never arrive, so it is not an expiry` |
 | not a calendar date | `2026-02-30 is not a calendar date` |
 | date already passed | `2026-10-01 is before today (2026-10-19); re-check the recommendation and renew it before posting` |
