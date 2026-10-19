@@ -6,16 +6,24 @@ Director's relay-log times were typed by hand and ran up to 35 minutes ahead of
 writes, under the lock, and offers no way for the caller to set it: there is no
 time argument, and the entry text is never read for one.
 
-  relay-log append --to <address> [--outcome <text>] (--text <t> | --text-file <path|->)
+  relay-log append --to <address> [--ws <slug>]... [--outcome <text>] (--text <t> | --text-file <path|->)
   relay-log outcome <R-n> (--text <t> | --text-file <path|->)
 
 append adds the next numbered entry (SKILL.md's shape: R-N, to, the verbatim
 text, the outcome) with a UTC stamp in the heading:
 
   ## R-<n> (<YYYY-MM-DDTHH:MM:SSZ>) -> <to>
+  **Workstream:** <slug>[, <slug>]        (only when --ws is given)
   **Text, verbatim:**
   > <each line of the text, prefixed with "> ">
   **Outcome:** <outcome, "pending" when none is given>
+
+--ws names the workstream the entry is about, so the ledger can move that row from
+the entry (ledger fill, #321). It is written by the writer, one field line right after
+the heading, and checked for shape only (dws's slug pattern): the ledger is never
+opened, so the writer keeps working with no ledger, no dws and a held ledger lock. The
+text is quoted line by line, so a **Workstream:** line typed inside a message stays
+quoted and links nothing.
 
 outcome adds a later note for an existing entry, stamped the same way:
 
@@ -34,6 +42,7 @@ flock covers the numbering, the stamp and the write.
 import argparse, datetime, fcntl, os, re, subprocess, sys
 
 HEADING = re.compile(rb"^## R-(\d+)\b", re.M)
+SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]*$")  # dws's pattern; the writer checks the shape only
 
 
 def find_log():
@@ -78,6 +87,7 @@ def main():
     a = sub.add_parser("append")
     a.add_argument("--to", required=True)
     a.add_argument("--outcome", default="pending")
+    a.add_argument("--ws", action="append", default=[], help="a workstream slug the entry is about; repeatable")
     g = a.add_mutually_exclusive_group(required=True)
     g.add_argument("--text")
     g.add_argument("--text-file")
@@ -99,6 +109,10 @@ def main():
     if args.cmd == "append":
         if not args.to.strip() or "\n" in args.to or "\n" in args.outcome:
             sys.exit("relay-log: --to must be one non-empty line, and --outcome one line")
+        for w in args.ws:
+            if not SLUG.match(w):
+                sys.exit(f"relay-log: --ws {w!r} is not a workstream slug (lower case letters, digits, '.', '_' or '-'); nothing written")
+        ws_line = ("**Workstream:** " + ", ".join(dict.fromkeys(args.ws)) + "\n") if args.ws else ""
 
     fd = os.open(log + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
@@ -117,7 +131,7 @@ def main():
                 n = (max(numbers) if numbers else 0) + 1
                 head = f"## R-{n} ({stamp()}) -> {args.to.strip()}"
                 quoted = "\n".join("> " + ln if ln else ">" for ln in text.rstrip("\n").split("\n"))
-                body = f"{head}\n**Text, verbatim:**\n{quoted}\n**Outcome:** {args.outcome.strip()}\n"
+                body = f"{head}\n{ws_line}**Text, verbatim:**\n{quoted}\n**Outcome:** {args.outcome.strip()}\n"
             lead = b""
             if existing and not existing.endswith(b"\n"):
                 lead = b"\n"
