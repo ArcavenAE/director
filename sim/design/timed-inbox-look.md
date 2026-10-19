@@ -273,8 +273,10 @@ director-mcp look-clear --state <state> --items FILE --items-reported N
 - **Refused whole: exit 1, nothing written.** Anything that makes the input
   itself doubtful: a file that does not parse; a count that differs from
   its `--*-reported`, or sits at `--limit`; two items with the same id or
-  the same gate key; two answers for the same item; an `updatedAt` that is
-  missing or not a time; `notify.json` or `cleared.json` present and not
+  the same gate key; an item that carries neither `id` nor `doc_id`, or
+  both with different values; an answer that names no item, or carries
+  `card` and `card_id` with different values; two answers for the same
+  item; an `updatedAt` that is missing or not a time; `notify.json` or `cleared.json` present and not
   parsing. As with `desk-snapshot`, a doubt about the read is never
   resolved by guessing which half to trust.
 - **Skipped, alone: the rest are applied.** A single answer that is
@@ -565,7 +567,10 @@ count, so they share the unread reader and its field names.
      - **every whole-input refusal, one fixture each:** an `--items` file
        that does not parse; an `--answers` file that does not parse; an
        items count that differs from `--items-reported`; an answers count
-       that differs from `--answers-reported`; a count equal to `--limit`;
+       that differs from `--answers-reported`; an items count equal to
+       `--limit`, and, in the same test, an answers count equal to it; an
+       item with neither `id` nor `doc_id`; an answer with neither `card`
+       nor `card_id`; an answer whose `card` and `card_id` disagree;
        two items with the same id; two items with the same gate key; two
        answers for one item; an answer with no `updatedAt`; an answer whose
        `updatedAt` is not a time; a `notify.json` that does not parse; a
