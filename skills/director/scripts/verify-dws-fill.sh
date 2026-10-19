@@ -54,9 +54,24 @@ socket.socket.connect_ex = lambda self, addr, *a, **k: _note("connect_ex", addr)
 socket.getaddrinfo = lambda host, *a, **k: _note("getaddrinfo", host)
 socket.gethostbyname = lambda host: _note("gethostbyname", host)
 socket.gethostbyname_ex = lambda host: _note("gethostbyname_ex", host)
+# Every spawn is recorded and refused too: --local starts no process, and a curl child would
+# reach the network without a single socket call in this process.
+import subprocess
+_slog = os.environ.get("SPAWNLOG")
+def _spawn(what):
+    def refuse(*a, **k):
+        if _slog:
+            with open(_slog, "a") as f:
+                f.write("%s %r\n" % (what, a[:2]))
+        raise OSError("spawn refused by the verifier: " + what)
+    return refuse
+subprocess.Popen.__init__ = lambda self, *a, **k: _spawn("Popen")(*a, **k)
+for _n in ("system", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", "execvpe"):
+    if hasattr(os, _n):
+        setattr(os, _n, _spawn(_n))
 PYG
 # netrun CMD...: run CMD with the guard on, so any network use lands in $NETLOG.
-netrun() { NETLOG="$NETLOG" PYTHONPATH="$root/netguard${PYTHONPATH:+:$PYTHONPATH}" "$@"; }
+netrun() { NETLOG="$NETLOG" SPAWNLOG="$root/spawnlog" PYTHONPATH="$root/netguard${PYTHONPATH:+:$PYTHONPATH}" "$@"; }
 
 lines() { if [[ -f "$LEDGER" ]]; then wc -l <"$LEDGER" | tr -d ' '; else echo 0; fi; }
 field() { "$DWS" show --json | python3 -c 'import json,sys;rows={r["slug"]:r for r in json.load(sys.stdin)["rows"]};print(rows[sys.argv[1]][sys.argv[2]])' "$1" "$2"; }
@@ -290,9 +305,10 @@ open_at 2026-10-05T10:00:00Z g1 --title "net" --owner director --link pr:o/r#1 b
 entry 2700 2026-10-18T10:00:00Z agent://t/n g1
 printf '{"c1": {"status": "open"}}' >"$root/cards12.json"
 DWS_NOW=2099-01-01T00:00:00Z "$SNAP" write --cards "$root/cards12.json" --reported 1 >/dev/null
-: >"$CALLS"; : >"$NETLOG"
+: >"$CALLS"; : >"$NETLOG"; : >"$root/spawnlog"
 NOW=2099-01-01T00:00:00Z netrun bash -c 'DWS_NOW=2099-01-01T00:00:00Z "$0" refresh --local' "$DWS" >/dev/null 2>&1
 [[ ! -s "$CALLS" ]] && ok "test 12: the stubbed gh and bd were never called by refresh --local" || bad "test 12: subprocess network calls" "$(cat "$CALLS")"
+[[ ! -s "$root/spawnlog" ]] && ok "test 12: no process was spawned" || bad "test 12: a spawn" "$(cat "$root/spawnlog")"
 [[ ! -s "$NETLOG" ]] && ok "test 12: no connect or name lookup was made from python" || bad "test 12: socket-layer network use" "$(cat "$NETLOG")"
 [[ "$(field g1 last_moved)" == "2026-10-18T10:00:00Z" ]] && ok "test 12: and the local sources still moved the row" || bad "test 12: positive" "$(field g1 last_moved)"
 
@@ -336,6 +352,43 @@ P
   DWS_NOW=2099-01-01T00:00:00Z netrun "$root/plant/dws-curl-$how" refresh --local >/dev/null 2>&1 || true
   [[ -s "$SPAWNLOG" ]] && ok "test 12 control: the spawn record flags a planted subprocess of curl ($how)" || bad "test 12 control: a planted curl ($how) goes unseen by the spawn record"
 done
+
+# test 12, the strong layer: the same fill under a profile that denies the network to every process,
+# children included, so a curl or a raw _socket connect fails however it was started. macOS only;
+# elsewhere the guard above is the whole check, and this says so.
+NETDENY='(version 1)(allow default)(deny network*)'
+if [[ "$(uname)" == Darwin ]] && command -v sandbox-exec >/dev/null && sandbox-exec -p "$NETDENY" /usr/bin/true >/dev/null 2>&1; then
+  # the profile is honored: a connect to a closed local port says Operation not permitted under it,
+  # and Connection refused without it
+  sbc='import socket
+try:
+    socket.create_connection(("127.0.0.1", 9), timeout=1)
+except OSError as e:
+    print(e)'
+  sandbox-exec -p "$NETDENY" python3 -c "$sbc" 2>&1 | grep -q 'Operation not permitted' \
+    && ok "test 12 control: under the profile a connect to a closed local port says Operation not permitted" || bad "test 12 control: the profile is not honored by a python connect"
+  python3 -c "$sbc" 2>&1 | grep -q 'Connection refused' \
+    && ok "test 12 control: without the profile the same connect is refused by the port, not by a sandbox" || bad "test 12 control: the unsandboxed connect" "$(python3 -c "$sbc" 2>&1)"
+  curlout="$(sandbox-exec -p "$NETDENY" /usr/bin/curl -sv --max-time 2 http://127.0.0.1:9/ 2>&1 || true)"
+  grep -q 'Operation not permitted' <<<"$curlout" \
+    && ok "test 12 control: under the profile a plain curl to a closed local port says Operation not permitted" || bad "test 12 control: the profile is not honored by curl"
+  fresh_state
+  open_at 2026-10-05T10:00:00Z sb1 --title "sandboxed" --owner director --link pr:o/r#1 ask:c1
+  entry 2702 2026-10-18T10:00:00Z agent://t/n sb1
+  printf '{"c1": {"status": "open"}}' >"$root/cards12.json"
+  DWS_NOW=2099-01-01T00:00:00Z "$SNAP" write --cards "$root/cards12.json" --reported 1 >/dev/null
+  DWS_NOW=2099-01-01T00:00:00Z sandbox-exec -p "$NETDENY" "$DWS" refresh --local >"$root/sb.out" 2>&1 \
+    && [[ "$(field sb1 last_moved)" == "2026-10-18T10:00:00Z" ]] \
+    && ok "test 12: refresh --local succeeds and still moves the row under a profile that denies all network" || bad "test 12: refresh --local under the network-deny profile" "$(cat "$root/sb.out")"
+  for how in abs bare; do
+    if DWS_NOW=2099-01-01T00:00:00Z sandbox-exec -p "$NETDENY" "$root/plant/dws-curl-$how" refresh --local >"$root/sb.out" 2>&1; then
+      bad "test 12 control: a planted curl ($how) passed under the profile"
+    elif grep -q 'Operation not permitted' "$root/sb.out"; then ok "test 12 control: a planted curl ($how) fails under the profile with its own Operation not permitted"
+    else bad "test 12 control: a planted curl ($how) failed for another reason" "$(tail -3 "$root/sb.out")"; fi
+  done
+else
+  echo "SKIP test 12 strong layer: no usable sandbox-exec here; the socket and spawn guard above is the whole check"
+fi
 
 # --- test 13: no render loop -------------------------------------------------------------------------
 fresh_state
