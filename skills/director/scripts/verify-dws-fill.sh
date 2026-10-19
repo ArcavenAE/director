@@ -22,7 +22,7 @@ pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 
-root="$(mktemp -d)"
+root="$(mktemp -d "${TMPDIR:-/tmp}/dws-fill.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 export PYTHONDONTWRITEBYTECODE=1
 export DIRECTOR_STATE="$root/state"
