@@ -357,6 +357,64 @@ near_case "in backticks" '1. *Keep 06:00.* The cost is a late report. `[RECOMMEN
 near_case "a wrapped line, lowercase" '1. *Keep 06:00.* Nothing changes.\n   The cost is a late report. [recommended]'
 near_case "inside a code fence" '1. *Keep 06:00.* Nothing changes.\n   ```\n   write [RECOMMENDED]\n   ```\n   The cost is a late report.' nonote
 
+# More near forms: bold and capitalised spellings draw a NOTE and are text.
+near_case "bold upper case" '1. *Keep 06:00.* The cost is a late report. **RECOMMENDED**'
+near_case "bold capitalised with a period" '1. *Keep 06:00.* The cost is a late report. **Recommended.**'
+python3 - "$BASE" "$root/capword.md" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+old = "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data."
+open(sys.argv[2], "w").write(t.replace(old, "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data. Recommended.", 1))
+P
+clean_state
+if run "$root/capword.md" >"$root/out" 2>"$root/err" && grep -q 'without brackets' "$root/out"; then ok "a line ending in Recommended. in any case draws the bare-word NOTE and is text"; else bad "a capitalised Recommended. draws a NOTE" "$(cat "$root/out" "$root/err")"; fi
+
+# Code fences. A fence line is made of the fence token (three or more backticks, or tildes), then an
+# optional info string, and nothing else; a closer is the same character, at least as long, with no
+# info string. State resets at every option, and an option that ends inside an open fence is refused,
+# so a fence can never swallow the next option's marker. A line that merely starts with inline
+# triple-backtick code is not a fence.
+fence_case() {  # label  opt1  opt2  rec  want   (want: accept | refuse:<text>)
+  local label="$1" o1="$2" o2="$3" rec="$4" want="$5"
+  python3 - "$BASE" "$root/fence-case.md" "$o1" "$o2" "$rec" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+a = "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data."
+b = "2. *Move to 07:00.* One schedule line changes. The cost is a later report."
+assert a in t and b in t
+t = t.replace(a, sys.argv[3].replace("\\n", "\n")).replace(b, sys.argv[4].replace("\\n", "\n"))
+t = t.replace("Option 2.", "Option %s." % sys.argv[5])
+open(sys.argv[2], "w").write(t)
+P
+  clean_state
+  local rc=0; run "$root/fence-case.md" >"$root/out" 2>"$root/err" || rc=$?
+  if [[ "$want" == accept ]]; then
+    [[ $rc -eq 0 ]] && ok "fence: $label" || bad "fence: $label" "$(cat "$root/err")"
+  else
+    [[ $rc -eq 1 ]] && grep -qF -- "${want#refuse:}" "$root/err" && ok "fence: $label" || bad "fence: $label" "rc $rc: $(cat "$root/err")"
+  fi
+}
+O2='2. *Move to 07:00.* One schedule line changes. The cost is a later report.'
+O1='1. *Keep 06:00.* Nothing changes. The cost is a late report.'
+fence_case "a fence opened in option 1 and closed in option 2 is refused, naming option 1" \
+  "1. *Keep 06:00.* The cost is a late report.\n   \`\`\`\n   some code" "2. *Move to 07:00.* More code. The cost is an hour.\n   \`\`\`\n   text [RECOMMENDED]" 1 \
+  "option 1 ends inside an open code fence"
+fence_case "a fence left open in the last option is refused" \
+  "$O1" "2. *Move to 07:00.* The cost is an hour.\n   \`\`\`\n   [RECOMMENDED]" 1 "option 2 ends inside an open code fence"
+fence_case "a tilde fence holds a token that is never the marker" \
+  "1. *Keep 06:00.* Nothing changes.\n   ~~~\n   write [RECOMMENDED]\n   ~~~\n   The cost is a late report." "$O2" 2 accept
+fence_case "a tilde fence left open is refused" \
+  "1. *Keep 06:00.* The cost is a late report.\n   ~~~\n   [RECOMMENDED]" "$O2" 2 "option 1 ends inside an open code fence"
+fence_case "a closer of the other character does not close a fence" \
+  "1. *Keep 06:00.* The cost is a late report.\n   \`\`\`\n   code\n   ~~~" "$O2" 2 "option 1 ends inside an open code fence"
+fence_case "a fence with an info string opens and closes, and the token inside is text" \
+  "1. *Keep 06:00.* Nothing changes.\n   \`\`\`bash\n   echo [RECOMMENDED]\n   \`\`\`\n   The cost is a late report." "$O2" 2 accept
+fence_case "a line that starts with inline triple-backtick code is not a fence: the marker after it is read" \
+  "1. *Keep 06:00.* The cost is a late report.\n   \`\`\`x\`\`\` is inline code [RECOMMENDED]" "$O2" 2 \
+  "RECOMMENDED marks option 1 and the recommendation names option 2"
+fence_case "a longer closer closes a shorter opener" \
+  "1. *Keep 06:00.* Nothing changes.\n   \`\`\`\n   [RECOMMENDED]\n   \`\`\`\`\n   The cost is a late report." "$O2" 2 accept
+
 # A log append that fails partway leaves the log as it was: no partial line without its batch.
 # RLIMIT_FSIZE stops the append part-way through; the seed log is under the limit, the batch is too.
 # CI_RLIMIT_SLACK (default 60) is how many bytes past the seed log the cap allows; a slack large
