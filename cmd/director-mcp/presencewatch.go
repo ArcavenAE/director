@@ -100,6 +100,9 @@ type PresenceWatch struct {
 	Sleeps   []watchGap            `json:"sleeps,omitempty"`
 	Downs    []watchGap            `json:"downs,omitempty"`
 	Blind    bool                  `json:"blind,omitempty"`
+	// Foreign lists each key under presence. that is not the shape the shim
+	// writes (D4), once, so it is reported once.
+	Foreign []string `json:"foreign,omitempty"`
 
 	th       watchThresholds
 	lastMono time.Duration
@@ -135,6 +138,21 @@ func asleepUntil(state string) (asleep bool, until time.Time) {
 		return true, t
 	}
 	return true, time.Time{}
+}
+
+// maxForeign bounds the foreign list kept in the state file.
+const maxForeign = 200
+
+func (w *PresenceWatch) noteForeign(key string, now time.Time, ev *[]watchEvent) {
+	for _, k := range w.Foreign {
+		if k == key {
+			return
+		}
+	}
+	if len(w.Foreign) < maxForeign {
+		w.Foreign = append(w.Foreign, key)
+	}
+	*ev = append(*ev, watchEvent{At: now, Kind: "foreign", Text: key})
 }
 
 func (w *PresenceWatch) unit(kind, cluster, instance string) (*watchUnit, string) {
@@ -242,6 +260,10 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 			unread[cl+"/"+inst] = true
 		case ok && r.Rec != nil:
 			seen[cl+"/"+inst] = r.Rec
+		case strings.HasPrefix(r.Key, "presence.") && !isDirectorKey(r.Key):
+			// Not shim-shaped, or shim-shaped with a value that is not a presence
+			// record: never counts toward a unit, listed once.
+			w.noteForeign(r.Key, now, &ev)
 		}
 	}
 

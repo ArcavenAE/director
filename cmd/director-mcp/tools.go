@@ -303,6 +303,9 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if r := bus.takeResumed(); len(r) > 0 {
 		out["resumed"] = r
 	}
+	if n := bus.presenceNotices(); len(n) > 0 {
+		out["presence_notice"] = n
+	}
 	return out, nil
 }
 
@@ -346,6 +349,9 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 	if r := bus.takeResumed(); len(r) > 0 {
 		out["resumed"] = r
 	}
+	if n := bus.presenceNotices(); len(n) > 0 {
+		out["presence_notice"] = n
+	}
 	return out, nil
 }
 
@@ -381,6 +387,9 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 	}
 	if res.GlobalWarn != "" {
 		out["global_warning"] = res.GlobalWarn
+	}
+	if n := bus.presenceNotices(); len(n) > 0 {
+		out["presence_notice"] = n
 	}
 	if bus.handled != nil {
 		rows := res.ReadUnhandled

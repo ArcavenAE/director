@@ -165,6 +165,9 @@ func main() {
 	// Renew presence on the shim's own timer, not the model's poll (R-56). The
 	// presence bucket TTL is 90s; renew at roughly TTL/3. The same tick carries
 	// the global row and re-attaches a hub that was down at startup.
+	if err := bus.startPresenceWatch(logf); err != nil {
+		logf("presence watch not started: %v", err)
+	}
 	go bus.heartbeat(ctx, 30*time.Second, logf)
 	logf("connected to %s as agent://%s/%s instance %s in workspace %s", url, self.Team, self.AgentID, bus.instance, self.Workspace)
 	if gcfg != nil {
