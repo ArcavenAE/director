@@ -139,8 +139,8 @@ Closing statuses live in one operator-editable table in dws, starting with
 closed, resolved, withdrawn, superseded and relayed. In director's Desk
 practice a card goes to `relayed` only after director relays an answer the
 operator marked ready, so `relayed` means answered; that practice is written
-in director's local notes, not on main, so the ruling confirms it. This needs
-the operator's ruling before LF4 builds.
+in director's local notes, not on main, so the ruling confirms it. Ruled
+yes on 2026-10-19 (section 8, row 1), with this list as the starting table.
 
 **Judging moves stay director's.** accepted, parked, released, deployed, a
 re-open, a new row and a closing of a workstream are never appended by
@@ -200,7 +200,7 @@ names an open card. The other half is the release: when the card closes, the
 block clears. That half is LF4 above and belongs in this item, since it is
 the Desk event this item exists to read.
 
-Two further edges are missing and are **recommended as a separate item**:
+Two further edges are missing and are **a separate item** (ruled 2026-10-19; #337):
 
 - **row to row** (`blocked ws:<slug>`): `blocked` is free text today; 110
   rows hold a value that is neither empty nor `operator`. A typed form needs a
@@ -262,7 +262,7 @@ and `bd` that log calls; nothing reads the live state.
 | LF1 | `relay-log append --ws <slug>` (repeatable), the `**Workstream:**` line, slug shape check | `scripts/relay-log`, `verify-relay-log.sh` | none |
 | LF2 | fold: consumed `src` set per row; a director `set` moves `last_moved` (R-197 as written, not a new decision); typed links `relay:R-<n>` and `msg:<id>` accepted by `link` | `scripts/dws`, `verify-dws.sh` | none |
 | LF3 | `dws refresh --local`: the relay reader (writer-form headings only, shared lock, timeout) and the Desk reader (observe only); `dws unlinked`; `DWS_NO_RERENDER` | `scripts/dws`, new `verify-dws-fill.sh` | LF1, LF2 |
-| LF4 | needs the ruling: refresh may append `set blocked ""` on a closed card; the closing-status table; `status` per id in the snapshot | `scripts/dws`, `scripts/desk-snapshot`, `verify-dws-fill.sh`, `verify-desk-snapshot.sh` | LF3, ruling |
+| LF4 | ruled 2026-10-19: refresh may append `set blocked ""` on a closed card; the closing-status table; `status` per id in the snapshot | `scripts/dws`, `scripts/desk-snapshot`, `verify-dws-fill.sh`, `verify-desk-snapshot.sh` | LF3 |
 | LF5 | `board-html` runs `dws refresh --local` before reading rows | `scripts/board-html`, `verify-board-html.sh` | LF3 |
 | LF6 | skill text: step 5 and the relay capture-trigger row name `--ws`; functions.md sections 2, 4 and 13 updated | `SKILL.md`, `reference/functions.md` | LF1 to LF5 |
 | W5 | the ask-ledger source, by `msg:` link | `scripts/dws` | LF3, and the ask reader's file existing (it does not, locally) |
@@ -312,17 +312,18 @@ and `bd` that log calls; nothing reads the live state.
     --local` reports the relay source unreadable within the timeout, writes no
     relay event, and still reads the Desk.
 
-## 8. Rulings needed (operator, via director)
+## 8. Rulings (operator, via director, 2026-10-19)
 
-| # | question | recommendation |
-|---|---|---|
-| 1 | Writer-table change: refresh may clear `blocked operator` when the row's linked Desk card is in a closing status (section 3, LF4) | yes, with the closing-status list confirmed, `relayed` first |
-| 2 | Run `refresh --local` on every render (section 6, option c) | yes |
-| 3 | Row-to-row and row-to-bd edges as a separate item (section 5) | yes |
+| # | question | recommendation | ruled |
+|---|---|---|---|
+| 1 | Writer-table change: refresh may clear `blocked operator` when the row's linked Desk card is in a closing status (section 3, LF4) | yes, with the closing-status list confirmed, `relayed` first | yes, with a confirmed list of closing statuses |
+| 2 | Run `refresh --local` on every render (section 6, option c) | yes | yes |
+| 3 | Row-to-row and row-to-bd edges as a separate item (section 5) | yes | yes, filed as #337 |
 
-Each recommendation is valid until 2026-11-02; the architect role re-checks
-it then. Nothing executes on silence. LF1 to LF3, LF5 and LF6 sit inside the
-writer table as it stands and need no ruling beyond this review.
+The closing-status table LF4 starts with is the one in section 3: closed,
+resolved, withdrawn, superseded and relayed. A wrong entry clears a block
+early, which is why the table is the operator's to edit (section 3).
+LF1 to LF6 now need nothing beyond review.
 
 ## 9. Candidate requirements (provisional)
 
