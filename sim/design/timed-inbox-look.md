@@ -127,7 +127,8 @@ classes:
   no `reply_by` has no sell-by and is never urgent.
 - **other:** everything else, shown only as a count.
 
-The urgent set is every gate, plus every request whose `reply_by` has passed.
+The urgent set is every gate not cleared (3.4.1), plus every request whose
+`reply_by` has passed.
 The body is read only to find that `GATE` line; nothing else of it is kept.
 
 **The digest** is one file under the user's state directory, mode 0600,
@@ -137,6 +138,7 @@ overwritten each run. Each run writes it in full:
 as of 2026-10-19T12:15:00Z (last look; host slept 11:40-12:10)
 waiting: local 3, global 1; oldest 2h14m
 GATE      01M59...  from agent://<team>/<seat>  age 2h14m
+cleared   01M59...  from agent://<team>/<seat>  age 6h02m  desk <desk-id> at 2026-10-19T10:40:00Z
 REQUEST   01M59...  from agent://<team>/<seat>  age 47m  sell-by 2026-10-20 (not passed)
 other     2
 reader: ok
@@ -211,12 +213,23 @@ operator has already handled keeps notifying until the cap.
 - **What clearing does.** Clearing tells the job to stop reminding. It is
   not an ack: the bus message stays unread, and the gate's own decision is
   still whatever the operator writes on its decision card. Director reads
-  the answer on its next sweep and writes the gate's key to `cleared.json`.
+  the answer on its next sweep and hands the clear answers it read to a
+  script, `director-mcp look-clear --state <state>`, which validates them
+  and writes `cleared.json`. The session reads; the script writes the file,
+  as with `desk-snapshot write`.
   The poster skips a cleared key, and the digest shows it under a "cleared"
   line instead of the urgent set.
 - **The same pattern as the Desk snapshot.** A session reads the Desk and
-  writes a local file a script reads (director `desk-snapshot`, K13). The
-  job only reads `cleared.json` and never writes it.
+  hands what it read to a script that writes a local file (director
+  `desk-snapshot`, K13). The job only reads `cleared.json` and never writes
+  it.
+- **Rule: recording a clear writes nothing to the Desk.** The only party
+  that can write the Desk is the session, and what a session does there is
+  honor-only, as for every Desk answer. So this is a rule, not a test: the
+  sweep's clear step reads the Desk and writes no Desk data, and it never
+  closes or changes the gate's decision card. What can be tested is the
+  script's side (test 7a2): `look-clear` has no Desk access at all, and its
+  only effect is `cleared.json`.
 - **Who may clear.** Only the operator. Director cannot check this: a Desk
   answer row carries the choice, a note and a time, and no author (read
   2026-10-19), and on main every Desk answer is honor-only ("Direct writes
@@ -358,7 +371,7 @@ gets no credential: its environment is built empty apart from `PATH` and
 | `digest.txt` | look | the text shown in 3.4, rewritten in full each run, 0600 |
 | `notify.json` | look | `{"as_of", "urgent": [{"tier", "stream", "seq", "class", "id", "sender", "age_s", "stage"}], "cleared": [same fields plus "desk_id", "cleared_at"], "reader": "ok" or the failure}`, 0600. A cleared gate is in `cleared`, never in `urgent` |
 | `reminders.json` | poster | `{"<tier>/<stream>/<seq>": {"first", "last", "count"}}`, 0600 |
-| `cleared.json` | director, from Desk answers (3.4.1) | `{"<tier>/<stream>/<seq>": {"at", "desk_id", "desk_updated_at", "author": "unverified"}}`, 0600; the job only reads it |
+| `cleared.json` | `look-clear`, from the Desk answers director's sweep read (3.4.1) | `{"<tier>/<stream>/<seq>": {"at", "desk_id", "desk_updated_at", "author": "unverified"}}`, 0600; the job only reads it |
 | `heartbeat.json` | look | `{"at", "local": n, "global": n, "reader"}`, written every run, even with zero counts and even when the reader failed, 0600 |
 | `look.sb` | installer | the sandbox profile |
 | `look.log` | launchd | stdout and stderr of both steps |
@@ -482,13 +495,14 @@ count, so they share the unread reader and its field names.
    - **it never reads as passed:** a fixture with one passed gate (acked, so
      absent from every list) and one cleared gate gives two different
      outputs. The cleared one appears in `cleared`, and the passed one in no
-     list. The test fails if the cleared gate is missing from every list, or
-     appears in a list beside a passed one;
-   - **the clear closes no card:** the director step that turns a Desk
-     answer into `cleared.json` makes no Desk write at all. Run against a
-     recorded Desk read, its only output is `cleared.json`, and the gate's
-     decision card is byte-identical before and after. The test fails on
-     any Desk write, a status change to the card included;
+     list. The test fails if the cleared gate is missing from every list,
+     or if the passed gate appears in any list;
+   - **`look-clear` writes only `cleared.json`:** fed a recorded clear
+     answer, it changes no file under `<state>` but `cleared.json`, and
+     writes nothing outside `<state>` (a listing with sizes and mtimes,
+     before and after, under a scratch `HOME`). It takes no Desk url and no
+     credential, so it has no Desk to write to. That the session writes
+     nothing to the Desk is the rule in 3.4.1, not this test;
    - each key carries `"author": "unverified"`.
    A key in `cleared.json` that matches no gate changes nothing. A malformed
    `cleared.json` is a reader line in the digest and leaves every gate on
