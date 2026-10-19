@@ -73,8 +73,13 @@ The floor is an OS job outside any session, and it runs no model.
 
 ### 3.3 What it reads
 
-`look` reuses the unread reader's durable path, not the whole reader. It
-skips presence, because listing KV keys creates a consumer (section 2).
+`look` reuses the unread reader's subject-filtered walk (`pendingIDs`,
+`unread.go:447`), not the whole reader. It skips presence, because listing KV
+keys creates a consumer (section 2). It does not reuse the reader's lister
+either: `readDurables` lists with `ListConsumers` (`unread.go:344`), which
+sends `CONSUMER.LIST` and returns every seat's full consumer info. The look
+sends `CONSUMER.NAMES` instead and asks `CONSUMER.INFO` only for the durables
+it keeps, so it sees other seats' durable names and nothing else of them.
 
 **Which durables.** Director runs one seat id, and each session makes its own
 durables: `mcp_<seat>_<instance>` on the local `AGENT_INBOX`, and
@@ -208,7 +213,17 @@ others, on each tier:
 | `$JS.API.STREAM.MSG.GET.<stream>` | the same walk, on a stream without direct get |
 
 `<stream>` is `AGENT_INBOX` on the local broker and `GLOBAL_TO_DIRECTOR` on
-the hub. The look also subscribes to its own reply inbox, `_INBOX.>` or a
+the hub. On the hub the subjects take the domain form,
+`$JS.<domain>.API.<rest>`, for example
+`$JS.<domain>.API.DIRECT.GET.GLOBAL_TO_DIRECTOR`, because director-mcp reaches
+the hub's JetStream through the leaf link with `jetstream.NewWithDomain`
+(`global.go:386`). The local subjects use the plain `$JS.API.` prefix.
+
+**The grant does not confine the read to director's mail.** `DIRECT.GET` on a
+shared stream carries the subject in its payload, so a user allowed this
+table can read any seat's mail on that stream. The look's code keeps to
+director's subjects, and test 2 checks it; no broker permission does. See
+"Exposure, stated" in section 3.3. The look also subscribes to its own reply inbox, `_INBOX.>` or a
 named prefix. Everything else is outside the list, and that includes each
 of these, which a denylist could miss: ack, `Nak`, `Term`, in-progress, any
 consumer create or delete, `STREAM.MSG.DELETE`, `STREAM.PURGE`, any KV put or
@@ -226,6 +241,9 @@ The look is safe to run unattended for these reasons, in order of strength:
    - This needs the broker's authorization block (aae-orc-umw8p), and the
      grant is the operator's: card 3. The grant is the same table, so test 2
      tests the grant too.
+   - "Nothing else" is about writes. For reads, this user can read every
+     seat's mail on the two shared streams, as section 3.3's "Exposure,
+     stated" sets out. Card 3 says so.
 
 **The interim credential, stated plainly.** Until that user exists, `look`
 connects as director-mcp does on that host, with the same connection
@@ -268,7 +286,9 @@ argument and never written into the script:
 ```
 
 The script is a fixed string, so nothing a seat writes can become
-AppleScript. MEASURED 2026-10-19 on macOS 26.5.2: with a payload of
+AppleScript. `osascript(1)` documents the `on run argv` handler, but not `--`
+as the end of options; that `--` is safe here is measured, below, not
+documented. MEASURED 2026-10-19 on macOS 26.5.2: with a payload of
 `x" & (do shell script "touch <scratch file>") & "`, the interpolated form
 `osascript -e "return \"$text\""` created the file, and the argv form
 returned the payload as literal text and created nothing. The same held for
@@ -320,9 +340,23 @@ count, so they share the unread reader and its field names.
    - It completes with no permissions violation in the server's log.
    - A planted control, a build of `look` with one ack added, fails with a
      violation, so the test can fail.
-   - Another seat's message, whose body carries a canary, is not read: the
-     canary is in no output, and the server's request log shows no direct
-     get whose `next_by_subj` names that seat's subject.
+   - **Another seat's mail is not read.** The fixture puts a gate, addressed
+     to another seat, on the same stream. Its id, its sender and a canary in
+     its body are each absent from everything the look writes: the digest,
+     `notify.json`, `heartbeat.json`, `reminders.json` and `look.log`. Since
+     the look never outputs a body, the id and sender are what make this
+     assertion able to fail.
+   - **Only allowed `next_by_subj` values.** The test harness subscribes to
+     the direct-get request subjects on the test server and records every
+     request payload. Every recorded request carries `next_by_subj`, and every
+     value is one of the filter subjects that `CONSUMER.INFO` reported for
+     director's kept durables. A request with no `next_by_subj` fails.
+   - **Mutants, both of which must fail:** a build that widens
+     `next_by_subj` to `agent.>`, and a build that walks by bare sequence.
+     The first fails both assertions above: the other seat's gate appears in
+     the digest, and the recorded value is not allowed. The second fails the
+     `next_by_subj` assertion, and the id assertion too, once the walk
+     reaches the other seat's message.
 3. **No write, by sandbox.** Step 1 runs under `look.sb`, which allows only
    the broker connections and writes to `<state>`.
    - A write elsewhere is refused, and the profile's refusal text goes in the
