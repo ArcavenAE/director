@@ -214,8 +214,8 @@ operator has already handled keeps notifying until the cap.
   not an ack: the bus message stays unread, and the gate's own decision is
   still whatever the operator writes on its decision card. Director reads
   the answer on its next sweep and hands the clear answers it read to a
-  script, `director-mcp look-clear --state <state>`, which validates them
-  and writes `cleared.json`. The session reads; the script writes the file,
+  script, `director-mcp look-clear` (3.4.2), which validates them and
+  writes `cleared.json`. The session reads; the script writes the file,
   as with `desk-snapshot write`.
   The poster skips a cleared key, and the digest shows it under a "cleared"
   line instead of the urgent set.
@@ -250,6 +250,62 @@ operator has already handled keeps notifying until the cap.
 - **Before director has swept,** nothing changes: the gate notifies on its
   ruled schedule. Clearing can only end reminders, never start or speed
   them up.
+
+#### 3.4.2 `look-clear`, exactly
+
+```
+director-mcp look-clear --state <state> --items FILE --items-reported N
+                        --answers FILE --answers-reported N [--limit 1000]
+```
+
+- **Input.** The same shape as `desk-snapshot write`. `--items` is what the
+  session's Desk read returned for gate items: a JSON object of id to item,
+  or a list of items that each carry `id` or `doc_id`. `--answers` is a JSON
+  list of answer records, each naming its item in `card` or `card_id` (both
+  only if they agree), with `choice`, `ready` and the Desk's `updatedAt`.
+  Each `--*-reported` is the count the Desk read itself reported. The file
+  must hold exactly that many, and a count at `--limit` may be truncated,
+  so it is refused. The script also reads `<state>/notify.json` and
+  `<state>/cleared.json`.
+- **What counts as a clear.** An answer whose item has `kind` exactly
+  `gate`, whose `choice` is exactly `clear`, and whose `ready` is `true`.
+  The item's tier, stream and sequence give the key.
+- **Refused whole: exit 1, nothing written.** Anything that makes the input
+  itself doubtful: a file that does not parse; a count that differs from
+  its `--*-reported`, or sits at `--limit`; two items with the same id or
+  the same gate key; two answers for the same item; an `updatedAt` that is
+  missing or not a time; `notify.json` or `cleared.json` present and not
+  parsing. As with `desk-snapshot`, a doubt about the read is never
+  resolved by guessing which half to trust.
+- **Skipped, alone: the rest are applied.** A single answer that is
+  well-formed but does not apply. Each skip is one stdout line with the
+  item id and the reason, never answer text:
+  - its item is not in `--items` (`unknown desk id`);
+  - its item is not `kind: gate` (`not a gate`);
+  - its `choice` is not `clear`, or `ready` is not `true` (`not a clear`);
+  - its gate is not open: the key is in neither `notify.json`'s `urgent`
+    nor its `cleared`, so the gate was acked or never seen (`gate not
+    open`). A clear never applies to a gate that has passed, so a passed
+    gate cannot be written as cleared.
+- **Against the stored file.** `cleared.json` is only ever added to.
+  - A key already present with the same `desk_id`: kept as it is, and the
+    stored `at` and `desk_updated_at` do not move.
+  - A key already present with a different `desk_id`: the stored entry
+    stays, and the answer is skipped (`already cleared by <stored desk
+    id>`).
+  - An answer whose `updatedAt` is earlier than the stored
+    `desk_updated_at` for its key: skipped (`older than stored`). A clear
+    cannot be undone by an older read.
+- **Exit codes.** 0 when the file was written, or when nothing changed
+  (every answer skipped or already stored); 1 when the input was refused
+  whole or the state could not be read or written. A skip is never an error
+  exit.
+- **The write.** A temp file in `<state>`, created mode 0600, written,
+  `fsync`ed and then renamed over `cleared.json`, as `desk-snapshot` does.
+  A crash leaves the old file or the new one, never half of one.
+- **Whoever runs it is a claim.** As with `desk-snapshot`, the script
+  checks the input's shape and completeness, not that a session really read
+  the Desk, nor who wrote the answer (3.4.1, "Who may clear").
 
 ### 3.5 Never acting, by mechanism (vote E2, 5-0)
 
@@ -498,11 +554,23 @@ count, so they share the unread reader and its field names.
      list. The test fails if the cleared gate is missing from every list,
      or if the passed gate appears in any list;
    - **`look-clear` writes only `cleared.json`:** fed a recorded clear
-     answer, it changes no file under `<state>` but `cleared.json`, and
-     writes nothing outside `<state>` (a listing with sizes and mtimes,
-     before and after, under a scratch `HOME`). It takes no Desk url and no
-     credential, so it has no Desk to write to. That the session writes
-     nothing to the Desk is the rule in 3.4.1, not this test;
+     answer, it changes no file but `cleared.json`. The check is a listing
+     of every file under the scratch `HOME` and the scratch `TMPDIR`, with
+     each file's SHA-256, taken before and after, so a rewrite of the same
+     size in the same second still shows. The only difference allowed is
+     `cleared.json`'s, and no temp file is left behind. It takes no Desk url
+     and no credential, so it has no Desk to write to. That the session
+     writes nothing to the Desk is the rule in 3.4.1, not this test;
+   - **`look-clear`'s refusals and skips** (3.4.2), one fixture each:
+     - a count that differs from `--answers-reported`, two answers for one
+       item, and a `cleared.json` that does not parse each exit 1 and leave
+       `cleared.json` byte-identical;
+     - an unknown desk id, a non-gate item, a `choice` other than `clear`,
+       a gate not open, a key cleared by another desk id, and an older
+       `updatedAt` are each skipped with their reason. A valid clear in the
+       same input is still written, and the run exits 0;
+     - the same input run twice leaves `cleared.json` byte-identical the
+       second time;
    - each key carries `"author": "unverified"`.
    A key in `cleared.json` that matches no gate changes nothing. A malformed
    `cleared.json` is a reader line in the digest and leaves every gate on
