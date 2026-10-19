@@ -137,7 +137,7 @@ The contract at the boundary, so neither side reaches into the other:
   does not carry the prompt; it names the subject and the class.
 
 This keeps the split clean: director owns who-may-judge and the verified
-envelope; marvel owns detect, interrupt, and shift; role library #295 owns the
+envelope; marvel owns detect, interrupt, and shift; the role library's own PR 295 owns the
 recovery content.
 
 ## Transport

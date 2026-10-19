@@ -9,7 +9,7 @@ things are defined before cutover: who does what (the manifest) and what
 Premises were verified against marvel's code and the live fleet today, with
 marvel-builder consulted on the marvel side (section 1). Requirements cited
 are director `sim/requirements.md`; role library items are the ratified v1 library
-at `contents/` (all ten roles at `status: proposal`, castable under
+in the role library's contents/ directory (all ten roles at `status: proposal`, castable under
 rulings 47 and 61 with `--allow-proposal`).
 
 ## 0. The shape of the program
