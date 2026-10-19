@@ -356,7 +356,7 @@ gets no credential: its environment is built empty apart from `PATH` and
 | file | written by | format |
 |---|---|---|
 | `digest.txt` | look | the text shown in 3.4, rewritten in full each run, 0600 |
-| `notify.json` | look | `{"as_of", "urgent": [{"tier", "stream", "seq", "class", "id", "sender", "age_s", "stage"}], "reader": "ok" or the failure}`, 0600 |
+| `notify.json` | look | `{"as_of", "urgent": [{"tier", "stream", "seq", "class", "id", "sender", "age_s", "stage"}], "cleared": [same fields plus "desk_id", "cleared_at"], "reader": "ok" or the failure}`, 0600. A cleared gate is in `cleared`, never in `urgent` |
 | `reminders.json` | poster | `{"<tier>/<stream>/<seq>": {"first", "last", "count"}}`, 0600 |
 | `cleared.json` | director, from Desk answers (3.4.1) | `{"<tier>/<stream>/<seq>": {"at", "desk_id", "desk_updated_at", "author": "unverified"}}`, 0600; the job only reads it |
 | `heartbeat.json` | look | `{"at", "local": n, "global": n, "reader"}`, written every run, even with zero counts and even when the reader failed, 0600 |
@@ -471,14 +471,28 @@ count, so they share the unread reader and its field names.
    window covering repeats 2 and 3, the gate still stops after 4
    notifications. The end-of-window summary leaves every gate's count
    unchanged.
-7a2. **Cleared on the Desk.** With a gate's key in `cleared.json`, the poster
-   posts no further reminder for it, the digest lists it under "cleared",
-   and the bus message is still unread (an unread count before and after
-   is the same). A key in `cleared.json` that matches no gate changes
-   nothing. Each key carries `"author": "unverified"`, and the digest's
-   "cleared" line shows the Desk id and time. A malformed `cleared.json` is a
-   reader line in the digest and
-   leaves every gate on its schedule, so a bad file cannot silence one.
+7a2. **Cleared on the Desk.** With a gate's key in `cleared.json`:
+   - the poster posts no further reminder for it;
+   - the bus message is still unread (an unread count before and after is
+     the same);
+   - **it is out of the urgent set and still visible:** the gate is absent
+     from `notify.json`'s `urgent` and present in its `cleared`, and the
+     digest lists it under "cleared" only, with the Desk id and time, never
+     in the urgent lines;
+   - **it never reads as passed:** a fixture with one passed gate (acked, so
+     absent from every list) and one cleared gate gives two different
+     outputs. The cleared one appears in `cleared`, and the passed one in no
+     list. The test fails if the cleared gate is missing from every list, or
+     appears in a list beside a passed one;
+   - **the clear closes no card:** the director step that turns a Desk
+     answer into `cleared.json` makes no Desk write at all. Run against a
+     recorded Desk read, its only output is `cleared.json`, and the gate's
+     decision card is byte-identical before and after. The test fails on
+     any Desk write, a status change to the card included;
+   - each key carries `"author": "unverified"`.
+   A key in `cleared.json` that matches no gate changes nothing. A malformed
+   `cleared.json` is a reader line in the digest and leaves every gate on
+   its schedule, so a bad file cannot silence one.
 7b. **Classification.** A `REQUEST` whose body starts with `GATE (ready)` is a
    gate. An `INFORM` whose body has a `GATE` line is a gate. A `REQUEST` with
    no `reply_by` is never urgent. One past its `reply_by` is urgent.
