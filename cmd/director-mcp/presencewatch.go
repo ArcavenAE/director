@@ -59,15 +59,20 @@ const (
 // watchUnit is the state of one supervisor instance ("cluster/instance") or one
 // cluster ("cluster").
 type watchUnit struct {
-	Kind        string      `json:"kind"` // "supervisor" or "cluster"
-	Cluster     string      `json:"cluster"`
-	Instance    string      `json:"instance,omitempty"`
-	Status      string      `json:"status"`
-	Unknown     bool        `json:"unknown,omitempty"`
-	Since       time.Time   `json:"since"`     // first seen if present, last seen if absent or asleep
-	LastSeen    time.Time   `json:"last_seen"` // the last pass that read a row for it
-	LastState   string      `json:"last_state,omitempty"`
-	AsleepUntil time.Time   `json:"asleep_until,omitempty"`
+	Kind        string    `json:"kind"` // "supervisor" or "cluster"
+	Cluster     string    `json:"cluster"`
+	Instance    string    `json:"instance,omitempty"`
+	Status      string    `json:"status"`
+	Unknown     bool      `json:"unknown,omitempty"`
+	Since       time.Time `json:"since"`     // first seen if present, last seen if absent or asleep
+	LastSeen    time.Time `json:"last_seen"` // the last pass that read a row for it
+	LastState   string    `json:"last_state,omitempty"`
+	AsleepUntil time.Time `json:"asleep_until,omitempty"`
+	// FirstTS is the ts of this row on the watch's first sighting of it, and
+	// Beating says a later sighting carried a later ts: the row is being renewed
+	// (design section 4). Both reset when the row is unseen and on a gap.
+	FirstTS     time.Time   `json:"first_ts,omitempty"`
+	Beating     bool        `json:"beating,omitempty"`
 	SeenRun     int         `json:"seen_run"`
 	MissRun     int         `json:"miss_run"`
 	Transitions []time.Time `json:"transitions,omitempty"`
@@ -224,6 +229,7 @@ func (w *PresenceWatch) noteGap(now time.Time, mono time.Duration, ev *[]watchEv
 	*ev = append(*ev, watchEvent{At: now, Kind: kind, From: w.LastPass, To: now, Text: fmt.Sprintf("%s %s to %s", kind, w.LastPass.Format(time.RFC3339), now.Format(time.RFC3339))})
 	for _, u := range w.Units {
 		u.SeenRun, u.MissRun = 0, 0
+		u.FirstTS, u.Beating = time.Time{}, false
 	}
 	return true
 }
@@ -317,6 +323,13 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 			u.MissRun = 0
 			u.SeenRun++
 			u.LastSeen, u.LastState = now, rec.State
+			if !rec.TS.IsZero() {
+				if u.FirstTS.IsZero() {
+					u.FirstTS = rec.TS
+				} else if rec.TS.After(u.FirstTS) {
+					u.Beating = true
+				}
+			}
 			switch {
 			case gap && !isNew:
 				// seen on the first pass after a gap: present after it, as observed
@@ -336,6 +349,7 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 			u.Unknown = false
 			u.SeenRun = 0
 			u.MissRun++
+			u.FirstTS, u.Beating = time.Time{}, false
 			switch {
 			case gap && u.Status == unitAbsent:
 				ev = append(ev, watchEvent{At: now, Kind: "absent-before-gap", Unit: name})
@@ -443,7 +457,14 @@ func (w *PresenceWatch) deriveClusters(now time.Time, gap bool, ev *[]watchEvent
 // Releasable reports whether mail held for the cluster may go out: one of its
 // supervisor instances is present and its row is beating, that is, its ts has
 // moved since the watch first saw that row (design section 4).
-func (w *PresenceWatch) Releasable(cluster string) bool { return false }
+func (w *PresenceWatch) Releasable(cluster string) bool {
+	for _, u := range w.Units {
+		if u.Kind == "supervisor" && u.Cluster == cluster && u.Status == unitPresent && !u.Unknown && u.Beating {
+			return true
+		}
+	}
+	return false
+}
 
 // AbsenceDuration is how long the unit has been absent at now, less any host
 // sleep inside that span (R-209). It is zero for a unit that is not absent.

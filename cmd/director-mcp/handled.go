@@ -71,6 +71,7 @@ var defaultThresholds = map[string]time.Duration{
 	thresholdHandledAckWait:     30 * time.Minute,
 	thresholdPresenceFlapWindow: time.Hour,
 	thresholdPresenceFlapQuiet:  15 * time.Minute,
+	thresholdPresenceHoldSellBy: 8 * time.Hour,
 }
 
 // ledgerLockTimeout bounds how long a writer waits for the flock. A holder that

@@ -55,6 +55,7 @@ const scanTimeout = 10 * time.Second
 const (
 	thresholdPresenceFlapWindow = "presence_flap_window"
 	thresholdPresenceFlapQuiet  = "presence_flap_quiet"
+	thresholdPresenceHoldSellBy = "presence_hold_sell_by"
 )
 
 // presenceWatcher is the watch as the shim holds it.
@@ -69,7 +70,9 @@ type presenceWatcher struct {
 
 	pending []string // notices not yet reported
 
-	hold *heldStore
+	hold    *heldStore
+	sellBy  time.Duration // a hold's sell-by when the send names no reply_by
+	publish func(ctx context.Context, e *Envelope) (*sendResult, error)
 }
 
 func newPresenceWatcher(store *watchStore, w *PresenceWatch, scan func(context.Context) watchScan, logf func(string, ...any)) *presenceWatcher {
@@ -99,6 +102,63 @@ func (p *presenceWatcher) tick(ctx context.Context) {
 	for _, e := range evs {
 		if !e.Collapsed {
 			p.pending = append(p.pending, p.noticeText(e))
+		}
+	}
+	if p.hold != nil {
+		p.release(ctx, p.now())
+	}
+}
+
+// release goes through the held records oldest first. A record past its sell-by
+// is proposed, never sent (nothing goes out on a clock past what the sender
+// meant). One whose cluster is back and beating is published through the normal
+// global send, under the record's own id as the message id, so a crash between
+// the publish and the record is repeated and the hub's dedupe window drops the
+// copy. A refusal again leaves it held. Any other failure marks it failed once.
+func (p *presenceWatcher) release(ctx context.Context, now time.Time) {
+	recs, err := p.hold.Current()
+	if err != nil {
+		p.log("presence watch: held store not read: %v", err)
+		return
+	}
+	for _, r := range recs {
+		if r.State != holdHeld {
+			continue
+		}
+		if now.After(r.SellBy) {
+			if err := p.hold.Append(heldRec{ID: r.ID, State: holdProposed, StateAt: now}); err != nil {
+				p.log("presence watch: held store not written: %v", err)
+				continue
+			}
+			p.pending = append(p.pending, fmt.Sprintf("presence: held send %s to %s is past sell-by (%s): release, revise or cancel", r.ID, r.To, r.SellBy.Format(time.RFC3339)))
+			continue
+		}
+		cluster, role, err := parseGlobalAddress(r.To)
+		if err != nil || role != roleSupervisor || !p.w.Releasable(cluster) {
+			continue
+		}
+		// A cancel may have landed since the fold above.
+		if cur, err := p.hold.find(r.ID); err != nil || cur == nil || cur.State != holdHeld {
+			continue
+		}
+		res, err := p.publish(ctx, r.Envelope)
+		var refused *presenceRefusalErr
+		var unread *presenceReadErr
+		switch {
+		case err == nil:
+			if aerr := p.hold.Append(heldRec{ID: r.ID, State: holdReleased, StateAt: now, Stream: res.Stream, Seq: res.Sequence}); aerr != nil {
+				p.log("presence watch: release of %s published but not recorded, it will be published again and deduped: %v", r.ID, aerr)
+				continue
+			}
+			p.pending = append(p.pending, fmt.Sprintf("presence: held send %s released to %s after %s (stream %s, sequence %d); delivered to the hub, not read", r.ID, r.To, now.Sub(r.HeldAt).Round(time.Second), res.Stream, res.Sequence))
+		case errors.As(err, &refused) || errors.As(err, &unread):
+			// the unit flapped out again, or the hub did not answer: still held
+		default:
+			if aerr := p.hold.Append(heldRec{ID: r.ID, State: holdFailed, StateAt: now, Reason: err.Error()}); aerr != nil {
+				p.log("presence watch: held store not written: %v", aerr)
+				continue
+			}
+			p.pending = append(p.pending, fmt.Sprintf("presence: held send %s to %s failed on release and will not be retried: %v", r.ID, r.To, err))
 		}
 	}
 }
@@ -173,6 +233,7 @@ func (b *Bus) startPresenceWatch(logf func(string, ...any)) error {
 	if err != nil {
 		return err
 	}
+	sellBy := table[thresholdPresenceHoldSellBy]
 	scan := func(ctx context.Context) watchScan {
 		g, err := b.globalReady(ctx)
 		if err != nil {
@@ -181,7 +242,71 @@ func (b *Bus) startPresenceWatch(logf func(string, ...any)) error {
 		return g.watchScan(ctx)
 	}
 	b.watch = newPresenceWatcher(store, w, scan, logf)
+	b.watch.hold = newHeldStore(dir)
+	b.watch.sellBy = sellBy
+	b.watch.publish = func(ctx context.Context, e *Envelope) (*sendResult, error) {
+		body, err := json.Marshal(e)
+		if err != nil {
+			return nil, err
+		}
+		return b.publishGlobalOnce(ctx, e, body)
+	}
 	return nil
+}
+
+// holdRefused keeps a send that presence refused, when the watch is on and the
+// refusal is for absence or for a hub that did not answer the presence read. It
+// returns the heldErr to hand back in place of the refusal, or nil to refuse as
+// before: the watch off, fail_fast, or any other failure (a publish that failed
+// after presence passed, an R-78 refusal, a validation error).
+func (b *Bus) holdRefused(ctx context.Context, e *Envelope, cause error) error {
+	p := b.watch
+	if p == nil || p.hold == nil {
+		return nil
+	}
+	if ff, _ := ctx.Value(holdFailFastKey{}).(bool); ff {
+		return nil
+	}
+	var refused *presenceRefusalErr
+	var unread *presenceReadErr
+	if !errors.As(cause, &refused) && !errors.As(cause, &unread) {
+		return nil
+	}
+	now := p.now()
+	rec := heldRec{ID: e.MessageID, To: e.Recipient.Address, Envelope: e, HeldAt: now, Reason: cause.Error(), State: holdHeld, StateAt: now, SellBy: now.Add(p.sellBy)}
+	if t, err := time.Parse(time.RFC3339, e.ReplyBy); err == nil {
+		rec.SellBy = t
+	}
+	if err := p.hold.Append(rec); err != nil {
+		// A send that cannot be kept is refused as before, with the reason added.
+		return fmt.Errorf("%w; it could not be held either: %v", cause, err)
+	}
+	return &heldErr{rec: rec}
+}
+
+// heldWhileOff counts the held records a shim with the watch off leaves in the
+// store: a shim started with the flag off while held records exist sends none
+// of them, and says so in each presence notice, so turning the watch off cannot
+// strand mail silently. Read only. A director shim only.
+func (b *Bus) heldWhileOff() int {
+	if b.watch != nil || b.globalCfg == nil || b.globalCfg.Role != roleDirector {
+		return 0
+	}
+	dir, err := stateDir()
+	if err != nil {
+		return 0
+	}
+	recs, err := newHeldStore(dir).Current()
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, r := range recs {
+		if r.State == holdHeld {
+			n++
+		}
+	}
+	return n
 }
 
 // watchTick is the heartbeat's one call into the watch.
@@ -194,6 +319,9 @@ func (b *Bus) watchTick(ctx context.Context) {
 // presenceNotices returns the unreported notices once.
 func (b *Bus) presenceNotices() []string {
 	if b.watch == nil {
+		if n := b.heldWhileOff(); n > 0 {
+			return []string{fmt.Sprintf("presence: %d held while the watch is off; none is sent until DIRECTOR_PRESENCE_WATCH=1 is back on", n)}
+		}
 		return nil
 	}
 	return b.watch.takeNotices()
@@ -236,7 +364,68 @@ func (g *globalTier) watchScan(ctx context.Context) watchScan {
 	return sc
 }
 
-// toolCancelHeld withdraws a held send, or replaces it with a later one.
+// toolCancelHeld withdraws a held send, or marks it superseded by a later one.
+// Only a record still held or proposed can be cancelled.
 func toolCancelHeld(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
-	return nil, errors.New("cancel_held is not built")
+	if bus.watch == nil || bus.watch.hold == nil {
+		return nil, errors.New("cancel_held: the presence watch is off for this session (DIRECTOR_PRESENCE_WATCH is not 1), so nothing is held")
+	}
+	var a struct {
+		ID          string `json:"id"`
+		Replacement string `json:"replacement"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil || a.ID == "" {
+		return nil, errors.New("cancel_held: give the id of the held send")
+	}
+	p := bus.watch
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cur, err := p.hold.find(a.ID)
+	if err != nil {
+		return nil, err
+	}
+	if cur == nil {
+		return nil, fmt.Errorf("cancel_held: no held send has the id %s", a.ID)
+	}
+	if cur.State != holdHeld && cur.State != holdProposed {
+		return nil, fmt.Errorf("cancel_held: %s is %s, and only a held or proposed send can be cancelled", a.ID, cur.State)
+	}
+	if a.Replacement != "" {
+		if rep, err := p.hold.find(a.Replacement); err != nil || rep == nil {
+			return nil, fmt.Errorf("cancel_held: the replacement %s is not a held send", a.Replacement)
+		}
+	}
+	if err := p.hold.Append(heldRec{ID: a.ID, State: holdCancelled, StateAt: p.now(), SupersededBy: a.Replacement}); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "cancelled", "id": a.ID, "superseded_by": a.Replacement, "note": "it will not be sent"}, nil
+}
+
+// withHoldTools adds what the held store needs to the tool catalog, only when
+// the watch is on: fail_fast on send_message and the cancel_held tool.
+func withHoldTools(tools []toolDef, on bool) []toolDef {
+	if !on {
+		return tools
+	}
+	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+	for i := range tools {
+		if tools[i].Name == "send_message" {
+			if props, ok := tools[i].InputSchema["properties"].(map[string]any); ok {
+				props["fail_fast"] = map[string]any{"type": "boolean", "description": "refuse at once when the recipient has no live presence, as without the presence watch, instead of holding the send for release when it returns"}
+			}
+			tools[i].Description += " With the presence watch on, a send to a global address that presence refuses is held, not delivered, and released when the recipient returns; the result says so. Pass fail_fast to refuse instead."
+		}
+	}
+	return append(tools, toolDef{
+		Name:        "cancel_held",
+		Description: "Withdraw a send the presence watch is holding (status held or proposed), optionally naming the later send that replaces it. A cancelled send is never released. Offered only when the presence watch is on.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":          str("the hold id the send_message result gave"),
+				"replacement": str("optional hold id of the later send that supersedes this one"),
+			},
+			"required": []string{"id"},
+		},
+	})
 }

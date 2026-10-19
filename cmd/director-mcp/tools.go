@@ -144,6 +144,8 @@ func dispatchTool(ctx context.Context, bus *Bus, name string, rawArgs json.RawMe
 		return toolBroadcast(ctx, bus, rawArgs)
 	case "report_status":
 		return toolReportStatus(ctx, bus, rawArgs)
+	case "cancel_held":
+		return toolCancelHeld(ctx, bus, rawArgs)
 	case "mark_handled":
 		if bus.handled == nil {
 			return nil, errors.New("unknown tool: " + name)
@@ -230,7 +232,26 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		}
 		return broadcastFanout(ctx, bus, ws, team, e)
 	}
+	var opts struct {
+		FailFast bool `json:"fail_fast"`
+	}
+	_ = json.Unmarshal(raw, &opts)
+	if opts.FailFast {
+		ctx = context.WithValue(ctx, holdFailFastKey{}, true)
+	}
 	res, err := bus.publish(ctx, e, wsHint)
+	var held *heldErr
+	if errors.As(err, &held) {
+		return map[string]any{
+			"status":     "held, not delivered",
+			"message_id": e.MessageID,
+			"hold_id":    held.rec.ID,
+			"to":         held.rec.To,
+			"reason":     held.rec.Reason,
+			"sell_by":    held.rec.SellBy.Format(time.RFC3339),
+			"note":       "the presence watch is holding this send: it is not delivered. It goes out when the recipient returns and its presence row is beating, within its sell-by, and is proposed for your review after that. cancel_held withdraws it; fail_fast refuses instead",
+		}, nil
+	}
 	if err != nil {
 		return nil, bus.refuseEnvelope(ctx, e, "publish", err)
 	}
