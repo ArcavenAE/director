@@ -1,6 +1,6 @@
 # gh-ingress: GitHub status onto the fleet bus
 
-- **Date:** 2026-10-19, revised the same day.
+- **Date:** 2026-10-19, revised the same day; section 4 revised again for the desk and fleet credential shapes.
 - **Status:** design for review. Nothing is built by this document.
 - **Owner:** director, for `cmd/gh-ingress`.
 
@@ -89,19 +89,69 @@ Each rule above has a red test against a fake GitHub server:
 
 ## 4. Credential
 
-- **Interim.** The core shells out to `gh api graphql`, so it never holds a token. The login gh uses carries whatever scopes its owner granted. For the login in use, those include write scopes (MEASURED; recorded privately). Read-only then rests on the fixed query set alone. The operator is told the measured scopes plainly, in a private record, not here.
-- **Target.** A dedicated read-only credential. The core reads the credential's grants at start and refuses any write grant.
-  - **How the grants are read.**
-    - A classic OAuth token reports `X-OAuth-Scopes`. MEASURED on the gh login (measured only: not checked against GitHub's documentation).
-    - An App installation token carries a `permissions` object in the mint response. INFERRED, not yet measured.
-    - How to read a fine-grained PAT's grants is UNVERIFIED. If none is found, the check fails closed: the core does not run on a credential whose grants it cannot read.
-  - **Date.** No date is set. The operator sets it on the credential card. The card recommends about two weeks after it is ruled.
-  - **The interim:** with the gh login as the source, the grant check runs in report mode. It prints the login's scopes and the word `interim` at start, and does not refuse. It refuses only for a dedicated source. The publishing refusal below means the interim never feeds the bus.
-  - **App.** A GitHub App owned by the ArcavenAE org, installed on the watched repos only, with read-only permissions. A minter holds the App key and writes an installation token. That such a token lasts 1 h, and that an installation can be limited to selected repos, are INFERRED from GitHub's App model, not yet measured, and UNVERIFIED against GitHub's documentation. The minter runs as its own local user on the core's host (round 7, 6-0). The key is 0600 and owned by that user. The core's user can read the token file and never the key, so the same-uid reader the earlier draft named cannot reach the key.
-  - **PAT.** A fine-grained token with the ArcavenAE org as its resource owner, "only select repositories" set to the watch list, and read-only permissions, kept in its own keychain item.
-  - **Permissions,** for either: metadata, contents, pull requests, checks, commit statuses, deployments and actions, all read. INFERRED from the queries in section 2, not yet checked against GitHub's permission tables. The start-up grant check is the test.
-- **This is an exception to the custody rule.** The rule says a component must not hold an artifact that is bearer authority at a third party, and both shapes are. Only the operator's ruling can grant the exception. The design records that it asks for one.
-- **gh-ingress refuses to publish while the core reports a gh login as its credential source,** so a desk shortcut never becomes fleet events.
+The reader needs a GitHub credential that can read and cannot write, and one shape cannot serve everyone. The operator observed that a per-org GitHub App works only where an org owner installs it: one App covers ArcavenAE, a second App could cover a second org, but neither helps a user who has no App, and neither reaches repos outside those orgs. So the credential splits in two:
+
+- **the desk:** any user, on their own machine, reading repos they may not own;
+- **the fleet:** the one reader whose events reach the bus.
+
+Both shapes are recommendations on the operator's credential cards, voted by the design party, and are not yet ruled.
+
+### The interim
+
+The core shells out to `gh api graphql`, so it never holds a token. The login gh uses carries whatever scopes its owner granted. For the login in use, those include write scopes (MEASURED; recorded privately). Read-only then rests on the fixed query set alone. The operator is told the measured scopes plainly, in a private record, not here.
+
+- **The grant check in report mode.** With the gh login as the source, the core prints the login's scopes and the word `interim` at start, and does not refuse. It refuses only for a dedicated source.
+- **No publishing.** The publishing refusal below means the interim never feeds the bus.
+
+### How the grants are read
+
+At start the core reads its credential's grants and refuses any write grant on a dedicated source.
+
+- A classic OAuth token reports `X-OAuth-Scopes`. MEASURED on the gh login (measured only: not checked against GitHub's documentation).
+- An App installation token carries a `permissions` object in the mint response. INFERRED, not yet measured.
+- How to read a fine-grained token's grants is UNVERIFIED. Such a token's scopes are shown as `unknown`, and a dedicated source whose grants cannot be read fails closed.
+
+### The desk: layered, never upward
+
+The design party voted this shape 6-0. The core picks its credential in this order:
+
+1. **A dedicated gh profile, one per resource owner.** It is a separate `GH_CONFIG_DIR`, so the user's main login is never touched. A write scope on a dedicated profile is refused at start.
+2. **Else the user's own gh login, only with an explicit acknowledgment flag.** Without the flag the core does not start on the login.
+3. **Never a fall-through upward.** A failed, revoked or missing profile token reports `unknown` with its reason and refuses. It never retries on the user's main login.
+
+Each repo then reports `access: none | public | read | unknown:<reason>`, so a repo the credential cannot see reads as that, not as quiet.
+
+- **The no-token diagnostic.** With no credential at all, the core runs REST only, for a short public list. It refuses to start with more than 5 repos, because unauthenticated REST allows 60 calls an hour and no GraphQL (MEASURED).
+- **Storage.** The profile's token is stored with `--insecure-storage`, a plaintext 0600 file in the profile directory, never the keyring. This holds until a test shows that a keyring-stored second gh login does not overwrite the main one (UNVERIFIED). Any process of the same uid can read that file; the design states this and does not solve it.
+- **A gh version check at start.** A gh upgrade that changes how `GH_CONFIG_DIR` or `--insecure-storage` behaves would otherwise break the profile with no test noticing (INFERRED).
+
+### The desk bootstrap: the tool fetches the no-scope token
+
+The operator asked whether the tool can get the profile's token for the user, as needed (2026-10-19). It can, gated on one test.
+
+- **How it works.** The tool runs GitHub's OAuth device flow against an OAuth App that ArcavenAE registers once, with the device flow enabled. The flow needs only the App's public client id, with no client secret, and requests no scope. A token with no scope grants read-only access to public information. The user approves one page in their browser. They need no membership in the ArcavenAE org. (GitHub docs: "Authorizing OAuth apps" and "Scopes for OAuth apps", read through a fetch summarizer.)
+- **Why an App of the tool's own.** gh's own device flow always requests `repo`, `read:org` and `gist` (gh v2.102.0, `internal/authflow/flow.go:34`, MEASURED in the source).
+- **The hand-off.** The tool passes the token to gh through stdin, with `gh auth login --with-token --insecure-storage` into the dedicated profile. gh accepts a token whose scopes header is empty: its minimum-scope check passes on no scopes (gh v2.102.0, `pkg/cmd/auth/shared/oauth_scopes.go:72-77`, and `pkg/cmd/auth/login/login.go:207` runs that check for `--with-token`; MEASURED in the source). The tool holds the token in memory only. It never writes it to disk itself, never puts it in an argument or the environment, and keeps no copy once gh has it. A failed or revoked token offers the device flow again, under the never-upward rule above.
+- **Lifetime.** The token has no expiry and no refresh token. GitHub revokes it after a year unused, and the user can revoke it in their settings at any time (GitHub docs, "Token expiration and revocation", read through a fetch summarizer).
+- **Custody.** After the hand-off, gh holds the token and the tool holds nothing, so the steady state is delegation. For the moment of the hand-off, the tool receives a long-lived token from GitHub and passes it on: a broker step. The custody rule allows brokering a short-lived credential; this one is long-lived, so whether the step fits is the operator's call, and the credential card says so.
+- **The gate.** GitHub's GraphQL docs say a classic token needs `public_repo` to read public repos, and `public_repo` includes write. They say nothing about a token with no scope. One operator test answers it, with one approval and the token revoked at the end. It reports REST, a private repo the token must not see, the scopes header, GraphQL, and the hand-off into a scratch gh profile with the main login unchanged before and after. Nothing in this subsection is built before it reports.
+- **If GraphQL refuses a no-scope token,** there are two ways on:
+  - the token still gives authenticated REST at 5,000 calls an hour, public data only;
+  - or the same test is re-run with a GitHub App that has no permissions and user-token expiry turned off, in place of the OAuth App. Its user token carries no scopes header, so gh would take it the same way (INFERRED, not tested). Expiry must stay off: with it on, the tool would need a refresh token, which is custody.
+
+### The fleet: Apps in the orgs the operator owns
+
+The design party voted this shape 6-0.
+
+- **The App.** A read-only GitHub App in each org the operator owns, personal-account installs included, installed on the watched repos only. That an installation token lasts 1 h, and that an installation can be limited to selected repos, are INFERRED from GitHub's App model, not yet measured, and UNVERIFIED against GitHub's documentation.
+- **The minter.** A minter holds the App key and writes an installation token. It runs as its own local user on the core's host (round 7, 6-0). The key is 0600 and owned by that user. The core's user can read the token file and never the key, so the same-uid reader the earlier draft named cannot reach the key.
+- **Permissions:** metadata, contents, pull requests, checks, commit statuses, deployments and actions, all read. INFERRED from the queries in section 2, not yet checked against GitHub's permission tables. The start-up grant check is the test.
+- **Nothing outside the owned orgs reaches the bus.** A seat that needs a repo outside them reads it through the desk path, on its own machine, and its reads never become fleet events.
+- **The fine-grained PAT is dropped** as a fleet option (5-1). The dissent, recorded: keep a 90-day read-only PAT as a stated fallback where an org owner will not install an App, since it gives a dated, revocable path, with the card naming the one account it ties the reader to.
+- **Date.** No date is set. The operator sets it on the credential card. The card recommends about two weeks after it is ruled.
+- **This is an exception to the custody rule.** The rule says a component must not hold an artifact that is bearer authority at a third party, and an App key is. Only the operator's ruling can grant the exception. The design records that it asks for one.
+
+**gh-ingress refuses to publish while the core reports a gh login or a desk profile as its credential source,** so a desk credential never becomes fleet events.
 
 ## 5. What gh-ingress adds
 
@@ -151,7 +201,12 @@ Each rule above has a red test against a fake GitHub server:
 | the token stays out of env and argv | A canary token is placed in the credential source. A recording spawner shows that no child's argv or environment carries it. `ps -E -o command= -p <pid>` on the core shows no canary in its argv or environment. In the interim the core sets no `GH_TOKEN` or `GITHUB_TOKEN` for `gh`, and `gh` reads its own login. |
 | the minter's files | The App key is 0600 and owned by the minter user, so the core's uid gets EACCES reading it. The token file is 0640, owned by the minter user, in a group whose only member is the core's user. A third uid gets EACCES on both files. Creating the users needs root, so this test runs only in the core repo's `minter-files` CI job, on a disposable GitHub-hosted macOS runner that can `sudo` (INFERRED that hosted runners allow it), and never on a fleet host. The job is created with the repo. Run anywhere else, it reports skipped, never passed. |
 | no unknown readers | A second uid is refused at the socket. `lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN` and `lsof -nP -a -p <pid> -iUDP` both print nothing for the core's pid, so it has no listener of either kind. Its only inet sockets are outbound TCP to the forge, seen with `lsof -nP -a -p <pid> -i`. |
-| no publishing from a gh login | With the credential source set to a gh login and the adapter enabled, gh-ingress refuses and says why. |
+| no publishing from a desk credential | With the credential source set to a gh login, or to a desk profile, and the adapter enabled, gh-ingress refuses and says why. |
+| desk: never upward | A dedicated profile whose token the fake server answers with 401 reports `unknown:<reason>` and refuses. A recording `gh` shim shows no call that runs on the user's main login. Without the acknowledgment flag, the main login as the only source refuses at start. |
+| desk: the no-token diagnostic | With no credential and 6 repos in the list, start-up refuses. With 5, it runs, and the fake server's log shows REST calls only, no `/graphql`. |
+| desk bootstrap: the token stays out of the tool | A fake device-flow server returns a canary token. A recording spawner shows the canary only on the stdin of `gh auth login --with-token --insecure-storage`, never in any child's argv or environment, and a scan of every file the tool wrote finds no piece of the canary. |
+| desk bootstrap: the main login is untouched | `gh auth status` against the user's main config reads the same before and after a bootstrap into a scratch `GH_CONFIG_DIR`. |
+| desk bootstrap: GraphQL gate | The operator test in section 4 reports GraphQL with a no-scope token. Until it does, the bootstrap is not built. |
 | least-privilege token | With a dedicated credential that carries a write grant, start-up fails and names the grant. With the gh login as source, start-up prints the scopes and `interim` and runs (report mode). The interim fails least privilege by design until the operator's date (section 4). |
 | grants fail closed | With a dedicated credential, the grant read is faked to error (a network failure or a 5xx), to return an unknown shape (no scopes header, no `permissions` object, or an unrecognised field), and to return an empty grant set. Start-up refuses in each case, names the reason, and makes no collection request. |
 | viewing never calls the forge | Every CLI verb in section 3, every quota view and window, and `--image` is run 100 times against the fake forge, and its request log does not change. A manual check against GitHub reads `x-ratelimit-used` before and after: unchanged. |
@@ -163,6 +218,7 @@ Each rule above has a red test against a fake GitHub server:
 ## 7. Sequencing
 
 1. **Now:** the core, its tests and its CLI. It publishes nowhere, so the broker's authorization work does not gate it. It runs on the interim credential once the operator has ruled the credential card, which states the login's scopes.
+   - The desk path (section 4) is built with the core once the desk credential card is ruled. Its bootstrap is built only after the operator test reports on GraphQL.
 2. **After the broker's authorization block is live on every broker that `events.<fleet>` reaches**, meaning each host's local broker, the hub and any leaf (aae-orc-umw8p, director#4): streams, grants, director-mcp's event tools, and gh-ingress publishing. This also needs the target credential, because of the refusal in section 4.
 3. **Later:** a webhook receiver on an always-on reachable host, with its own review. The poller stays as reconciliation.
 
@@ -213,6 +269,8 @@ Image tests:
 |---|---|---|
 | shared subject and envelope package | aae-orc-5wmeg | |
 | status core (new repo) | to be filed when the operator names the repo | |
+| desk credential path and bootstrap | to be filed when the desk card is ruled and the operator test reports | the status core |
+| fleet App and minter | to be filed when the fleet card is ruled | the status core |
 | gh-ingress adapter | aae-orc-bstdv | the core, aae-orc-5wmeg, aae-orc-aubd6 |
 | streams | aae-orc-aubd6 | aae-orc-umw8p |
 | grant rows, including the heartbeat and registry grants | aae-orc-lgthv | aae-orc-umw8p |
