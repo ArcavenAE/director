@@ -127,6 +127,20 @@ fi
 for c in nats-server nats jq; do command -v "$c" >/dev/null || { echo "$c not on PATH"; exit 2; }; done
 
 pass=0; fail=0
+
+# The shim, built into the temp dir (or DIRECTOR_MCP_BIN, to run the proof
+# against another build).
+if [[ -n "${DIRECTOR_MCP_BIN:-}" ]]; then
+  SHIM="$DIRECTOR_MCP_BIN"
+else
+  progress "building the shim (limit ${VERIFY_BUILD_TIMEOUT:-180}s)"
+  # shellcheck disable=SC2016  # the program is meant to expand in the child shell
+  bounded "${VERIFY_BUILD_TIMEOUT:-180}" bash -c 'cd "$1/cmd/director-mcp" && go build -o "$2/director-mcp" .' _ "$here" "$work" \
+    || { echo "the go build failed or did not finish in ${VERIFY_BUILD_TIMEOUT:-180}s"; exit 2; }
+  SHIM="$work/director-mcp"
+fi
+[[ -x "$SHIM" ]] || { echo "the shim $SHIM is not an executable file"; exit 2; }
+
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 stop_here() { # a failure after which the later steps would only wait
@@ -180,18 +194,6 @@ done
 "${HUB[@]}" stream add GLOBAL_TO_c1 --subjects 'global.c1.>' --storage memory --defaults >/dev/null
 "${HUB[@]}" kv add GLOBAL_PRESENCE --ttl 8s --storage memory >/dev/null
 
-# The shim, built into the temp dir (or DIRECTOR_MCP_BIN, to run the proof
-# against another build).
-if [[ -n "${DIRECTOR_MCP_BIN:-}" ]]; then
-  SHIM="$DIRECTOR_MCP_BIN"
-else
-  progress "building the shim (limit ${VERIFY_BUILD_TIMEOUT:-180}s)"
-  # shellcheck disable=SC2016  # the program is meant to expand in the child shell
-  bounded "${VERIFY_BUILD_TIMEOUT:-180}" bash -c 'cd "$1/cmd/director-mcp" && go build -o "$2/director-mcp" .' _ "$here" "$work" \
-    || { echo "the go build failed or did not finish in ${VERIFY_BUILD_TIMEOUT:-180}s"; exit 2; }
-  SHIM="$work/director-mcp"
-fi
-[[ -x "$SHIM" ]] || { echo "the shim $SHIM is not an executable file"; exit 2; }
 
 # --- drive the shim over its own stdio ---------------------------------------
 mkfifo "$work/in" "$work/out"
