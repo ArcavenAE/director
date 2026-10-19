@@ -132,7 +132,7 @@ Each rule above has a red test against a fake GitHub server:
 | core without a desk plugin | Plugin absent: `<core> watch` prints a change line within one cycle. |
 | each present | The view bytes are identical with marvel, NATS and the plugin present. |
 | NATS present, marvel absent | The broker carries a hand-written authorization block, and there is no marvel binary or socket. gh-ingress publishes its subjects, and a second user is denied publish on the heartbeat subject. The grant rows marvel renders (aae-orc-lgthv) are one way to write that block; none of them is required. |
-| the display contract | Every `<core> key` line exits 0 and starts with a word from `passing`, `failing`, `running` or `unknown`. This holds in every state, stale and error included. The same fixture file also passes BetterDials' `parse_status_line` (cli-key.md test 1). |
+| the display contract | Every `<core> key` line exits 0 and starts with a word from `passing`, `failing`, `running` or `unknown`. This holds in every state, stale and error included. A desk-controller plugin's own design defines the same rules and reads the same fixture file. |
 | no caller-chosen fetch: an unlisted repo | `<core> key other/repo` and an adapter request for it each leave the fake server's log at zero requests. |
 | no caller-chosen fetch: a raw query | No CLI flag, socket message or bus message takes query text. A test sends GraphQL text through each input, and the log shows only the compiled queries. |
 | no write call | The HTTP layer issues only GET, plus POST to `/graphql` with a compiled document. The fake server fails the test on any other method or path, so a REST write fails it as well as a GraphQL `mutation`. In the interim, a recording `gh` shim on `PATH` logs every argv. The test fails on any argv other than `api graphql` with a compiled query, or `api -X GET` on an allowlisted path. A source check for `mutation` stays as a second line. |
@@ -144,7 +144,7 @@ Each rule above has a red test against a fake GitHub server:
 | no publishing from a gh login | With the credential source set to a gh login and the adapter enabled, gh-ingress refuses and says why. |
 | least-privilege token | With a dedicated credential that carries a write grant, start-up fails and names the grant. With the gh login as source, start-up prints the scopes and `interim` and runs (report mode). The interim fails least privilege by design until the operator's date (section 4). |
 | viewing never calls the forge | Every CLI verb in section 3, every quota view and window, and `--image` is run 100 times against the fake forge, and its request log does not change. A manual check against GitHub reads `x-ratelimit-used` before and after: unchanged. |
-| an image carries no active content | `<core> quota ... --image` output passes the same rules BetterDials applies (BetterDials `docs/design/cli-key.md` tests 11 to 15). A fixture that injects `script`, `foreignObject`, `on*`, an external `href`, CSS `url()` or `@import` into a chart label shows that the drawing escapes it. |
+| an image carries no active content | `<core> quota ... --image` output passes the image rules in section 8 (a desk-controller plugin's own design defines the same rules). A fixture that injects `script`, `foreignObject`, `on*`, an external `href`, CSS `url()` or `@import` into a chart label shows that the drawing escapes it. |
 | subject tokens | A repo `a.b` in a fixture publishes nothing, and logs and counts one drop. A repo `a-b_1` publishes. |
 | dedupe | The same fact read twice gives one `Nats-Msg-Id`. A changed `updated_at` or head SHA gives a new one. A `review.stale` in the same window gives the same id, and in the next window a new one. A webhook GUID in a header does not change the id. |
 | webhook receiver (later) | A bad or missing `X-Hub-Signature-256` gets 401 and changes no state. |
@@ -177,7 +177,7 @@ gh-ingress publishes only what the core's providers deliver. Subjects already ca
   - every result is labelled `candidate`.
 - **The bus:** gh-ingress may publish a quota health summary (remaining, reset, the flag) on its heartbeat. It never publishes the series detail or any attribution.
 - **Viewing** never causes a forge call (section 6).
-- **BetterDials as a quota console:** views and windows are `<core> select` entries, a press opens settings or a local report, and charts arrive through BetterDials' bounded `image` field. The design is in BetterDials `docs/design/cli-key.md` section 5a.
+- **A desk controller as a quota console:** views and windows are `<core> select` entries, a press opens settings or a local report, and charts arrive as bounded images (section 8, image rules). The controller's own design defines the same rules.
 
 Tests:
 1. The series file is created 0600, and a sample older than 7 days is trimmed.
