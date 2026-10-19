@@ -227,6 +227,51 @@ o = json.load(open(sys.argv[1]))["writes"][0]["data"]["options"]
 assert "RECOMMENDED" not in o[0]["text"] and o[0]["text"].endswith("late data."), o
 P
 then ok "an agreeing marker at the end of a wrapped option is accepted and removed from the text"; else bad "a wrapped agreeing marker is removed" "$(cat "$root/err")"; fi
+# RECOMMENDED may end any line of an option: its first, a middle or its last. It is read
+# wherever it ends a line, checked against the recommendation, and removed from the text.
+for pos in first middle last; do
+  python3 - "$BASE" "$pos" "$root/rec-agree-$pos.md" "$root/rec-differ-$pos.md" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+pos = sys.argv[2]
+mark = {"first": ["", ""], "middle": ["", ""], "last": ["", ""]}
+lines = ["1. *Keep 06:00.* Nothing changes.", "   The cost is a report short of late data.", "   More detail on this option."]
+i = {"first": 0, "middle": 1, "last": 2}[pos]
+lines[i] += " RECOMMENDED."
+opt = "\n".join(lines)
+old = "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data."
+agree = t.replace(old, opt).replace("Option 2.", "Option 1.")
+differ = t.replace(old, opt)
+open(sys.argv[3], "w").write(agree)
+open(sys.argv[4], "w").write(differ)
+P
+  refuses "refuses a RECOMMENDED marker ending the $pos line of option 1 when option 2 is recommended" "$root/rec-differ-$pos.md" "RECOMMENDED marks option 1 and the recommendation names option 2"
+  clean_state
+  if run "$root/rec-agree-$pos.md" >/dev/null 2>"$root/err" && python3 - "$(batch_json)" <<'P'
+import json, sys
+o = json.load(open(sys.argv[1]))["writes"][0]["data"]["options"]
+assert "RECOMMENDED" not in o[0]["text"] and o[0]["text"].count("\n") == 2, o
+P
+  then ok "an agreeing RECOMMENDED marker ending the $pos line of option 1 is accepted and removed"; else bad "an agreeing marker on the $pos line" "$(cat "$root/err")"; fi
+done
+python3 - "$BASE" "$root/rec-twice.md" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+open(sys.argv[2], "w").write(t.replace("1. *Keep 06:00.* Nothing changes. The cost is a report short of late data.", "1. *Keep 06:00.* Nothing changes. RECOMMENDED.\n   The cost is a report short of late data. RECOMMENDED."))
+P
+refuses "refuses a marker on two lines of one option" "$root/rec-twice.md" "option 1 carries RECOMMENDED on 2 lines"
+# an action card whose Options part is prose, with no numbered line
+python3 - "$BASE" "$root/prose.md" <<'P'
+import sys
+t = open(sys.argv[1]).read().replace("**Terms.** None.", "**Terms.** None.\n\n**Kind.** action")
+a = t.index("1. *Keep")
+b = t.index("**Recommendation.**")
+t = t[:a] + "Just do it, there is nothing to choose.\n\n" + t[b:]
+t = t.replace("Option 2.", "Option 1.")
+open(sys.argv[2], "w").write(t)
+P
+refuses "an action card whose Options part has no numbered line is refused as 'an action card needs at least one option; found 0'" "$root/prose.md" "an action card needs at least one option; found 0"
+
 # a log that cannot be appended leaves no batch behind
 clean_state; mkdir -p "$LOG"
 if run "$BASE" >/dev/null 2>"$root/err"; then bad "a log-append failure is refused" "accepted"
