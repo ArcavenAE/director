@@ -562,11 +562,18 @@ count, so they share the unread reader and its field names.
      and no credential, so it has no Desk to write to. That the session
      writes nothing to the Desk is the rule in 3.4.1, not this test;
    - **`look-clear`'s refusals and skips** (3.4.2), one fixture each:
-     - a count that differs from `--answers-reported`, two answers for one
-       item, and a `cleared.json` that does not parse each exit 1 and leave
-       `cleared.json` byte-identical;
+     - **every whole-input refusal, one fixture each:** an `--items` file
+       that does not parse; an `--answers` file that does not parse; an
+       items count that differs from `--items-reported`; an answers count
+       that differs from `--answers-reported`; a count equal to `--limit`;
+       two items with the same id; two items with the same gate key; two
+       answers for one item; an answer with no `updatedAt`; an answer whose
+       `updatedAt` is not a time; a `notify.json` that does not parse; a
+       `cleared.json` that does not parse. Each exits 1, leaves
+       `cleared.json` byte-identical (or absent, if it was absent), and
+       leaves no `look-clear` temp file in `<state>`;
      - an unknown desk id, a non-gate item, a `choice` other than `clear`,
-       a gate not open, a key cleared by another desk id, and an older
+       a `ready` that is not `true`, a gate not open, a key cleared by another desk id, and an older
        `updatedAt` are each skipped with their reason. A valid clear in the
        same input is still written, and the run exits 0;
      - the same input run twice leaves `cleared.json` byte-identical the
