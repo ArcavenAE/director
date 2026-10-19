@@ -415,6 +415,10 @@ fence_case "a fence with an info string opens and closes, and the token inside i
 fence_case "a line that starts with inline triple-backtick code is not a fence: the marker after it is read" \
   "1. *Keep 06:00.* The cost is a late report.\n   \`\`\`x\`\`\` is inline code [RECOMMENDED]" "$O2" 2 \
   "RECOMMENDED marks option 1 and the recommendation names option 2"
+fence_case "a fence line may carry any leading whitespace (8 spaces here), wider than CommonMark" \
+  "1. *Keep 06:00.* Nothing changes.\n        \`\`\`\n        write [RECOMMENDED]\n        \`\`\`\n   The cost is a late report." "$O2" 2 accept
+fence_case "a closer may carry trailing spaces" \
+  "1. *Keep 06:00.* Nothing changes.\n   \`\`\`\n   write [RECOMMENDED]\n   \`\`\`   \n   The cost is a late report." "$O2" 2 accept
 fence_case "a longer closer closes a shorter opener" \
   "1. *Keep 06:00.* Nothing changes.\n   \`\`\`\n   [RECOMMENDED]\n   \`\`\`\`\n   The cost is a late report." "$O2" 2 accept
 
