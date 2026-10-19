@@ -81,8 +81,11 @@ the Desk is the hand parse again with a script's name on it. That (b) refuses
 every real card is expected, since no standard existed when they were
 written; the fix per file is one or two lines (section 9).
 
-This recommendation is valid until 2026-10-26, or until a builder opens the
-draft PR, whichever comes first. The architect role re-checks it then.
+Who settles it: this is a design choice, not an operator ruling. It is
+settled in this design's review, and director decides at merge. The operator
+is asked only if the reviewer and the architect role disagree. This
+recommendation is valid until 2026-10-26, or until a builder opens the draft
+PR, whichever comes first. The architect role re-checks it then.
 
 ## 4. The card file contract
 

@@ -260,7 +260,7 @@ and `bd` that log calls; nothing reads the live state.
 | part | what | files | depends on |
 |---|---|---|---|
 | LF1 | `relay-log append --ws <slug>` (repeatable), the `**Workstream:**` line, slug shape check | `scripts/relay-log`, `verify-relay-log.sh` | none |
-| LF2 | fold: consumed `src` set per row; a director `set` moves `last_moved` (R-197); typed links `relay:R-<n>` and `msg:<id>` accepted by `link` | `scripts/dws`, `verify-dws.sh` | none |
+| LF2 | fold: consumed `src` set per row; a director `set` moves `last_moved` (R-197 as written, not a new decision); typed links `relay:R-<n>` and `msg:<id>` accepted by `link` | `scripts/dws`, `verify-dws.sh` | none |
 | LF3 | `dws refresh --local`: the relay reader (writer-form headings only, shared lock, timeout) and the Desk reader (observe only); `dws unlinked`; `DWS_NO_RERENDER` | `scripts/dws`, new `verify-dws-fill.sh` | LF1, LF2 |
 | LF4 | needs the ruling: refresh may append `set blocked ""` on a closed card; the closing-status table; `status` per id in the snapshot | `scripts/dws`, `scripts/desk-snapshot`, `verify-dws-fill.sh`, `verify-desk-snapshot.sh` | LF3, ruling |
 | LF5 | `board-html` runs `dws refresh --local` before reading rows | `scripts/board-html`, `verify-board-html.sh` | LF3 |
@@ -286,10 +286,13 @@ and `bd` that log calls; nothing reads the live state.
 6. **Legacy headings:** a hand-typed `## R-7 (old)` and a duplicate R-n are
    not read, are counted, and a `relay:R-7` link is listed as not in writer
    form.
-7. **Judging move refused for refresh:** `dws --actor refresh` with `stage
-   <slug> accepted --from merged`, `park`, `open` and `set --next` each exit
-   nonzero and append nothing; the fill run against a fixture that would
-   suggest each move appends none of them.
+7. **Judging move refused for refresh:** the red half is the fill. Run against
+   a fixture whose sources would suggest each move (`accepted`, `park`, `open`,
+   `set --next`), it appends none of them. The other half is a regression pin
+   that already passes on main (`allowed()`, dws:326-336): `dws --actor
+   refresh` with each of those moves exits nonzero and appends nothing. It is
+   kept so the fill's new code cannot widen the table by accident, and it is
+   not this item's red test.
 8. **After-the-fact link:** `dws link <slug> relay:R-<n>` then refresh moves
    the row once.
 9. **Authored update moves the clock:** a director `set --next` moves

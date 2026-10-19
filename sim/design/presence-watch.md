@@ -34,8 +34,9 @@ re-measured here).
 A watch turns both into events director sees within a minute, and lets an ask
 that could not be sent go out when its recipient returns, without a person or
 a lucky turn remembering it. The cost of merge is one new opt-in loop on the
-director seat's existing timer and one new local file; no other seat's
-behavior changes until a separate ruling (section 5).
+director seat's existing timer and its local files. The hold in section 4 is
+behind the same flag, so with the watch off every send behaves as it does
+today. No other seat's behavior changes until a separate ruling (section 5).
 
 The watch is diagnostic. Its reports and counts block nothing (SOUL section 8,
 ADR-007, `diagnostic-not-gate.md`).
@@ -47,6 +48,13 @@ ADR-007, `diagnostic-not-gate.md`).
   director (`global.go:184-196`). Only two roles exist at the global tier,
   `supervisor` and `director` (`global.go:35-41`). A worker seat never has a
   global row.
+- **That holds only while the shim is the only writer.** The shim refuses any
+  other role at start (`global.go:144-147`) and writes presence in one place,
+  under `presenceKey` (`global.go:781`, `184-185`). The hub does not enforce
+  it: the director credential may publish to `$KV.GLOBAL_PRESENCE.>`, and each
+  leaf has the bucket's KV API (`probe/nats-global-tier/hub/nats-server.conf:31`,
+  `56`, `82`). So any client holding one of those credentials can write a key
+  of any shape. The watch states that assumption and does not rely on it (D4).
 - **TTL and beat.** The probe hub creates the bucket with `--ttl 90s`
   (`probe/nats-global-tier/hub/provision.sh:24`); the live hub's setting is
   inferred to match and should be read once (`nats kv info GLOBAL_PRESENCE`).
@@ -137,10 +145,17 @@ director session runs.
 
 **D4. What "absent" and "back" mean.**
 
-- **Units.** A *cluster* is every key under `presence.<cluster>.`; a
-  *supervisor* is each instance under `presence.<cluster>.supervisor.`.
-  Today these nearly coincide, since supervisors are the only cluster rows
-  (`global.go:35-41`). Director's own rows are not watched.
+- **Units.** A *supervisor* is each instance under
+  `presence.<cluster>.supervisor.`; a *cluster* is the set of its supervisor
+  instances. Director's own rows are not watched.
+- **Only shim-shaped keys count.** A key counts toward a unit only when it has
+  the shape the shim writes, `presence.<cluster>.supervisor.<instance>` with
+  one instance segment, and its value parses as a presence record. Any other
+  key under `presence.<cluster>.` is *foreign*: it never makes a unit present
+  or keeps it present, and the watch lists each foreign key once in the event
+  file and the next `presence_notice`. Closing the hub permissions so that only
+  the shim's own subject can be written is a separate hardening item (section
+  5), not part of this design.
 - **Absent:** no readable key for the unit on two consecutive passes. With a
   90s TTL and a 30s beat, that is about two and a half minutes after the last
   beat (inferred arithmetic). One missed pass is not reported.
@@ -183,6 +198,14 @@ These recommendations are valid until 2026-11-02, or until a builder starts
 build item 1, whichever comes first. The architect re-checks them then.
 
 ## 4. Held messages
+
+**Behind the watch's flag.** The hold exists only on a shim with
+`DIRECTOR_PRESENCE_WATCH=1` and global role `director`, the same gate as the
+watch (D2), because release runs only on the watch's back event. With the flag
+off, a send that presence refuses is refused exactly as today, and nothing is
+written to `held.jsonl`. A shim started with the flag off while held records
+exist sends none of them. It lists them in each `presence_notice` as `N held
+while the watch is off`, so turning the watch off cannot strand mail silently.
 
 **What one is.** A director `send_message` to a `global://` address that the
 shim did not publish because presence said no live recipient, kept by the
@@ -254,11 +277,16 @@ look.
 
 ## 5. What it does not do, and its neighbours
 
-- It does not watch local seats. Global presence holds supervisors and
-  director only (`global.go:35-41`), so "every seat on a cluster absent" is
+- It does not watch local seats. The shim writes global presence for
+  supervisors and director only (`global.go:35-41`; section 2 on other
+  writers), so "every seat on a cluster absent" is
   visible only as that cluster's supervisor rows gone. A cluster's workers
   live in its own broker's `AGENT_STATE`, which director on another host does
   not read (inferred from the per-cluster broker layout).
+- It does not harden the hub. The hub lets the director credential and each
+  leaf write any key in `GLOBAL_PRESENCE` (section 2). Narrowing those
+  permissions to the shim's own subjects is a separate item. Until it is done,
+  D4's shape rule keeps foreign keys from counting as presence.
 - It does not hold mail for any seat but director. R-141 is fleet-wide; making
   every shim hold by default changes send semantics for every seat and is a
   separate ruling. Brief 11's outbox is the transport-level answer and
@@ -302,10 +330,20 @@ bus. Each refusal assertion has a positive control first, as
    role `director`, with `presence_notice` on the two tool results. Tests
    (leaf rig): `TestWatchSeesSupervisorExpireAndReturn` (stop beating a
    scratch row; see absent; write it again; see back),
-   `TestWatchOffWritesNothing`, `TestWatchHubRestartIsBlindNotAbsent`
-   (`restartHub`).
-5. `held.go` and the hold path in `publish` for director's seat, with
-   `fail_fast` and `cancel_held`. Tests: `TestHoldOnNoPresenceSaysHeldNotDelivered`,
+   `TestWatchOnWritesStateOffWritesNothing`: a positive control first (the
+   flag on, one pass, and the state file and one event exist), then the same
+   pass with the flag off writes neither. The control fails on main, where no
+   watch exists. Also `TestWatchHubRestartIsBlindNotAbsent` (`restartHub`) and
+   `TestWatchForeignKeyNeverCountsAsPresent` (a scratch client writes
+   `presence.<cluster>.worker.x` and a malformed supervisor value; the unit
+   stays absent, and both keys are listed as foreign).
+5. `held.go` and the hold path in `publish` for director's seat, behind the
+   watch's flag, with `fail_fast` and `cancel_held`. Tests:
+   `TestHoldOffKeepsTodaysRefusal` (the flag off: the refusal text as on main,
+   and no `held.jsonl`; a regression pin that passes on main, paired in the
+   same file with the red `TestHoldOnNoPresenceSaysHeldNotDelivered` on the
+   same fixture), `TestHeldWhileWatchOffIsListedNotSent`,
+   `TestHoldOnNoPresenceSaysHeldNotDelivered`,
    `TestNoHoldWhenPresencePassedAndPublishFailed`,
    `TestNoHoldOnTwoDirectors`, `TestFailFastKeepsRefusal`,
    `TestReleaseOnBackPublishesOnceWithHoldID`,
@@ -331,12 +369,13 @@ bus. Each refusal assertion has a positive control first, as
   lucky roster read. Earned by the 2026-10-19 six-hour hold and the
   03:28Z-04:01Z absence learned from a peer.
 - **PW-B (JUDGMENT)** · absence is two missed passes, return is two seen
-  passes, and an unreadable row or an unreadable hub is unknown, never absent.
+  passes, an unreadable row or an unreadable hub is unknown, never absent, and
+  only a key of the shape the shim writes counts toward presence.
 - **PW-C (OBSERVED)** · the watcher's own downtime and its host's sleep are
   gaps it records and subtracts, never transitions it infers. Extends R-209.
 - **PW-D (JUDGMENT)** · a unit with four or more transitions in an hour is
   shown as flapping and reported once per hour. Extends R-210.
-- **PW-E (OBSERVED)** · a director send refused for absence is held, says
+- **PW-E (OBSERVED)** · with the watch on, a director send refused for absence is held, says
   "held, not delivered", and is released through the normal publish when its
   recipient returns, under its own message id. Earned by the six-hour hold and
   the 04:3xZ refusal; implements R-141 for director's seat.
