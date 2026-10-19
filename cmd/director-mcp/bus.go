@@ -77,6 +77,9 @@ type Bus struct {
 	// (localrecover.go), and the cue watcher reads it on another goroutine.
 	localMu sync.Mutex
 	local   localState
+	// lookup is a test seam for the broker lookup of the local durable; nil in
+	// production (localrecover.go lookupLocal).
+	lookup func(ctx context.Context, durable string) error
 }
 
 // localConsumerInactive is the local durable's inactive threshold. The inbox

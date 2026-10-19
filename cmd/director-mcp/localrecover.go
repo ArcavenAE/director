@@ -91,12 +91,22 @@ func (b *Bus) recheckLocal(ctx context.Context) (bool, error) {
 	return b.restoreLocal(ctx)
 }
 
+// lookupLocal asks the broker whether the durable exists. b.lookup replaces the
+// call in a test, so a test can count the calls and make one fail.
+func (b *Bus) lookupLocal(ctx context.Context, durable string) error {
+	if b.lookup != nil {
+		return b.lookup(ctx, durable)
+	}
+	_, err := b.js.Consumer(ctx, "AGENT_INBOX", durable)
+	return err
+}
+
 func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 	if b.js == nil {
 		return false, nil // no broker context to ask (a bus built around a fake consumer)
 	}
 	durable := "mcp_" + b.self.AgentID + "_" + b.instance
-	_, err := b.js.Consumer(ctx, "AGENT_INBOX", durable)
+	err := b.lookupLocal(ctx, durable)
 	if err == nil {
 		b.localMu.Lock()
 		b.local.checked = time.Now()

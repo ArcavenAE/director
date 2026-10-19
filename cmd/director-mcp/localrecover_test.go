@@ -218,3 +218,100 @@ func TestBrokerLostLocalDurableKeepsAHeldMessageMarkable(t *testing.T) {
 		t.Fatalf("ack-pending after marking h1 = %d, want 0", n)
 	}
 }
+
+// counted wraps the broker lookup so a test can see how often it is made.
+func counted(t *testing.T, bus *Bus, fail error) *int {
+	t.Helper()
+	n := 0
+	bus.lookup = func(ctx context.Context, durable string) error {
+		n++
+		if fail != nil {
+			return fail
+		}
+		_, err := bus.js.Consumer(ctx, "AGENT_INBOX", durable)
+		return err
+	}
+	return &n
+}
+
+// A healthy empty poll asks the broker whether the durable exists at most once
+// per durableCheckEvery, and not at all inside the window (director#328 round 1:
+// a mutant that makes recheckLocal return false must fail here).
+func TestBrokerEmptyPollAsksTheBrokerOncePerWindow(t *testing.T) {
+	old := durableCheckEvery
+	durableCheckEvery = time.Hour
+	defer func() { durableCheckEvery = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	bus, _ := localLossBus(t, ctx)
+	asks := counted(t, bus, nil)
+
+	// inside the window (attach just set it): an empty poll, a batch and a
+	// non-blocking take ask nothing.
+	if _, err := bus.receiveTiered(ctx, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bus.receiveBatch(ctx, time.Second, 5); err != nil {
+		t.Fatal(err)
+	}
+	if *asks != 0 {
+		t.Fatalf("inside the window the broker was asked %d times, want 0", *asks)
+	}
+
+	// due: the next empty poll asks once, finds the durable, rebuilds nothing, and
+	// the window starts again.
+	bus.localMu.Lock()
+	bus.local.checked = time.Now().Add(-2 * time.Hour)
+	bus.localMu.Unlock()
+	if _, err := bus.receiveTiered(ctx, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if *asks != 1 {
+		t.Fatalf("when due the broker was asked %d times, want 1", *asks)
+	}
+	if recreateNote(t, bus) != "" {
+		t.Fatal("a healthy durable was rebuilt")
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := bus.receiveBatch(ctx, time.Second, 5); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if *asks != 1 {
+		t.Fatalf("after the check the window should hold: %d asks, want 1", *asks)
+	}
+}
+
+// Only a broker that says the durable is not found rebuilds it. Any other
+// answer, such as a timeout, changes nothing (director#328 round 1: a mutant
+// that rebuilds on any error must fail here).
+func TestBrokerOnlyNotFoundRebuilds(t *testing.T) {
+	old := durableCheckEvery
+	durableCheckEvery = 0
+	defer func() { durableCheckEvery = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	bus, js := localLossBus(t, ctx)
+	if err := js.DeleteConsumer(ctx, "AGENT_INBOX", localDurableName(bus)); err != nil {
+		t.Fatal(err)
+	}
+	asks := counted(t, bus, context.DeadlineExceeded)
+	_, _ = bus.receiveTiered(ctx, time.Second) // the pull error is reported as it was
+	if *asks == 0 {
+		t.Fatal("CONTROL FAILED: the lookup was never made, so the answer below proves nothing")
+	}
+	if _, err := js.Consumer(ctx, "AGENT_INBOX", localDurableName(bus)); err == nil {
+		t.Fatal("a lookup that failed with a timeout rebuilt the durable")
+	}
+	if recreateNote(t, bus) != "" {
+		t.Fatal("a recreate was reported for a lookup that failed")
+	}
+	// control: the same state with an honest not-found answer does rebuild.
+	counted(t, bus, nil)
+	if _, err := bus.receiveTiered(ctx, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := js.Consumer(ctx, "AGENT_INBOX", localDurableName(bus)); err != nil {
+		t.Fatalf("CONTROL FAILED: a not-found answer should rebuild: %v", err)
+	}
+}
