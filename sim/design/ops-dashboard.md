@@ -84,13 +84,44 @@ document per panel per day, kept 14 days. The ledger file stays the history.
 
 A row holds only these fields:
 - `id`: a workstream slug or a session name;
-- `stage`: one of the ledger's ten stages, or marvel's `state` value as
-  printed;
+- `stage`: one of the ledger's ten stages, or marvel's `state` value;
 - `age_h`: hours since the row last moved;
 - `area`: a label from the Desk's own area list;
-- `title`: for ledger rows only, the title director typed;
-- `health`, `last_active`, `cluster`: for session rows only, as marvel
-  prints them.
+- `title`: for ledger rows only, the title director typed, when it passes
+  the content checks below;
+- `health`, `last_active`, `cluster`: for session rows only.
+
+**Content, not only fields.** The page has readers other than director
+(Contributors see the Desk), so the writer bounds what each field may hold.
+Every value is printable text with no control or escape characters. Then:
+
+| field | allowed |
+|---|---|
+| `id` | lower-case letters, digits, `-` and `.`, at most 80 characters |
+| `stage` | one of the ten ledger stages, or one of marvel's session states (`limited` included). marvel adds `(<tag>)` to a failed row that will not be replaced, and the tag is the start of free reason text, so it is written as `(terminal)` |
+| `age_h` | a number |
+| `area` | one of the Desk's area labels |
+| `cluster` | one of the cluster names in director's own cluster list |
+| `health` | a closed set: `healthy`, `unhealthy`, `unknown`, each optionally with `(stalled)`, `(logged-out)` or `(parked)`. A parked reason is free text, so it is dropped: `healthy (parked: x)` is written as `healthy (parked)` |
+| `last_active` | marvel's age words, a dash, or the stale form, plus an optional `*`; at most 40 characters |
+| `title` | at most 120 characters, and none of the refusals below |
+
+Refused in any free-text value (`id`, `title`, `last_active`):
+- a path shape: `~/`, `/Users/`, `/home/`, `/private/`, `/tmp/`, `/var/`, or
+  any run that starts with `/` and holds a second `/`;
+- a token shape: a known token prefix (`ghp_`, `gho_`, `ghs_`,
+  `github_pat_`, `xox`, `sk-`, `AKIA`), or any run of 24 or more base64 or
+  hex characters;
+- a URL (`://`) or an address with `@`;
+- any entry in a private-names list, a local file director reads
+  (`$DIRECTOR_STATE/dash-withhold.txt`, 0600, one name per line, matched
+  as whole words and without regard to case). The file itself is never
+  written anywhere.
+
+A row whose `id`, `stage` or `cluster` fails is not written, and the panel's
+`refusal` counts it by reason, never by value. A `title` that fails is
+replaced by `(title withheld: <reason>)`, so the row still counts. Titles
+are otherwise written as typed.
 
 Never a row: tokens, keys, socket paths, settings values, message bodies,
 route note or basis text, issue or PR body text, `next` or `repos` from the
@@ -110,10 +141,36 @@ Contributors.
 One added step in director's sweep, in a session:
 1. Read `dws show --json` and fold it with dws's own fold, so the page cannot
    fold differently from the CLI.
-2. Read `marvel get sessions --columns team,role,name,state,health,last-active`
-   once per cluster. Before parsing, check that the header row names exactly
-   those columns. On a mismatch, the Sessions panel's `refusal` names it and
-   no rows are drawn from a table the writer cannot read.
+2. Read `marvel --cluster <name> get sessions --columns
+   team,role,name,state,health,last-active` once for each cluster in
+   director's cluster list. A cluster that does not answer gets one line,
+   "<cluster>: not reached at T", and no rows.
+
+   **This parses a table formatted for people.** marvel prints it for a
+   terminal, and a release can change it: a new health suffix, a new mark,
+   a new form for an absent value. Nothing in marvel promises the layout. The
+   parse is built to refuse when the layout moves, never to guess.
+   - **The header.** The expected header labels are `TEAM`, `ROLE`,
+     `AGENT NAME`, `STATE`, `HEALTH`, `LAST-ACTIVE`, the labels marvel's
+     column registry gives those six column names. The header must be those
+     six labels, in that order, each followed by two or more spaces except the
+     last. `AGENT NAME` holds a space, so the header is never split on
+     whitespace either. On any mismatch the panel's `refusal` names it and no
+     rows are drawn.
+   - **The split rule: fixed offsets from the header.** marvel lays the table
+     out with Go's `tabwriter`, padding 2, spaces only, so every cell of a
+     column starts at the same character offset as its header label. The
+     writer takes each label's start offset, counted in characters, not bytes,
+     and cuts each row at those offsets. A cell is the text from its offset to
+     the next one, with trailing spaces removed; the last cell runs to the end
+     of the line.
+   - **A row that cannot be cut cleanly is refused, alone.** That is a row
+     shorter than the last offset, a cell that starts with a space, or a cell
+     with fewer than two spaces before the next offset (a cell that ran into
+     its neighbour). Also refused: a row holding a tab or a control
+     character. The panel shows that row as "unreadable row" in the panel's
+     `refusal` count and draws the others. It never draws a shifted value.
+   - Then each cell goes through the content checks in section 3.
 3. Shape each panel, check each document against the 256 KiB document cap,
    and write a refusal into `refusal` instead of a cut-short panel.
 4. Write every changed document in one batch of at most 50 writes, then
@@ -133,11 +190,27 @@ last ran, in words, so a silent writer shows.
 1. **The Desk is unharmed.** With `dash_*` collections missing, empty, or
    holding a malformed document, the decisions view renders the same cards
    in the same order.
-2. **The field list.** The writer refuses to write any field not in
-   section 3. A fixture row carrying `next`, `repos` or a token-shaped string
-   writes nothing for that row, and the refusal says why.
-3. **Header check.** A sessions table with a renamed, missing or extra
-   column draws no rows and sets `refusal`.
+2. **The field list and its content.**
+   - The writer refuses to write any field not in section 3. A fixture row
+     carrying `next` or `repos` writes nothing for that row, and the refusal
+     says why.
+   - A ledger title holding `~/work/x`, `/Users/a/b`, a `ghp_` token, a
+     30-character hex run, a URL, or a name from `dash-withhold.txt` is
+     written as `(title withheld: <reason>)`. The refusal text never repeats
+     the value.
+   - A session `id` with a `/`, or a `cluster` not on director's list, writes
+     nothing for that row.
+   - A HEALTH of `healthy (parked: /Users/a)` is written as `healthy (parked)`.
+3. **Header check and split.**
+   - A sessions table with a renamed, missing or extra column draws no rows
+     and sets `refusal`.
+   - A row whose HEALTH is `healthy (parked: x y)` and whose LAST-ACTIVE ends
+     in `*` parses into the right six cells, and HEALTH is written as
+     `healthy (parked)`.
+   - A row whose cell runs into the next column, a row with a tab in it, and a
+     row shorter than the last offset are each refused alone. The other rows
+     are drawn, and no value lands in the wrong field.
+   - A cluster that does not answer shows "not reached" and no rows.
 4. **Size.** A panel over 256 KiB is not written; `refusal` says so.
 5. **Stale.** With `as_of` 61 minutes old the panel shows "stale since T";
    at 59 minutes it does not.
