@@ -122,6 +122,13 @@ snap_refuses "an answer that names no card is refused" "answer" \
 printf '[{"card": "ghost"}]' >"$root/answers-ghost.json"
 snap_refuses "an answer for a card the read does not hold is refused" "ghost" \
   "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-ghost.json" --answers-reported 1
+printf '[{"card": "card-1", "card_id": "card-5"}]' >"$root/answers-differ.json"
+snap_refuses "an answer whose card and card_id differ is refused, not read as the first" "card_id" \
+  "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-differ.json" --answers-reported 1
+printf '[{"card": "card-1", "card_id": "card-1"}]' >"$root/answers-agree.json"
+"$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-agree.json" --answers-reported 1 >/dev/null 2>&1 \
+  && python3 -c "import json;s=json.load(open('$SNAPFILE'));assert s['answered']==['card-1'],s" \
+  && ok "an answer whose card and card_id agree is read once" || bad "an answer whose card and card_id agree is read once"
 printf '[]' >"$root/answers-none.json"
 "$SNAP" write --cards "$cards" --reported 5 --answers "$root/answers-none.json" --answers-reported 0 >/dev/null 2>&1 \
   && python3 -c "import json;s=json.load(open('$SNAPFILE'));assert s['answered']==[],s" \
