@@ -309,6 +309,47 @@ o = json.load(open(sys.argv[1]))["writes"][0]["data"]["options"]
 assert "RECOMMENDED" not in o[1]["text"], o
 P
 
+# Near forms of the marker are text, and say so: none is read as the marker, none is refused, each
+# draws a NOTE that names the exact form, and the Desk text keeps what the seat wrote. The
+# recommendation is on option 2, so a near form read as a marker would be refused as a disagreement.
+# A token inside a code fence is an example, never a marker.
+near_case() {  # label  option-1 text (python expression of the first option's whole text)  [note|nonote]
+  local label="$1" body="$2" want="${3:-note}"
+  python3 - "$BASE" "$root/near.md" "$body" <<'P'
+import sys
+t = open(sys.argv[1]).read()
+old = "1. *Keep 06:00.* Nothing changes. The cost is a report short of late data."
+assert old in t
+open(sys.argv[2], "w").write(t.replace(old, sys.argv[3].replace("\\n", "\n"), 1))
+P
+  clean_state
+  if run "$root/near.md" >"$root/out" 2>"$root/err"; then
+    python3 - "$(batch_json)" "$body" <<'P' && ok "near form ($label) is read as text and kept in the Desk text" || bad "near form ($label): the text was changed" "$(cat "$root/out")"
+import json, sys
+o = json.load(open(sys.argv[1]))["writes"][0]["data"]["options"][0]["text"]
+want = sys.argv[2].replace("\\n", "\n")
+want = want.split(" ", 1)[1] if want[:3] == "1. " else want
+assert o == want, (o, want)
+P
+    if [[ "$want" == note ]]; then
+      grep -q 'is not the marker; it is read as text. The marker is \[RECOMMENDED\] ending a line' "$root/out" \
+        && ok "near form ($label) draws a NOTE naming the accepted form" || bad "near form ($label): no NOTE naming the accepted form" "$(cat "$root/out")"
+    else
+      ! grep -q 'is not the marker' "$root/out" && ok "a fenced token ($label) draws no NOTE" || bad "a fenced token ($label) drew a NOTE" "$(cat "$root/out")"
+    fi
+  else
+    bad "near form ($label) is accepted as text" "$(cat "$root/err")"
+  fi
+}
+near_case "lowercase at the end of a line" '1. *Keep 06:00.* The cost is a late report. [recommended]'
+near_case "spaces inside the brackets" '1. *Keep 06:00.* The cost is a late report. [ RECOMMENDED ]'
+near_case "a trailing colon" '1. *Keep 06:00.* The cost is a late report. [RECOMMENDED]:'
+near_case "at the start of a line" '1. [RECOMMENDED] *Keep 06:00.* The cost is a late report.'
+near_case "in the middle of a line" '1. *Keep 06:00.* [RECOMMENDED] The cost is a late report.'
+near_case "in backticks" '1. *Keep 06:00.* The cost is a late report. `[RECOMMENDED]`'
+near_case "a wrapped line, lowercase" '1. *Keep 06:00.* Nothing changes.\n   The cost is a late report. [recommended]'
+near_case "inside a code fence" '1. *Keep 06:00.* Nothing changes.\n   ```\n   write [RECOMMENDED]\n   ```\n   The cost is a late report.' nonote
+
 # A log append that fails partway leaves the log as it was: no partial line without its batch.
 # RLIMIT_FSIZE stops the append part-way through; the seed log is under the limit, the batch is too.
 clean_state; mkdir -p "$DIRECTOR_STATE"
