@@ -1167,9 +1167,11 @@ def grant_end(g):
     if not isinstance(exp, str):
         return None
     try:
-        return datetime.datetime.strptime(exp, "%Y-%m-%dT%H:%M:%SZ" if "T" in exp else "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+        end = datetime.datetime.strptime(exp, "%Y-%m-%dT%H:%M:%SZ" if "T" in exp else "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
     except ValueError:
         return None
+    # A date-only expiry holds through the end of that day, as in reconcile.
+    return end if "T" in exp else end + datetime.timedelta(days=1)
 
 
 def cmd_inherit(a):
