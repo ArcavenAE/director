@@ -397,15 +397,19 @@ func TestHubMoveSeenAfterAGapLeavesTheStillOutSetAndNamesTheRest(t *testing.T) {
 	}
 }
 
-func TestHubMoveAnAsleepStragglerGetsNoLostAtConversionAndIsNamedAsleep(t *testing.T) {
+// asleep straggler (guard), design #359 section 8. No real path leaves an
+// asleep cluster in the still-out set, since a unit becomes asleep only from
+// present and present takes a cluster out of the set. The rule is kept as a
+// guard, so this test sets the unit's status directly instead of reaching it by
+// transitions.
+func TestHubMoveAnAsleepStragglerGuardGetsNoLostAtConversionAndIsNamedAsleep(t *testing.T) {
 	w, c := hubWatch(time.Minute, 6)
 	runPasses(w, c, 2, rowsFor("c1", "c2", "c3")...)
 	runPasses(w, c, 3)
 	if w.Parent == nil {
 		t.Fatal("CONTROL FAILED: the parent should be open")
 	}
-	// c3 is asleep and not present; the unit is set directly, since a unit that
-	// is absent cannot become asleep by a transition
+	// the unit is set directly because no transition leads here (see the comment above)
 	for _, n := range []string{"c3", "c3/a"} {
 		u := w.Unit(n)
 		u.Status, u.AsleepUntil = unitAsleep, c.wall.Add(24*time.Hour)
