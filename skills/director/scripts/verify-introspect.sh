@@ -24,7 +24,12 @@ has()  { grep -q -- "$1" "$2"; }
 
 [[ -f "$S" ]] || { bad "introspect exists at $S"; echo "$pass passed, $fail failed"; exit 1; }
 
-root="$(mktemp -d /private/tmp/ins.XXXXXX)"
+# A short scratch path (macOS socket limit) that exists on macOS and Linux; a failed mktemp stops the run,
+# so no path ever collapses to "/".
+root="$(mktemp -d "${INTROSPECT_TMP:-/tmp}/ins.XXXXXX")" || { echo "FAIL scratch root: mktemp failed"; exit 1; }
+[[ -n "$root" && -d "$root" ]] || { echo "FAIL scratch root: no directory"; exit 1; }
+root="$(cd "$root" && pwd -P)"
+modeof() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/home" "$root/t" "$root/bin" "$root/proj/-work-aae-orc" "$root/proj/-work-client-x" "$root/state"
 PYDIR="$(dirname "$(command -v python3)")"
@@ -279,7 +284,7 @@ rm -f "$state/introspector/records.jsonl"
 run --since today --config "$conf" >"$root/o" 2>"$root/err"; rc=$?
 rec="$state/introspector/records.jsonl"
 [[ $rc -eq 0 && -s "$rec" ]] && ok "a run appends typed records to records.jsonl" || bad "records appended" "rc=$rc $(head -2 "$root/err")"
-[[ "$(stat -f %Lp "$state/introspector")" == 700 && "$(stat -f %Lp "$rec")" == 600 ]] && ok "P2 the directory is 700 and the file 600" || bad "modes" "$(stat -f %Lp "$state/introspector") $(stat -f %Lp "$rec")"
+[[ "$(modeof "$state/introspector")" == 700 && "$(modeof "$rec")" == 600 ]] && ok "P2 the directory is 700 and the file 600" || bad "modes" "$(modeof "$state/introspector") $(modeof "$rec")"
 genv git -C "$state/introspector" rev-parse >/dev/null 2>&1 && bad "P2 the record directory is outside any checkout" || ok "P2 the record directory is outside any checkout"
 python3 - "$rec" <<'PY' && ok "every record matches the typed schema (v, rev, host, from, to, line, state; a gap has no n)" || bad "record schema"
 import json, re, sys
@@ -308,7 +313,7 @@ open(sys.argv[1], "w").write("".join(json.dumps(r) + "\n" for r in rows))
 PY
 run --since today --config "$conf" >/dev/null 2>&1
 grep -q '2025-01-01' "$rec" && bad "records older than 400 days are pruned" || ok "records older than 400 days are pruned on append"
-[[ "$(stat -f %Lp "$rec")" == 600 ]] && ok "the atomic rewrite keeps mode 600" || bad "mode after rewrite"
+[[ "$(modeof "$rec")" == 600 ]] && ok "the atomic rewrite keeps mode 600" || bad "mode after rewrite"
 chmod 755 "$state/introspector"
 run --since today --config "$conf" >"$root/o" 2>/dev/null; rc=$?
 grep -q '^GAP records write' "$root/o" && ok "a directory wider than 700 refuses the append and prints a GAP line" || bad "wide dir GAP" "$(grep -i records "$root/o")"
@@ -344,7 +349,7 @@ if command -v sandbox-exec >/dev/null 2>&1; then
 (version 1)
 (allow default)
 (deny file-write*)
-(allow file-write* (subpath "/private/tmp/ins.$(basename "$root" | sed 's/^ins\.//')") (subpath "/dev"))
+(allow file-write* (subpath "$root") (subpath "/dev"))
 (deny network*)
 (allow network* (remote ip "localhost:*"))
 EOF
