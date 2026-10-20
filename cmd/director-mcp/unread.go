@@ -100,9 +100,15 @@ type cliArgs struct {
 	interval  time.Duration // ask-reader: the pass interval; 0 means the 30s default
 	file      string        // ask-reader: the JSON file it rewrites after each pass
 	help      bool          // asks: print the help text
+	role      string        // dossier: TEAM/ROLE
+	pred      string        // dossier: the predecessor's agent id
+	predState string        // dossier: the predecessor's state directory
+	pointers  []string      // dossier: files the role keeps
 }
 
 const askReaderUsage = "director-mcp ask-reader [--once] [--file <path>] [--interval <duration up to 30s>]"
+
+const dossierUsage = "director-mcp dossier --role TEAM/ROLE [--predecessor AGENT-INSTANCE] [--predecessor-state DIR] [--pointer PATH]... [--json]"
 
 const unreadUsage = "director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <duration>]"
 
@@ -165,6 +171,8 @@ func parseArgs(args []string) (cliArgs, error) {
 			}
 		}
 		return out, nil
+	case args[0] == "dossier":
+		return parseDossierArgs(args[1:])
 	case args[0] == "unread":
 		out := cliArgs{mode: "unread"}
 		rest := args[1:]
@@ -199,7 +207,7 @@ func parseArgs(args []string) (cliArgs, error) {
 		}
 		return out, nil
 	}
-	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage)
+	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage, dossierUsage)
 }
 
 type unreadPresence struct {
