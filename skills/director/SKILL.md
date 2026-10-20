@@ -62,10 +62,12 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`) a
    it prints a GAP line; show that line, never skip the step silently.
    It exits 0 whether it finds nothing or a lot, so read its lines, never its exit code.
    Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/dbi --json` (read only, no fetch; it asks each repo's remote, so
-   allow up to a minute) and record it with `standing-hook scan-beat` (as in the Standing checklist). Its
-   `rows` are the Stalled ideas block, its `unverified.count` the Unverified line. Exit 2 means it could not
-   run (no `stalled_idea_days` in `$DIRECTOR_STATE/thresholds.json`, or no `idea-roots.conf`): print
-   `Stalled ideas: not run (<its stderr line>)`, never an empty block. A scan that did not run is not "none".
+   allow up to a minute). When it exits 0, record the scan with `standing-hook scan-beat` (described
+   under "Standing checklist"). Its `rows` are the Stalled ideas block, its `unverified.count` the Unverified line.
+   Exit 2 means it could not run (no `stalled_idea_days` in `$DIRECTOR_STATE/thresholds.json`, or no
+   `idea-roots.conf`): do not run `standing-hook scan-beat`, since the hook would then report a scan that
+   never ran as "0h ago", and print `Stalled ideas: not run (<its stderr line>)`, never an empty block. A scan
+   that did not run is not "none".
 4. Present, in this shape and no other:
 
 ```
@@ -80,17 +82,20 @@ Running, not blocked: <names>
 Stalled ideas (N)  [research or design, no live forward pointer, quiet <threshold>d+]
 9. <repo>/<path> - <title>  (quiet 23d; pointers all closed)
 10. <repo>/<path> - <title>  (quiet 16d; no pointer; as of 2026-09-21, remote unreachable)
+Stalled ideas: none  [a scan that ran and found no rows, in place of the block above]
 Unverified ideas: K  [bd: 4; remote unreachable: 2]
 Drafts: <draft-sweep lines, GAP lines included, or "none">
 Uncaptured: <one line each, or "none">
 ```
 
-Stalled ideas: at most five lines, oldest quiet first, then `(+M more)`; number them on from the last
+Stalled ideas: list every row, oldest quiet first; number them on from the last
 block; the reason is the row's `reason`; a row with `remote` other than `current` shows `as of <as_of>` and,
 for `unreachable`, `remote unreachable`. Unverified ideas are counted apart and never in N; omit that line
 when K is 0 and name only kinds of source in the bracket. The block presents and stops: the operator
-revives, parks (a line in `$DIRECTOR_STATE/ideas-parked.txt`) or drops. The five-line cap and the
-threshold are the design's provisional values (`sim/design/stalled-big-ideas.md` section 7), not rulings.
+revives, parks (a line in `$DIRECTOR_STATE/ideas-parked.txt`) or drops. No cap is ruled
+(`sim/design/stalled-big-ideas.md` section 7, item 2: no default applies without a ruling), so nothing is
+truncated. The design proposes five lines then `(+M more)`; apply that only once the operator rules it. The
+threshold is likewise unset until ruled, which is why the block can read "not run".
 
 One line per item. No narrative, no context paragraphs, no confidence notes
 in the list. Detail on request, by number. Session 1's operator complaint was

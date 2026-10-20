@@ -88,7 +88,11 @@ STATE="${DIRECTOR_STATE:-$HOME/.director/state}"
 mkdir -p "$STATE"
 # The default idea roots for dbi (stalled-big-ideas.md section 3). Written only when the file is
 # absent: the operator edits it, and an install never overwrites an operator's file.
-if [ ! -e "$STATE/idea-roots.conf" ]; then
+if [ -L "$STATE/idea-roots.conf" ]; then
+  # cp would write through the link, possibly into a file this script does not own.
+  echo "refusing to write through a symlink: $STATE/idea-roots.conf" >&2
+  REFUSED+=("$STATE/idea-roots.conf")
+elif [ ! -e "$STATE/idea-roots.conf" ]; then
   cp "$SRC/skills/director/idea-roots.conf" "$STATE/idea-roots.conf"
   echo "  $STATE/idea-roots.conf (default roots, edit freely)"
 fi

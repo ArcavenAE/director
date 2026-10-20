@@ -138,5 +138,17 @@ run_install "$clean" && [[ "$(cat "$cf")" == "# mine" ]] && ok "a second install
 cp "$here/skills/director/idea-roots.conf" "$root/roots.conf"
 [[ "$(grep -vc -E '^(#|$)' "$root/roots.conf")" == 7 ]] && ok "the shipped default names the design's seven roots" || bad "the shipped default names the design's seven roots"
 
+# A dangling symlink at the conf path must stop the install, not be written through.
+sl="$root/sl"; mkdir -p "$sl/director/state"
+ln -s "$root/elsewhere.conf" "$sl/director/state/idea-roots.conf"
+if run_install "$sl"; then bad "a symlink at idea-roots.conf stops the install" "exit 0"; else ok "a symlink at idea-roots.conf stops the install"; fi
+[[ ! -e "$root/elsewhere.conf" ]] && ok "nothing was written through the dangling symlink" || bad "nothing was written through the dangling symlink"
+grep -q 'idea-roots.conf' "$sl/out" && ok "the refusal names the conf path" || bad "the refusal names the conf path" "$(tail -3 "$sl/out")"
+# The skill's stalled-ideas prose (review round 1 of ld16k).
+grep -q 'do not run `standing-hook scan-beat`' "$skill" && ok "the skill skips scan-beat when dbi did not run" || bad "the skill skips scan-beat when dbi did not run"
+grep -q '^Stalled ideas: none' "$skill" && ok "the shape has a none line for a scan with no rows" || bad "the shape has a none line"
+grep -q 'No cap is ruled' "$skill" && ! grep -q 'at most five lines' "$skill" && ok "the skill applies no cap until one is ruled" || bad "the skill applies no cap until one is ruled"
+grep -q 'under "Standing checklist"' "$skill" && ! grep -q 'as in the Standing checklist' "$skill" && ok "the scan-beat pointer names where it is described" || bad "the scan-beat pointer"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
