@@ -50,7 +50,8 @@ ap.add_argument("path"); ap.add_argument("--agent"); ap.add_argument("--day", de
 ap.add_argument("--ok", type=int, default=0); ap.add_argument("--den", type=int, default=0)
 ap.add_argument("--mid", type=int, default=0); ap.add_argument("--err", type=int, default=0)
 ap.add_argument("--plainerr", type=int, default=0); ap.add_argument("--secret", action="store_true")
-ap.add_argument("--sends", type=int, default=0)
+ap.add_argument("--sends", type=int, default=0); ap.add_argument("--to", default="global://mokuzai/supervisor")
+ap.add_argument("--sendtool", default="mcp__director__send_message"); ap.add_argument("--badline", action="store_true")
 ap.add_argument("--lag", type=int, default=0); ap.add_argument("--fakelag", type=int, default=0)
 ap.add_argument("--secrets", action="store_true")
 a = ap.parse_args()
@@ -71,7 +72,9 @@ with open(a.path, "w") as f:
     for _ in range(a.mid): pair(f, "Bash", "the log said: " + DEN)
     for _ in range(a.err): pair(f, "mcp__director__wait_for_message", "nats: consumer not found", True)
     for _ in range(a.plainerr): pair(f, "mcp__director__inbox_summary", "note: consumer not found was seen last week")
-    for _ in range(a.sends): pair(f, "mcp__director__send_message", "accepted", False, {"text": "see /Users/someone/work/x"})
+    for _ in range(a.sends): pair(f, a.sendtool, "accepted", False, {"to": a.to, "text": "see /Users/someone/work/x"})
+    if a.badline:
+        f.write('{"timestamp": "%sT10:30:00.000Z", "message": {"content": [{"type": "tool_use", "id": "z", "name": "mcp__director__send_message", "input": {"to": "glo\n' % a.day)
     def wait(sent, data):
         body = {"count": 1, "messages": [{"message": {"sent_at": sent, "content": {"type": "text", "data": data}}, "tier": "local"}]}
         pair(f, "mcp__director__wait_for_message", json.dumps(body))
@@ -260,10 +263,47 @@ writeconf </dev/null
 # weekly appears only on --window week
 run --since today --config "$conf" --no-append >"$root/o" 2>/dev/null
 grep -q '^weekly' "$root/o" && bad "weekly only at harvest" || ok "no weekly line on a sweep run"
-mk "$root/proj/-work-aae-orc/s4.jsonl" --agent director --ok 3 --sends 2
+mk "$root/proj/-work-aae-orc/s4.jsonl" --agent director --ok 3 --sends 2 --to global://mokuzai/supervisor
 run --since today --window week --config "$conf" --no-append >"$root/o" 2>/dev/null
 grep -q '^weekly ' "$root/o" && ok "the weekly line appears with --window week" || bad "weekly line" "$(tail -3 "$root/o")"
 grep '^weekly ' "$root/o" | grep -q 'host-local paths 2' && ok "weekly counts host-local paths in sends as a number" || bad "host-local count" "$(grep '^weekly' "$root/o")"
+# the host-local-path count: send_message inputs only, "another host" from the `to` address only
+hl() { run --since today --window week --config "$conf" --no-append "$@" >"$root/o" 2>/dev/null; grep '^weekly ' "$root/o" | sed -n 's/.*host-local paths \([^;]*\);.*/\1/p'; }
+hlcase() { # name, expected, mk args...
+  nm="$1"; want="$2"; shift 2
+  mk "$root/proj/-work-aae-orc/s4.jsonl" --agent director --ok 3 "$@"
+  got="$(hl)"; [[ "$got" == "$want" ]] && ok "host-local paths: $nm ($want)" || bad "host-local paths: $nm" "want $want got $got"
+}
+hlcase "a send to a cluster that is another host counts" 2 --sends 2 --to global://mokuzai/supervisor
+hlcase "a send to this host's own cluster does not" 0 --sends 2 --to global://kinu/supervisor
+hlcase "a send to an agent address does not" 0 --sends 2 --to agent://arcaven/arcaven-supervisor-g5-0
+hlcase "global://director counts only when director is off this host (here it is not)" 0 --sends 2 --to global://director
+hlcase "a tool that merely starts with send does not" 0 --sends 2 --sendtool mcp__director__send_digest
+hlcase "a broadcast input does not" 0 --sends 2 --sendtool mcp__director__broadcast
+writeconf <<<"director_host=mokuzai"
+hlcase "global://director counts when director_host is another host" 2 --sends 2 --to global://director
+writeconf </dev/null
+cat >"$root/mkres.py" <<'PY'
+import json, sys
+p, day = sys.argv[1:3]
+with open(p, "w") as f:
+    f.write(json.dumps({"timestamp": day + "T10:00:01.000Z", "message": {"content": [{"type": "tool_use", "id": "r1", "name": "mcp__director__wait_for_message", "input": {}}]}}) + "\n")
+    f.write(json.dumps({"timestamp": day + "T10:00:02.000Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "r1", "content": json.dumps({"messages": [{"message": {"sent_at": day + "T10:00:00Z", "content": {"data": "see /Users/someone/work/x"}}}]})}]}}) + "\n")
+PY
+python3 "$root/mkres.py" "$root/proj/-work-aae-orc/s4.jsonl" 2026-10-20
+got="$(hl)"; [[ "$got" == "0" ]] && ok "host-local paths: a path inside a delivered message is never matched (0)" || bad "delivered content matched" "got $got"
+mk "$root/proj/-work-aae-orc/s5.jsonl" --agent research-supervisor --ok 3 --sends 2 --to global://mokuzai/supervisor
+hlcase "a dropped (research) transcript's sends are not counted" 0
+rm -f "$root/proj/-work-aae-orc/s5.jsonl"
+mk "$root/proj/-work-aae-orc/s4.jsonl" --agent director --ok 3 --sends 1 --to global://mokuzai/supervisor --badline
+got="$(hl)"; [[ "$got" == "GAP"* ]] && ok "an unreadable send line makes the host-local field a GAP, never a count" || bad "unreadable shape GAP" "got $got"
+run --since today --window week --config "$conf" --json >"$root/j" 2>/dev/null
+python3 - "$state/introspector/records.jsonl" <<'PY' && ok "and the weekly record is a gap with no n" || bad "weekly gap record"
+import json, sys
+r = [json.loads(l) for l in open(sys.argv[1])]
+w = [x for x in r if x["line"] == "weekly"][-1]
+assert w["state"] == "gap" and "n" not in w, w
+PY
 rm -f "$root/proj/-work-aae-orc/s4.jsonl"
 [[ "$(sed 1d "$root/o" | grep -c .)" -le 7 ]] && ok "the weekly run is still at most 7 lines, footers included" || bad "weekly at most 7 lines" "$(cat "$root/o")"
 
@@ -433,7 +473,7 @@ writeconf </dev/null
 grep -q 'last_harvest=' "$repo/skills/director/SKILL.md" && ok "harvest step 6 writes last_harvest after the run" || bad "SKILL.md last_harvest line"
 
 # ================================================================ properties of the script itself
-[[ "$(grep -c -E 'ArtifactData|send_message|broadcast|marvel inject|gh (api|pr|issue)' "$S")" == 0 ]] && ok "P1 the script names no Desk, bus send, inject or gh call" || bad "P1" "$(grep -n -E 'ArtifactData|send_message|broadcast|marvel inject|gh (api|pr|issue)' "$S")"
+[[ "$(grep -c -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")" == 0 ]] && ok "P1 the script names no Desk, bus send, inject or gh call (the name send_message is read from transcripts, never run)" || bad "P1" "$(grep -n -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")"
 python3 - "$S" <<'PY' && ok "the script is Python 3 standard library only" || bad "stdlib only"
 import ast, sys, sys as _s
 mods = set()

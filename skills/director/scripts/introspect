@@ -56,7 +56,7 @@ Config: key=value lines in --config (default $DIRECTOR_STATE/introspector/intros
 and never checked in. Lists are comma separated. Keys: projects_dir, project_include (substrings of a
 project directory name; the ArcavenAE scope only), exclude_agent_names, checkout.director,
 checkout.marvel, install.director-mcp, director_mcp, marvel_cmd, stalled_page_dir, ledgers,
-hub_volume, state_dir, record_dir, host, hosts, roles, last_harvest, band.denials, band.denials_ratio,
+hub_volume, state_dir, record_dir, host, hosts, director_host, roles, last_harvest, band.denials, band.denials_ratio,
 band.disk_free_pct, band.sell_by.
 
 INTROSPECT_NOW (an ISO time) pins the clock for tests.
@@ -161,12 +161,14 @@ def load_config(path, state_dir_default):
         "hub_volume": os.path.expanduser(cfg.get("hub_volume", state)),
         "record_dir": os.path.expanduser(cfg.get("record_dir", f"{state}/introspector")),
         "host": cfg.get("host") or socket.gethostname().split(".")[0],
+        "director_host": cfg.get("director_host"),
         "last_harvest": cfg.get("last_harvest"),
         "band.denials": int(cfg.get("band.denials", "2000")),
         "band.denials_ratio": float(cfg.get("band.denials_ratio", "2")),
         "band.disk_free_pct": float(cfg.get("band.disk_free_pct", "10")),
         "band.sell_by": cfg.get("band.sell_by", "2026-11-17"),
     }
+    c["director_host"] = c["director_host"] or c["host"]
     c["hosts"] = [x for x in cfg.get("hosts", c["host"]).split(",") if x]
     c["roles"] = [x for x in cfg.get("roles", "operator,builder,director").split(",") if x]
     return c
@@ -253,13 +255,14 @@ def agent_name(path):
 def blank_tally():
     return {"results": 0, "denials": 0, "denials_substring": 0, "bus_errors": 0, "director_calls": 0,
             "lag_over_1h": 0, "oversize": 0, "send_rejections": 0, "host_local_paths": 0,
-            "week_results": 0, "week_denials": 0}
+            "week_results": 0, "week_denials": 0, "unreadable": 0}
 
 
+SEND = b"mcp__director__send_message"
 HOSTPATH = re.compile(r"/Users/[A-Za-z0-9._-]+/")
 
 
-def scan_file(path, since_s, week_s, tally, secrets):
+def scan_file(path, since_s, week_s, tally, secrets, remote):
     uses = {}
     seen = set()
     shapes_here = set()
@@ -274,11 +277,14 @@ def scan_file(path, since_s, week_s, tally, secrets):
                     shapes_here.add(name)
             if b'"tool_' not in line:
                 continue
+            sendish = SEND in line and b'"tool_use"' in line
             try:
                 r = json.loads(line.decode("utf-8", "replace"))
             except ValueError:
+                tally["unreadable"] += sendish
                 continue
             if not isinstance(r, dict):
+                tally["unreadable"] += sendish
                 continue
             ts = str(r.get("timestamp", ""))[:19]
             if ts < week_s:
@@ -286,6 +292,7 @@ def scan_file(path, since_s, week_s, tally, secrets):
             msg = r.get("message")
             c = msg.get("content") if isinstance(msg, dict) else None
             if not isinstance(c, list):
+                tally["unreadable"] += sendish
                 continue
             period = ts >= since_s
             for b in c:
@@ -297,7 +304,12 @@ def scan_file(path, since_s, week_s, tally, secrets):
                     uses[b.get("id")] = name
                     if period and name.startswith("mcp__director__"):
                         tally["director_calls"] += 1
-                        if name.split("__")[-1].startswith("send") and HOSTPATH.search(json.dumps(b.get("input", ""))):
+                    if period and name == "mcp__director__send_message":
+                        inp = b.get("input")
+                        to = inp.get("to") if isinstance(inp, dict) else None
+                        if not isinstance(to, str):
+                            tally["unreadable"] += 1
+                        elif remote(to) and HOSTPATH.search(json.dumps({k: v for k, v in inp.items() if k != "to"})):
                             tally["host_local_paths"] += 1
                     continue
                 if kind != "tool_result":
@@ -394,6 +406,17 @@ def scan_transcripts(cfg, since, t_now):
     for p in files:
         if "/subagents/" not in p:
             names[p] = agent_name(p)
+    others = {h for h in cfg["hosts"] if h != cfg["host"]}
+    director_off = cfg["director_host"] != cfg["host"]
+
+    def remote(to):
+        """Another host, decided from the `to` address alone: a global:// cluster other than this host, or
+        global://director when director runs off this host."""
+        m = re.match(r"global://([A-Za-z0-9._-]+)(/|$)", to)
+        if not m:
+            return False
+        return director_off if m.group(1) == "director" else m.group(1) in others
+
     main, research, secrets = blank_tally(), blank_tally(), {}
     excluded = 0
     for p in files:
@@ -405,9 +428,9 @@ def scan_transcripts(cfg, since, t_now):
         is_research = nm in cfg["exclude_agent_names"]
         if is_research:
             excluded += 1
-            scan_file(p, since_s, week_s, research, {})
+            scan_file(p, since_s, week_s, research, {}, remote)
         else:
-            scan_file(p, since_s, week_s, main, secrets)
+            scan_file(p, since_s, week_s, main, secrets, remote)
     return main, research, secrets, excluded, len(files)
 
 
@@ -776,9 +799,10 @@ def line_weekly(tally, cfg, rows, t_now):
     mt = [os.stat(p).st_mtime for p in cfg["ledgers"] if os.path.isfile(p)]
     led = f"ledger {int((t_now - datetime.datetime.fromtimestamp(max(mt), UTC)).days)}d" if mt else "ledger none"
     gapn = tally["denials_substring"] - tally["denials"]
+    hl = f"GAP ({tally['unreadable']} unreadable send lines)" if tally["unreadable"] else str(tally["host_local_paths"])
     text = (f"drain lag over 1h {tally['lag_over_1h']}; oversize drains {tally['oversize']}; send rejections {tally['send_rejections']}; "
-            f"host-local paths {tally['host_local_paths']}; {led}; precision gap {gapn}")
-    return Line("weekly", fmt_line("weekly", text), n=tally["host_local_paths"], band="none")
+            f"host-local paths {hl}; {led}; precision gap {gapn}")
+    return Line("weekly", fmt_line("weekly", text), state="gap" if tally["unreadable"] else "count", n=tally["host_local_paths"], band="none")
 
 
 # ----------------------------------------------------------------------------------- main
