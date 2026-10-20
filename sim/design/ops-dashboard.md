@@ -124,7 +124,7 @@ the session row builder, and `internal/api` for the values):
   - `succeeded (exit N)` or `crashed (exit N)`, with N one to three digits,
     written as printed.
   Nothing else follows the base word.
-- HEALTH is one base word, `healthy`, `unhealthy` or `unknown`, then in
+- HEALTH is one base word, `alive`, `healthy`, `unhealthy` or `unknown` (`alive` is what a process-alive role reads once marvel#968 merges), then in
   this order, each at most once:
   - ` (stalled)`;
   - then at most one of ` (logged-out)` or ` (parked: <reason>)`. marvel

@@ -64,7 +64,7 @@ READER = "dws show --json; marvel get sessions"
 
 ID_RE = re.compile(r"[a-z0-9.-]{1,80}")
 STATE_RE = re.compile(r"(pending|running|limited|succeeded|failed|crashloop-backoff|crashed)(?: \((.*)\))?", re.S)
-HEALTH_RE = re.compile(r"(healthy|unhealthy|unknown)( \(stalled\))?(?: (\(logged-out\)|\(parked(?:: .*)?\)))?", re.S)
+HEALTH_RE = re.compile(r"(alive|healthy|unhealthy|unknown)( \(stalled\))?(?: (\(logged-out\)|\(parked(?:: .*)?\)))?", re.S)
 AGE_WORD = r"(?:[0-9]{1,4}[smhd]|[0-9]{1,3}h[0-9]{1,2}m)"
 ACTIVE_RE = re.compile(r"(?:[-\u2013\u2014]|" + AGE_WORD + r"|stale(?: " + AGE_WORD + r")?)\*?")
 PATH_RE = re.compile(r"(~/|/Users/|/home/|/private/|/tmp/|/var/|(?:^|\s)/[^\s/]*/)")

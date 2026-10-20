@@ -77,6 +77,8 @@ rows = [
     ["arcaven", "worker", "arcaven-worker-g5-7", "running", "healthy", "5 fortnights ago"],
     ["arcaven", "worker", "arcaven-worker-g5-8", "running", "healthy", "2h5m"],
     ["arcaven", "worker", "arcaven-worker-g5-9", "running", "healthy", "stale 5m*"],
+    ["arcaven", "worker", "arcaven-worker-g5-11", "running", "alive", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-12", "running", "alive (stalled) (parked: x y)", "4m"],
     ["arcaven", "worker", "arcaven-worker-g5-10", "running", "healthy", "stale soon"],
     ["arcaven", "worker", "arcaven-bartholomew-g5-9", "running", "healthy", "1m"],
 ]
@@ -241,6 +243,7 @@ assert rows["arcaven-worker-g5-6"]["last_active"] == "unreadable", "over 40 char
 assert "bad_name" not in rows
 assert rows["arcaven-worker-g5-7"]["last_active"] == "unreadable", "5 fortnights ago is not a word of the grammar"
 assert rows["arcaven-worker-g5-8"]["last_active"] == "2h5m" and rows["arcaven-worker-g5-9"]["last_active"] == "stale 5m*", (rows["arcaven-worker-g5-8"], rows["arcaven-worker-g5-9"])
+assert rows["arcaven-worker-g5-11"]["health"] == "alive" and rows["arcaven-worker-g5-12"]["health"] == "alive (stalled) (parked)", (rows.get("arcaven-worker-g5-11"), rows.get("arcaven-worker-g5-12"))
 assert rows["arcaven-worker-g5-10"]["last_active"] == "unreadable", "stale takes an age word or nothing"
 assert "arcaven-bartholomew-g5-9" not in rows, "a withheld name in a session name drops the row"
 ref = [x["data"]["refusal"] for x in d["writes"] if x["doc_id"] == "sessions" and x["collection"] == "dash_panels"][0]
