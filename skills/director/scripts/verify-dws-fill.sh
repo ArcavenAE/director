@@ -267,7 +267,7 @@ printf '{"c1": {"status": "open"}, "c2": {"status": "open"}}' >"$root/cards.json
 DWS_NOW=2026-10-17T10:00:00Z "$SNAP" write --cards "$root/cards.json" --reported 2 >/dev/null
 refresh_local >/dev/null 2>&1
 [[ "$(lines)" == "$n" ]] && ok "test 10: a snapshot older than 24 hours writes no Desk event" || bad "test 10: old snapshot"
-"$DWS" unlinked >"$root/unl" 2>&1
+DWS_NOW="${NOW:-2026-10-19T12:00:00Z}" "$DWS" unlinked >"$root/unl" 2>&1
 grep -qi 'desk.*UNREAD' "$root/unl" && ok "test 10: and unlinked still says UNREAD" || bad "test 10: old snapshot UNREAD" "$(cat "$root/unl")"
 # a fresh snapshot: one observe for the linked open card, once
 DWS_NOW=2026-10-19T10:00:00Z "$SNAP" write --cards "$root/cards.json" --reported 2 >/dev/null
@@ -280,7 +280,7 @@ assert ev["src"] == "desk:c1@2026-10-19T10:00:00Z" and ev["seen"]["state"] == "o
 P
 n="$(lines)"; refresh_local >/dev/null 2>&1
 [[ "$(lines)" == "$n" ]] && ok "the Desk reader writes nothing on a replay of the same snapshot" || bad "Desk replay"
-"$DWS" unlinked >"$root/unl" 2>&1
+DWS_NOW="${NOW:-2026-10-19T12:00:00Z}" "$DWS" unlinked >"$root/unl" 2>&1
 grep -q 'c2' "$root/unl" && ok "unlinked lists an open Desk card that no row links" || bad "unlinked: an open card with no row" "$(cat "$root/unl")"
 
 # --- unlinked: rows with no link, and rows blocked on the operator with no card -----------------
