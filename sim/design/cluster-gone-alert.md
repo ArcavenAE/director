@@ -157,24 +157,38 @@ The cheaper alternative, a director-only row with no marvel stamp, is option
 `presence_hub_move_window` (provisional default 2 minutes), and those are every
 cluster that was present apart from this director's own, the watch opens one
 `hub-moved` parent instead of per-cluster absences. The parent lists those
-clusters. A listed cluster is **still out** until it raises `back`. While the
-parent is open:
+clusters. A listed cluster is **still out** until the watch first sees it
+present on a sighted pass, by either of the two events that set a cluster
+present: `back`, or `present-after-gap` on the first pass after a watch gap
+(which is not a return, since no transition is inferred across a gap;
+section 2). It then leaves the still-out set for good. An `asleep` cluster is
+not present and stays still out. While the parent is open:
 
 - the `absent` and `lost` events of a still-out listed cluster are recorded in
   the event file, marked collapsed, and left out of the notices (the flap
   collapse's mechanism, `presencewatch.go:174-189`). Every other cluster's
-  events, including a listed cluster that came back and left again, are
-  raised as usual and never collapsed;
-- each listed cluster that returns raises `back` as usual, and that `back`
-  names the listed clusters still out, so the reader has a line naming them;
-- the parent closes when no listed cluster is still out; a listed cluster
-  that raised `back` and left again counts as returned for this parent, and
+  events, including a listed cluster that was seen present and left again,
+  are raised as usual and never collapsed;
+- the event that takes a listed cluster out of the still-out set, `back` or
+  `present-after-gap`, names the listed clusters still out, so the reader has
+  a line naming them. That one event is shown even during the cluster's flap
+  spell (it can happen at most once per listed cluster per parent, so it
+  cannot flood); any later event of that cluster follows the flap collapse as
+  usual;
+- the parent closes when no listed cluster is still out. Its closing notice
+  says every listed cluster is seen present, not that each returned, and
+  names any that were seen present only after a watch gap. A listed cluster
+  that was seen present and left again counts as seen for this parent, and
   its new absence is its own, never converted with the stragglers. When
   `presence_hub_move_window` has passed since the parent opened and any listed
   cluster is still out, the parent closes and converts: each still-out cluster
-  gets its own per-cluster `lost` at its own bound, raised at once if the bound
-  has already passed (so a real loss is not hidden behind a parent, whether
-  none, some or all of the other listed clusters returned).
+  that is absent gets its own per-cluster `lost` at its own bound, raised at
+  once if the bound has already passed (so a real loss is not hidden behind a
+  parent, whether none, some or all of the other listed clusters returned). A
+  still-out cluster that is `asleep` at conversion gets no `lost` while it
+  sleeps, since declared sleep is not loss (section 5); the conversion notice
+  names it as asleep, and it raises `lost` later only if it goes absent and
+  reaches its bound.
 
 **Amended 2026-10-20.** As first written, the parent converted only "after
 `presence_hub_move_window` passes with none back", and the collapse covered
@@ -291,6 +305,14 @@ All in director unless named. Each starts with a one-command premise check.
    - **back and gone again:** a listed cluster returns, then leaves while the
      parent is still open; its new `absent` is shown;
    - **cap clock:** host sleep inside the hour counts toward the cap's hour.
+   - **seen after a gap:** a listed cluster first seen present after a watch
+     gap leaves the still-out set with `present-after-gap` and no `back`; that
+     event names the clusters still out, and when it is the last, the closing
+     notice says seen present and names it;
+   - **asleep straggler:** a still-out cluster asleep at conversion gets no
+     `lost`, and the conversion notice names it as asleep;
+   - **back in a flap spell:** a listed cluster's `back` during its flap spell
+     is shown and names the clusters still out.
 4. **C4. The key** (section 7): `dedupe_key` on the hub-side notices, and the
    sink fold for director's own sink. Tests:
    - a copy with no open item pages;
