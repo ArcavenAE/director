@@ -24,6 +24,7 @@ W="${DASH_WRITER:-$here/dash-writer}"
 pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
+skp()  { echo "SKIP $1"; }
 [[ -f "$W" ]] || { echo "FAIL dash-writer exists at $W"; echo "0 passed, 1 failed"; exit 1; }
 
 root="$(mktemp -d "${DASH_TMP:-/tmp}/dsh.XXXXXX")" || { echo "FAIL scratch root: mktemp failed"; exit 1; }
@@ -34,7 +35,9 @@ mkdir -p "$root/home" "$root/bin" "$root/tables" "$root/state"
 PYDIR="$(dirname "$(command -v python3)")"
 state="$root/state"
 NOW="2026-10-20T18:00:00Z"
-run() { env -i HOME="$root/home" PATH="$root/bin:/usr/bin:/bin:$PYDIR" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" \
+command -v yq >/dev/null 2>&1 || { echo "FAIL yq (the mikefarah build) is required: dash-writer reads the marvel config with it"; exit 1; }
+YQDIR="$(dirname "$(command -v yq)")"
+run() { env -i HOME="$root/home" PATH="$root/bin:/usr/bin:/bin:$PYDIR:$YQDIR" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" \
         DWS_TEST_CLOCK=1 DWS_NOW="${NOW_OVERRIDE:-$NOW}" DASH_MARVEL="$root/bin/marvel" TABLES="$root/tables" python3 -I "$W" "$@"; }
 
 cat >"$root/bin/marvel" <<'SH'
@@ -71,6 +74,11 @@ rows = [
     ["arcaven", "worker", "arcaven-worker-g5-5", "running", "healthy (parked: x) (stalled)", "1m"],
     ["arcaven", "worker", "arcaven-worker-g5-6", "running", "healthy", ("1m " * 14).strip()],
     ["arcaven", "worker", "bad_name", "running", "healthy", "1m"],
+    ["arcaven", "worker", "arcaven-worker-g5-7", "running", "healthy", "5 fortnights ago"],
+    ["arcaven", "worker", "arcaven-worker-g5-8", "running", "healthy", "2h5m"],
+    ["arcaven", "worker", "arcaven-worker-g5-9", "running", "healthy", "stale 5m*"],
+    ["arcaven", "worker", "arcaven-worker-g5-10", "running", "healthy", "stale soon"],
+    ["arcaven", "worker", "arcaven-bartholomew-g5-9", "running", "healthy", "1m"],
 ]
 open(os.path.join(d, "alpha"), "w").write(table(H, rows))
 open(os.path.join(d, "good"), "w").write(table(H, rows[:1]))
@@ -116,6 +124,7 @@ TOK="ghp_""$(python3 -c 'print("Z"*30)')"
   openev t-long "building" "$(python3 -c 'print("x"*121)')" "" '["pr:o/r#8"]' 2026-10-19T12:00:00Z
   openev t-ok120 "building" "$(python3 -c 'print("y "*60)' | sed 's/ $//' | cut -c1-120)" "" '["pr:o/r#9"]' 2026-10-19T13:00:00Z
   openev bad_slug "building" "underscore id" "" '["pr:o/r#10"]' 2026-10-19T14:00:00Z
+  openev bartholomew-plan "building" "a plain title" "" '["pr:o/r#12"]' 2026-10-19T15:00:00Z
   openev waits "defined" "waits on the operator" "operator" '["ask:c1"]' 2026-10-17T06:00:00Z
   openev idea-a "idea" "an idea" "" '[]' 2026-10-05T06:00:00Z
   openev idea-b "idea" "another idea" "" '[]' 2026-10-09T06:00:00Z
@@ -130,7 +139,7 @@ printf 'Bartholomew\n' >"$state/dash-withhold.txt"; chmod 600 "$state/dash-withh
 setclusters() { # names...: a marvel config whose cluster entries hold values that must never be read
   mkdir -p "$root/home/.marvel"
   { echo "# comment"; echo "default_cluster: CANARY-TOP-5520"; echo "token: CANARY-TOKEN-8801"; echo "clusters:"
-    for n in "$@"; do echo "  $n:"; echo "    url: https://CANARY-URL-4410.example.test"; echo "    credentials:"; echo "      secret: CANARY-SECRET-3392"; echo "    nested:"; echo "      deep: CANARY-DEEP-7714"; done
+    for n in "$@"; do echo "  $n:   # CANARY-KEYLINE-6633"; echo "    url: https://CANARY-URL-4410.example.test"; echo "    credentials:"; echo "      secret: CANARY-SECRET-3392"; echo "    nested:"; echo "      deep: CANARY-DEEP-7714"; done
     echo "other:"; echo "  notacluster: CANARY-OTHER-6620"; } >"$root/home/.marvel/config.yaml"
 }
 setclusters alpha
@@ -230,8 +239,12 @@ assert "arcaven-worker-g5-4" not in rows, "running (exit 3) fails the grammar an
 assert rows["arcaven-worker-g5-5"]["health"] == "unreadable", "wrong order is unreadable"
 assert rows["arcaven-worker-g5-6"]["last_active"] == "unreadable", "over 40 characters is unreadable"
 assert "bad_name" not in rows
+assert rows["arcaven-worker-g5-7"]["last_active"] == "unreadable", "5 fortnights ago is not a word of the grammar"
+assert rows["arcaven-worker-g5-8"]["last_active"] == "2h5m" and rows["arcaven-worker-g5-9"]["last_active"] == "stale 5m*", (rows["arcaven-worker-g5-8"], rows["arcaven-worker-g5-9"])
+assert rows["arcaven-worker-g5-10"]["last_active"] == "unreadable", "stale takes an age word or nothing"
+assert "arcaven-bartholomew-g5-9" not in rows, "a withheld name in a session name drops the row"
 ref = [x["data"]["refusal"] for x in d["writes"] if x["doc_id"] == "sessions" and x["collection"] == "dash_panels"][0]
-assert ref.get("health:grammar") == 1 and ref.get("last_active:unreadable") == 1 and ref.get("stage:grammar") == 1 and ref.get("id:charset") == 1, ref
+assert ref.get("health:grammar") == 1 and ref.get("last_active:unreadable") == 3 and ref.get("stage:grammar") == 1 and ref.get("id:charset") == 1, ref
 ' && ok "state and health are matched to marvel's grammar: parked reasons dropped, exit codes as printed, failed tagged terminal, wrong order and long cells unreadable, a bad state drops the row" || bad "session grammar"
 grep -q 'secret\|budget exceeded' "$root/out.json" && bad "free text after a session cell never lands" || ok "free text inside a session cell never lands"
 
@@ -287,8 +300,15 @@ assert sorted({r["cluster"] for r in p["rows"]})==["alpha"] and p["counts"]["not
 printf 'clusters: {alpha: {url: CANARY-FLOW-1}}\n' >"$root/home/.marvel/config.yaml"; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
+assert sorted({r["cluster"] for r in p["rows"]})==["alpha"], p["rows"][:1]'
+[[ $? -eq 0 ]] && ! grep -q CANARY "$root/out.json" "$root/err" && ok "a flow-style clusters mapping is read by the real parser: its key is used and no value is echoed" || bad "flow-style clusters"
+printf 'clusters:\n  alpha:\n    url: x\n  beta: "first line\n  CANARYLEAK7: rest"\n' >"$root/home/.marvel/config.yaml"; runout run
+! grep -q CANARYLEAK7 "$root/out.json" "$root/err" && grep -q 'beta: not reached' "$root/out.json" && ok "a quoted value that spans lines is not read as a key: only the real keys appear" || bad "quoted continuation" "$(grep -o 'CANARYLEAK7[^"]*' "$root/out.json" | head -1)"
+printf 'clusters:\n  alpha: [unclosed CANARY-BAD-4471\n  beta: {\n' >"$root/home/.marvel/config.yaml"; runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
 assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p'
-[[ $? -eq 0 ]] && ! grep -q CANARY "$root/out.json" && ok "a flow-style clusters mapping is unreadable: refused, and no value is echoed" || bad "flow-style clusters"
+[[ $? -eq 0 ]] && ! grep -q CANARY "$root/out.json" "$root/err" && ok "a config that does not parse refuses the sessions panel and prints nothing from the file" || bad "invalid yaml"
 printf 'clusters: {}\n  alpha:\n    url: CANARY-FLOW-2\n' >"$root/home/.marvel/config.yaml"; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
@@ -387,6 +407,31 @@ runout run
 after="$(cat "$state/workstreams.jsonl" "$state/desk-snapshot.json" | shasum -a 256)"
 [[ "$before" == "$after" ]] && ok "a run changes neither the ledger nor the snapshot" || bad "read only"
 [[ ! -e "$state/dash-writer.json" ]] && ok "a run writes no state of its own (only ack does)" || bad "run writes state"
+# every daily doc past 14 days is deleted, not only the one exactly 14 back; a batch never passes 50 writes
+python3 - "$state/dash-writer.json" <<'PY'
+import json, sys
+json.dump({"last_run": "2026-10-20T10:00:00Z", "runs": 3, "days": ["2026-10-02", "2026-10-04", "2026-10-10", "2026-10-19"]}, open(sys.argv[1], "w"))
+PY
+runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); dele=sorted(x["doc_id"] for x in d["writes"] if x["action"]=="delete")
+want=sorted("%s-2026-10-%s" % (p, dd) for p in ("waiting","where-work-sits","in-flight","sessions") for dd in ("02","04","06"))
+assert dele==want, dele' && ok "daily docs older than 14 days are all deleted (days on record plus the one 14 back), the newer ones kept" || bad "stale daily delete"
+python3 - "$state/dash-writer.json" <<'PY'
+import json, sys, datetime
+d0 = datetime.date(2026, 9, 20)
+days = [(d0 + datetime.timedelta(days=i)).isoformat() for i in range(17)] + ["2026-10-19"]
+json.dump({"last_run": "2026-10-20T10:00:00Z", "runs": 3, "days": days}, open(sys.argv[1], "w"))
+PY
+runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); w=d["writes"]; dele=sorted(x["doc_id"] for x in w if x["action"]=="delete")
+assert "refused" not in d and len(w)==49, (len(w), d.get("refused"))
+assert len(dele)==40, dele
+assert not [x for x in dele if x.endswith("-2026-09-30") or x.endswith("-2026-10-06")], "the oldest ten days go first, the rest wait"' && ok "a long backlog is cut to the oldest ten days: 49 writes, never over 50, never refused" || bad "backlog cap"
+run ack >/dev/null 2>&1
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["days"]==["2026-09-30","2026-10-01","2026-10-02","2026-10-03","2026-10-04","2026-10-05","2026-10-06","2026-10-19","2026-10-20"], d["days"]' "$state/dash-writer.json" && ok "ack drops from its record only the days it was told to delete, and adds today" || bad "ack days" "$(cat "$state/dash-writer.json")"
+rm -f "$state/dash-writer.json"
 run ack >/dev/null 2>&1
 [[ "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["runs"],d["last_run"])' "$state/dash-writer.json")" == "1 2026-10-20T18:00:00Z" ]] && ok "ack records the run and its count" || bad "ack"
 NOW_OVERRIDE="2026-10-20T18:20:00Z" run run >"$root/out.json" 2>/dev/null
@@ -398,11 +443,33 @@ pyc 'import json,sys;d=json.load(open(sys.argv[1]));m=[x["data"] for x in d["wri
 rm -f "$state/dash-writer.json"
 
 # ---------------------------------------------------------------- the withhold file and the size cap
+# a withhold file that cannot be trusted refuses every panel that carries a title, an id or a session name
+refused3() { # $1 reason: the three filtered panels hold no rows and one withhold-file refusal; where-work-sits still draws
+  pyc 'import json,sys
+d=json.load(open(sys.argv[1])); P={x["doc_id"]:x["data"] for x in d["writes"] if x["collection"]=="dash_panels"}
+for n in ("waiting","in-flight","sessions"):
+    assert P[n]["rows"]==[] and P[n]["refusal"].get("withhold-file:'"$1"'")==1 and P[n]["counts"]=={}, (n, P[n]["rows"][:1], P[n]["refusal"], P[n]["counts"])
+assert P["where-work-sits"]["counts"]["building"]>0, P["where-work-sits"]["counts"]'
+}
 chmod 644 "$state/dash-withhold.txt"; runout run
-pyc 'import json,sys
-d=json.load(open(sys.argv[1])); rows=[r for x in d["writes"] if x["doc_id"]=="in-flight" and x["collection"]=="dash_panels" for r in x["data"]["rows"]]
-assert rows and all(r["title"]=="(title withheld: withhold-file)" for r in rows), rows[:2]' && ok "a withhold file wider than 0600 withholds every title" || bad "withhold mode"
+refused3 mode && ok "a withhold file wider than 0600 refuses waiting, in-flight and sessions: no rows, no counts, one withhold-file refusal" || bad "withhold mode"
+grep -qi bartholomew "$root/out.json" && bad "no withheld name in ids or agent names under a wide file" || ok "no withheld name appears anywhere (ids, titles, agent names) under a wide file"
+chmod 600 "$state/dash-withhold.txt"; runout run
+grep -qi bartholomew "$root/out.json" && bad "control withhold" || ok "control: with a 0600 file the withheld name is refused id by id and never printed"
+chmod 000 "$state/dash-withhold.txt"
+if [[ -r "$state/dash-withhold.txt" ]]; then skp "an unreadable withhold file: this user can read a mode 000 file"
+else runout run; refused3 unreadable && ok "a withhold file present but unreadable (mode 000) refuses the panels it filters, never reads as no list" || bad "withhold mode 000"; fi
 chmod 600 "$state/dash-withhold.txt"
+mv "$state/dash-withhold.txt" "$root/w.keep"; mkdir "$state/dash-withhold.txt"; runout run
+refused3 unreadable && ok "a directory in place of the withhold file refuses the panels it filters" || bad "withhold directory"
+rmdir "$state/dash-withhold.txt"
+printf '\xff\xfe Bartholomew\n' >"$state/dash-withhold.txt"; chmod 600 "$state/dash-withhold.txt"; runout run; rc=$?
+[[ $rc -eq 0 ]] && ! grep -q Traceback "$root/err" && refused3 unreadable && ok "a withhold file that is not UTF-8 refuses the panels it filters, exit 0, no traceback" || bad "withhold not utf-8" "rc=$rc $(head -2 "$root/err")"
+rm -f "$state/dash-withhold.txt"; runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="in-flight" and x["collection"]=="dash_panels"][0]
+assert p["rows"] and not [k for k in p["refusal"] if k.startswith("withhold-file")], p["refusal"]' && ok "control: an absent withhold file is no list, not a refusal" || bad "absent withhold file"
+mv "$root/w.keep" "$state/dash-withhold.txt"; chmod 600 "$state/dash-withhold.txt"
 python3 - "$state/workstreams.jsonl" <<'PY'
 import json, sys
 with open(sys.argv[1], "a") as f:

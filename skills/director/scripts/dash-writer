@@ -13,18 +13,22 @@ prints the batch, and the session applies it with one ArtifactData batch of at m
 Sources, read only: `dws show --json` (the ledger folded by dws's own fold, so the page cannot fold
 differently), `marvel --cluster C get sessions --columns team,role,name,state,health,last-active`
 once for each cluster named under `clusters:` in $HOME/.marvel/config.yaml (command: $DASH_MARVEL, default
-marvel), and $DIRECTOR_STATE/desk-snapshot.json. The config is read for the KEY NAMES under `clusters:`
-and nothing else; no value in it is read into a variable or emitted. A config that is missing, has no
-`clusters:` block, or writes it in flow style refuses the sessions panel, never an empty one. The Desk's
+marvel), and $DIRECTOR_STATE/desk-snapshot.json. The config is read by yq (the mikefarah build) with
+`.clusters | keys`: this script gets the KEY NAMES under `clusters:` and nothing else, no value is read into a
+variable or emitted, and yq's own messages are dropped. A config that is missing, does not parse, has no
+`clusters:` mapping, or a machine with no yq refuses the sessions panel, never an empty one. The Desk's
 area labels are the `areas` list the snapshot records; no snapshot, or no list, labels nothing.
 Two local files the operator keeps, one entry per line, because no canonical source holds them:
   dash-area-map.tsv    <workstream slug><TAB><area label>; a ledger row carries no area, so this maps
                        the slug to a Desk area; a row with no entry (or an unlisted area) is `unlabelled`
-  dash-withhold.txt    private names, whole words, any case; must be mode 0600 or no title is written
+  dash-withhold.txt    private names, whole words, any case. Absent: no filter. Present but unreadable, not
+                       UTF-8, not a plain file, or wider than 0600: the waiting, in-flight and sessions panels
+                       are refused (no rows, no counts), since a title, an id and a session name can all carry one
 
 It writes exactly the fields of section 3 and nothing else:
   dash_panels/<panel>  panel, as_of, writer, rows, counts, refusal
-  dash_daily/<panel>-<day>  panel, day, counts   (kept 14 days: the batch deletes the day that aged out)
+  dash_daily/<panel>-<day>  panel, day, counts   (kept 14 days: the batch deletes every recorded day 14 or more
+                       days back, and the day exactly 14 back; a batch is 9 writes plus 4 per day deleted, at most 50)
   dash_meta/writer     last_run, runs, reader, checks
 A row holds only id, stage, age_h, area, title (ledger rows) or id, stage, health, last_active,
 cluster (session rows). Never a token, key, socket path, settings value, message body, note text,
@@ -38,6 +42,7 @@ import datetime
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -60,7 +65,8 @@ READER = "dws show --json; marvel get sessions"
 ID_RE = re.compile(r"[a-z0-9.-]{1,80}")
 STATE_RE = re.compile(r"(pending|running|limited|succeeded|failed|crashloop-backoff|crashed)(?: \((.*)\))?", re.S)
 HEALTH_RE = re.compile(r"(healthy|unhealthy|unknown)( \(stalled\))?(?: (\(logged-out\)|\(parked(?:: .*)?\)))?", re.S)
-ACTIVE_RE = re.compile(r"(?:[-\u2013\u2014]|[0-9<][0-9a-z .<>()+-]*|stale[0-9a-z .<>()+-]*)\*?")
+AGE_WORD = r"(?:[0-9]{1,4}[smhd]|[0-9]{1,3}h[0-9]{1,2}m)"
+ACTIVE_RE = re.compile(r"(?:[-\u2013\u2014]|" + AGE_WORD + r"|stale(?: " + AGE_WORD + r")?)\*?")
 PATH_RE = re.compile(r"(~/|/Users/|/home/|/private/|/tmp/|/var/|(?:^|\s)/[^\s/]*/)")
 TOKEN_RE = re.compile(r"(ghp_|gho_|ghs_|github_pat_|xox|sk-|AKIA|[A-Za-z0-9+/]{24,})")
 TOKEN_PREFIX = ("ghp_", "gho_", "ghs_", "github_pat_", "xox", "sk-", "AKIA")
@@ -89,41 +95,56 @@ def read_list(name):
     try:
         with open(path, encoding="utf-8") as f:
             return [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")], path
+    except (OSError, UnicodeDecodeError):
+        return None, path
+
+
+def load_withhold():
+    """(names, why): why is None, "mode" or "unreadable". An absent file is no list ([], None). A file that is
+    present but unreadable, not a regular file, not UTF-8, or wider than 0600 is a refusal, never no list."""
+    path = os.path.join(STATE, "dash-withhold.txt")
+    try:
+        fd = os.open(path, os.O_RDONLY)
     except FileNotFoundError:
-        return None, path
+        return [], None
     except OSError:
-        return None, path
+        return None, "unreadable"
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None, "unreadable"
+        if st.st_mode & 0o077:
+            return None, "mode"
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            text = f.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None, "unreadable"
+    finally:
+        os.close(fd)
+    return [l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")], None
 
 
 def cluster_names():
     """The key names under `clusters:` in the marvel config, or None when they cannot be read.
 
-    Reads lines and keeps only each key; a value is never stored, so none can reach the output.
+    A real YAML parser (yq, the mikefarah build) reads the file and prints only the keys; this script never
+    sees a value, and nothing yq prints to stderr is kept. A missing yq, a file that does not parse, or
+    anything but a mapping of keys is None: the sessions panel is refused and nothing from the file is shown.
     """
-    try:
-        with open(os.path.join(HOME, ".marvel", "config.yaml"), encoding="utf-8") as f:
-            lines = f.read().splitlines()
-    except OSError:
+    path = os.path.join(HOME, ".marvel", "config.yaml")
+    if not os.path.isfile(path):
         return None
-    names, at, child = [], None, None
-    for line in lines:
-        if at is None:
-            if re.match(r"clusters:\s*(#.*)?$", line):  # an inline or flow value is not a block of keys
-                at = True
-            continue
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if indent == 0:
-            break
-        if child is None:
-            child = indent
-        if indent != child:
-            continue
-        k = re.match(r"([^\s:#'\"{\[\]][^:#]*?):(\s|$)", line.lstrip(" "))
-        if k and k.group(1) not in names:
-            names.append(k.group(1))
-    return names or None
+    try:
+        p = subprocess.run(["yq", "-o=json", "-I=0", ".clusters | keys", path], capture_output=True, timeout=20,
+                           stdin=subprocess.DEVNULL)
+        if p.returncode != 0:
+            return None
+        names = json.loads(p.stdout.decode("utf-8"))
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    if not isinstance(names, list) or not names or not all(isinstance(n, str) and n for n in names):
+        return None
+    return names
 
 
 def snapshot_areas():
@@ -298,10 +319,7 @@ def ledger_row(r, t_now, areas, area_map, withhold, refusal, with_title=True):
         row["area"] = "unlabelled"
     if with_title:
         title = r.get("title", "")
-        if withhold is None:
-            row["title"] = "(title withheld: withhold-file)"
-            refusal.add("title", "withhold-file")
-        elif not isinstance(title, str) or len(title) > TITLE_MAX:
+        if not isinstance(title, str) or len(title) > TITLE_MAX:
             row["title"] = "(title withheld: length)"
             refusal.add("title", "length")
         else:
@@ -356,14 +374,7 @@ def session_rows(clusters, withhold, refusal, t_text):
 
 
 def build(t_text, t_now):
-    withhold_raw, wpath = read_list("dash-withhold.txt")
-    withhold = withhold_raw or []
-    if withhold_raw is not None:
-        try:
-            if os.stat(wpath).st_mode & 0o077:
-                withhold = None
-        except OSError:
-            withhold = None
+    withhold, wwhy = load_withhold()
     areas = snapshot_areas()
     area_map = {}
     amap, _ = read_list("dash-area-map.tsv")
@@ -375,14 +386,10 @@ def build(t_text, t_now):
     data, why = ledger()
     panels = {p: {"rows": [], "counts": {}, "refusal": Refusals()} for p in PANELS}
     ledger_rows = data.get("rows", []) if data else []
-    wl = withhold if withhold is not None else []
+    wl = withhold or []
 
     def lrow(r, refusal):
-        # a withhold file that is too open withholds every title
-        row = ledger_row(r, t_now, areas, area_map, wl, refusal)
-        if row is not None and withhold is None:
-            row["title"] = "(title withheld: withhold-file)"
-        return row
+        return ledger_row(r, t_now, areas, area_map, wl, refusal)
 
     if data is None:
         for p in ("waiting", "where-work-sits", "in-flight"):
@@ -418,14 +425,21 @@ def build(t_text, t_now):
         panels["in-flight"]["rows"] = fl
         panels["in-flight"]["counts"] = {"in_flight": len(fl)}
     sref = panels["sessions"]["refusal"]
-    if not clusters:
+    if wwhy:
+        pass  # every panel the withhold list filters is refused below, so marvel is not asked
+    elif not clusters:
         sref.add("clusters", "unread")
         panels["sessions"]["counts"] = {"not_reached": []}
     else:
         rows, counts, nr = session_rows(clusters, wl, sref, t_text)
         panels["sessions"]["rows"] = rows
         panels["sessions"]["counts"] = dict(counts, not_reached=nr)
-    return panels, data, wl
+    if wwhy:
+        # the list cannot be trusted: no title, id or session name goes out from any panel it filters
+        for name in ("waiting", "in-flight", "sessions"):
+            panels[name] = {"rows": [], "counts": {}, "refusal": Refusals()}
+            panels[name]["refusal"].add("withhold-file", wwhy)
+    return panels, data
 
 
 def checks_of(data, t_now):
@@ -467,6 +481,16 @@ def read_state():
         return {}
 
 
+def expired_days(st, t_now):
+    """The days whose daily docs are to be deleted in this batch: every recorded day 14 or more days back, and
+    the day exactly 14 back (the only one a state with no record can name), oldest first. The batch is 9 writes
+    and 4 per expired day, so at most (MAX_WRITES - 9) // 4 days go in one batch and the rest wait."""
+    cutoff = (t_now - datetime.timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")
+    days = {d for d in st.get("days", []) if isinstance(d, str) and re.fullmatch(r"\d{4}-\d\d-\d\d", d) and d <= cutoff}
+    days.add(cutoff)
+    return sorted(days)[:(MAX_WRITES - 9) // 4]
+
+
 def size_of(doc):
     return len(json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
@@ -478,9 +502,9 @@ def cmd_run(force):
     if last and not force and 0 <= (t_now - last).total_seconds() < FLOOR_MIN * 60:
         print(json.dumps({"skipped": f"last run {st['last_run']}, under the {FLOOR_MIN}-minute floor", "writes": []}))
         return
-    panels, data, _ = build(t_text, t_now)
+    panels, data = build(t_text, t_now)
     today = t_now.strftime("%Y-%m-%d")
-    old = (t_now - datetime.timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")
+    expired = expired_days(st, t_now)
     writes = []
     for name in PANELS:
         p = panels[name]
@@ -492,19 +516,21 @@ def cmd_run(force):
     for name in PANELS:
         writes.append({"action": "set", "collection": "dash_daily", "doc_id": f"{name}-{today}",
                        "data": {"panel": name, "day": today, "counts": panels[name]["counts"]}})
-        writes.append({"action": "delete", "collection": "dash_daily", "doc_id": f"{name}-{old}"})
+    for day in expired:
+        for name in PANELS:
+            writes.append({"action": "delete", "collection": "dash_daily", "doc_id": f"{name}-{day}"})
     meta = {"last_run": t_text, "runs": int(st.get("runs", 0)) + 1, "reader": READER, "checks": checks_of(data, t_now)}
     writes.append({"action": "set", "collection": "dash_meta", "doc_id": "writer", "data": meta})
-    if len(writes) > MAX_WRITES:
-        print(json.dumps({"refused": f"{len(writes)} writes is over the {MAX_WRITES} cap", "writes": []}))
-        return
     print(json.dumps({"writes": writes}, ensure_ascii=False, indent=1))
 
 
 def cmd_ack():
     t_text, _ = now()
     st = read_state()
-    st = {"last_run": t_text, "runs": int(st.get("runs", 0)) + 1}
+    _, t_now = now()
+    gone = set(expired_days(st, t_now))
+    days = sorted({d for d in st.get("days", []) if isinstance(d, str) and re.fullmatch(r"\d{4}-\d\d-\d\d", d)} - gone | {t_now.strftime("%Y-%m-%d")})
+    st = {"last_run": t_text, "runs": int(st.get("runs", 0)) + 1, "days": days}
     os.makedirs(STATE, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".dash-writer.")
     with os.fdopen(fd, "w") as f:
