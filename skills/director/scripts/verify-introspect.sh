@@ -575,6 +575,34 @@ fi
 chmod 600 "$root/proj/-work-aae-orc/s1.jsonl"; cp "$root/s1.keep" "$root/proj/-work-aae-orc/s1.jsonl"; rm -f "$root/s1.keep"
 rm -f "$state/introspector/records.jsonl"
 
+# an unreadable subagent file or an unlistable subagents directory under a readable parent is a gap, never a silent drop
+mk "$root/proj/-work-aae-orc/pd1.jsonl" --agent director --ok 2 --den 1
+mkdir -p "$root/proj/-work-aae-orc/pd1/subagents"
+mk "$root/proj/-work-aae-orc/pd1/subagents/a.jsonl" --den 2
+chmod 000 "$root/proj/-work-aae-orc/pd1/subagents/a.jsonl"
+if [[ -r "$root/proj/-work-aae-orc/pd1/subagents/a.jsonl" ]]; then skp "an unreadable subagent file: this user can read a mode 000 file"
+else
+  run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
+  python3 - "$root/j1" <<'PY' && ok "an unreadable subagent file under a readable parent is a gap in the main tally, not a silent drop" || bad "unreadable subagent file"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["counts"]["transcripts_unreadable"] == 1 and "GAP transcripts 1 unreadable" in d["header"], (d["counts"], d["header"])
+assert [l for l in d["lines"] if "GAP transcripts: 1 unreadable" in l or ("GAP denials" in l and "transcripts" in l)], d["lines"]
+PY
+fi
+chmod 600 "$root/proj/-work-aae-orc/pd1/subagents/a.jsonl"
+chmod 000 "$root/proj/-work-aae-orc/pd1/subagents"
+if [[ -r "$root/proj/-work-aae-orc/pd1/subagents" && -x "$root/proj/-work-aae-orc/pd1/subagents" ]]; then skp "an unlistable subagents directory: this user can list a mode 000 directory"
+else
+  run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
+  python3 - "$root/j1" <<'PY' && ok "a subagents directory that cannot be listed is a gap in the main tally, not a silent drop" || bad "unlistable subagents directory"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["counts"]["transcripts_unreadable"] == 1 and "GAP transcripts 1 unreadable" in d["header"], (d["counts"], d["header"])
+PY
+fi
+chmod 700 "$root/proj/-work-aae-orc/pd1/subagents"; rm -rf "$root/proj/-work-aae-orc/pd1" "$root/proj/-work-aae-orc/pd1.jsonl"
+
 # ================================================================ properties of the script itself
 [[ "$(grep -c -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")" == 0 ]] && ok "P1 the script names no Desk, bus send, inject or gh call (the name send_message is read from transcripts, never run)" || bad "P1" "$(grep -n -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")"
 python3 - "$S" <<'PY' && ok "the script is Python 3 standard library only" || bad "stdlib only"

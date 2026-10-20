@@ -273,7 +273,7 @@ def scan_file(path, since_s, week_s, tally, secrets, remote):
     try:
         f = open(path, "rb")
     except OSError:
-        return
+        return False
     with f:
         for line in f:
             for name, rx in SECRET_SHAPES:
@@ -350,6 +350,7 @@ def scan_file(path, since_s, week_s, tally, secrets, remote):
                         tally["send_rejections"] += 1
     for s in shapes_here:
         secrets[s] = secrets.get(s, 0) + 1
+    return True
 
 
 ENVELOPE = ("sent_at", "message_id", "performative", "sender", "recipient")
@@ -422,17 +423,25 @@ def scan_transcripts(cfg, since, t_now):
     since_s, week_s = isos(since), isos(week_lo)
     cutoff = (week_lo - datetime.timedelta(days=1)).timestamp()
     files = []
+    main, research, secrets = blank_tally(), blank_tally(), {}
+
+    def cannot_list(err):  # a directory that cannot be listed hides transcripts: a gap, never a silent drop
+        main["files_unreadable"] += 1
+
     for d in sorted(glob.glob(os.path.join(pdir, "*"))):
         if not os.path.isdir(d) or not any(inc in os.path.basename(d) for inc in cfg["project_include"]):
             continue
-        for p in glob.glob(os.path.join(d, "**", "*.jsonl"), recursive=True):
-            if forbidden(p):
-                continue
-            try:
-                if os.stat(p).st_mtime >= cutoff:
-                    files.append(p)
-            except OSError:
-                pass
+        for root, dirs, fnames in os.walk(d, onerror=cannot_list):
+            dirs[:] = sorted(x for x in dirs if not x.startswith(".") and not forbidden(os.path.join(root, x)))
+            for fn in sorted(fnames):
+                p = os.path.join(root, fn)
+                if fn.startswith(".") or not fn.endswith(".jsonl") or forbidden(p):
+                    continue
+                try:
+                    if os.stat(p).st_mtime >= cutoff:
+                        files.append(p)
+                except OSError:
+                    main["files_unreadable"] += 1
     names = {}
     for p in files:
         if "/subagents/" not in p:
@@ -448,7 +457,6 @@ def scan_transcripts(cfg, since, t_now):
             return False
         return director_off if m.group(1) == "director" else m.group(1) in others
 
-    main, research, secrets = blank_tally(), blank_tally(), {}
     excluded = 0
     for p in files:
         if "/subagents/" in p:
@@ -469,7 +477,8 @@ def scan_transcripts(cfg, since, t_now):
                     research["denials"] += n
             # any other dropped identity (the introspector's own) is never opened for anything
         else:
-            scan_file(p, since_s, week_s, main, secrets, remote)
+            if not scan_file(p, since_s, week_s, main, secrets, remote):
+                main["files_unreadable"] += 1
     return main, research, secrets, excluded, len(files)
 
 
