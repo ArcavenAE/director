@@ -1,0 +1,847 @@
+#!/usr/bin/env python3
+"""introspect - the director introspector: a script director runs, never a seat.
+
+Spec: the introspector party outcome (id 5ptdd, 2026-10-20, five panel seats over five rounds).
+It makes a recurring fault in the fleet's own machinery visible on the day it happens. Every line
+is a fact with one id and the owner of the fix by role. Nothing in it needs an answer.
+
+  introspect [--since today|last-harvest|<ISO>] [--window day|week] [--json] [--no-append]
+             [--config PATH] [--help]
+
+Run points, both steps director already takes (never a timer): the sweep after step 3
+(`--since today`) and harvest step 6 (`--since last-harvest --window week`). A count is cited under
+harvest step 6 and nowhere else; it never becomes a requirement, a rule, a hook or a card (M1).
+
+Prints a header, then at most 7 lines, one band per line (M2):
+  denials        classifier denials; shows at 2000+ results and twice the trailing weekday mean
+  bus-errors     director tool results flagged as errors that carry a bus phrase
+  not-installed  components merged but not installed (director-mcp, marvel, director checkout, this script)
+  disk           free space on the hub volume
+  stale-page     the stalled-streams page is older than a commit; days since the ledger was written
+  asks           REQUESTs with no ack past 15 minutes (director-mcp asks --json)
+  weekly         only with --window week
+A source that cannot see prints `GAP <source> last <time> (<reason>)`, never a zero.
+
+Every count is anchored: a tool result that opens with the marker string, or a director tool result
+flagged is_error. A substring match is only ever used to print the weekly precision gap.
+Transcripts whose most common agentName is research-supervisor, introspector or retrospector are
+skipped by identity (subagent files take their parent session's name), and their denials print as
+`(+N research)`.
+
+It reads, and quotes nothing. The only thing it writes is $DIRECTOR_STATE/introspector/records.jsonl
+(fixed fields; directory 700, file 600; refuses to append if either is wider; never inside a git
+work tree). The file is history, never a source of truth: the one thing a run reads from it is the
+trailing weekday mean the denial band needs.
+
+Exit 0 on every reading. Exit 2 only for a usage error, or when its write path is inside a work tree.
+
+Values the party left open are PROVISIONAL, not ruled: the denial band (band.denials, default 2000
+results, and band.denials_ratio, default 2), the disk band (band.disk_free_pct, default 10) and the
+sell-by date band.sell_by (default 2026-11-17). The seat that owns the config re-derives them then.
+
+Config: key=value lines in --config (default $DIRECTOR_STATE/introspector/introspect.conf), kept local
+and never checked in. Lists are comma separated. Keys: projects_dir, project_include (substrings of a
+project directory name; the ArcavenAE scope only), exclude_agent_names, checkout.director,
+checkout.marvel, install.director-mcp, director_mcp, marvel_cmd, stalled_page_dir, ledgers,
+hub_volume, state_dir, record_dir, host, hosts, roles, last_harvest, band.denials, band.denials_ratio,
+band.disk_free_pct, band.sell_by.
+
+INTROSPECT_NOW (an ISO time) pins the clock for tests.
+"""
+import datetime
+import errno
+import glob
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+
+if not sys.flags.isolated:
+    os.execv(sys.executable, [sys.executable, "-I"] + sys.argv)
+
+DEN = "Permission for this action was denied by the Claude Code auto mode classifier"
+BUS_PHRASES = ("consumer not found", "10014", "no responders")
+SECRET_SHAPES = (
+    ("aws-key", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("gh-token", re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}")),
+    ("nkey-seed", re.compile(r"\bS[ACNOPUX][A-Z2-7]{54,}\b")),
+    ("private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+)
+LINE_IDS = ("denials", "bus-errors", "not-installed", "disk", "stale-page", "asks", "weekly")
+REMEDIES = ("operator-grant", "control-owner", "install", "page-refresh", "none")
+OWNER = {"denials": "operator", "bus-errors": "builder", "not-installed": "builder", "disk": "operator",
+         "stale-page": "director", "asks": "director", "weekly": "director"}
+REMEDY = {"denials": "operator-grant", "bus-errors": "control-owner", "not-installed": "install", "disk": "none",
+          "stale-page": "page-refresh", "asks": "none", "weekly": "none"}
+OWNER_TEXT = {"denials": "operator grant", "bus-errors": "builder", "not-installed": "builder", "disk": "operator",
+              "stale-page": "director", "asks": "director", "weekly": "director"}
+EXCLUDE_PATHS = [":(exclude)*_test.go", ":(exclude)*.md", ":(exclude)docs", ":(exclude)sim"]
+FETCH_MAX_AGE = datetime.timedelta(hours=24)
+PRUNE_DAYS = 400
+ASK_AFTER = datetime.timedelta(minutes=15)
+UTC = datetime.timezone.utc
+TFMT = "%Y-%m-%dT%H:%MZ"
+
+
+def usage_error(msg):
+    print(f"introspect: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def now():
+    raw = os.environ.get("INTROSPECT_NOW")
+    if raw:
+        return parse_iso(raw)
+    return datetime.datetime.now(UTC)
+
+
+def parse_iso(s):
+    s = s.strip()
+    for f in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%MZ", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(s, f).replace(tzinfo=UTC)
+        except ValueError:
+            pass
+    raise ValueError(s)
+
+
+def stamp(t):
+    return t.strftime(TFMT)
+
+
+def isos(t):
+    return t.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+# ----------------------------------------------------------------------------------- config
+def load_config(path, state_dir_default):
+    cfg = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                cfg[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    except OSError as err:
+        print(f"introspect: cannot read config {path}: {err.strerror}", file=sys.stderr)
+    home = os.path.expanduser("~")
+    state = os.path.expanduser(cfg.get("state_dir", state_dir_default))
+    c = {
+        "state_dir": state,
+        "projects_dir": os.path.expanduser(cfg.get("projects_dir", f"{home}/.claude/projects")),
+        "project_include": [x for x in cfg.get("project_include", "aae-orc").split(",") if x],
+        "exclude_agent_names": [x for x in cfg.get("exclude_agent_names", "research-supervisor,introspector,retrospector").split(",") if x],
+        "checkout.director": os.path.expanduser(cfg["checkout.director"]) if "checkout.director" in cfg else None,
+        "checkout.marvel": os.path.expanduser(cfg["checkout.marvel"]) if "checkout.marvel" in cfg else None,
+        "install.director-mcp": os.path.expanduser(cfg["install.director-mcp"]) if "install.director-mcp" in cfg else None,
+        "director_mcp": os.path.expanduser(cfg.get("director_mcp", cfg.get("install.director-mcp", ""))) or None,
+        "marvel_cmd": cfg.get("marvel_cmd", "marvel"),
+        "stalled_page_dir": os.path.expanduser(cfg["stalled_page_dir"]) if "stalled_page_dir" in cfg else None,
+        "ledgers": [os.path.expanduser(x) for x in cfg.get("ledgers", f"{state}/workstreams.jsonl").split(",") if x],
+        "hub_volume": os.path.expanduser(cfg.get("hub_volume", state)),
+        "record_dir": os.path.expanduser(cfg.get("record_dir", f"{state}/introspector")),
+        "host": cfg.get("host") or socket.gethostname().split(".")[0],
+        "last_harvest": cfg.get("last_harvest"),
+        "band.denials": int(cfg.get("band.denials", "2000")),
+        "band.denials_ratio": float(cfg.get("band.denials_ratio", "2")),
+        "band.disk_free_pct": float(cfg.get("band.disk_free_pct", "10")),
+        "band.sell_by": cfg.get("band.sell_by", "2026-11-17"),
+    }
+    c["hosts"] = [x for x in cfg.get("hosts", c["host"]).split(",") if x]
+    c["roles"] = [x for x in cfg.get("roles", "operator,builder,director").split(",") if x]
+    return c
+
+
+# ----------------------------------------------------------------------------------- git
+def genv():
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", ""),
+           "LANG": os.environ.get("LANG", "C"), "GIT_TERMINAL_PROMPT": "0", "GIT_NO_LAZY_FETCH": "1",
+           "GIT_OPTIONAL_LOCKS": "0"}
+    return env
+
+
+def sh(argv, cwd=None, timeout=20, env=None):
+    """(rc, stdout) with no shell and a timeout; rc None when it could not run."""
+    try:
+        p = subprocess.run(argv, cwd=cwd, env=env or genv(), capture_output=True, timeout=timeout,
+                           stdin=subprocess.DEVNULL, start_new_session=True)
+        return p.returncode, p.stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.TimeoutExpired):
+        return None, ""
+
+
+def git(path, *args):
+    return sh(["git", "-C", path] + list(args))
+
+
+def head_of(path):
+    rc, out = git(path, "rev-parse", "HEAD")
+    return out.strip() if rc == 0 and re.fullmatch(r"[0-9a-f]{7,40}", out.strip()) else None
+
+
+def fetched_at(path):
+    rc, out = git(path, "rev-parse", "--git-path", "FETCH_HEAD")
+    if rc != 0:
+        return None
+    p = out.strip()
+    if not os.path.isabs(p):
+        p = os.path.join(path, p)
+    try:
+        return datetime.datetime.fromtimestamp(os.stat(p).st_mtime, UTC)
+    except OSError:
+        return None
+
+
+def behind(path, rev, scope):
+    """Commits on origin/main after rev, on the given paths, tests and docs left out."""
+    rc, out = git(path, "rev-list", "--count", f"{rev}..origin/main", "--", scope, *EXCLUDE_PATHS)
+    if rc != 0:
+        return None
+    try:
+        return int(out.strip())
+    except ValueError:
+        return None
+
+
+# ----------------------------------------------------------------------------------- transcripts
+def text_of(x):
+    if isinstance(x, list):
+        x = " ".join(y.get("text", "") for y in x if isinstance(y, dict))
+    return x if isinstance(x, str) else str(x)
+
+
+def agent_name(path):
+    """Most common agentName in a transcript, or None."""
+    counts = {}
+    try:
+        with open(path, "rb") as f:
+            for line in f:
+                if b"agentName" not in line:
+                    continue
+                try:
+                    r = json.loads(line.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                n = r.get("agentName") if isinstance(r, dict) else None
+                if isinstance(n, str):
+                    counts[n] = counts.get(n, 0) + 1
+    except OSError:
+        return None
+    return max(counts, key=counts.get) if counts else None
+
+
+def blank_tally():
+    return {"results": 0, "denials": 0, "denials_substring": 0, "bus_errors": 0, "director_calls": 0,
+            "lag_over_1h": 0, "oversize": 0, "send_rejections": 0, "host_local_paths": 0,
+            "week_results": 0, "week_denials": 0}
+
+
+HOSTPATH = re.compile(r"/Users/[A-Za-z0-9._-]+/")
+
+
+def scan_file(path, since_s, week_s, tally, secrets):
+    uses = {}
+    seen = set()
+    shapes_here = set()
+    try:
+        f = open(path, "rb")
+    except OSError:
+        return
+    with f:
+        for line in f:
+            for name, rx in SECRET_SHAPES:
+                if name not in shapes_here and rx.search(line.decode("utf-8", "replace")):
+                    shapes_here.add(name)
+            if b'"tool_' not in line:
+                continue
+            try:
+                r = json.loads(line.decode("utf-8", "replace"))
+            except ValueError:
+                continue
+            if not isinstance(r, dict):
+                continue
+            ts = str(r.get("timestamp", ""))[:19]
+            if ts < week_s:
+                continue
+            msg = r.get("message")
+            c = msg.get("content") if isinstance(msg, dict) else None
+            if not isinstance(c, list):
+                continue
+            period = ts >= since_s
+            for b in c:
+                if not isinstance(b, dict):
+                    continue
+                kind = b.get("type")
+                if kind == "tool_use":
+                    name = str(b.get("name", ""))
+                    uses[b.get("id")] = name
+                    if period and name.startswith("mcp__director__"):
+                        tally["director_calls"] += 1
+                        if name.split("__")[-1].startswith("send") and HOSTPATH.search(json.dumps(b.get("input", ""))):
+                            tally["host_local_paths"] += 1
+                    continue
+                if kind != "tool_result":
+                    continue
+                tid = b.get("tool_use_id")
+                if tid in seen:
+                    continue
+                seen.add(tid)
+                x = text_of(b.get("content"))
+                xs = x.lstrip()
+                name = uses.get(tid, "")
+                anchored = xs.startswith(DEN)
+                tally["week_results"] += 1
+                if anchored:
+                    tally["week_denials"] += 1
+                if not period:
+                    continue
+                tally["results"] += 1
+                if DEN in x:
+                    tally["denials_substring"] += 1
+                if anchored:
+                    tally["denials"] += 1
+                    continue
+                if name.startswith("mcp__director__"):
+                    if b.get("is_error") and any(k in x[:300] for k in BUS_PHRASES):
+                        tally["bus_errors"] += 1
+                    short = name.split("__")[-1]
+                    if short == "wait_for_message":
+                        if xs.startswith("Error: result"):
+                            tally["oversize"] += 1
+                        else:
+                            tally["lag_over_1h"] += lag_over_hour(xs, str(r.get("timestamp", "")))
+                    if short.startswith("send") and b.get("is_error"):
+                        tally["send_rejections"] += 1
+    for s in shapes_here:
+        secrets[s] = secrets.get(s, 0) + 1
+
+
+def lag_over_hour(text, ts):
+    try:
+        j = json.loads(text)
+    except ValueError:
+        return 0
+    ms = [w.get("message") for w in j.get("messages", [])] if isinstance(j, dict) and "messages" in j else [j.get("message") if isinstance(j, dict) else None]
+    n = 0
+    try:
+        t = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    for m in ms:
+        if isinstance(m, dict) and isinstance(m.get("sent_at"), str):
+            try:
+                s = datetime.datetime.fromisoformat(m["sent_at"].replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if (t - s).total_seconds() > 3600:
+                n += 1
+    return n
+
+
+def scan_transcripts(cfg, since, t_now):
+    """(main tally, research tally, secrets, excluded count, scanned count) or None when no projects dir."""
+    pdir = cfg["projects_dir"]
+    if not os.path.isdir(pdir):
+        return None
+    week_lo = min(since, t_now - datetime.timedelta(days=7))
+    since_s, week_s = isos(since), isos(week_lo)
+    cutoff = (week_lo - datetime.timedelta(days=1)).timestamp()
+    files = []
+    for d in sorted(glob.glob(os.path.join(pdir, "*"))):
+        if not os.path.isdir(d) or not any(inc in os.path.basename(d) for inc in cfg["project_include"]):
+            continue
+        for p in glob.glob(os.path.join(d, "**", "*.jsonl"), recursive=True):
+            try:
+                if os.stat(p).st_mtime >= cutoff:
+                    files.append(p)
+            except OSError:
+                pass
+    names = {}
+    for p in files:
+        if "/subagents/" not in p:
+            names[p] = agent_name(p)
+    main, research, secrets = blank_tally(), blank_tally(), {}
+    excluded = 0
+    for p in files:
+        if "/subagents/" in p:
+            parent = os.path.dirname(os.path.dirname(p)) + ".jsonl"
+            nm = names.get(parent) if parent in names else agent_name(p)
+        else:
+            nm = names.get(p)
+        is_research = nm in cfg["exclude_agent_names"]
+        if is_research:
+            excluded += 1
+            scan_file(p, since_s, week_s, research, {})
+        else:
+            scan_file(p, since_s, week_s, main, secrets)
+    return main, research, secrets, excluded, len(files)
+
+
+# ----------------------------------------------------------------------------------- records
+def read_records(path):
+    rows = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    pass
+    except OSError:
+        pass
+    return rows
+
+
+def last_good(rows, line):
+    for r in reversed(rows):
+        if r.get("line") == line and r.get("state") == "count":
+            return r.get("to")
+    return None
+
+
+def weekday_mean(rows, t_now):
+    """Trailing weekday mean of denials per 1000 results, from the last 20 count records before today."""
+    rates = []
+    for r in rows:
+        if r.get("line") != "denials" or r.get("state") != "count" or not r.get("d"):
+            continue
+        try:
+            day = datetime.datetime.strptime(r["from"][:10], "%Y-%m-%d").replace(tzinfo=UTC)
+        except (KeyError, ValueError):
+            continue
+        if day.weekday() < 5 and day.date() < t_now.date():
+            rates.append((day, r["n"] / r["d"] * 1000.0))
+    rates.sort()
+    rates = [x for _, x in rates][-20:]
+    return sum(rates) / len(rates) if rates else None
+
+
+ID_RES = (re.compile(r"[0-9A-Z]{26}"), re.compile(r"[0-9a-z]{10}"), re.compile(r"ArcavenAE/[A-Za-z0-9_.-]+#\d+"),
+          re.compile(r"aae-orc-[a-z0-9]{4,5}"), re.compile(r"[0-9a-f]{7,40}"))
+ALLOWED = {"v", "rev", "host", "from", "to", "line", "state", "n", "d", "band", "cat", "tool", "remedy", "owner", "ids", "sess"}
+RECORD_LINES = set(LINE_IDS) | {"SECRET-SHAPE", "REJECT"}
+
+
+def validate(rec, cfg):
+    """Reason a record is rejected, or None. A failing record is dropped whole."""
+    if not set(rec) <= ALLOWED:
+        return "unknown-field"
+    for k in ("v", "rev", "host", "from", "to", "line", "state"):
+        if k not in rec:
+            return "missing-field"
+    if rec["v"] != 1 or not re.fullmatch(r"[0-9a-f]{7,40}", str(rec["rev"])) or rec["host"] not in cfg["hosts"] \
+            or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\dZ", str(rec["from"])) \
+            or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\dZ", str(rec["to"])) \
+            or rec["line"] not in RECORD_LINES or rec["state"] not in ("count", "gap") \
+            or rec.get("band", "none") not in ("none", "over") or rec.get("remedy", "none") not in REMEDIES \
+            or ("owner" in rec and rec["owner"] not in cfg["roles"]):
+        return "bad-format"
+    if rec["state"] == "gap" and ("n" in rec or "d" in rec):
+        return "bad-format"
+    for k in ("n", "d"):
+        if k in rec and (not isinstance(rec[k], int) or not 0 <= rec[k] <= 10**9):
+            return "bad-format"
+    ids = rec.get("ids", [])
+    if len(ids) > 3:
+        return "too-long"
+    for v in [x for x in rec.values() if isinstance(x, str)] + list(ids):
+        if not v.isascii():
+            return "non-ascii"
+    for i in ids:
+        if re.fullmatch(r"ArcavenAE/[A-Za-z0-9_.-]+#\d+", i):
+            continue
+        if "/" in i:
+            return "client-scope" if re.search(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d+", i) else "path"
+        if not any(rx.fullmatch(i) for rx in ID_RES):
+            return "bad-format"
+    for k, v in rec.items():
+        if k != "ids" and isinstance(v, str) and ("/" in v or "~" in v):
+            return "path"
+        if any(rx.search(str(v)) for _, rx in SECRET_SHAPES):
+            return "shape"
+    return None
+
+
+def inside_work_tree(path):
+    p = path
+    while p and not os.path.isdir(p):
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+    rc, out = sh(["git", "-C", p or ".", "rev-parse", "--is-inside-work-tree"])
+    return rc == 0 and out.strip() == "true"
+
+
+def append_records(cfg, recs, t_now):
+    """Append typed records. Returns (gap reason or None, rejected counts)."""
+    d = cfg["record_dir"]
+    f = os.path.join(d, "records.jsonl")
+    rejected = {}
+    good = []
+    for r in recs:
+        why = validate(r, cfg)
+        if why:
+            rejected[why] = rejected.get(why, 0) + 1
+        else:
+            good.append(r)
+    try:
+        if not os.path.isdir(d):
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            os.chmod(d, 0o700)
+        if os.stat(d).st_mode & 0o077:
+            return "mode", rejected
+        if os.path.exists(f) and os.stat(f).st_mode & 0o077:
+            return "mode", rejected
+        rows = read_records(f)
+        cut = isos(t_now - datetime.timedelta(days=PRUNE_DAYS))[:16]
+        rows = [r for r in rows if str(r.get("to", ""))[:16] >= cut]
+        rows += good
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".records.")
+        with os.fdopen(fd, "w") as out:
+            os.fchmod(out.fileno(), 0o600)
+            for r in rows:
+                out.write(json.dumps(r, separators=(",", ":")) + "\n")
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp, f)
+    except OSError as err:
+        return errno.errorcode.get(err.errno, "EIO"), rejected
+    return None, rejected
+
+
+# ----------------------------------------------------------------------------------- the lines
+class Line:
+    def __init__(self, id_, text, state="count", n=None, d=None, band="none", ids=None, gap_source=None):
+        self.id, self.text, self.state, self.n, self.d, self.band = id_, text, state, n, d, band
+        self.ids = ids or []
+        self.shown = True
+
+
+def fmt_line(id_, rest, owner):
+    return f"{id_:<14}{rest} | owner: {owner}"
+
+
+def gap(source, rows, reason, line_id=None):
+    last = last_good(rows, line_id or source)
+    return Line(line_id or source, f"GAP {source} last {last or 'never'} ({reason})", state="gap")
+
+
+def line_denials(tally, research, wk, rows, cfg, t_now, provisional):
+    n, d = tally["denials"], tally["results"]
+    if d < cfg["band.denials"]:
+        return gap("denials", rows, f"{d} results, under {cfg['band.denials']}")
+    if wk["week_results"] >= 20000 and wk["week_denials"] == 0:
+        return gap("denials", rows, "no denial in 20000 or more results in 7 days; the source may not be seeing them")
+    mean = weekday_mean(rows, t_now)
+    if mean is None:
+        return gap("denials", rows, "no weekday baseline yet")
+    rate = n / d * 1000.0
+    over = rate >= mean * cfg["band.denials_ratio"]
+    ln = Line("denials", "", n=n, d=d, band="over" if over else "none")
+    if over:
+        rs = f" (+{research['denials']} research)" if research["denials"] else ""
+        ln.text = fmt_line("denials", f"{n}{rs} of {d} results: {rate:.2f}/1000, weekday {mean:.2f}" + (" (provisional)" if provisional else ""), OWNER_TEXT["denials"])
+    else:
+        ln.shown = False
+    return ln
+
+
+def line_bus(tally, rows):
+    if tally["director_calls"] == 0:
+        return gap("bus-errors", rows, "no director tool call in the window")
+    n = tally["bus_errors"]
+    ln = Line("bus-errors", "", n=n, d=tally["director_calls"], band="over" if n else "none")
+    if n:
+        ln.text = fmt_line("bus-errors", f"{n} director results flagged as errors with a bus phrase, of {tally['director_calls']} calls", OWNER_TEXT["bus-errors"])
+    else:
+        ln.shown = False
+    return ln
+
+
+def go_revision(binary):
+    rc, out = sh(["go", "version", "-m", binary])
+    m = re.search(r"vcs\.revision=([0-9a-f]{7,40})", out) if rc == 0 else None
+    return m.group(1) if m else None
+
+
+def marvel_revision(cmd):
+    rc, out = sh([cmd, "version"])
+    m = re.search(r"\b([0-9a-f]{7,40})\b", out) if rc == 0 else None
+    return m.group(1) if m else None
+
+
+def line_not_installed(cfg, rows, t_now):
+    items, stale, any_config = [], [], False
+    for key in ("checkout.director", "checkout.marvel"):
+        co = cfg[key]
+        if co:
+            any_config = True
+            f = fetched_at(co)
+            if f is None or t_now - f > FETCH_MAX_AGE:
+                stale.append(f"{os.path.basename(co.rstrip('/'))} fetched {stamp(f) if f else 'never'}")
+    if not any_config:
+        return gap("not-installed", rows, "no checkout configured")
+    if stale:
+        return gap("not-installed", rows, "origin/main not fetched within 24h: " + "; ".join(stale))
+    total = 0
+    co = cfg["checkout.director"]
+    if co and cfg["install.director-mcp"]:
+        rev = go_revision(cfg["install.director-mcp"])
+        b = behind(co, rev, "cmd/director-mcp") if rev else None
+        if b is None:
+            items.append("director-mcp unreadable")
+        else:
+            total += b
+            items.append(f"director-mcp {rev[:7]} {b} behind")
+    co_m = cfg["checkout.marvel"]
+    if co_m:
+        rev = marvel_revision(cfg["marvel_cmd"])
+        b = behind(co_m, rev, ".") if rev else None
+        if b is None:
+            items.append("marvel unreadable")
+        else:
+            total += b
+            items.append(f"marvel {rev[:7]} {b} behind")
+    if co:
+        rev = head_of(co)
+        b = behind(co, rev, ".") if rev else None
+        if b is None:
+            items.append("director checkout unreadable")
+        else:
+            total += b
+            items.append(f"director checkout {b} behind")
+        installed = os.path.join(os.path.expanduser("~"), ".director", "bin", "introspect")
+        src = os.path.join(co, "skills", "director", "scripts", "introspect")
+        if os.path.isfile(installed) and not os.path.islink(installed) and os.path.isfile(src):
+            try:
+                if open(installed, "rb").read() != open(src, "rb").read():
+                    total += 1
+                    items.append("this script differs from the checkout")
+            except OSError:
+                pass
+    ln = Line("not-installed", "", n=total, band="over" if total else "none")
+    if total:
+        ln.text = fmt_line("not-installed", "; ".join(items), OWNER_TEXT["not-installed"])
+    else:
+        ln.shown = False
+    return ln
+
+
+def line_disk(cfg, rows):
+    try:
+        st = os.statvfs(cfg["hub_volume"])
+    except OSError:
+        return gap("disk", rows, "the volume cannot be read")
+    if not st.f_blocks:
+        return gap("disk", rows, "the volume reports no blocks")
+    pct = st.f_bavail / st.f_blocks * 100.0
+    gib = st.f_bavail * st.f_frsize / 2**30
+    ln = Line("disk", "", n=int(pct), d=100, band="over" if pct < cfg["band.disk_free_pct"] else "none")
+    if ln.band == "over":
+        ln.text = fmt_line("disk", f"{int(pct)}% free ({int(gib)} GiB) on the hub volume", OWNER_TEXT["disk"])
+    else:
+        ln.shown = False
+    return ln
+
+
+def line_stale_page(cfg, rows, t_now):
+    pdir = cfg["stalled_page_dir"]
+    files = []
+    if pdir and os.path.isdir(pdir):
+        files = [os.path.join(pdir, x) for x in os.listdir(pdir) if os.path.isfile(os.path.join(pdir, x))]
+    if not files:
+        return gap("stale-page", rows, "the page directory is empty or not configured")
+    newest = max(files, key=lambda p: os.stat(p).st_mtime)
+    written = datetime.datetime.fromtimestamp(os.stat(newest).st_mtime, UTC)
+    co = cfg["checkout.director"]
+    if not co:
+        return gap("stale-page", rows, "no director checkout configured")
+    rc, out = git(co, "rev-list", "--count", f"--since={isos(written)}Z", "origin/main")
+    try:
+        n = int(out.strip()) if rc == 0 else None
+    except ValueError:
+        n = None
+    if n is None:
+        return gap("stale-page", rows, "origin/main cannot be read")
+    mt = [os.stat(p).st_mtime for p in cfg["ledgers"] if os.path.isfile(p)]
+    age = f"; ledger written {int((t_now - datetime.datetime.fromtimestamp(max(mt), UTC)).days)}d ago" if mt else "; ledger not found"
+    stem = os.path.splitext(os.path.basename(newest))[0]
+    ln = Line("stale-page", "", n=n, band="over" if n else "none")
+    if n:
+        ln.text = fmt_line("stale-page", f"{stem} written {written.strftime('%m-%d %H:%M')}; {n} director commits since{age}", OWNER_TEXT["stale-page"])
+    else:
+        ln.shown = False
+    return ln
+
+
+def line_asks(cfg, rows, t_now):
+    exe = cfg["director_mcp"]
+    if not exe:
+        return gap("asks", rows, "no director-mcp configured")
+    rc, out = sh([exe, "asks", "--json"], timeout=30, env={**genv(), **({"NATS_URL": os.environ["NATS_URL"]} if "NATS_URL" in os.environ else {})})
+    if rc is None:
+        return gap("asks", rows, "director-mcp could not run")
+    if rc != 0:
+        return gap("asks", rows, "the subcommand is absent or cannot connect")
+    try:
+        data = json.loads(out)
+        sent = [r for r in data.get("rows", []) if isinstance(r, dict) and r.get("state") == "sent"]
+    except (ValueError, AttributeError):
+        return gap("asks", rows, "the reply could not be read")
+    old = []
+    for r in sent:
+        try:
+            if t_now - parse_iso(str(r.get("sent_at"))) > ASK_AFTER:
+                old.append(r)
+        except ValueError:
+            continue
+    old.sort(key=lambda r: r.get("sent_at", ""))
+    ln = Line("asks", "", n=len(old), d=len(data.get("rows", [])), band="over" if old else "none")
+    if old:
+        oid = str(old[0].get("ask", ""))
+        ln.ids = [oid] if re.fullmatch(r"[0-9A-Z]{26}|[0-9a-z]{10}", oid) else []
+        ln.text = fmt_line("asks", f"{len(old)} REQUESTs unacknowledged past 15m" + (f", oldest {oid}" if ln.ids else ""), OWNER_TEXT["asks"])
+    else:
+        ln.shown = False
+    return ln
+
+
+def line_weekly(tally, cfg, rows, t_now):
+    mt = [os.stat(p).st_mtime for p in cfg["ledgers"] if os.path.isfile(p)]
+    led = f"ledger {int((t_now - datetime.datetime.fromtimestamp(max(mt), UTC)).days)}d" if mt else "ledger none"
+    gapn = tally["denials_substring"] - tally["denials"]
+    text = (f"drain lag over 1h {tally['lag_over_1h']}; oversize drains {tally['oversize']}; send rejections {tally['send_rejections']}; "
+            f"host-local paths {tally['host_local_paths']}; {led}; precision gap {gapn}")
+    return Line("weekly", fmt_line("weekly", text, OWNER_TEXT["weekly"]), n=tally["host_local_paths"], band="none")
+
+
+# ----------------------------------------------------------------------------------- main
+def parse_args(argv):
+    a = {"since": "today", "window": "day", "json": False, "append": True, "config": None}
+    i = 0
+    while i < len(argv):
+        x = argv[i]
+        if x in ("--help", "-h"):
+            print(__doc__)
+            sys.exit(0)
+        elif x == "--json":
+            a["json"] = True
+        elif x == "--no-append":
+            a["append"] = False
+        elif x in ("--since", "--window", "--config"):
+            if i + 1 >= len(argv):
+                usage_error(f"{x} needs a value")
+            a[x[2:]] = argv[i + 1]
+            i += 1
+        else:
+            usage_error(f"unknown argument {x}; try --help")
+        i += 1
+    if a["window"] not in ("day", "week"):
+        usage_error("--window is day or week")
+    return a
+
+
+def main():
+    a = parse_args(sys.argv[1:])
+    t_now = now()
+    state_default = os.environ.get("DIRECTOR_STATE") or os.path.join(os.path.expanduser("~"), ".director", "state")
+    cfg_path = a["config"] or os.path.join(state_default, "introspector", "introspect.conf")
+    cfg = load_config(cfg_path, state_default)
+    today = t_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    notes = []
+    if a["since"] == "today":
+        since = today
+    elif a["since"] == "last-harvest":
+        try:
+            since = parse_iso(cfg["last_harvest"]) if cfg["last_harvest"] else None
+        except ValueError:
+            since = None
+        if since is None:
+            since = today
+            notes.append("GAP last-harvest last never (not set in the config; counting from today)")
+    else:
+        try:
+            since = parse_iso(a["since"])
+        except ValueError:
+            usage_error("--since is today, last-harvest or an ISO time")
+    if a["append"] and inside_work_tree(cfg["record_dir"]):
+        usage_error("the record path is inside a git work tree; refusing to start")
+
+    rows = read_records(os.path.join(cfg["record_dir"], "records.jsonl"))
+    scan = scan_transcripts(cfg, since, t_now)
+    here = os.path.dirname(os.path.realpath(__file__))
+    rev = head_of(here)
+    rc, out = git(here, "rev-list", "--count", "HEAD..origin/main", "--", ".", *EXCLUDE_PATHS) if rev else (None, "")
+    nb = out.strip() if rc == 0 else None
+    fa = fetched_at(here) if rev else None
+    sell = parse_iso(cfg["band.sell_by"])
+    provisional = t_now < sell
+    lines, counts, secrets = [], {}, {}
+    if scan is None:
+        for src in ("denials", "bus-errors"):
+            lines.append(gap(src, rows, "the projects directory cannot be read"))
+        tally, research, excluded, scanned = blank_tally(), blank_tally(), 0, 0
+    else:
+        tally, research, secrets, excluded, scanned = scan
+        lines.append(line_denials(tally, research, tally, rows, cfg, t_now, provisional))
+        lines.append(line_bus(tally, rows))
+    lines.append(line_not_installed(cfg, rows, t_now))
+    lines.append(line_disk(cfg, rows))
+    lines.append(line_stale_page(cfg, rows, t_now))
+    lines.append(line_asks(cfg, rows, t_now))
+    if a["window"] == "week":
+        lines.append(line_weekly(tally, cfg, rows, t_now))
+    counts = dict(tally)
+    counts["denials_research"] = research["denials"]
+    counts["excluded"] = excluded
+    counts["scanned"] = scanned
+
+    others = [h for h in cfg["hosts"] if h != cfg["host"]]
+    header = (f"introspect {cfg['host']} since {since.strftime('%H:%MZ') if since == today else stamp(since)} rev {rev[:7] if rev else '(not built)'} "
+              f"({nb if nb is not None else 'unknown'} behind origin/main, fetched {stamp(fa) if fa else 'never'}) "
+              f"not covered: {', '.join(others) if others else 'none'} excluded {excluded}/{scanned} "
+              f"bands: {'provisional until ' + cfg['band.sell_by'] if provisional else 'past sell-by ' + cfg['band.sell_by']}")
+    shown = [ln for ln in lines if ln.shown][:7]
+    footer = [f"SECRET-SHAPE {s} {n} files {cfg['host']}" for s, n in sorted(secrets.items())]
+
+    recs = []
+    base = {"v": 1, "rev": rev[:40] if rev else "0000000", "host": cfg["host"], "from": stamp(since), "to": stamp(t_now)}
+    for ln in lines:
+        r = dict(base, line=ln.id, state=ln.state, band=ln.band, remedy=REMEDY[ln.id], owner=OWNER[ln.id])
+        if ln.state == "count":
+            r["n"], r["d"] = ln.n if ln.n is not None else 0, ln.d if ln.d is not None else 0
+            if ln.d is None:
+                del r["d"]
+        r["ids"] = ln.ids
+        recs.append(r)
+    for s, n in sorted(secrets.items()):
+        recs.append(dict(base, line="SECRET-SHAPE", state="count", n=n, band="over", cat=s, remedy="none", owner="operator", ids=[]))
+    rec_gap, rejected = (None, {})
+    if a["append"]:
+        rec_gap, rejected = append_records(cfg, recs, t_now)
+    out_lines = [ln.text for ln in shown] + notes
+    if rec_gap:
+        out_lines.append(f"GAP records write {rec_gap}")
+    out_lines += footer
+    if rejected.get("client-scope"):
+        out_lines.append(f"REJECT client-scope {rejected['client-scope']}")
+    if a["json"]:
+        print(json.dumps({"header": header, "lines": out_lines, "counts": counts, "rejected": rejected}, indent=2))
+    else:
+        print(header)
+        for l in out_lines:
+            print(l)
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
