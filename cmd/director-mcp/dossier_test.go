@@ -131,6 +131,10 @@ func TestDossierT2NoBody(t *testing.T) {
 		o.JSON = asJSON
 		out, errs, _ := runOnce(t, ctx, url, o)
 		md, js := dossierFiles(t, state, "builder-new")
+		// positive control: the pointers are there, so an empty output cannot pass
+		if !strings.Contains(section(md, 4), "ask-A") || !strings.Contains(section(md, 6), "mail-1") || !strings.Contains(js, "ask-A") {
+			t.Errorf("json=%v: the ask and the mail are not listed as pointers:\n%s", asJSON, md)
+		}
 		for name, text := range map[string]string{"stdout": out, "stderr": errs, "md": md, "json": js} {
 			if strings.Contains(text, bodySentinel) {
 				t.Errorf("json=%v: %s carries a body", asJSON, name)
@@ -170,7 +174,7 @@ func TestDossierT7AckFloorUntouched(t *testing.T) {
 	if after := snap(); after != before {
 		t.Errorf("bus state moved:\nbefore %s\nafter  %s", before, after)
 	}
-	if !strings.Contains(section(out, 8), "3") {
+	if !strings.Contains(section(out, 8), "mcp_builder-old_01ABC pending=3") {
 		t.Errorf("section 8 does not show the 3 pending: %q", section(out, 8))
 	}
 }
@@ -228,8 +232,9 @@ func TestDossierT13NothingElseWritten(t *testing.T) {
 	if hashTree(t, home, "") != beforeHome {
 		t.Errorf("the home changed")
 	}
-	if _, err := os.Stat(filepath.Join(state, "dossier", "builder-new")); err != nil {
-		t.Errorf("no dossier written: %v", err)
+	md, _ := dossierFiles(t, state, "builder-new")
+	if !strings.Contains(section(md, 4), "ask-A") || !strings.Contains(section(md, 7), "p1") {
+		t.Errorf("the dossier does not list the ask and the parked item:\n%s", md)
 	}
 }
 
@@ -500,5 +505,126 @@ func TestParseArgsDossier(t *testing.T) {
 		if (err != nil) != c.bad {
 			t.Errorf("%v: err %v", c.args, err)
 		}
+	}
+}
+
+func writeHandoff(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "handoff.md")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// t6p-1: a dossier backs acceptance only when no valid authored handoff exists.
+func TestDossierAcceptanceSwitch(t *testing.T) {
+	valid := writeHandoff(t, "# handoff\nstuff\nHANDOFF-COMPLETE\n\n")
+	partial := writeHandoff(t, "# handoff\nstuff\n")
+	midfile := writeHandoff(t, "HANDOFF-COMPLETE\nthen more text\n")
+	link := filepath.Join(t.TempDir(), "link.md")
+	_ = os.Symlink(valid, link)
+	for name, c := range map[string]struct {
+		path string
+		want string
+	}{
+		"valid":           {valid, "authored handoff present: " + valid + "; this dossier does not back acceptance"},
+		"partial":         {partial, "no valid authored handoff; this dossier may back acceptance"},
+		"marker not last": {midfile, "no valid authored handoff; this dossier may back acceptance"},
+		"absent":          {filepath.Join(t.TempDir(), "none.md"), "no valid authored handoff; this dossier may back acceptance"},
+		"unknown":         {"", "no valid authored handoff; this dossier may back acceptance"},
+		"symlink":         {link, "no valid authored handoff; this dossier may back acceptance"},
+	} {
+		if got := acceptanceLine(c.path); got != c.want {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+}
+
+func TestDossierHeaderAndJSONCarryAcceptance(t *testing.T) {
+	state := dossierScratch(t)
+	ctx, url, _ := scratchBus(t)
+	o := baseOpts(state)
+	o.HandoffPath = writeHandoff(t, "x\nHANDOFF-COMPLETE\n")
+	out, _, _ := runOnce(t, ctx, url, o)
+	_, js := dossierFiles(t, state, "builder-new")
+	for name, text := range map[string]string{"stdout": out, "json": js} {
+		if !strings.Contains(text, "authored handoff present: "+o.HandoffPath+"; this dossier does not back acceptance") {
+			t.Errorf("%s lacks the acceptance line", name)
+		}
+	}
+	// the dossier itself never carries the marker, whatever the handoff holds
+	if strings.Contains(out+js, "HANDOFF-COMPLETE") {
+		t.Errorf("the marker leaked into the dossier")
+	}
+}
+
+// Every list is capped, and a record that cannot fit fails closed.
+func TestDossierCapsEveryListAndFailsClosed(t *testing.T) {
+	state := dossierScratch(t)
+	ctx, url, js := scratchBus(t)
+	now := time.Now()
+	long := strings.Repeat("x", 150)
+	for i := 0; i < 3000; i++ {
+		auditAt(t, ctx, js, now.Add(-time.Hour), fmt.Sprintf("m%04d", i), "REQUEST", fmt.Sprintf("ops-builder-%s-%04d", long, i), "agent://ops/x", "b", senderRole("builder"))
+	}
+	o := baseOpts(state)
+	o.Predecessor, o.PredSource = "", "unknown"
+	out, _, _ := runOnce(t, ctx, url, o)
+	md, jsn := dossierFiles(t, state, "builder-new")
+	if len(md) > 8192 || len(out) > 8192 || len(jsn) > 65536 {
+		t.Errorf("md %d stdout %d json %d", len(md), len(out), len(jsn))
+	}
+	if !strings.Contains(md, "more candidates, see the .json") {
+		t.Errorf("candidates not capped in the md")
+	}
+	// fail closed: a record that stays over the cap with every list emptied
+	d := &dossier{ID: "n", Role: strings.Repeat("r", 200000), Successor: "s", Acceptance: "a"}
+	_, big := renderBoth(d)
+	if len(big) > 65536 || !strings.Contains(string(big), `"overflow": true`) {
+		t.Errorf("not failed closed: %d bytes", len(big))
+	}
+}
+
+// The broker URL, and the userinfo it can carry, never reach the output.
+func TestDossierRedactsTheBrokerURL(t *testing.T) {
+	state := dossierScratch(t)
+	ctx := context.Background()
+	out, errs, _ := runOnce(t, ctx, "nats://alice:s3cretpw@127.0.0.1:1", baseOpts(state))
+	md, jsn := dossierFiles(t, state, "builder-new")
+	for name, text := range map[string]string{"stdout": out, "stderr": errs, "md": md, "json": jsn} {
+		if strings.Contains(text, "s3cretpw") || strings.Contains(text, "alice") {
+			t.Errorf("%s carries the userinfo", name)
+		}
+	}
+	if !strings.Contains(out, "127.0.0.1:1") {
+		t.Errorf("host and port missing: %s", out)
+	}
+}
+
+// With no state directory the dossier still prints, says so, and writes nothing.
+func TestDossierNoStateDirPrintsANotice(t *testing.T) {
+	dossierScratch(t)
+	ctx := context.Background()
+	o := baseOpts("")
+	out, _, code := runOnce(t, ctx, "nats://127.0.0.1:1", o)
+	if code != 0 || !strings.Contains(out, "no state directory") {
+		t.Errorf("code %d out %s", code, out)
+	}
+}
+
+// A bad dossier row never changes how the other rows load.
+func TestDossierRowsDoNotAffectTheHardLoader(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "thresholds.json"), []byte(`{"dossier_window":"-1h","dossier_keep":"nonsense","handled_ack_wait":"10m"}`), 0o600)
+	got, err := loadThresholds(dir)
+	if err != nil {
+		t.Fatalf("a dossier row stopped the hard loader: %v", err)
+	}
+	if got[thresholdHandledAckWait] != 10*time.Minute {
+		t.Errorf("handled_ack_wait = %v", got[thresholdHandledAckWait])
+	}
+	if _, in := got[thresholdDossierWindow]; in {
+		t.Errorf("the hard table carries a dossier row")
 	}
 }

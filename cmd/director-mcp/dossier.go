@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,15 @@ const (
 	thresholdDossierWindow = "dossier_window"
 	thresholdDossierKeep   = "dossier_keep"
 )
+
+// dossierDefaults are the dossier's own threshold rows. They are not in
+// defaultThresholds: those load hard (a bad row stops handled mode and the
+// presence watch), and a dossier row must never do that. loadThresholds skips
+// these two keys and loadDossierThresholds reads them softly.
+var dossierDefaults = map[string]time.Duration{
+	thresholdDossierWindow: 168 * time.Hour,
+	thresholdDossierKeep:   168 * time.Hour,
+}
 
 var dossierToken = regexp.MustCompile(`^[-A-Za-z0-9_=]+$`)
 
@@ -118,6 +128,7 @@ type dossierOpts struct {
 	State       string
 	Successor   string
 	DWS         string
+	HandoffPath string // the predecessor's seat handoff file, if its location is known
 	Now         time.Time
 }
 
@@ -157,6 +168,9 @@ type dossier struct {
 	Window        string   `json:"window"`
 	Outside       int      `json:"sequences_before_window"`
 	Notices       []string `json:"notices,omitempty"`
+	Acceptance    string   `json:"acceptance"`
+	CandOmitted   int      `json:"candidates_omitted,omitempty"`
+	NoticeOmitted int      `json:"notices_omitted,omitempty"`
 	Sections      []*dSec  `json:"sections"`
 }
 
@@ -199,7 +213,7 @@ func (d *dossier) add(n int, it dItem) {
 // not a positive duration keeps its default and is named in the notices; it
 // never stops the command (the presence watch's all-or-nothing load would).
 func loadDossierThresholds(dir string) (window, keep time.Duration, notices []string) {
-	window, keep = defaultThresholds[thresholdDossierWindow], defaultThresholds[thresholdDossierKeep]
+	window, keep = dossierDefaults[thresholdDossierWindow], dossierDefaults[thresholdDossierKeep]
 	b, err := os.ReadFile(filepath.Join(dir, "thresholds.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return
@@ -219,7 +233,7 @@ func loadDossierThresholds(dir string) (window, keep time.Duration, notices []st
 		str, _ := v.(string)
 		dur, err := time.ParseDuration(str)
 		if err != nil || dur <= 0 {
-			notices = append(notices, fmt.Sprintf("threshold %s = %v is not a positive duration, default %s kept", k, v, defaultThresholds[k]))
+			notices = append(notices, fmt.Sprintf("threshold %s = %v is not a positive duration, default %s kept", k, v, dossierDefaults[k]))
 			continue
 		}
 		if k == thresholdDossierWindow {
@@ -234,8 +248,8 @@ func loadDossierThresholds(dir string) (window, keep time.Duration, notices []st
 func runDossierCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Writer) int {
 	st, err := stateDir()
 	if err != nil {
-		_, _ = fmt.Fprintf(errw, "director-mcp dossier: %v\n", err)
-		return 0
+		_, _ = fmt.Fprintf(errw, "director-mcp dossier: no state directory, so nothing is written and the retention sweep is skipped: %v\n", err)
+		st = ""
 	}
 	o := dossierOpts{Role: cli.role, Predecessor: cli.pred, PredSource: "flag", PredState: cli.predState,
 		Pointers: cli.pointers, JSON: cli.json, State: st, DWS: os.Getenv("DIRECTOR_DWS"), Now: time.Now()}
@@ -253,7 +267,61 @@ func runDossierCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Wr
 	if o.DWS == "" {
 		o.DWS = "dws"
 	}
+	// The predecessor's handoff is where the manifest puts it:
+	// ~/.director/state/<session>/handoff.md, with the predecessor's id as the
+	// session; --predecessor-state names that directory directly.
+	switch {
+	case o.PredState != "":
+		o.HandoffPath = filepath.Join(o.PredState, "handoff.md")
+	case o.Predecessor != "":
+		if home, err := os.UserHomeDir(); err == nil {
+			o.HandoffPath = filepath.Join(home, ".director", "state", o.Predecessor, "handoff.md")
+		}
+	}
 	return runDossier(ctx, url, o, out, errw)
+}
+
+const handoffMarker = "HANDOFF-COMPLETE"
+
+// handoffValid reports whether path is a predecessor-authored handoff that is
+// complete: a regular file (not a link) whose last non-empty line is exactly the
+// terminal marker. Only the tail is read; a partial handoff, or one that cannot
+// be read, is not valid.
+func handoffValid(path string) bool {
+	if path == "" {
+		return false
+	}
+	fi, err := os.Lstat(path)
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	const tail = 4096
+	off := fi.Size() - tail
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, fi.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil && !errors.Is(err, io.EOF) {
+		return false
+	}
+	lines := strings.Split(strings.TrimRight(string(buf), " \t\r\n"), "\n")
+	return strings.TrimSpace(lines[len(lines)-1]) == handoffMarker
+}
+
+// acceptanceLine is the t6p-1 switch (operator ruling): a reconstructed dossier
+// may back successor acceptance only when no valid predecessor-authored handoff
+// exists, and it is never the predecessor's handoff marker. A valid authored
+// handoff takes precedence. This is the one place that decides.
+func acceptanceLine(handoffPath string) string {
+	if handoffValid(handoffPath) {
+		return "authored handoff present: " + handoffPath + "; this dossier does not back acceptance"
+	}
+	return "no valid authored handoff; this dossier may back acceptance"
 }
 
 func runDossier(ctx context.Context, url string, o dossierOpts, out, errw io.Writer) int {
@@ -269,19 +337,25 @@ func runDossier(ctx context.Context, url string, o dossierOpts, out, errw io.Wri
 	if d.Predecessor == "" {
 		d.Predecessor, d.PredSource = "", "unknown"
 	}
+	d.Acceptance = acceptanceLine(o.HandoffPath)
+	if o.State == "" {
+		d.Notices = append(d.Notices, "no state directory: no file written, retention sweep skipped")
+	}
 	for n := 2; n <= 10; n++ {
 		d.set(n, stRead, "")
 	}
 	dir := filepath.Join(o.State, "dossier", o.Successor)
-	if err := sweepDossiers(dir, keep, o.Now); err != nil {
-		_, _ = fmt.Fprintf(errw, "director-mcp dossier: retention sweep: %v\n", err)
+	if o.State != "" {
+		if err := sweepDossiers(dir, keep, o.Now); err != nil {
+			_, _ = fmt.Fprintf(errw, "director-mcp dossier: retention sweep: %v\n", err)
+		}
 	}
 
 	collectDWS(ctx, d, o, role)
 	nc, js, err := dial(url, Sender{AgentID: "dossier"})
 	if err != nil {
 		for _, n := range []int{4, 5, 6, 8} {
-			d.unread(n, "connect "+url+": "+err.Error())
+			d.unread(n, "connect "+hostOnly(url)+": "+redactURL(err.Error(), url))
 		}
 		if d.Predecessor == "" {
 			d.Candidates = nil
@@ -295,8 +369,10 @@ func runDossier(ctx context.Context, url string, o dossierOpts, out, errw io.Wri
 	finishCannotRecover(d)
 
 	md, js2 := renderBoth(d)
-	if err := writeDossier(dir, o, d, md, js2); err != nil {
-		_, _ = fmt.Fprintf(errw, "director-mcp dossier: %v\n", err)
+	if o.State != "" {
+		if err := writeDossier(dir, o, d, md, js2); err != nil {
+			_, _ = fmt.Fprintf(errw, "director-mcp dossier: %v\n", err)
+		}
 	}
 	if o.JSON {
 		_, _ = out.Write(js2)
@@ -305,6 +381,36 @@ func runDossier(ctx context.Context, url string, o dossierOpts, out, errw io.Wri
 		_, _ = io.WriteString(out, md)
 	}
 	return 0
+}
+
+// hostOnly is host:port of a broker URL, never its userinfo.
+func hostOnly(raw string) string {
+	if u, err := neturl.Parse(raw); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return "the broker"
+}
+
+// redactURL removes the broker URL, and any userinfo it carried, from text.
+func redactURL(text, raw string) string {
+	text = strings.ReplaceAll(text, raw, hostOnly(raw))
+	if u, err := neturl.Parse(raw); err == nil && u.User != nil {
+		if pw, ok := u.User.Password(); ok && pw != "" {
+			text = strings.ReplaceAll(text, pw, "REDACTED")
+		}
+		if n := u.User.Username(); n != "" {
+			text = strings.ReplaceAll(text, n+"@", "")
+		}
+	}
+	return text
+}
+
+// clip bounds one string so no single field can push a file over its cap.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 // sweepDossiers removes this directory's own files that carry the nonce line
@@ -616,12 +722,21 @@ func finishCannotRecover(d *dossier) {
 	}
 }
 
-// truncated is a copy of d with at most cap items per section.
+// truncated is a copy of d with at most cap items per section, at most cap
+// candidates and notices, and every free-text field clipped.
 func truncated(d *dossier, cap int) *dossier {
 	c := *d
 	c.Sections = nil
+	c.Candidates, c.CandOmitted = capStrings(d.Candidates, cap)
+	c.Notices, c.NoticeOmitted = capStrings(d.Notices, cap)
+	c.Acceptance = clip(d.Acceptance, 400)
 	for _, s := range d.Sections {
 		x := *s
+		x.Why = clip(x.Why, 300)
+		x.Items = append([]dItem(nil), s.Items...)
+		for i := range x.Items {
+			x.Items[i].Text = clip(x.Items[i].Text, 300)
+		}
 		if len(x.Items) > cap {
 			x.Omitted = len(x.Items) - cap
 			x.Items = x.Items[:cap]
@@ -629,6 +744,17 @@ func truncated(d *dossier, cap int) *dossier {
 		c.Sections = append(c.Sections, &x)
 	}
 	return &c
+}
+
+func capStrings(in []string, cap int) ([]string, int) {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		out = append(out, clip(v, 200))
+	}
+	if len(out) > cap {
+		return out[:cap], len(out) - cap
+	}
+	return out, 0
 }
 
 func (it dItem) line() string {
@@ -655,11 +781,18 @@ func renderMD(d *dossier) string {
 		pred = "unknown (no --predecessor and no MARVEL_PREDECESSOR)"
 	}
 	fmt.Fprintf(&b, "- successor: %s\n- predecessor: %s (from %s)\n- generated: %s\n- window: %s, %d sequences before it\n", d.Successor, pred, d.PredSource, d.GeneratedAt, d.Window, d.Outside)
+	fmt.Fprintf(&b, "- acceptance: %s\n", d.Acceptance)
 	for _, c := range d.Candidates {
 		fmt.Fprintf(&b, "- candidate instance: %s\n", c)
 	}
+	if d.CandOmitted > 0 {
+		fmt.Fprintf(&b, "- %d more candidates, see the .json\n", d.CandOmitted)
+	}
 	for _, n := range d.Notices {
 		fmt.Fprintf(&b, "- notice: %s\n", n)
+	}
+	if d.NoticeOmitted > 0 {
+		fmt.Fprintf(&b, "- %d more notices, see the .json\n", d.NoticeOmitted)
 	}
 	for _, s := range d.Sections {
 		fmt.Fprintf(&b, "\n## %d. %s\n\n%s", s.N, s.Title, s.State)
@@ -704,7 +837,18 @@ func renderBoth(d *dossier) (string, []byte) {
 	var js []byte
 	for c := 2048; ; c /= 2 {
 		js, _ = json.MarshalIndent(truncated(d, c), "", "  ")
-		if len(js) <= dossierJSONCap || c == 0 {
+		if len(js) <= dossierJSONCap {
+			break
+		}
+		if c == 0 {
+			// Fail closed: still over the limit with every list empty, so write a
+			// minimal record that says so, never an oversize file.
+			js, _ = json.MarshalIndent(map[string]any{
+				"director_dossier_id": d.ID, "reconstructed": true, "overflow": true,
+				"role": clip(d.Role, 200), "successor": clip(d.Successor, 200),
+				"acceptance": clip(d.Acceptance, 400),
+				"note":       "the full record exceeded the 64 KiB cap with every list emptied; read the .md",
+			}, "", "  ")
 			break
 		}
 	}

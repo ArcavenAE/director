@@ -72,8 +72,6 @@ var defaultThresholds = map[string]time.Duration{
 	thresholdPresenceFlapWindow: time.Hour,
 	thresholdPresenceFlapQuiet:  15 * time.Minute,
 	thresholdPresenceHoldSellBy: 8 * time.Hour,
-	thresholdDossierWindow:      168 * time.Hour,
-	thresholdDossierKeep:        168 * time.Hour,
 }
 
 // ledgerLockTimeout bounds how long a writer waits for the flock. A holder that
@@ -113,6 +111,9 @@ func loadThresholds(dir string) (map[string]time.Duration, error) {
 		return nil, fmt.Errorf("threshold table %s: %w", filepath.Join(dir, "thresholds.json"), err)
 	}
 	for k, v := range raw {
+		if _, soft := dossierDefaults[k]; soft {
+			continue // read softly by loadDossierThresholds, never by this hard path
+		}
 		if _, known := defaultThresholds[k]; !known {
 			return nil, fmt.Errorf("threshold table %s: unknown key %q (a misspelled row would silently keep its default)", filepath.Join(dir, "thresholds.json"), k)
 		}
