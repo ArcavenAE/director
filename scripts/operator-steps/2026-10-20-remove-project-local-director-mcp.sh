@@ -86,6 +86,9 @@ def kv(path):
 proof_path = os.path.join(state, "launch-proof")
 try:
     proof = kv(proof_path)
+    pid_ = proof["id"]
+    if not pid_ or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for c in pid_) or ".." in pid_:
+        raise ValueError("id")
     rec = kv(os.path.join(state, "launches", proof["id"]))
     with open(config, "rb") as f:
         cur = hashlib.sha256(f.read()).hexdigest()

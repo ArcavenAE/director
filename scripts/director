@@ -44,6 +44,7 @@ sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
 prove() {
   local id="${DIRECTOR_LAUNCH_ID:-}" rec pid rsha cand p found=0
   [[ -n "$id" ]] || stop "no launch id: run this inside a session started by director start"
+  [[ "$id" =~ ^[A-Za-z0-9._-]+$ && "$id" != *..* ]] || stop "the launch id is not a plain name"
   rec="$state/launches/$id"
   [[ -f "$rec" ]] || stop "no launch record for this session"
   pid="$(sed -n 's/^pid=//p' "$rec")"; rsha="$(sed -n 's/^config_sha256=//p' "$rec")"
@@ -54,13 +55,15 @@ prove() {
     p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]')"
   done
   [[ "$found" == 1 ]] || stop "this shell is not inside the session the launcher started"
-  # descendants of the session whose executable (or script) is director-mcp or director-mcp-seat
+  # descendants of the session whose executable (or script) is director-mcp or director-mcp-seat,
+  # with no other argument: the config passes none, and `ps eww` shows arguments and environment
+  # on one line, so an argument must never be mistaken for the environment
   cand="$(ps -axo pid=,ppid=,command= | awk -v root="$pid" '
     { pp[$1]=$2; c=$0; sub(/^[ ]*[0-9]+[ ]+[0-9]+[ ]+/, "", c); cmd[$1]=c }
-    END { for (q in pp) { a=q; while (a != "" && a != 0 && a != 1) { if (a == root) { if (cmd[q] ~ /^([^ ]*\/)?director-mcp[^ ]*( |$)/ || cmd[q] ~ /^[^ ]*(bash|sh|zsh) +([^ ]*\/)?director-mcp[^ ]*( |$)/) print q; break } a=pp[a] } } }')"
+    END { for (q in pp) { a=q; while (a != "" && a != 0 && a != 1) { if (a == root) { if (cmd[q] ~ /^([^ ]*\/)?director-mcp[^ ]*$/ || cmd[q] ~ /^[^ ]*(bash|sh|zsh) +([^ ]*\/)?director-mcp[^ ]*$/) print q; break } a=pp[a] } } }')"
   local q ok=""
   for q in $cand; do
-    if ps eww -o command= -p "$q" 2>/dev/null | grep -q "DIRECTOR_LAUNCH_ID=$id"; then ok="$q"; break; fi
+    if ps eww -o command= -p "$q" 2>/dev/null | grep -qE "(^| )DIRECTOR_LAUNCH_ID=$id( |\$)"; then ok="$q"; break; fi
   done
   [[ -n "$ok" ]] || stop "no director MCP server running under this session with launch id $id"
   mkdir -p "$state"
