@@ -268,8 +268,8 @@ director until the launcher is proven. In order:
 1. `scripts/director start`, in a new session.
 2. Inside that session, run `scripts/director prove`. It passes only when the
    session was started by the launcher and the director MCP server is running
-   under it carrying the launch id, which a server started by the old entry does
-   not have. It writes `$HOME/.director/state/launch-proof`.
+   under it with the launch variable that only the config's env block sets,
+   which a server started by the old entry does not have (it needs `python3`). It writes `$HOME/.director/state/launch-proof`.
 3. `scripts/operator-steps/2026-10-20-remove-project-local-director-mcp.sh --check`,
    then `--apply`. Both refuse without a proof from a launch that used the
    current config, written in the last 7 days. `--apply` backs the file up and

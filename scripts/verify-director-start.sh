@@ -160,6 +160,7 @@ pm_yes "matcher: the seat script under bash matches" id1 '{"argv":["/bin/bash","
 pm_no  "matcher: a longer basename is not the server" id1 '{"argv":["/x/director-mcp-evil"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
 pm_no  "matcher: ssh is not an interpreter" id1 '{"argv":["ssh","/x/director-mcp-seat"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
 pm_no  "matcher: an extra argument is refused" id1 '{"argv":["/x/director-mcp","DIRECTOR_LAUNCH_VIA_CONFIG=id1"],"env":[]}'
+pm_no  "matcher: two extra arguments are refused" id1 '{"argv":["/x/director-mcp","a","b"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
 pm_no  "matcher: the inherited variable alone is not the config's" id1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_ID=id1"]}'
 pm_no  "matcher: a longer id is not ours" id1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id19"]}'
 pm_no  "matcher: trailing text is not ours" id1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1 trailing"]}'

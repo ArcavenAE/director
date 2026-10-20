@@ -39,7 +39,7 @@ sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
 # (Reading another process's environment works for the director-mcp binary, which
 # is an ordinary executable. macOS hides it for system-protected binaries.)
 # prove: this session was started by `director start`, and the director MCP
-# server is running under it carrying the same launch id. A server the old
+# server is running under it with the config's own launch variable. A server the old
 # project-local entry started has no launch id, so it cannot satisfy this.
 prove() {
   local id="${DIRECTOR_LAUNCH_ID:-}" rec pid rsha cand p found=0
@@ -55,15 +55,18 @@ prove() {
     p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]')"
   done
   [[ "$found" == 1 ]] || stop "this shell is not inside the session the launcher started"
-  # descendants of the session whose executable (or script) is director-mcp or director-mcp-seat,
-  # with no other argument: the config passes none, and `ps eww` shows arguments and environment
-  # on one line, so an argument must never be mistaken for the environment
-  cand="$(ps -axo pid=,ppid=,command= | awk -v root="$pid" '
-    { pp[$1]=$2; c=$0; sub(/^[ ]*[0-9]+[ ]+[0-9]+[ ]+/, "", c); cmd[$1]=c }
-    END { for (q in pp) { a=q; while (a != "" && a != 0 && a != 1) { if (a == root) { if (cmd[q] ~ /^([^ ]*\/)?director-mcp[^ ]*$/ || cmd[q] ~ /^[^ ]*(bash|sh|zsh) +([^ ]*\/)?director-mcp[^ ]*$/) print q; break } a=pp[a] } } }')"
+  # Every descendant of the session is a candidate; director-procmatch decides. It reads
+  # each process's arguments and environment as separate lists and wants the config's own
+  # variable, DIRECTOR_LAUNCH_VIA_CONFIG=<id>. The launch id the session carries itself
+  # is inherited by every child, so a server the old project-local entry started would
+  # have it too; only the config's env block sets the other.
+  command -v python3 >/dev/null 2>&1 || stop "python3 is needed to read a process's environment"
+  cand="$(ps -axo pid=,ppid= | awk -v root="$pid" '
+    { pp[$1]=$2 }
+    END { for (q in pp) { a=q; while (a != "" && a != 0 && a != 1) { if (a == root) { print q; break } a=pp[a] } } }')"
   local q ok=""
   for q in $cand; do
-    if ps eww -o command= -p "$q" 2>/dev/null | grep -qE "(^| )DIRECTOR_LAUNCH_ID=$id( |\$)"; then ok="$q"; break; fi
+    if "$here/scripts/director-procmatch" --id "$id" --pid "$q" 2>/dev/null; then ok="$q"; break; fi
   done
   [[ -n "$ok" ]] || stop "no director MCP server running under this session with launch id $id"
   mkdir -p "$state"

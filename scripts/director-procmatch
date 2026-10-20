@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""director-procmatch --id <launch id> (--pid <pid> | --stdin)
+
+Exit 0 when the process is the director MCP server that the repo's MCP config
+started for this launch, 1 when it is not, 2 when it cannot be read.
+
+The process must be the server binary (director-mcp) or the seat launcher
+(director-mcp-seat) by exact basename, alone or run by one of bash, sh, zsh or
+dash, with no other argument, and its environment must hold the entry
+DIRECTOR_LAUNCH_VIA_CONFIG=<id> exactly. That key is set only by the config's env
+block, so it shows the config's server started and its variable expanded; the
+launch id the session itself carries is inherited by every child and proves
+nothing. Arguments and environment are read as separate NUL-delimited lists, so
+text in one cannot pass for the other.
+
+--stdin takes {"argv": [...], "env": [...]} instead of a pid, for tests.
+"""
+import json
+import os
+import struct
+import sys
+
+SERVERS = {"director-mcp", "director-mcp-seat"}
+INTERPRETERS = {"bash", "sh", "zsh", "dash"}
+KEY = "DIRECTOR_LAUNCH_VIA_CONFIG"
+
+
+def read_pid(pid):
+    if sys.platform.startswith("linux"):
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0")[:-1]]
+        with open("/proc/%d/environ" % pid, "rb") as f:
+            env = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+        return argv, env
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2
+    size = ctypes.c_size_t(0)
+    if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
+        raise OSError("sysctl size")
+    buf = ctypes.create_string_buffer(size.value)
+    if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+        raise OSError("sysctl read")
+    data = buf.raw[: size.value]
+    (argc,) = struct.unpack("i", data[:4])
+    parts = data[4:].split(b"\0")
+    i = 1  # parts[0] is the executable path
+    while i < len(parts) and parts[i] == b"":
+        i += 1
+    argv = [p.decode("utf-8", "replace") for p in parts[i : i + argc]]
+    env = [p.decode("utf-8", "replace") for p in parts[i + argc :] if p]
+    return argv, env
+
+
+def matches(argv, env, launch_id):
+    base = lambda s: os.path.basename(s)
+    if len(argv) == 1:
+        named = base(argv[0]) in SERVERS
+    elif len(argv) == 2:
+        named = base(argv[0]) in INTERPRETERS and base(argv[1]) in SERVERS
+    else:
+        named = False
+    return named and ("%s=%s" % (KEY, launch_id)) in env
+
+
+def main(args):
+    if len(args) == 4 and args[0] == "--id" and args[2] in ("--pid", "--stdin"):
+        pass
+    elif len(args) == 3 and args[0] == "--id" and args[2] == "--stdin":
+        args = args + [""]
+    else:
+        sys.stderr.write(__doc__)
+        return 2
+    launch_id = args[1]
+    try:
+        if args[2] == "--stdin":
+            d = json.load(sys.stdin)
+            argv, env = d["argv"], d["env"]
+        else:
+            argv, env = read_pid(int(args[3]))
+    except (OSError, ValueError, KeyError, struct.error):
+        return 2
+    return 0 if matches(argv, env, launch_id) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
