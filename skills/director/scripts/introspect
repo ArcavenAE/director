@@ -54,7 +54,7 @@ sell-by date band.sell_by (default 2026-11-17). The seat that owns the config re
 
 Config: key=value lines in --config (default $DIRECTOR_STATE/introspector/introspect.conf), kept local
 and never checked in. Lists are comma separated. Keys: projects_dir, project_include (substrings of a
-project directory name; the ArcavenAE scope only), exclude_agent_names, checkout.director,
+project directory name; the ArcavenAE scope only), exclude_agent_names, research_agent_names, checkout.director,
 checkout.marvel, install.director-mcp, director_mcp, marvel_cmd, stalled_page_dir, ledgers,
 hub_volume, state_dir, record_dir, host, hosts, director_host, roles, last_harvest, band.denials, band.denials_ratio,
 band.disk_free_pct, band.sell_by.
@@ -151,6 +151,7 @@ def load_config(path, state_dir_default):
         "projects_dir": os.path.expanduser(cfg.get("projects_dir", f"{home}/.claude/projects")),
         "project_include": [x for x in cfg.get("project_include", "aae-orc").split(",") if x],
         "exclude_agent_names": [x for x in cfg.get("exclude_agent_names", "research-supervisor,introspector,retrospector").split(",") if x],
+        "research_agent_names": [x for x in cfg.get("research_agent_names", "research-supervisor,retrospector").split(",") if x],
         "checkout.director": os.path.expanduser(cfg["checkout.director"]) if "checkout.director" in cfg else None,
         "checkout.marvel": os.path.expanduser(cfg["checkout.marvel"]) if "checkout.marvel" in cfg else None,
         "install.director-mcp": os.path.expanduser(cfg["install.director-mcp"]) if "install.director-mcp" in cfg else None,
@@ -374,6 +375,33 @@ def lag_over_hour(text, ts):
     return n
 
 
+def denial_count(path, since_s, week_s):
+    """The anchored denial count of a dropped transcript, or None when it cannot be read. Reads nothing else."""
+    seen, n = set(), 0
+    try:
+        with open(path, "rb") as f:
+            for line in f:
+                if b'"tool_result"' not in line:
+                    continue
+                try:
+                    r = json.loads(line.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                ts = str(r.get("timestamp", ""))[:19] if isinstance(r, dict) else ""
+                msg = r.get("message") if isinstance(r, dict) else None
+                c = msg.get("content") if isinstance(msg, dict) else None
+                if ts < since_s or not isinstance(c, list):
+                    continue
+                for b in c:
+                    if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") not in seen:
+                        seen.add(b.get("tool_use_id"))
+                        if text_of(b.get("content")).lstrip().startswith(DEN):
+                            n += 1
+    except OSError:
+        return None
+    return n
+
+
 FORBIDDEN = re.compile(r"(^|/)(nats-global|store|[^/]*spill[^/]*)(/|$)", re.I)
 
 
@@ -425,10 +453,15 @@ def scan_transcripts(cfg, since, t_now):
             nm = names.get(parent) if parent in names else agent_name(p)
         else:
             nm = names.get(p)
-        is_research = nm in cfg["exclude_agent_names"]
-        if is_research:
+        if nm in cfg["exclude_agent_names"]:
             excluded += 1
-            scan_file(p, since_s, week_s, research, {}, remote)
+            if nm in cfg["research_agent_names"]:  # the one thing read from a dropped file: its anchored denials
+                n = denial_count(p, since_s, week_s)
+                if n is None:
+                    research["unreadable"] += 1
+                else:
+                    research["denials"] += n
+            # any other dropped identity (the introspector's own) is never opened for anything
         else:
             scan_file(p, since_s, week_s, main, secrets, remote)
     return main, research, secrets, excluded, len(files)
@@ -610,6 +643,8 @@ def line_denials(tally, research, wk, rows, cfg, t_now, provisional):
     ln = Line("denials", "", n=n, d=d, band="over" if over else "none")
     if over:
         rs = f" (+{research['denials']} research)" if research["denials"] else ""
+        if research["unreadable"]:
+            rs += f" (+GAP research: {research['unreadable']} unreadable)"
         ln.text = fmt_line("denials", f"{n}{rs} of {d} results: {rate:.2f}/1000, weekday {mean:.2f}" + (" (provisional)" if provisional else ""))
     else:
         ln.shown = False
@@ -887,6 +922,7 @@ def main():
         lines.append(line_weekly(tally, cfg, rows, t_now))
     counts = dict(tally)
     counts["denials_research"] = research["denials"]
+    counts["research_unreadable"] = research["unreadable"]
     counts["excluded"] = excluded
     counts["scanned"] = scanned
 
@@ -894,6 +930,7 @@ def main():
     header = (f"introspect {cfg['host']} since {since.strftime('%H:%MZ') if since == today else stamp(since)} rev {rev[:7] if rev else '(not built)'} "
               f"({nb if nb is not None else 'unknown'} behind origin/main, fetched {stamp(fa) if fa else 'never'}) "
               f"not covered: {', '.join(others) if others else 'none'} excluded {excluded}/{scanned} "
+              + (f"GAP research-transcripts {research['unreadable']} unreadable " if research["unreadable"] else "") +
               f"bands: {'provisional until ' + cfg['band.sell_by'] if provisional else 'past sell-by ' + cfg['band.sell_by']}")
     shown = [ln for ln in lines if ln.shown]
     footer = [f"SECRET-SHAPE {s} {n} files {cfg['host']}" for s, n in sorted(secrets.items())]

@@ -472,6 +472,46 @@ sed -n 1p "$root/o" | grep -q 'since 2026-10-18T08:00Z' && ! grep -q '^GAP last-
 writeconf </dev/null
 grep -q 'last_harvest=' "$repo/skills/director/SKILL.md" && ok "harvest step 6 writes last_harvest after the run" || bad "SKILL.md last_harvest line"
 
+# (6) "+N research": only the anchored denial count, from research-supervisor and retrospector transcripts;
+# an introspector transcript is never counted; an unreadable dropped file is a GAP, never +0
+run --since today --config "$conf" --no-append --json >"$root/j0" 2>/dev/null
+mk "$root/proj/-work-aae-orc/i1.jsonl" --agent introspector --ok 5 --den 3 --err 2 --secrets
+run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
+python3 - "$root/j0" "$root/j1" <<'PY' && ok "an introspector transcript holding real denials adds nothing: not to the count, not to +N research, no secret shape" || bad "introspector transcript counted"
+import json, sys
+a = json.load(open(sys.argv[1])); b = json.load(open(sys.argv[2]))
+for k in ("denials", "denials_research", "bus_errors", "results"):
+    assert a["counts"][k] == b["counts"][k], (k, a["counts"][k], b["counts"][k])
+assert not [l for l in b["lines"] if l.startswith("SECRET-SHAPE") and "private-key" in l], b["lines"]
+PY
+rm -f "$root/proj/-work-aae-orc/i1.jsonl"
+mk "$root/proj/-work-aae-orc/rt1.jsonl" --agent retrospector --ok 5 --den 2 --err 3 --secrets --sends 2 --to global://mokuzai/supervisor
+run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
+python3 - "$root/j0" "$root/j1" <<'PY' && ok "a retrospector transcript adds only its denials to +N research: nothing else it holds is read into any count" || bad "retrospector count"
+import json, sys
+a = json.load(open(sys.argv[1]))["counts"]; b = json.load(open(sys.argv[2]))["counts"]
+assert b["denials_research"] == a["denials_research"] + 2, (a, b)
+for k in ("denials", "bus_errors", "results", "director_calls", "host_local_paths"):
+    assert a[k] == b[k], (k, a[k], b[k])
+PY
+rm -f "$root/proj/-work-aae-orc/rt1.jsonl"
+mk "$root/proj/-work-aae-orc/rs9.jsonl" --agent research-supervisor --ok 2 --den 1
+mkdir -p "$root/proj/-work-aae-orc/rs9/subagents"
+mk "$root/proj/-work-aae-orc/rs9/subagents/a.jsonl" --den 4
+chmod 000 "$root/proj/-work-aae-orc/rs9/subagents/a.jsonl"
+if [[ -r "$root/proj/-work-aae-orc/rs9/subagents/a.jsonl" ]]; then
+  skp "an unreadable dropped file: this user can read a mode 000 file"
+else
+  run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
+  python3 - "$root/j1" <<'PY' && ok "an unreadable dropped file is a GAP in the header and a count of files, never a quiet +0" || bad "unreadable dropped file"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["counts"]["research_unreadable"] == 1, d["counts"]
+assert "GAP research-transcripts 1 unreadable" in d["header"], d["header"]
+PY
+fi
+chmod 600 "$root/proj/-work-aae-orc/rs9/subagents/a.jsonl"; rm -rf "$root/proj/-work-aae-orc/rs9" "$root/proj/-work-aae-orc/rs9.jsonl"
+
 # ================================================================ properties of the script itself
 [[ "$(grep -c -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")" == 0 ]] && ok "P1 the script names no Desk, bus send, inject or gh call (the name send_message is read from transcripts, never run)" || bad "P1" "$(grep -n -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")"
 python3 - "$S" <<'PY' && ok "the script is Python 3 standard library only" || bad "stdlib only"
