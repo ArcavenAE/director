@@ -128,35 +128,66 @@ check "the launcher hands the config the seat launcher under DIRECTOR_HOME" bash
 # running under it and carries the launch id, can write the proof
 mkdir -p "$root/bin"
 # a stand-in MCP server, run by whichever bash `env bash` finds
+procmatch="$here/scripts/director-procmatch"
 cat >"$root/bin/director-mcp-seat" <<'MCP'
 #!/usr/bin/env bash
 sleep 30; true   # the trailing command keeps this script's own process from being replaced by sleep
 MCP
 chmod +x "$root/bin/director-mcp-seat"
+cp "$root/bin/director-mcp-seat" "$root/bin/director-mcp-evil"
+spawn() { # run a stand-in in its own process group; $mcp is its pid, which is also its group
+  perl -e 'setpgrp(0,0); exec @ARGV' "$@" & mcp=$!
+}
 # control: macOS hides the environment of system-protected binaries, and `prove` reads
 # the server's environment. If the stand-in's interpreter is one (the system bash 3.2),
 # the prove checks cannot run here, and are skipped rather than counted either way.
-DIRECTOR_LAUNCH_ID=control-id "$root/bin/director-mcp-seat" & cpid=$!
+spawn env DIRECTOR_LAUNCH_VIA_CONFIG=control-id "$root/bin/director-mcp-seat"
 sleep 1
-if ps eww -o command= -p "$cpid" 2>/dev/null | grep -q 'DIRECTOR_LAUNCH_ID=control-id'; then can_prove=1; else can_prove=0; fi
-kill "$cpid" 2>/dev/null || true; wait "$cpid" 2>/dev/null || true
+if ps eww -o command= -p "$mcp" 2>/dev/null | grep -q "DIRECTOR_LAUNCH_VIA_CONFIG=control-id"; then can_prove=1; else can_prove=0; fi
+kill -- "-$mcp" 2>/dev/null || true; wait "$mcp" 2>/dev/null || true
 skipped=0
-if [[ "$can_prove" == 0 ]]; then echo "SKIP the prove checks: this interpreter's process environment is hidden from ps"; skipped=6; fi
+if [[ "$can_prove" == 0 ]]; then echo "SKIP the prove checks on real processes: this interpreter's process environment is hidden"; skipped=10; fi
+
+# the matcher on its own, over argv and environment lists, so the cases a real
+# process cannot show (another interpreter, an entry inside another variable) are run
+pm() { # id, json; the matcher's exit status
+  printf '%s' "$2" | "$procmatch" --id "$1" --stdin
+}
+pm_yes() { local name="$1"; shift; if pm "$@"; then ok "$name"; else bad "$name"; fi; }
+pm_no()  { local name="$1"; shift; if pm "$@"; then bad "$name" "matched"; else ok "$name"; fi; }
+pm_yes "matcher: the server binary with the config's variable matches" id1 '{"argv":["/x/director-mcp"],"env":["A=b","DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
+pm_yes "matcher: the seat script under bash matches" id1 '{"argv":["/bin/bash","/x/director-mcp-seat"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
+pm_no  "matcher: a longer basename is not the server" id1 '{"argv":["/x/director-mcp-evil"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
+pm_no  "matcher: ssh is not an interpreter" id1 '{"argv":["ssh","/x/director-mcp-seat"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
+pm_no  "matcher: an extra argument is refused" id1 '{"argv":["/x/director-mcp","DIRECTOR_LAUNCH_VIA_CONFIG=id1"],"env":[]}'
+pm_no  "matcher: the inherited variable alone is not the config's" id1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_ID=id1"]}'
+pm_no  "matcher: a longer id is not ours" id1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id19"]}'
+pm_no  "matcher: trailing text is not ours" id1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1 trailing"]}'
+pm_no  "matcher: an entry inside another variable is not ours" id1 '{"argv":["/x/director-mcp"],"env":["OTHER=x DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
+pm_no  "matcher: an id that contains a dot does not match a different id" id.1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=idx1"]}'
+
 cat >"$root/claude-session" <<'STUB'
 #!/usr/bin/env bash
-# a stand-in session: starts the director MCP server the way claude would, then
+# a stand-in session: starts the director MCP server the way claude would (the config's
+# env block gives it DIRECTOR_LAUNCH_VIA_CONFIG, expanded from DIRECTOR_LAUNCH_ID), then
 # runs `director prove` from inside, as the session's shell tool would
+spawn() { perl -e 'setpgrp(0,0); exec @ARGV' "$@" & mcp=$!; }
+srv="$STUB_BIN/director-mcp-seat"; id="$DIRECTOR_LAUNCH_ID"
 case "${STUB_MCP:-yes}" in
-  yes)   "$STUB_BIN/director-mcp-seat" & mcp=$! ;;
-  noid)  env -u DIRECTOR_LAUNCH_ID "$STUB_BIN/director-mcp-seat" & mcp=$! ;;
-  other) env DIRECTOR_LAUNCH_ID=some-other-launch "$STUB_BIN/director-mcp-seat" & mcp=$! ;;
-  argid) env -u DIRECTOR_LAUNCH_ID "$STUB_BIN/director-mcp-seat" "DIRECTOR_LAUNCH_ID=$DIRECTOR_LAUNCH_ID" & mcp=$! ;;
-  prefix) env DIRECTOR_LAUNCH_ID="${DIRECTOR_LAUNCH_ID}9" "$STUB_BIN/director-mcp-seat" & mcp=$! ;;
-  none)  mcp= ;;
+  yes)       spawn env DIRECTOR_LAUNCH_VIA_CONFIG="$id" "$srv" ;;
+  inherited) spawn "$srv" ;;
+  noid)      spawn env -u DIRECTOR_LAUNCH_ID "$srv" ;;
+  other)     spawn env DIRECTOR_LAUNCH_VIA_CONFIG=some-other-launch "$srv" ;;
+  argid)     spawn env -u DIRECTOR_LAUNCH_ID "$srv" "DIRECTOR_LAUNCH_VIA_CONFIG=$id" ;;
+  prefix)    spawn env DIRECTOR_LAUNCH_VIA_CONFIG="${id}9" "$srv" ;;
+  trailing)  spawn env DIRECTOR_LAUNCH_VIA_CONFIG="$id trailing" "$srv" ;;
+  contained) spawn env -u DIRECTOR_LAUNCH_ID "OTHER=x DIRECTOR_LAUNCH_VIA_CONFIG=$id" "$srv" ;;
+  evil)      spawn env DIRECTOR_LAUNCH_VIA_CONFIG="$id" "$STUB_BIN/director-mcp-evil" ;;
+  none)      mcp= ;;
 esac
 sleep 1
 "$STUB_START" prove >"$STUB_PROVE_OUT" 2>&1; echo "rc=$?" >>"$STUB_PROVE_OUT"
-if [[ -n "$mcp" ]]; then kill "$mcp" 2>/dev/null || true; fi
+if [[ -n "$mcp" ]]; then kill -- "-$mcp" 2>/dev/null || true; fi
 STUB
 chmod +x "$root/claude-session"
 sess() { # STUB_MCP value; runs start with the stand-in session
@@ -164,23 +195,22 @@ sess() { # STUB_MCP value; runs start with the stand-in session
   env -i HOME="$home" PATH="$PATH" LANG="${LANG:-C}" CLAUDE_BIN="$root/claude-session" STUB_BIN="$root/bin" \
     STUB_START="$start" STUB_PROVE_OUT="$root/prove.out" STUB_MCP="$1" "$start" start >"$root/stdout" 2>&1 || true
 }
+stops() { bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"; }
 rm -rf "$home/.director/state"
 run_start start >"$root/stdout" 2>&1 || true
 check "start leaves a launch record" bash -c "ls '$home'/.director/state/launches/* >/dev/null 2>&1"
 if [[ "$can_prove" == 1 ]]; then
   sess yes
   check "prove inside a launched session with its MCP server writes the proof" bash -c "grep -q 'rc=0' '$root/prove.out' && [[ -s '$home/.director/state/launch-proof' ]]"
-  sess none
-  check "prove with no MCP server under the session is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
-  sess noid
-  check "prove with an MCP server that lacks the launch id is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
-  sess other
-  check "prove with an MCP server carrying another launch id is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
-  # review 5589085560: the id as an argument, or as the start of a longer id, is not the launch id
-  sess argid
-  check "prove with the launch id passed as an argument is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
-  sess prefix
-  check "prove with a launch id that only starts with ours is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
+  sess none;      check "prove with no MCP server under the session is a STOP" stops
+  sess inherited; check "prove with only the inherited launch id (the config's server never started) is a STOP" stops
+  sess noid;      check "prove with an MCP server that lacks the launch id is a STOP" stops
+  sess other;     check "prove with an MCP server carrying another launch id is a STOP" stops
+  sess argid;     check "prove with the launch id passed as an argument is a STOP" stops
+  sess prefix;    check "prove with a launch id that only starts with ours is a STOP" stops
+  sess trailing;  check "prove with trailing text after the launch id is a STOP" stops
+  sess contained; check "prove with the entry inside another variable is a STOP" stops
+  sess evil;      check "prove with a server named director-mcp-evil is a STOP" stops
 fi
 rm -f "$home/.director/state/launch-proof"
 if env -i HOME="$home" PATH="$PATH" LANG="${LANG:-C}" "$start" prove >"$root/o" 2>&1; then bad "prove outside a launched session is refused" "exit 0"; else ok "prove outside a launched session is refused"; fi
