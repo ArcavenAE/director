@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -212,5 +213,50 @@ func TestCountRowsWithANonStringValueKeepTheDefaultAndSayWhy(t *testing.T) {
 	}
 	if len(notes) != 1 || !strings.Contains(notes[0], "presence_hub_move_min") {
 		t.Fatalf("one note naming the row, got %q", notes)
+	}
+}
+
+// cashp C3 review 5586449061 item 1: a capped notice is recorded in the events
+// file and never queued for the operator. The cap lives in the watch; the shim
+// decides what it queues, so this runs the shim's own tick.
+func TestShimQueuesNoCappedNotice(t *testing.T) {
+	w, c := hubWatch(time.Minute, 2)
+	var rows []watchRow
+	scan := func(context.Context) watchScan {
+		return watchScan{Rows: rows, SelfCheck: true, SelfSeen: true, SelfTS: c.wall, SelfWant: c.wall}
+	}
+	store := newWatchStore(t.TempDir())
+	p := newPresenceWatcher(store, w, scan, func(string, ...any) {})
+	p.now = func() time.Time { return c.wall }
+	p.mono = func() time.Duration { return c.mono }
+	pass := func(n int, clusters ...string) {
+		rows = rowsFor(clusters...)
+		for i := 0; i < n; i++ {
+			c.tick()
+			p.tick(context.Background())
+		}
+	}
+	pass(2, "keep", "c1", "c2", "c3", "c4")
+	for _, left := range [][]string{{"keep", "c2", "c3", "c4"}, {"keep", "c3", "c4"}, {"keep", "c4"}, {"keep"}} {
+		pass(8, left...) // one cluster leaves every 4 minutes, so no hub-moved parent opens
+	}
+	evs, err := store.Events()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capped, queued := 0, 0
+	for _, e := range evs {
+		if e.Capped {
+			capped++
+		}
+		if !e.Collapsed && !e.Capped {
+			queued++
+		}
+	}
+	if capped == 0 {
+		t.Fatalf("CONTROL FAILED: a cap of 2 over four lost clusters should hold some back: %+v", evs)
+	}
+	if len(p.pending) != queued {
+		t.Fatalf("the shim queued %d notices, want %d (the %d capped must stay in the file only): %q", len(p.pending), queued, capped, p.pending)
 	}
 }
