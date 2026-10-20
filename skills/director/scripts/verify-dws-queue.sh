@@ -73,7 +73,7 @@ DIRECTOR_STATE="$root/state-torn" "$DWS" queue --json >"$root/jt" 2>"$root/et" &
 [[ "$(q "d['sources']['ledger']['torn']" <"$root/jt")" == "1" ]] && ok "the JSON carries the torn count" || bad "torn count in JSON"
 [[ "$(q "d['hidden']" <"$root/jt")" == "[]" && "$(q "d['counts']['hidden']" <"$root/jt")" == "0" ]] && ok "with a torn ledger line no card is hidden" || bad "no card hidden on a torn ledger" "$(q "d['hidden']" <"$root/jt")"
 [[ "$(q "sorted(x['card'] for x in d['shown'])" <"$root/jt")" == "['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']" ]] && ok "the cards that would have been hidden are shown" || bad "would-be hidden cards shown" "$(q "sorted(x['card'] for x in d['shown'])" <"$root/jt")"
-[[ "$(q "[x['note'] for x in d['shown'] if x['card']=='c2']" <"$root/jt")" == "['would be hidden (merged); shown because a torn ledger line may hold a PR state']" ]] && ok "each says why it is shown" || bad "would-be hidden note" "$(q "[x for x in d['shown'] if x['card']=='c2']" <"$root/jt")"
+[[ "$(q "[x['note'] for x in d['shown'] if x['card']=='c2']" <"$root/jt")" == "['would be hidden (merged); shown because a torn ledger line may hold a PR state (hiding stays off until that line of workstreams.jsonl is fixed or removed)']" ]] && ok "each says why it is shown" || bad "would-be hidden note" "$(q "[x for x in d['shown'] if x['card']=='c2']" <"$root/jt")"
 DIRECTOR_STATE="$root/state-torn" "$DWS" queue >"$root/tt" 2>&1
 grep -Eq '^queue .*ledger read \(torn 1\)' "$root/tt" && ok "the text output shows (torn 1) as board-state does" || bad "text shows torn count" "$(head -2 "$root/tt")"
 "$SNAP" write --cards "$root/cards2.json" --reported 7 >/dev/null
