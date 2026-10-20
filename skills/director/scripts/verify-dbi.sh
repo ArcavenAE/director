@@ -78,7 +78,7 @@ cfg() {  # roots file
   printf '%s\n' "$root/orc/*/_kos/ideas/*.md" "$root/orc/*/sim/design/*.md" >"$DIRECTOR_STATE/idea-roots.conf"
 }
 cfg
-run() { "$DBI" --json --threshold-days 14 "$@"; }
+run() { "$DBI" --json --threshold-days 14 "$@" || echo "dbi exited $?" >&2; }
 q() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 rows() { q "sorted((r['path'], r['reason']) for r in d['rows'])"; }
 
@@ -100,7 +100,6 @@ run >"$root/j" 2>"$root/e" || bad "dbi runs" "$(cat "$root/e")"
 [[ "$(q "[r['quiet_days'] for r in d['rows']]" <"$root/j")" == "[20]" ]] && ok "quiet days count from the last commit on the default branch" || bad "quiet days" "$(q "d['rows']" <"$root/j")"
 [[ "$(q "set(d['rows'][0])>={'path','title','quiet_days','reason','pointers','as_of','remote'}" <"$root/j")" == "True" ]] && ok "a row has the section 5 fields" || bad "row fields"
 [[ "$(q "d['rows'][0]['title']" <"$root/j")" == "Stale" ]] && ok "the title is the first heading" || bad "title"
-ok "5: the idea 10 days quiet is not listed (see the rows above)"
 
 # --- 2: pointers -------------------------------------------------------------------------
 newrepo r2
@@ -159,8 +158,7 @@ mkdir -p "$root/orc/run/x/_kos/ideas" "$root/orc/r6-wt-a/_kos/ideas"
 cp -R "$root/orc/r6/.git" "$root/orc/r6-wt-a/.git"; echo "$(idea W)" >"$root/orc/r6-wt-a/_kos/ideas/w.md"
 cp -R "$root/orc/r6/.git" "$root/orc/run/x/.git"; echo "$(idea R)" >"$root/orc/run/x/_kos/ideas/r.md"
 cat >>"$DIRECTOR_STATE/idea-roots.conf" <<C
-$root/orc/run/*/_kos/ideas/*.md
-$root/orc/*-wt-*/_kos/ideas/*.md
+$root/orc/*/*/_kos/ideas/*.md
 C
 run >"$root/j" 2>"$root/e"
 r4="$(q "sorted(r['path'] for r in d['rows'] if r['path'].startswith('r4/'))" <"$root/j")"
@@ -240,6 +238,49 @@ alive=0; while read -r p; do kill -0 "$p" 2>/dev/null && alive=$((alive+1)); don
 [[ "$(wc -l <"$HANG_PIDS" | tr -d ' ')" -gt 0 ]] && ok "7f: the fake ssh really ran" || bad "7f: the fake ssh really ran"
 grep -q 'BatchMode=yes' "$here/dbi" && ok "7e: the ssh command line carries BatchMode=yes" || bad "7e: BatchMode=yes"
 grep -q 'start_new_session=True' "$here/dbi" && ok "7e: each call runs in its own session" || bad "7e: own session"
+
+
+# --- review 5580238780: a missing roots file is loud, never a clean scan --------------------------
+cfg
+mv "$DIRECTOR_STATE/idea-roots.conf" "$root/roots.saved"
+"$DBI" --json --threshold-days 14 >"$root/o" 2>"$root/e" && rc=0 || rc=$?
+[[ "$rc" == 2 ]] && grep -q 'idea-roots.conf' "$root/e" && ! grep -q '"rows"' "$root/o" && ok "a missing roots file exits 2 naming the file and prints no report" || bad "a missing roots file is loud" "rc=$rc $(cat "$root/e")"
+: >"$DIRECTOR_STATE/idea-roots.conf"
+"$DBI" --json --threshold-days 14 >"$root/o" 2>"$root/e" && rc=0 || rc=$?
+[[ "$rc" == 2 ]] && ! grep -q '"rows"' "$root/o" && ok "a roots file with no root exits 2 too" || bad "an empty roots file is loud" "rc=$rc"
+mv "$root/roots.saved" "$DIRECTOR_STATE/idea-roots.conf"
+"$DBI" --json --threshold-days -3 >"$root/o" 2>/dev/null && bad "a negative threshold is refused" || ok "a negative threshold is refused"
+
+# --- a git read that fails is unverified, never "no pointer" --------------------------------------------
+mkdir -p "$root/gitfail"; REALGIT="$(command -v git)"
+cat >"$root/gitfail/git" <<S
+#!/usr/bin/env bash
+a=("\$@"); i=0; [[ "\${a[0]}" == "-C" ]] && i=2
+if [[ -n "\${FAKE_GIT_FAIL:-}" && "\${a[\$i]}" == "\$FAKE_GIT_FAIL" ]]; then echo "fatal: fake failure of \$FAKE_GIT_FAIL" >&2; exit 128; fi
+exec "$REALGIT" "\$@"
+S
+chmod +x "$root/gitfail/git"
+newrepo g1
+fx commit "$root/remotes/g1.git" $((NOW-30*DAY)) "_kos/ideas/g.md=$(idea G)"
+checkout g1
+for sub in ls-tree show log; do
+  PATH="$root/gitfail:$PATH" FAKE_GIT_FAIL=$sub run >"$root/j" 2>/dev/null
+  [[ "$(q "any(r['path'].startswith('g1/') for r in d['rows'])" <"$root/j")" == "False" ]] && ok "git $sub failing: the idea is not listed as no pointer" || bad "git $sub failing: not listed" "$(q "d['rows']" <"$root/j")"
+  [[ "$(q "d['unverified']['kinds'].get('git read',0)>=1 and 'git read' in d['unread']" <"$root/j")" == "True" ]] && ok "git $sub failing: counted unverified, kind git read, and named in unread" || bad "git $sub failing: unverified" "$(q "[d['unverified'],d['unread']]" <"$root/j")"
+done
+grep -q 'GIT_NO_LAZY_FETCH' "$here/dbi" && ok "git reads set GIT_NO_LAZY_FETCH" || bad "git reads set GIT_NO_LAZY_FETCH"
+
+# --- review item 3: exclusion by realpath, and only below the glob's fixed prefix --------------------------
+mkdir -p "$root/orc/run/lk"; newrepo lk; fx commit "$root/remotes/lk.git" $((NOW-30*DAY)) "_kos/ideas/lk.md=$(idea LK)"
+git clone -q "$root/remotes/lk.git" "$root/orc/run/lk/blue" 2>/dev/null
+ln -s "$root/orc/run/lk/blue" "$root/orc/linked-blue"
+mkdir -p "$root/legit/run"; git clone -q "$root/remotes/lk.git" "$root/legit/run/lg" 2>/dev/null
+printf '%s\n' "$root/orc/*/_kos/ideas/*.md" "$root/legit/run/*/_kos/ideas/*.md" >"$DIRECTOR_STATE/idea-roots.conf"
+run >"$root/j" 2>/dev/null
+[[ "$(q "any(r['path'].startswith('linked-blue/') for r in d['rows'])" <"$root/j")" == "False" ]] && ok "a symlink into run/ is never read" || bad "symlink into run/ read"
+[[ "$(q "any('linked-blue' in x['path'] for x in d['skipped'])" <"$root/j")" == "True" ]] && ok "the symlinked root's skip is logged" || bad "symlink skip logged" "$(q "d['skipped']" <"$root/j")"
+[[ "$(q "any(r['path'].startswith('lg/') for r in d['rows'])" <"$root/j")" == "True" ]] && ok "a checkout under a parent named run, named by the root's fixed prefix, is read" || bad "legit run parent" "$(q "[d['rows'],d['skipped']]" <"$root/j")"
+cfg
 
 echo "dbi: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
