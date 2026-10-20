@@ -81,5 +81,23 @@ J
 [[ "$(q "d['sources']['desk']['state']" <"$root/j2")" == "UNREAD" && "$(q "d['open_asks']" <"$root/j2")" == "None" ]] && ok "a stale snapshot makes open asks UNREAD, not empty" || bad "a stale snapshot makes open asks UNREAD, not empty"
 [[ "$(q "len(d['terms'])" <"$root/j2")" == "2" ]] && ok "terms still read" || bad "terms still read"
 
+# --- round 3 (review 5580347702): a store with no readable row is UNREAD, as in reconcile ----
+st() { export DIRECTOR_STATE="$root/r3$1"; mkdir -p "$DIRECTOR_STATE"; }
+st a; printf 'garbage\n{broken\n' >"$DIRECTOR_STATE/rulings.jsonl"; printf 'garbage\n{broken\n' >"$DIRECTOR_STATE/workstreams.jsonl"
+"$DWS" inherit team-a/architect --json >"$root/ja" 2>"$root/ea" && rc=0 || rc=$?
+[[ "$(q "[d['sources']['rulings']['state'], d['sources']['ledger']['state']]" <"$root/ja")" == "['UNREAD', 'UNREAD']" ]] && ok "all-torn rulings and ledger read UNREAD" || bad "all-torn files read UNREAD" "$(q "d['sources']" <"$root/ja")"
+[[ "$(q "[d['terms'], d['grants'], d['open_asks']]" <"$root/ja")" == "[None, None, None]" ]] && ok "their sections are unknown, not empty" || bad "sections of all-torn files are None"
+"$DWS" inherit team-a/architect >"$root/ta" 2>&1; grep -q 'standing terms: UNREAD' "$root/ta" && ok "the text output says standing terms: UNREAD" || bad "text says UNREAD" "$(cat "$root/ta")"
+st b; printf '%s\n' '{}' '{"ts":"2026-09-01T10:00:00Z","actor":"director","tag":"judgment","event":"move","ws":"nobody","stage":"done"}' >"$DIRECTOR_STATE/workstreams.jsonl"
+"$DWS" inherit team-a/architect --json >"$root/jb" 2>/dev/null
+[[ "$(q "d['sources']['ledger']['state']" <"$root/jb")" == "UNREAD" ]] && ok "a ledger that parses but folds to no row reads UNREAD" || bad "parsed but zero rows"
+# --- an unparseable expiry is not in force: it agrees with reconcile -------------------------------
+st c
+printf '%s\n' "{$g,\"id\":\"g-bad\",\"to\":\"team-a/architect\",\"state\":\"confirmed\",\"expires\":\"next tuesday\"}" "{$g,\"id\":\"g-ok\",\"to\":\"team-a/architect\",\"state\":\"confirmed\",\"expires\":\"2026-12-01\"}" >"$DIRECTOR_STATE/rulings.jsonl"
+"$DWS" inherit team-a/architect --json >"$root/jc" 2>/dev/null
+[[ "$(q "sorted(x['id'] for x in d['grants'])" <"$root/jc")" == "['g-ok']" ]] && ok "a grant with an unparseable expiry is not listed as in force" || bad "unparseable expiry in force" "$(q "d['grants']" <"$root/jc")"
+[[ "$(q "[x['id'] for x in d['unchecked_grants']]" <"$root/jc")" == "['g-bad']" ]] && ok "it is listed as unchecked, with the reason" || bad "unchecked grants" "$(q "d.get('unchecked_grants')" <"$root/jc")"
+"$DWS" reconcile --json >"$root/rc" 2>/dev/null; [[ "$(q "any(n['check']=='grant-expired:g-bad' for n in d['not_run'])" <"$root/rc")" == "True" ]] && ok "reconcile lists the same grant as not run" || bad "reconcile agrees"
+
 echo "dws inherit: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
