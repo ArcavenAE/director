@@ -44,6 +44,10 @@ its own rulings.lock beside it. It never creates the file, refuses the exclusion
 `records [--json]` folds the file: replaces is an explicit id pointer; a target is marked
 replaced_by, and a pointer to a missing id or another kind is counted, never guessed.
 
+K14: `ring SEAT --idle-minutes N --mail N` records a ring in rings.jsonl (Q6: 10 minutes idle with
+mail, at most 3 rings per seat per hour, then it refuses and the seat is reported stuck);
+`ring-note SEAT first-turn|ack|blocker [--text T]` follows it; `rings [--json]` reads per seat.
+
 K10: `grant-card <id> [--out FILE]` renders the Desk card that shows a draft grant's bounds, in
 card-ingest's format. `grant-confirm <id> --card C --quote WORDS` records the grant as confirmed
 (replacing the draft, which is never edited) only when the fresh Desk snapshot lists C as answered;
@@ -1156,6 +1160,148 @@ def cmd_records(a):
         print(f"dws: {torn} unreadable line(s) in {path} skipped, not repaired", file=sys.stderr)
 
 
+# K14: rings.jsonl, keyed by seat (R-200, Q6). A ring, its first turn, its ack and
+# its blocker, on the dws store shape: append-only, folded on read, one flock
+# (rings.lock) around fold, check and append. Q6's numbers, the operator's: ring
+# after 10 minutes idle with mail, at most 3 rings per seat per hour, then report
+# the seat as stuck. dws cannot see idleness or mail; the caller states both from
+# its own drain, as --actor is a claim. A refused ring writes nothing.
+RINGS = os.path.join(STATE, "rings.jsonl")
+RING_IDLE_MINUTES = 10
+RING_CAP = 3
+RING_WINDOW_HOURS = 1
+RING_NOTES = ("first-turn", "ack", "blocker")
+
+
+def rings_lock():
+    os.makedirs(STATE, exist_ok=True)
+    return Locked(os.path.join(STATE, "rings.lock"))
+
+
+def fold_rings(path=None):
+    """Per seat, in file order: every ring time, and the follow-up since the last
+    ring (a new ring resets it). Returns (seats, torn)."""
+    path = path or RINGS
+    seats, torn = {}, 0
+    try:
+        f = open(path, encoding="utf-8")
+    except FileNotFoundError:
+        return seats, 0
+    with f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                torn += 1
+                continue
+            if not isinstance(e, dict) or not isinstance(e.get("seat"), str):
+                torn += 1
+                continue
+            r = seats.setdefault(e["seat"], {"rings": [], "last_ring": None, "first_turn": None,
+                                             "ack": None, "blocker": None, "blocker_at": None})
+            if e.get("event") == "ring":
+                r["rings"].append(e.get("ts", ""))
+                r["last_ring"] = e.get("ts", "")
+                r["first_turn"] = r["ack"] = r["blocker"] = r["blocker_at"] = None
+            elif e.get("event") == "first-turn":
+                r["first_turn"] = e.get("ts", "")
+            elif e.get("event") == "ack":
+                r["ack"] = e.get("ts", "")
+            elif e.get("event") == "blocker":
+                r["blocker"], r["blocker_at"] = e.get("text", ""), e.get("ts", "")
+    return seats, torn
+
+
+def rings_in_window(r, t_now):
+    start = parse_time(t_now) - datetime.timedelta(hours=RING_WINDOW_HOURS)
+    return sum(1 for ts in r["rings"] if (parse_ts(ts) or start) > start)
+
+
+def ring_status(r, t_now):
+    if r["ack"]:
+        return "acked"
+    if rings_in_window(r, t_now) >= RING_CAP:
+        return "stuck"
+    if r["blocker"]:
+        return "blocked"
+    if r["first_turn"]:
+        return "turned"
+    return "rung"
+
+
+CLAIMS_NOTE = "idle minutes and mail are the caller's claims; dws cannot see either"
+_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")
+
+
+def printable(text):
+    """Text from a record, made safe for a terminal: control and bidi runes shown as \\uXXXX."""
+    return _UNSAFE.sub(lambda m: "\\u%04x" % ord(m.group()), str(text))
+
+
+def cmd_ring(a):
+    if a.actor != "director":
+        raise Refused(f"actor {a.actor!r} may not ring a seat; only director does")
+    seat = checked("seat", a.seat)
+    if a.idle_minutes < RING_IDLE_MINUTES:
+        raise Refused(f"{seat} has been idle {a.idle_minutes} minutes; a ring needs {RING_IDLE_MINUTES} idle (Q6)")
+    if a.mail < 1:
+        raise Refused(f"{seat} has no mail waiting; a ring needs mail (Q6)")
+    t_now = now()
+    with rings_lock():
+        seats, _ = fold_rings()
+        r = seats.get(seat)
+        if r and rings_in_window(r, t_now) >= RING_CAP:
+            raise Refused(f"{seat} was rung {rings_in_window(r, t_now)} times in the last {RING_WINDOW_HOURS} hour "
+                          f"(the cap is {RING_CAP}); report it as stuck, with its blocker if it showed one (Q6)")
+        append({"ts": t_now, "actor": a.actor, "event": "ring", "seat": seat,
+                "idle_minutes": a.idle_minutes, "mail": a.mail}, RINGS)
+    print(f"dws: recorded a ring for {seat} ({CLAIMS_NOTE})")
+
+
+def cmd_ring_note(a):
+    if a.actor != "director":
+        raise Refused(f"actor {a.actor!r} may not record a ring follow-up; only director does")
+    seat = checked("seat", a.seat)
+    text = None
+    if a.note == "blocker":
+        # The blocker is quoted as the seat showed it (R-200), never normalized.
+        text = nonblank("text", a.text)
+    elif a.text is not None:
+        raise Refused("--text goes with the blocker note only")
+    with rings_lock():
+        seats, _ = fold_rings()
+        if seat not in seats:
+            raise Refused(f"no ring recorded for {seat}; there is nothing to follow")
+        event = {"ts": now(), "actor": a.actor, "event": a.note, "seat": seat}
+        if text is not None:
+            event["text"] = text
+        append(event, RINGS)
+    print(f"dws: recorded {a.note} for {seat}")
+
+
+def cmd_rings(a):
+    seats, torn = fold_rings()
+    t_now = now()
+    out = {}
+    for seat, r in sorted(seats.items()):
+        out[seat] = {"status": ring_status(r, t_now), "rings_in_window": rings_in_window(r, t_now),
+                     "rings_total": len(r["rings"]), "last_ring": r["last_ring"], "first_turn": r["first_turn"],
+                     "ack": r["ack"], "blocker": r["blocker"], "blocker_at": r["blocker_at"]}
+    if a.json:
+        json.dump({"file": RINGS, "torn": torn, "note": CLAIMS_NOTE, "seats": out}, sys.stdout, indent=2, ensure_ascii=True)
+        print()
+    else:
+        for seat, v in out.items():
+            extra = f"  blocker: {printable(v['blocker'])}" if v["blocker"] else ""
+            print(f"{printable(seat)}  {v['status']}  rings in the last hour {v['rings_in_window']}  last ring {v['last_ring']}{extra}")
+        if out:
+            print(f"note: {CLAIMS_NOTE}")
+    if torn:
+        print(f"dws: {torn} unreadable line(s) in {RINGS} skipped, not repaired", file=sys.stderr)
+
+
 # K10: the grant confirm card. A draft grant has no effect. grant-card renders a
 # Desk card (card-ingest's format) that shows the draft's bounds; the operator
 # answers it on the Desk; grant-confirm then records the confirmed grant, and
@@ -1315,9 +1461,17 @@ def cmd_reconcile(a):
     else:
         sources["rulings"] = {"state": "UNREAD", "why": f"no rulings file at {path}"}
 
-    rings = os.path.join(STATE, "rings.jsonl")
-    sources["rings"] = ({"state": "UNREAD", "why": f"no rings file at {rings}; K14 has not built it"}
-                        if not os.path.isfile(rings) else {"state": "UNREAD", "why": "rings.jsonl exists and has no reader yet (K14)"})
+    if os.path.isfile(RINGS):
+        try:
+            rseats, rtorn2 = fold_rings()
+            if rtorn2 and not rseats:
+                sources["rings"] = {"state": "UNREAD", "why": f"{RINGS} has no readable line (torn {rtorn2})"}
+            else:
+                sources["rings"] = {"state": "read", "read_at": t_now, "torn": rtorn2}
+        except OSError as err:
+            sources["rings"] = {"state": "UNREAD", "why": f"{RINGS} cannot be read ({type(err).__name__})"}
+    else:
+        sources["rings"] = {"state": "UNREAD", "why": f"no rings file at {RINGS}; no ring has been recorded"}
 
     checked = [o.get("checked_at") for row in rows.values() for link, o in row["observed"].items()
                if link.startswith("pr:") and isinstance(o, dict)]
@@ -1518,6 +1672,24 @@ def main(argv):
     rr.add_argument("--json", action="store_true")
     rr.add_argument("--kind", choices=RECORD_KINDS)
     rr.set_defaults(fn=cmd_records)
+
+    rg = sub.add_parser("ring", help="record a ring of an idle seat with mail; at most 3 an hour (K14). --idle-minutes and --mail are the caller's claims; dws cannot see either")
+    rg.add_argument("seat")
+    rg.add_argument("--idle-minutes", dest="idle_minutes", type=int, required=True,
+                    help="minutes the seat has been idle, the caller's claim (dws cannot see it)")
+    rg.add_argument("--mail", type=int, required=True,
+                    help="messages waiting for the seat, the caller's claim (dws cannot see it)")
+    rg.set_defaults(fn=cmd_ring)
+
+    rn = sub.add_parser("ring-note", help="record a ring's first turn, ack or blocker (K14)")
+    rn.add_argument("seat")
+    rn.add_argument("note", choices=RING_NOTES)
+    rn.add_argument("--text")
+    rn.set_defaults(fn=cmd_ring_note)
+
+    rs2 = sub.add_parser("rings", help="read rings.jsonl per seat (K14)")
+    rs2.add_argument("--json", action="store_true")
+    rs2.set_defaults(fn=cmd_rings)
 
     gc = sub.add_parser("grant-card", help="render the Desk card that shows a draft grant's bounds (K10)")
     gc.add_argument("id")
