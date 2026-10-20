@@ -1416,7 +1416,10 @@ def cmd_reconcile(a):
     if os.path.isfile(LEDGER):
         try:
             rows, torn = fold()
-            sources["ledger"] = {"state": "read", "read_at": t_now, "torn": torn}
+            if torn and not rows:
+                sources["ledger"] = {"state": "UNREAD", "why": f"{LEDGER} has no readable row (torn {torn})"}
+            else:
+                sources["ledger"] = {"state": "read", "read_at": t_now, "torn": torn}
         except OSError as err:
             sources["ledger"] = {"state": "UNREAD", "why": f"{LEDGER} cannot be read ({type(err).__name__})"}
     else:
@@ -1428,7 +1431,10 @@ def cmd_reconcile(a):
     if os.path.isfile(path):
         try:
             records, rtorn, _ = fold_records(path)
-            sources["rulings"] = {"state": "read", "read_at": t_now, "torn": rtorn}
+            if rtorn and not records:
+                sources["rulings"] = {"state": "UNREAD", "why": f"{path} has no readable record (torn {rtorn})"}
+            else:
+                sources["rulings"] = {"state": "read", "read_at": t_now, "torn": rtorn}
         except OSError as err:
             sources["rulings"] = {"state": "UNREAD", "why": f"{path} cannot be read ({type(err).__name__})"}
     else:
@@ -1493,7 +1499,11 @@ def cmd_reconcile(a):
                 continue
             try:
                 end = datetime.datetime.strptime(exp, "%Y-%m-%dT%H:%M:%SZ" if "T" in exp else "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+                if "T" not in exp:
+                    # A date-only expiry holds through the end of that day.
+                    end += datetime.timedelta(days=1)
             except ValueError:
+                not_run.append({"check": f"grant-expired:{r.get('id')}", "why": f"the expiry {exp!r} does not parse (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)"})
                 continue
             if end < when:
                 proposals.append({"kind": "grant-expired", "subject": str(r.get("id")),
@@ -1513,14 +1523,22 @@ def cmd_reconcile(a):
     report = {"read_at": t_now, "sources": sources, "queue": queue, "proposals": proposals, "not_run": not_run}
 
     out = a.out or reconcile_proposals_path()
-    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     tmp = f"{out}.{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, out)
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, out)
+    except OSError as err:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise Refused(f"cannot write the proposals file {out} ({type(err).__name__}: {err.strerror or err}); "
+                      "the report was not written. Name another file with --out")
 
     if a.json:
         json.dump(report, sys.stdout, indent=2, ensure_ascii=False)
@@ -1528,7 +1546,8 @@ def cmd_reconcile(a):
         return
     for name in ("desk", "ledger", "rulings", "rings", "prs"):
         v = sources[name]
-        print(f"{name:<8} " + (f"read {v['read_at']}" if v["state"] == "read" else f"UNREAD  {v['why']}"))
+        torn_note = f" (torn {v['torn']})" if v.get("torn") else ""
+        print(f"{name:<8} " + (f"read {v['read_at']}{torn_note}" if v["state"] == "read" else f"UNREAD  {v['why']}"))
     if queue["count"] is None:
         print("queue    UNREAD (the Desk is not read)")
     else:

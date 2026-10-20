@@ -98,5 +98,45 @@ J
 # --- 4. only director-class callers: an unknown flag is refused ----------------
 "$DWS" reconcile --apply >/dev/null 2>&1 && bad "reconcile has no apply flag" || ok "reconcile has no apply flag"
 
+# --- 5. a malformed store is UNREAD, never "read and empty" (review 5580134662) ----------
+good_desk='{"read_at":"2026-10-20T09:00:00Z","cards":1,"open":["c1"],"ids":{"c1":"open"}}'
+g2='"kind":"grant","ts":"2026-10-01T00:00:00Z","actor":"director","source":"s","subject":"x","scope":"s","to":"r","text":"t","state":"confirmed","tag":"mirror"'
+fresh() {  # sets DIRECTOR_STATE to a new dir holding a good desk snapshot, ledger and rulings
+  export DIRECTOR_STATE="$root/st$1"; mkdir -p "$DIRECTOR_STATE"
+  printf '%s\n' "$good_desk" >"$DIRECTOR_STATE/desk-snapshot.json"
+  printf '%s\n' '{"ts":"2026-09-01T10:00:00Z","actor":"director","tag":"judgment","event":"open","ws":"old","title":"t","stage":"building","links":[]}' >"$DIRECTOR_STATE/workstreams.jsonl"
+  printf '%s\n' "{$g2,\"id\":\"g-ok\",\"expires\":\"2026-12-01\"}" >"$DIRECTOR_STATE/rulings.jsonl"
+}
+fresh 1; printf 'garbage one\n{broken\nnot json\n' >"$DIRECTOR_STATE/workstreams.jsonl"
+"$DWS" reconcile --json >"$root/m1" 2>/dev/null
+[[ "$(q "d['sources']['ledger']['state']" <"$root/m1")" == "UNREAD" ]] && ok "a ledger of only unreadable lines reads UNREAD" || bad "a ledger of only unreadable lines reads UNREAD" "$(q "d['sources']['ledger']" <"$root/m1")"
+[[ "$(q "'torn 3' in d['sources']['ledger'].get('why','')" <"$root/m1")" == "True" ]] && ok "the UNREAD reason carries the torn count" || bad "the UNREAD reason carries the torn count"
+[[ "$(q "sorted(n['check'] for n in d['not_run'] if n['check'] in ('unmoved','blocked-no-open-card','card-pr-merged','duplicate-open-cards'))" <"$root/m1")" == "['blocked-no-open-card', 'card-pr-merged', 'duplicate-open-cards', 'unmoved']" ]] && ok "the ledger's checks are listed as not run" || bad "the ledger's checks are listed as not run"
+[[ "$(q "d['queue']['at_least']" <"$root/m1")" == "True" ]] && ok "the queue reads at least n with an UNREAD ledger" || bad "the queue reads at least n with an UNREAD ledger"
+fresh 2; printf 'garbage\n{broken\n' >"$DIRECTOR_STATE/rulings.jsonl"
+"$DWS" reconcile --json >"$root/m2" 2>/dev/null
+[[ "$(q "d['sources']['rulings']['state']" <"$root/m2")" == "UNREAD" && "$(q "'grant-expired' in [n['check'] for n in d['not_run']]" <"$root/m2")" == "True" ]] && ok "a malformed rulings file reads UNREAD and grant-expired is not run" || bad "malformed rulings"
+fresh 3; printf 'torn line\n' >>"$DIRECTOR_STATE/workstreams.jsonl"
+"$DWS" reconcile >"$root/m3" 2>/dev/null
+grep -E '^ledger +read .*torn 1' "$root/m3" >/dev/null && ok "a partly torn ledger shows its torn count in the text output" || bad "a partly torn ledger shows its torn count in the text output" "$(grep '^ledger' "$root/m3")"
+fresh 4; : >"$DIRECTOR_STATE/workstreams.jsonl"
+"$DWS" reconcile --json >"$root/m4" 2>/dev/null
+[[ "$(q "d['sources']['ledger']['state']" <"$root/m4")" == "read" ]] && ok "an empty ledger file is read, with no rows" || bad "an empty ledger file is read, with no rows"
+
+# --- 6. an expiry that does not parse is named; a date-only expiry runs to the end of that day --------
+fresh 5
+printf '%s\n' "{$g2,\"id\":\"g-bad\",\"expires\":\"next week\"}" "{$g2,\"id\":\"g-today\",\"expires\":\"2026-10-20\"}" "{$g2,\"id\":\"g-yday\",\"expires\":\"2026-10-19\"}" >>"$DIRECTOR_STATE/rulings.jsonl"
+"$DWS" reconcile --json >"$root/m5" 2>/dev/null
+[[ "$(q "[n['check'] for n in d['not_run'] if 'g-bad' in n['check']]" <"$root/m5")" == "['grant-expired:g-bad']" ]] && ok "an expiry that does not parse is listed as not run" || bad "an unparseable expiry is listed" "$(q "d['not_run']" <"$root/m5")"
+has5() { q "any(p['kind']=='grant-expired' and p['subject']=='$1' for p in d['proposals'])" <"$root/m5"; }
+[[ "$(has5 g-today)" == "False" && "$(has5 g-yday)" == "True" ]] && ok "a date-only expiry holds through the end of that day" || bad "a date-only expiry holds through the end of that day"
+
+# --- 7. a state dir that cannot be written is a refusal, not a traceback ---------------------------
+fresh 6; chmod 555 "$DIRECTOR_STATE"
+"$DWS" reconcile >"$root/m6" 2>"$root/m6e" && rc=0 || rc=$?
+chmod 755 "$DIRECTOR_STATE"
+[[ "$rc" == 1 ]] && ! grep -q Traceback "$root/m6e" && grep -q 'refused' "$root/m6e" && ok "an unwritable state dir exits 1 with a refusal and no traceback" || bad "unwritable state dir" "rc=$rc $(cat "$root/m6e" | head -3)"
+"$DWS" reconcile --out "$root/elsewhere2.json" >/dev/null 2>&1 && ok "--out still works when the state dir cannot be written" || bad "--out elsewhere"
+
 echo "dws reconcile: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
