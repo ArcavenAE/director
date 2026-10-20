@@ -200,3 +200,17 @@ func TestSoftCountRowsKeepDefaultsAndSayWhy(t *testing.T) {
 		t.Fatalf("count keys are known keys: %v", err)
 	}
 }
+
+func TestCountRowsWithANonStringValueKeepTheDefaultAndSayWhy(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "thresholds.json"), []byte(`{"presence_hub_move_min":3,"presence_alert_cap":"9"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	counts, notes := loadCountRows(dir)
+	if counts[thresholdPresenceHubMoveMin] != 2 || counts[thresholdPresenceAlertCap] != 9 {
+		t.Fatalf("the bad row keeps its default and the good row applies, got %v", counts)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "presence_hub_move_min") {
+		t.Fatalf("one note naming the row, got %q", notes)
+	}
+}
