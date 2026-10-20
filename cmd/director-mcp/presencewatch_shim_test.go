@@ -333,3 +333,64 @@ func TestWatchNoticeReachesWaitAndSummaryOnce(t *testing.T) {
 		t.Fatalf("inbox_summary should carry the new notice, got %v, %v", notice(out), err)
 	}
 }
+
+// beat is the heartbeat's order: the director's own row first, then the pass.
+func (fx *watchFx) beat() {
+	fx.t.Helper()
+	if msg := fx.bus.writeGlobalPresence(fx.ctx, "working"); msg != "" {
+		fx.t.Fatal(msg)
+	}
+	fx.tick()
+}
+
+// cashp C1: a hub that lost the director's own row (replaced or flushed) is not
+// the hub this director writes to, so no cluster is called gone from its reads.
+func TestWatchFlushedHubIsSelfUnseenNotEveryClusterGone(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	fx := newWatchFx(t, ctx, 0, true)
+	fx.put("c1", "s1", "working")
+	fx.beat()
+	fx.put("c1", "s1", "working")
+	fx.beat()
+	if u := newWatchStoreUnit(t, fx, "c1/s1"); u == nil || u.Status != unitPresent {
+		t.Fatalf("CONTROL FAILED: c1/s1 should be present on sighted passes, got %+v", u)
+	}
+	if count(fx.events(), "self-unseen") != 0 {
+		t.Fatalf("CONTROL FAILED: sighted passes raised self-unseen: %+v", fx.events())
+	}
+
+	// the hub is flushed: every row is gone, including the director's own.
+	own := fx.bus.globalCfg.presenceKey(fx.bus.instance)
+	if err := fx.kv.Delete(ctx, "presence.c1.supervisor.s1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.kv.Delete(ctx, own); err != nil {
+		t.Fatal(err)
+	}
+	fx.tick()
+	fx.tick()
+	fx.tick()
+	ev := fx.events()
+	if count(ev, "absent") != 0 {
+		t.Fatalf("a flushed hub must not read as every cluster leaving, got %+v", ev)
+	}
+	if count(ev, "self-unseen") != 1 {
+		t.Fatalf("self-unseen should be recorded once, got %+v", ev)
+	}
+
+	// the director writes its row again: sighted, and a missing cluster counts again.
+	fx.beat()
+	if count(fx.events(), "self-seen") != 1 {
+		t.Fatalf("the own row back should be recorded once, got %+v", fx.events())
+	}
+}
+
+func newWatchStoreUnit(t *testing.T, fx *watchFx, name string) *watchUnit {
+	t.Helper()
+	w, err := newWatchStore(fx.dir).Load(defaultWatchThresholds())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w.Unit(name)
+}
