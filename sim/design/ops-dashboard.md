@@ -14,7 +14,8 @@ drawn from rows director writes on its sweep.
   artifact could show director status, triage, the Desk, the ledger and the
   flow of work, through the arcaven supervisor.
 - A five-seat design party worked it in two rounds, with a forced vote. The
-  operator ruled six of its seven cards on 2026-10-19 (section 6).
+  operator ruled six of its seven cards on 2026-10-19 and the seventh,
+  dash-sequence, on 2026-10-20 (section 6).
 - Related: `board-workstream-ledger.md` (the ledger and its stages),
   `director-functions-redesign.md` K13 (the Desk snapshot), director finding
   glst (a script cannot reach artifact data).
@@ -67,9 +68,17 @@ sort and no buttons, and nothing reads it as a gate (ADR-007: metrics inform, th
 cards on what a working seat means are ruled. Running teams are named by
 team or seat label.
 
-**Sequence, not yet ruled.** Card dash-sequence (Desk only first, or all four
-panels now) is still open. Panel 1's Desk half needs no writer and can ship
-on its own either way. Panels 2 and 3 wait on that card.
+**Sequence (ruled 2026-10-20, dash-sequence: desk-first).** The operator
+chose: "Desk queue only at first; ledger panels come back when the three
+checks hold. Cost: no view of work in flight until the ledger is fixed, and
+fixing it is separate work someone must do." So the first build draws panel
+1's Desk half only: open cards by age band, read live from the Desk's own
+`decisions` collection. Panel 1's ledger half and panels 2 and 3 are drawn
+only while the three checks of section 4.1 hold on the writer's latest run.
+Until then the tab shows one line in their place: "Ledger panels return when
+the ledger checks hold: <each check, and whether it holds>". Panel 4 is not a
+ledger panel, so the three checks do not cover it; whether it ships with the
+Desk queue is open and has gone to the supervisor as a question.
 
 ## 3. The rows (ruled, dash-data-model)
 
@@ -216,6 +225,61 @@ its numbers. The ruling chose one mark, so a fresh write over a source that
 has stopped moving reads as current. The header line says when the writer
 last ran, in words, so a silent writer shows.
 
+### 4.1 The three checks (ruled, dash-sequence)
+
+The card defines "ledger kept current" as three things anyone can check, not
+a date. The writer evaluates each on every run, writes the result to
+`dash_meta/writer` as `checks: [{name, holds, observed}]`, and draws the
+ledger panels only when all three hold on that run. Each is a structural
+read of director's own files; the operator ruled the display on them, and they
+gate nothing else (ADR-007).
+
+| check | instrument | holds when |
+|---|---|---|
+| the refresh ran in the last day | the newest `refresh-run` event in `workstreams.jsonl` (added by this build, below) | its `at` is within 24 hours of the writer's clock, and not in the future |
+| the Desk snapshot file exists | `$DIRECTOR_STATE/desk-snapshot.json` | the file exists and parses as JSON |
+| every row past the idea stage carries a link | `dws show --json` | every row whose stage is any stage after `idea` in the ledger's list (`defined` to `parked`) has at least one entry in `links` |
+
+`observed` is text the page may show: the refresh time, "exists" or "missing",
+and the count of rows past idea with no link. It never lists the rows'
+titles.
+
+**The refresh leaves no run record today.** `dws refresh` appends `observe`
+and `stage` events only when a link has something new, and skips links read
+recently, so a run that changes nothing writes nothing. Its last run cannot
+be read from the ledger. The build adds one event, written by `dws refresh`
+as its last append of every run, under the same lock, actor `refresh`, tag
+`mirror`:
+
+```
+{"event": "refresh-run", "at": <now>, "rows": <n read>, "links": <n read>, "warnings": <n>, "tag": "mirror"}
+```
+
+The fold ignores it for every row, and `dws show --json` reports the newest
+one as `last_refresh`. `refresh --local` writes one too, with `"local": true`;
+the check counts either.
+
+Two limits, stated rather than changed, since they are the ruled text:
+- The snapshot check asks only that the file exists. `dws` itself reads a
+  snapshot older than 24 hours as UNREAD (K13). Whether this check should
+  also ask for freshness has gone to the supervisor as a question.
+- A row past idea with an untyped link counts as carrying a link. Refresh
+  cannot read such a link, and names it on stderr.
+
+### 4.2 The build
+
+One director PR, in this order inside it:
+1. `dws`: the `refresh-run` event and `last_refresh` in `show --json`
+   (`verify-dws-refresh.sh` gains a test that a run changing nothing still
+   writes one event).
+2. The writer step: the three checks and `dash_meta/writer.checks`.
+3. The Desk tab: panel 1's Desk half, and the one-line placeholder while any
+   check fails. Panels 2 and 3 and panel 1's ledger half are built but drawn
+   only when every check holds, so turning them on needs no second build.
+
+Fixing the ledger so the checks hold is separate work, as the card says. It is
+not part of this build.
+
 ## 5. Tests (red first)
 
 1. **The Desk is unharmed.** With `dash_*` collections missing, empty, or
@@ -259,8 +323,17 @@ last ran, in words, so a silent writer shows.
    free or idle.
 8. **Write rule.** As a Contributor (`as_level` interact), a write to each
    `dash_*` collection is refused.
+9. **The three checks.** Each fails alone in a fixture, and the tab then
+   draws panel 1's Desk half and the placeholder line naming that check, and
+   no ledger row: a newest `refresh-run` 25 hours old (fails) and 23 hours
+   old (holds); one ahead of the clock (fails); a missing snapshot file and
+   one that does not parse (each fails); one `defined` row with no links
+   (fails), one `parked` row with no links (fails), one `idea` row with no
+   links (holds). With all three holding, panels 2 and 3 are drawn.
+10. **The run record.** `dws refresh` on a ledger whose links were all read
+    a minute ago appends exactly one `refresh-run` event and nothing else.
 
-## 6. Rulings, 2026-10-19
+## 6. Rulings, 2026-10-19 and 2026-10-20
 
 | card | ruling |
 |---|---|
@@ -270,7 +343,7 @@ last ran, in words, so a silent writer shows.
 | dash-refresh | each sweep, 30-minute floor, stale after twice that |
 | dash-merged-rows | merged rows as one summary line |
 | dash-fourth-panel | Sessions per cluster, marvel's columns as printed |
-| dash-sequence | not yet ruled |
+| dash-sequence | 2026-10-20: desk-first; the ledger panels return when the three checks of section 4.1 hold |
 
 ## 7. Not covered
 
