@@ -167,7 +167,9 @@ parent is open:
   raised as usual and never collapsed;
 - each listed cluster that returns raises `back` as usual, and that `back`
   names the listed clusters still out, so the reader has a line naming them;
-- the parent closes when every listed cluster is back. When
+- the parent closes when no listed cluster is still out; a listed cluster
+  that raised `back` and left again counts as returned for this parent, and
+  its new absence is its own, never converted with the stragglers. When
   `presence_hub_move_window` has passed since the parent opened and any listed
   cluster is still out, the parent closes and converts: each still-out cluster
   gets its own per-cluster `lost` at its own bound, raised at once if the bound
