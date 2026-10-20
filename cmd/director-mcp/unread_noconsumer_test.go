@@ -50,3 +50,38 @@ func TestReadUnreadCreatesNoConsumerOnPresenceBucket(t *testing.T) {
 		t.Fatalf("warnings: %v", r.Warnings)
 	}
 }
+
+// quietKeys must agree with kv.Keys: a key whose latest entry is a delete
+// marker is not listed, and an empty bucket is not an error.
+func TestQuietKeysMatchesKeys(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	kv, err := js.KeyValue(ctx, "AGENT_STATE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := quietKeys(ctx, js, "AGENT_STATE", kv); err != nil || len(got) != 0 {
+		t.Fatalf("empty bucket: %v, %v", got, err)
+	}
+	for _, k := range []string{"presence.t.a.i1", "presence.t.b.i2", "presence.t.c.i3"} {
+		if _, err := kv.PutString(ctx, k, `{}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := kv.Delete(ctx, "presence.t.b.i2"); err != nil {
+		t.Fatal(err)
+	}
+	want, err := kv.Keys(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := quietKeys(ctx, js, "AGENT_STATE", kv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || len(want) != 2 || got[0] != "presence.t.a.i1" || got[1] != "presence.t.c.i3" {
+		t.Fatalf("quietKeys %v, kv.Keys %v", got, want)
+	}
+}
