@@ -64,7 +64,9 @@ default list (DIGEST_INTERRUPTS), for the operator to edit.
 K12: `queue [--json]` is the operator's queue: the open Desk cards joined to ledger rows by their ask: links.
 A card whose linked PRs are all observed draft, merged or closed is hidden until director closes it; any other
 open card is shown, and a card no row links is "unclassified, shown". The checks that need card fields the
-snapshot lacks (kind, text, source) are listed as not run. Read only.
+snapshot lacks (kind, text, source) are listed as not run. Read only. While the ledger has a torn line nothing is
+hidden; dws never repairs one, so the operator clears it by correcting or removing that line of workstreams.jsonl
+(`dws show` and `dws queue` print the unreadable-line count), and hiding resumes on the next run.
 
 K19: `board-state` rewrites only the text between `<!-- state:begin -->` and `<!-- state:end -->` in
 $DIRECTOR_STATE/board.md from the ledger and the Desk snapshot (the block goes first when there are no
@@ -1216,7 +1218,7 @@ def queue_report():
                     # a torn ledger line may hold a PR state (a ready observation that would
                     # have kept this card), so nothing is hidden on a ledger that is not whole
                     shown.append({"card": card, "kind": "row", "ws": first["slug"], "stage": first["stage"],
-                                  "note": f"would be hidden ({p['state']}); shown because a torn ledger line may hold a PR state"})
+                                  "note": f"would be hidden ({p['state']}); shown because a torn ledger line may hold a PR state (hiding stays off until that line of workstreams.jsonl is fixed or removed)"})
                     continue
                 hidden.append({"card": card, "ws": p["ws"], "why": {"link": p["link"], "state": p["state"], "checked_at": p["checked_at"]}})
                 continue
