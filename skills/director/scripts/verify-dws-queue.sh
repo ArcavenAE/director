@@ -35,11 +35,11 @@ obs() {  # WS LINK STATE: a PR observation as dws refresh records it
 # --- fixtures -------------------------------------------------------------------------------------
 printf '{"c1":{"status":"open"},"c2":{"status":"open"},"c3":{"status":"open"},"c4":{"status":"open"},"c5":{"status":"open"},"c6":{"status":"open"},"c7":{"status":"open"},"c9":{"status":"closed"}}' >"$root/cards.json"
 "$SNAP" write --cards "$root/cards.json" --reported 8 >/dev/null
-"$DWS" open alpha --title a --owner director --link ask:c1 --link pr:o/r#1 >/dev/null
-"$DWS" open beta --title b --owner director --link ask:c2 --link pr:o/r#2 >/dev/null
-"$DWS" open gamma --title g --owner director --link ask:c3 --link pr:o/r#3 >/dev/null
-"$DWS" open delta --title d --owner director --link ask:c4 --link pr:o/r#4 >/dev/null
-"$DWS" open eps --title e --owner director --link ask:c6 --link pr:o/r#5 --link pr:o/r#6 >/dev/null
+"$DWS" open alpha --title a --owner director --link ask:c1 'pr:o/r#1' >/dev/null
+"$DWS" open beta --title b --owner director --link ask:c2 'pr:o/r#2' >/dev/null
+"$DWS" open gamma --title g --owner director --link ask:c3 'pr:o/r#3' >/dev/null
+"$DWS" open delta --title d --owner director --link ask:c4 'pr:o/r#4' >/dev/null
+"$DWS" open eps --title e --owner director --link ask:c6 'pr:o/r#5' 'pr:o/r#6' >/dev/null
 "$DWS" open zeta --title z --owner director --link ask:c7 >/dev/null
 "$DWS" open closedrow --title cr --owner director --link ask:c9 >/dev/null
 obs alpha 'pr:o/r#1' ready; obs beta 'pr:o/r#2' merged; obs gamma 'pr:o/r#3' draft
