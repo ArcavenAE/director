@@ -217,6 +217,64 @@ beside the command registration:
 
 Diagnostic: a marvel-managed agent that appears on the roster under the seat
 id rather than its own session name is missing that line.
+## Start the director
+
+A session is the director only when it is started as one. `scripts/director
+start` runs `claude --mcp-config config/director-mcp.json`, so the director MCP
+server comes from this repo and not from the folder the session opened in.
+Identity never sits in the repo or in a session folder. It comes from one small
+file per host, `$HOME/.director/seat.env`, or from flags.
+
+**First start.** Install the server and its seat launcher (see "The bus seat,
+by hand"), then write the seat file. One `KEY=value` per line, blank lines and
+whole-line `#` comments allowed, nothing executed; no comment after a value.
+Example, with placeholder values:
+
+```seat-env
+DIRECTOR_AGENT_ID=director
+DIRECTOR_TEAM=ops
+DIRECTOR_WORKSPACE=aae
+DIRECTOR_CLUSTER=kinu
+NATS_URL=nats://127.0.0.1:4222
+```
+
+`DIRECTOR_AGENT_ID`, `DIRECTOR_TEAM` and `DIRECTOR_WORKSPACE` are required. The
+other allowed keys are `DIRECTOR_CLUSTER` (`--cluster <name>` overrides it),
+`DIRECTOR_GLOBAL_DOMAIN` (empty keeps the global tier off), `DIRECTOR_GLOBAL_ROLE`,
+and `NATS_URL` (default `nats://127.0.0.1:4222`). Any other key is refused.
+
+Then run `scripts/director start`. The session is named `director`. The
+launcher stops with the missing key names, and runs nothing, when a required key
+(`DIRECTOR_AGENT_ID`, `DIRECTOR_TEAM`, `DIRECTOR_WORKSPACE`) is absent or the
+file holds a line it does not allow.
+
+**Restart.** `scripts/director start --resume director` resumes that session by
+name. Use `--cluster <name>` to start against another cluster without editing
+the file.
+
+**Recovery when the session is lost.** The director's state is on the bus and
+under `$HOME/.director/state`, not in the session, so a lost session costs
+conversation context only. Run `scripts/director start` again (a new session
+named `director`), or `claude --resume` to pick an older one and then
+`scripts/director start --resume <name>`. Nothing about the identity has to be
+rebuilt, because it was never in the session.
+
+**Prove the launcher, then clear the old entry.** Earlier setups left a
+project-local `director-mcp` entry for the aae-orc folder in
+`$HOME/.claude.json`, which makes every Claude session started there join the
+bus as the director. Do not remove it first: it is the only way left to start a
+director until the launcher is proven. In order:
+
+1. `scripts/director start`, in a new session.
+2. Inside that session, run `scripts/director prove`. It passes only when the
+   session was started by the launcher and the director MCP server is running
+   under it with the launch variable that only the config's env block sets,
+   which a server started by the old entry does not have (it needs `python3`). It writes `$HOME/.director/state/launch-proof`.
+3. `scripts/operator-steps/2026-10-20-remove-project-local-director-mcp.sh --check`,
+   then `--apply`. Both refuse without a proof from a launch that used the
+   current config, written in the last 7 days. `--apply` backs the file up and
+   removes that one entry, nothing else.
+
 ## Run the bus
 
 ```sh

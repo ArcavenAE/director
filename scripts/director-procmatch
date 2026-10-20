@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""director-procmatch --id <launch id> (--pid <pid> | --stdin)
+
+Exit 0 when the process is the director MCP server that the repo's MCP config
+started for this launch, 1 when it is not (the only refusal code), 2 when it
+cannot be read or the arguments are wrong, 3 when the pid is not a plain number
+from 1 to 2^31-1 (a wider one would be cut to 32 bits by the kernel call and
+read another process).
+
+The process must be the server binary (director-mcp) or the seat launcher
+(director-mcp-seat) by exact basename, alone or run by one of bash, sh, zsh or
+dash, with no other argument, and its environment must hold the entry
+DIRECTOR_LAUNCH_VIA_CONFIG=<id> exactly. That key is set only by the config's env
+block, so it shows the config's server started and its variable expanded; the
+launch id the session itself carries is inherited by every child and proves
+nothing. Arguments and environment are read as separate NUL-delimited lists, so
+text in one cannot pass for the other.
+
+--stdin takes {"argv": [...], "env": [...]} instead of a pid, for tests.
+"""
+import json
+import os
+import struct
+import sys
+
+SERVERS = {"director-mcp", "director-mcp-seat"}
+INTERPRETERS = {"bash", "sh", "zsh", "dash"}
+KEY = "DIRECTOR_LAUNCH_VIA_CONFIG"
+
+
+def read_pid(pid):
+    if sys.platform.startswith("linux"):
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0")[:-1]]
+        with open("/proc/%d/environ" % pid, "rb") as f:
+            env = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+        return argv, env
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2
+    size = ctypes.c_size_t(0)
+    if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
+        raise OSError("sysctl size")
+    buf = ctypes.create_string_buffer(size.value)
+    if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+        raise OSError("sysctl read")
+    data = buf.raw[: size.value]
+    (argc,) = struct.unpack("i", data[:4])
+    # Layout: argc, the executable path, NUL padding, then exactly argc arguments, then the
+    # environment. The padding is measured, not guessed: the path plus its NULs fill
+    # the next multiple of 8 above the path's length (checked on macOS 26 for path
+    # lengths 6 to 14), so an empty argv[0] is told apart from padding. Skipping every
+    # NUL would swallow an empty argv[0] and make the first environment entry argv[0].
+    body = data[4:]
+    path_len = body.index(b"\0") if b"\0" in body else len(body)
+    start = (path_len // 8 + 1) * 8
+    parts = body[start:].split(b"\0")
+    argv = [p.decode("utf-8", "replace") for p in parts[:argc]]
+    env = [p.decode("utf-8", "replace") for p in parts[argc:] if p]
+    return argv, env
+
+
+def matches(argv, env, launch_id):
+    base = lambda s: os.path.basename(s)
+    if len(argv) == 1:
+        named = base(argv[0]) in SERVERS
+    elif len(argv) == 2:
+        named = base(argv[0]) in INTERPRETERS and base(argv[1]) in SERVERS
+    else:
+        named = False
+    ours = [e for e in env if e.startswith(KEY + "=")]
+    return named and ours == ["%s=%s" % (KEY, launch_id)]
+
+
+def main(args):
+    if len(args) == 4 and args[0] == "--id" and args[2] in ("--pid", "--stdin"):
+        pass
+    elif len(args) == 3 and args[0] == "--id" and args[2] == "--stdin":
+        args = args + [""]
+    else:
+        sys.stderr.write(__doc__)
+        return 2
+    launch_id = args[1]
+    try:
+        if args[2] == "--stdin":
+            d = json.load(sys.stdin)
+            argv, env = d["argv"], d["env"]
+        else:
+            if not (args[3].isascii() and args[3].isdigit()) or not 1 <= int(args[3]) <= 2**31 - 1:
+                return 3
+            argv, env = read_pid(int(args[3]))
+    except (OSError, ValueError, KeyError, struct.error):
+        return 2
+    return 0 if matches(argv, env, launch_id) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
