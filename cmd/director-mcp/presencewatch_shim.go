@@ -184,6 +184,9 @@ func (p *presenceWatcher) noticeText(e watchEvent) string {
 	case "absent":
 		return fmt.Sprintf("presence: %s absent, last seen %s (%s, host sleep not counted)", e.Unit, p.lastSeen(e.Unit), p.w.AbsenceDuration(e.Unit, e.At).Round(time.Second))
 	case "back":
+		if e.Text != "" {
+			return fmt.Sprintf("presence: %s back; %s", e.Unit, e.Text)
+		}
 		return fmt.Sprintf("presence: %s back", e.Unit)
 	case "appeared":
 		return fmt.Sprintf("presence: %s seen", e.Unit)

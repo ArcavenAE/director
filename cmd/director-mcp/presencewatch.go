@@ -639,33 +639,69 @@ func (w *PresenceWatch) raiseLost(now time.Time, ev *[]watchEvent) {
 type hubParent struct {
 	Opened   time.Time `json:"opened"`
 	Clusters []string  `json:"clusters"`
+	// Out is the listed clusters still out: a listed cluster leaves it when it
+	// returns, and does not re-enter if it leaves again (design section 6). A
+	// state file from before this field reads as every listed cluster still out.
+	Out []string `json:"out,omitempty"`
+}
+
+// stillOut is the listed clusters not yet back, as the parent holds them.
+func (p *hubParent) stillOut() []string {
+	if p.Out == nil {
+		return p.Clusters
+	}
+	return p.Out
+}
+
+// inCluster reports whether a unit name (a cluster, or cluster/instance) belongs to
+// a cluster in set.
+func inCluster(name string, set []string) bool {
+	cl, _, _ := strings.Cut(name, "/")
+	for _, s := range set {
+		if s == cl {
+			return true
+		}
+	}
+	return false
 }
 
 // hubMove opens, closes or converts the hub-moved parent (cashp design section
 // 6). It runs only on a sighted pass. At least HubMoveMin clusters going absent
 // within HubMoveWindow, with no cluster left present, is a hub move and not N
-// separate losses. The parent closes when every listed cluster is back. When the
-// window has passed with none of the listed clusters back, it converts: the
-// per-cluster lost alerts take over at their own bounds, so a real multi-cluster
-// loss is not hidden behind it.
+// separate losses. The parent closes when every listed cluster is back. The window
+// bounds its life: when it has passed with any listed cluster still out, the
+// parent converts and each still-out cluster raises its own lost at its own
+// bound, at once if that bound has passed, so a real loss is not hidden behind it.
 func (w *PresenceWatch) hubMove(now time.Time, ev *[]watchEvent) {
 	if w.th.HubMoveMin <= 0 || w.th.HubMoveWindow <= 0 {
 		return
 	}
 	if p := w.Parent; p != nil {
 		var out []string
-		for _, n := range p.Clusters {
+		for _, n := range p.stillOut() {
 			if u := w.Units[n]; u == nil || u.Status != unitPresent {
 				out = append(out, n)
+			}
+		}
+		p.Out = out
+		if p.Out == nil {
+			p.Out = []string{}
+		}
+		if len(out) > 0 {
+			// each listed back names the clusters still out
+			for i := range *ev {
+				if e := &(*ev)[i]; e.Kind == "back" && e.Unit != "" && inCluster(e.Unit, p.Clusters) && !strings.Contains(e.Unit, "/") {
+					e.Text = "still out: " + strings.Join(out, ", ")
+				}
 			}
 		}
 		switch {
 		case len(out) == 0:
 			*ev = append(*ev, watchEvent{At: now, Kind: "hub-moved-closed", Text: "every cluster the hub-moved parent listed is back"})
 			w.Parent = nil
-		case len(out) == len(p.Clusters) && now.Sub(p.Opened) >= w.th.HubMoveWindow:
-			*ev = append(*ev, watchEvent{At: now, Kind: "hub-moved-converted", Text: fmt.Sprintf("none back after %s: %s; each is reported on its own lost bound", w.th.HubMoveWindow, strings.Join(out, ", "))})
-			for _, n := range p.Clusters {
+		case now.Sub(p.Opened) >= w.th.HubMoveWindow:
+			*ev = append(*ev, watchEvent{At: now, Kind: "hub-moved-converted", Text: fmt.Sprintf("%s passed with %s still out; each is reported on its own lost bound", w.th.HubMoveWindow, strings.Join(out, ", "))})
+			for _, n := range out {
 				if u := w.Units[n]; u != nil {
 					u.Lost = false
 				}
@@ -690,19 +726,22 @@ func (w *PresenceWatch) hubMove(now time.Time, ev *[]watchEvent) {
 		return
 	}
 	sort.Strings(gone)
-	w.Parent = &hubParent{Opened: now, Clusters: gone}
+	w.Parent = &hubParent{Opened: now, Clusters: gone, Out: gone}
 	*ev = append(*ev, watchEvent{At: now, Kind: "hub-moved", Text: fmt.Sprintf("clusters %s went absent together; per-cluster absent and lost notices are held while this is open", strings.Join(gone, ", "))})
 }
 
 // collapseUnderParent marks the pass's absent and lost events collapsed while a
-// parent is open: they stay in the event file and are left out of the notices.
+// parent is open, for the listed clusters still out only: they stay in the event
+// file and are left out of the notices. Every other cluster, including a listed
+// one that came back and left again, is raised as usual.
 func (w *PresenceWatch) collapseUnderParent(ev *[]watchEvent) {
 	if w.Parent == nil {
 		return
 	}
 	for i := range *ev {
-		if k := (*ev)[i].Kind; k == "absent" || k == "lost" {
-			(*ev)[i].Collapsed = true
+		e := &(*ev)[i]
+		if (e.Kind == "absent" || e.Kind == "lost") && inCluster(e.Unit, w.Parent.stillOut()) {
+			e.Collapsed = true
 		}
 	}
 }

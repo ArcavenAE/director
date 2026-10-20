@@ -95,7 +95,7 @@ func TestHubMoveBelowTheMinimumIsNoParent(t *testing.T) {
 }
 
 func TestHubMoveReturnsAreNotCollapsedAndTheParentClosesOnce(t *testing.T) {
-	w, c := hubWatch(30*time.Minute, 6)
+	w, c := hubWatchWin(30*time.Minute, 6, 30*time.Minute) // the window outlasts the test: it is not what ends the parent here
 	threeUp(t, w, c)
 	runPasses(w, c, 3)
 	var all []watchEvent
