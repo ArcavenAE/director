@@ -57,6 +57,12 @@ card-ingest's format. `grant-confirm <id> --card C --quote WORDS` records the gr
 (replacing the draft, which is never edited) only when the fresh Desk snapshot lists C as answered;
 the quote is the session's claim of the operator's words.
 
+K19: `board-state` rewrites only the text between `<!-- state:begin -->` and `<!-- state:end -->` in
+$DIRECTOR_STATE/board.md from the ledger and the Desk snapshot (the block goes first when there are no
+markers; a malformed pair is refused and nothing is written; dws never creates board.md). `board-check
+[--json]` lists the `ask:<id>` and `ws:<slug>` ids in the prose that resolve to no record, exits 0, and
+says "not checked" for an id whose store is UNREAD.
+
 K11: `reconcile [--json] [--out FILE]` reads the Desk snapshot, the ledger, rulings.jsonl,
 rings.jsonl and the PR state the ledger observed, and writes proposals (tag proposal) to
 $DIRECTOR_STATE/reconcile-proposals.json. It appends no record to any store. Each source
@@ -67,7 +73,7 @@ its window, a harvest due) is listed as not run, never counted as zero.
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
 """
-import argparse, datetime, fcntl, json, os, re, subprocess, sys, time, unicodedata
+import argparse, datetime, fcntl, json, os, re, subprocess, sys, tempfile, time, unicodedata
 
 HOME = os.path.expanduser("~")
 STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
@@ -996,6 +1002,158 @@ def cmd_show(a):
     if torn:
         print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
 
+# K19: the board's generated state section (sim/design/director-functions-redesign.md,
+# section 4, "Board"). `board-state` rewrites only the text between the two markers
+# in $DIRECTOR_STATE/board.md, from the ledger and the Desk snapshot; the authored
+# narrative around it is never touched. With no markers the block is put at the top.
+# A malformed pair is refused and nothing is written. `board-check` lists the ask: and
+# ws: ids in the prose that resolve to no record; it exits 0 (a diagnostic, SOUL
+# section 8), and an id whose store is UNREAD is "not checked", never "unresolved".
+BOARD_BEGIN = "<!-- state:begin -->"
+BOARD_END = "<!-- state:end -->"
+BOARD_TOKEN = re.compile(r"\b(ask|ws):([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
+
+
+def board_path():
+    return os.path.join(STATE, "board.md")
+
+
+def board_markers(lines):
+    """(begin, end) line indexes of the one generated block, (None, None) when there is none.
+    Anything else (a lone marker, two blocks, the end first) is refused: dws never guesses
+    which text is generated."""
+    begins = [i for i, l in enumerate(lines) if l.rstrip("\n") == BOARD_BEGIN]
+    ends = [i for i, l in enumerate(lines) if l.rstrip("\n") == BOARD_END]
+    if not begins and not ends:
+        return None, None
+    if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0]:
+        raise Refused(f"{board_path()} has {len(begins)} begin and {len(ends)} end marker(s); it needs "
+                      f"none, or exactly one {BOARD_BEGIN} followed by one {BOARD_END}. Nothing was written")
+    return begins[0], ends[0]
+
+
+def board_sources():
+    """The two stores the board reads: (rows or None, ledger source, snapshot or None, desk source)."""
+    rows, lsrc = None, {"state": "UNREAD", "why": f"no ledger at {LEDGER}"}
+    if os.path.isfile(LEDGER):
+        rows, torn = fold()
+        if not rows and (torn or ledger_has_lines()):
+            rows, lsrc = None, {"state": "UNREAD", "why": f"{LEDGER} has no readable row (torn {torn})"}
+        else:
+            lsrc = {"state": "read", "torn": torn}
+    snap, why = desk_snapshot()
+    dsrc = {"state": "read", "read_at": snap["read_at"]} if snap else {"state": "UNREAD", "why": why}
+    return rows, lsrc, snap, dsrc
+
+
+def board_block(t_now):
+    rows, lsrc, snap, dsrc = board_sources()
+    out = [BOARD_BEGIN,
+           f"## State (generated {t_now} by dws board-state; it is rewritten, so edit the text outside these markers)"]
+    ltxt = f"read {t_now}" + (f" (torn {lsrc['torn']})" if lsrc.get("torn") else "") if lsrc["state"] == "read" else f"UNREAD ({lsrc['why']})"
+    dtxt = f"read {dsrc['read_at']}" if dsrc["state"] == "read" else f"UNREAD ({dsrc['why']})"
+    out.append(f"sources: ledger {ltxt}; desk {dtxt}")
+    out.append(f"open Desk cards: {len(snap['open']) if snap else 'UNREAD'}")
+    if rows is None:
+        out.append("rows: UNREAD")
+    else:
+        by = {}
+        for r in rows.values():
+            by[r["stage"]] = by.get(r["stage"], 0) + 1
+        order = [st for st in STAGES if st in by] + sorted(st for st in by if st not in STAGES)
+        out.append(f"rows: {len(rows)}" + (" (" + ", ".join(f"{st} {by[st]}" for st in order) + ")" if by else ""))
+        for r in sorted_rows(rows):
+            asks = " ".join(l for l in r["links"] if ASK.match(l))
+            blocked = f"  blocked on {stored_form(r['blocked'])}" if r["blocked"] else ""
+            out.append(f"- {r['slug']}  {r['stage']}  {r['owner'] or 'no owner'}  moved {r['last_moved']}{blocked}" + (f"  {asks}" if asks else ""))
+    out.append(BOARD_END)
+    return out
+
+
+def cmd_board_state(a):
+    path = board_path()
+    if not os.path.isfile(path):
+        raise Refused(f"no board at {path}; the board is authored and dws never creates it")
+    with Locked(path + ".lock"):
+        with open(path, "rb") as f:
+            raw = f.read()
+        lines = raw.decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
+        begin, end = board_markers(lines)
+        block = [l + "\n" for l in board_block(now())]
+        if begin is None:
+            new = block + ["\n"] + lines
+        else:
+            new = lines[:begin] + block + lines[end + 1:]
+        data = "".join(new).encode("utf-8", errors="surrogateescape")
+        if data != raw:
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".board.md.tmp")
+            try:
+                os.fchmod(fd, os.stat(path).st_mode & 0o7777)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, path)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+    print(f"dws: wrote the state block in {path}")
+
+
+def cmd_board_check(a):
+    path = board_path()
+    if not os.path.isfile(path):
+        raise Refused(f"no board at {path}")
+    with open(path, "rb") as f:
+        lines = f.read().decode("utf-8", errors="replace").splitlines()
+    try:
+        begin, end = board_markers(lines)
+        note = None
+    except Refused as err:
+        begin, end, note = None, None, str(err)
+    rows, lsrc, snap, dsrc = board_sources()
+    ids = snap.get("ids") if snap and isinstance(snap.get("ids"), dict) else None
+    unresolved, not_checked, checked = [], [], 0
+    for n, line in enumerate(lines, 1):
+        if begin is not None and begin <= n - 1 <= end:
+            continue
+        for m in BOARD_TOKEN.finditer(line):
+            kind, ident = m.group(1), m.group(2)
+            token = f"{kind}:{ident}"
+            item = {"token": token, "line": n}
+            if kind == "ask":
+                if snap is None or ids is None:
+                    not_checked.append({**item, "why": "the Desk snapshot is UNREAD"})
+                    continue
+                resolved = ident in ids
+            else:
+                if rows is None:
+                    not_checked.append({**item, "why": "the ledger is UNREAD"})
+                    continue
+                resolved = ident in rows
+            checked += 1
+            if not resolved:
+                unresolved.append(item)
+    report = {"board": path, "sources": {"ledger": lsrc, "desk": dsrc}, "checked": checked,
+              "unresolved": unresolved, "not_checked": not_checked}
+    if note:
+        report["marker_problem"] = note
+    if a.json:
+        json.dump(report, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+        return
+    if note:
+        print(f"note: {note}; the whole board was read as prose")
+    print(f"board-check: {checked} id(s) checked, {len(unresolved)} unresolved, {len(not_checked)} not checked")
+    for u in unresolved:
+        print(f"unresolved   board.md:{u['line']}  {u['token']}")
+    for u in not_checked:
+        print(f"not checked  board.md:{u['line']}  {u['token']} ({u['why']})")
+
+
 # K9: rulings.jsonl, the store of rulings, grants and terms (R-201, R-204, R-184).
 # The file is the one merge-guard reads for exclusions (R-153); exclusions stay
 # the operator's and dws never writes one. The operator creates the file, so dws
@@ -1738,6 +1896,13 @@ def main(argv):
     ul.add_argument("--json", action="store_true")
     ul.add_argument("--since", help="only relay entries stamped on or after YYYY-MM-DD")
     ul.set_defaults(fn=cmd_unlinked)
+
+    bs = sub.add_parser("board-state", help="rewrite the generated state block in board.md between its markers (K19)")
+    bs.set_defaults(fn=cmd_board_state)
+
+    bc = sub.add_parser("board-check", help="list the ask: and ws: ids in the board prose that resolve to no record; exits 0 (K19)")
+    bc.add_argument("--json", action="store_true")
+    bc.set_defaults(fn=cmd_board_check)
 
     w = sub.add_parser("show")
     w.add_argument("--json", action="store_true")
