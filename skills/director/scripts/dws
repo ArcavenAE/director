@@ -57,6 +57,13 @@ card-ingest's format. `grant-confirm <id> --card C --quote WORDS` records the gr
 (replacing the draft, which is never edited) only when the fresh Desk snapshot lists C as answered;
 the quote is the session's claim of the operator's words.
 
+K12: `queue [--json]` is the operator's queue: the open Desk cards joined to ledger rows by their ask: links.
+A card whose linked PRs are all observed draft, merged or closed is hidden until director closes it; any other
+open card is shown, and a card no row links is "unclassified, shown". The checks that need card fields the
+snapshot lacks (kind, text, source) are listed as not run. Read only. While the ledger has a torn line nothing is
+hidden; dws never repairs one, so the operator clears it by correcting or removing that line of workstreams.jsonl
+(`dws show` and `dws queue` print the unreadable-line count), and hiding resumes on the next run.
+
 K19: `board-state` rewrites only the text between `<!-- state:begin -->` and `<!-- state:end -->` in
 $DIRECTOR_STATE/board.md from the ledger and the Desk snapshot (the block goes first when there are no
 markers; a malformed pair is refused and nothing is written; dws never creates board.md). `board-check
@@ -1160,6 +1167,84 @@ def cmd_board_check(a):
         print(f"not checked  board.md:{u['line']}  {u['token']} ({u['why']})")
 
 
+# K12: `queue`, the operator's queue with the presentation check applied (design
+# section 4, Q2 and Q5 as ruled). It reads the Desk snapshot and joins each open card
+# to the ledger rows that link it (ask:<id>). A card is hidden only when it links at
+# least one PR and every linked PR is observed draft, merged or closed (R-171, R-198;
+# Q5 c: the ask stays open until director closes it, and the queue hides it till then).
+# Every other open card is shown, and a card no row links is "unclassified, shown"
+# (Q2: no cap). The snapshot holds no card kind, text or source, so the clerical-relay
+# check (R-203), the no-source check and the grouping into merges, rulings and console
+# steps are listed as "check not run", never guessed. Read only.
+QUEUE_HIDDEN_PR = ("draft", "merged", "closed")
+QUEUE_NOT_RUN = [
+    {"check": "grouping by kind", "why": "the Desk snapshot holds no card kind"},
+    {"check": "clerical relay", "why": "the Desk snapshot holds no card text (R-203)"},
+    {"check": "claims with no source", "why": "the Desk snapshot holds no card source"},
+]
+
+
+def cmd_queue(a):
+    rows, lsrc, snap, dsrc = board_sources()
+    torn = lsrc.get("torn", 0) if lsrc["state"] == "read" else 0
+    report = {"sources": {"ledger": lsrc, "desk": dsrc}, "shown": None, "hidden": None, "counts": None,
+              "not_run": QUEUE_NOT_RUN}
+    if snap is not None:
+        shown, hidden = [], []
+        for card in sorted(snap["open"]):
+            linked = [] if rows is None else [r for r in sorted(rows.values(), key=lambda r: r["slug"])
+                                              if f"ask:{card}" in r["links"]]
+            if not linked:
+                shown.append({"card": card, "kind": "unclassified",
+                              "note": "no ledger row links it" if rows is not None else "the ledger is UNREAD"})
+                continue
+            prs, unread = [], []
+            for r in linked:
+                for l in r["links"]:
+                    if l.startswith("pr:"):
+                        o = r["observed"].get(l)
+                        st = (o.get("seen") or {}).get("state") if isinstance(o, dict) else None
+                        (prs if st else unread).append({"ws": r["slug"], "link": l, "state": st,
+                                                       "checked_at": o.get("checked_at") if isinstance(o, dict) else None})
+            first = linked[0]
+            if prs and not unread and all(p["state"] in QUEUE_HIDDEN_PR for p in prs):
+                p = prs[0]
+                if torn:
+                    # a torn ledger line may hold a PR state (a ready observation that would
+                    # have kept this card), so nothing is hidden on a ledger that is not whole
+                    shown.append({"card": card, "kind": "row", "ws": first["slug"], "stage": first["stage"],
+                                  "note": f"would be hidden ({p['state']}); shown because a torn ledger line may hold a PR state (hiding stays off until that line of workstreams.jsonl is fixed or removed)"})
+                    continue
+                hidden.append({"card": card, "ws": p["ws"], "why": {"link": p["link"], "state": p["state"], "checked_at": p["checked_at"]}})
+                continue
+            item = {"card": card, "kind": "row", "ws": first["slug"], "stage": first["stage"]}
+            if unread:
+                item["note"] = "PR state unread"
+            shown.append(item)
+        report.update({"shown": shown, "hidden": hidden,
+                       "counts": {"open": len(snap["open"]), "shown": len(shown), "hidden": len(hidden)}})
+    if a.json:
+        json.dump(report, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+        return
+    ltxt = ("read" + (f" (torn {lsrc['torn']})" if lsrc.get("torn") else "")) if lsrc["state"] == "read" else f"UNREAD ({lsrc['why']})"
+    if snap is None:
+        print(f"queue    UNREAD ({dsrc['why']}); ledger {ltxt}")
+    else:
+        print(f"queue    desk read {dsrc['read_at']}; ledger {ltxt}")
+        c = report["counts"]
+        print(f"shown {c['shown']} of {c['open']} open card(s)")
+        for x in report["shown"]:
+            where = f"unclassified ({x['note']})" if x["kind"] == "unclassified" else f"on {x['ws']} ({x['stage']})" + (f"; {x['note']}" if x.get("note") else "")
+            print(f"  {x['card']}  {where}")
+        print(f"hidden {c['hidden']} (shown again only if a linked PR is observed ready; gone once director closes the card)")
+        for x in report["hidden"]:
+            w = x["why"]
+            print(f"  {x['card']}  on {x['ws']}: {w['link']} is {w['state']} (checked {w['checked_at']})")
+    for n in QUEUE_NOT_RUN:
+        print(f"not run  {n['check']}: {n['why']}")
+
+
 # K9: rulings.jsonl, the store of rulings, grants and terms (R-201, R-204, R-184).
 # The file is the one merge-guard reads for exclusions (R-153); exclusions stay
 # the operator's and dws never writes one. The operator creates the file, so dws
@@ -1909,6 +1994,10 @@ def main(argv):
     bc = sub.add_parser("board-check", help="list the ask: and ws: ids in the board prose that resolve to no record; exits 0 (K19)")
     bc.add_argument("--json", action="store_true")
     bc.set_defaults(fn=cmd_board_check)
+
+    qu = sub.add_parser("queue", help="the operator's queue: open Desk cards with the presentation check applied; read only (K12)")
+    qu.add_argument("--json", action="store_true")
+    qu.set_defaults(fn=cmd_queue)
 
     w = sub.add_parser("show")
     w.add_argument("--json", action="store_true")
