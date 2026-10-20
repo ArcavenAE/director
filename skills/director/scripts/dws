@@ -422,7 +422,9 @@ def write_many(actor, plan, run_record=None):
         events = [stamp(actor, e) for e in plan(rows)]
         for e in events:
             append(e)
-        if run_record is not None:
+        # A fill launched by the board renderer (DWS_NO_RERENDER=1) is not a refresh run by director: it
+        # would move the ledger file's mtime on every render and so hide the page's "ledger Nm" age.
+        if run_record is not None and not os.environ.get("DWS_NO_RERENDER"):
             append(stamp(actor, run_record(events)))
     if events:
         rerender()

@@ -20,7 +20,8 @@ root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
 export HOME="$root/home"; mkdir -p "$HOME" "$root/bin"
 export DIRECTOR_STATE="$root/state"; mkdir -p "$DIRECTOR_STATE"
-export DWS_TEST_CLOCK=1 DWS_NOW=2030-12-31T00:00:00Z DWS_NO_RERENDER=1
+export DWS_TEST_CLOCK=1 DWS_NOW=2030-12-31T00:00:00Z
+unset DWS_NO_RERENDER
 LEDGER="$DIRECTOR_STATE/workstreams.jsonl"
 export RELAY_LOG="$root/relay.md"; : >"$RELAY_LOG"
 export CALLS="$root/calls"; : >"$CALLS"
@@ -60,6 +61,14 @@ tail -n 1 "$LEDGER" | python3 -c 'import json,sys; e=json.load(sys.stdin); asser
   && ok "refresh --local writes one with local true, as its last append" || bad "local run record" "$(tail -n 1 "$LEDGER") $(cat "$root/e")"
 "$DWS" show --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["last_refresh"]["at"]=="2030-12-31T01:00:00Z" and d["last_refresh"]["local"] is True' \
   && ok "the newest of either kind is last_refresh" || bad "newest of either kind"
+
+# a fill the board renderer launches (DWS_NO_RERENDER=1) is not a run by director and leaves no record,
+# so the page's "ledger Nm" age still shows when the ledger was last really written
+n0="$(lines)"
+DWS_NO_RERENDER=1 "$DWS" refresh --local >/dev/null 2>&1
+[[ "$(lines)" == "$n0" ]] && ok "a render-launched fill appends no run record" || bad "render-launched fill appends nothing" "$(( $(lines) - n0 ))"
+DWS_NO_RERENDER=1 "$DWS" refresh >/dev/null 2>&1
+[[ "$(lines)" == "$n0" ]] && ok "and neither does a render-launched refresh" || bad "render-launched refresh appends nothing"
 
 rm -f "$LEDGER"; DWS_NOW=2030-09-01T00:00:00Z "$DWS" open gamma --title "g" --stage idea >/dev/null 2>&1
 "$DWS" show --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["last_refresh"] is None, d["last_refresh"]' \
