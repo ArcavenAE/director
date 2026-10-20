@@ -107,7 +107,8 @@ func (p *presenceWatcher) tick(ctx context.Context) {
 		p.log("presence watch: event file not written: %v", err)
 	}
 	for _, e := range evs {
-		if !e.Collapsed {
+		// a capped notice stays in the events file; only the hourly summary reaches the reader
+		if !e.Collapsed && !e.Capped {
 			p.pending = append(p.pending, p.noticeText(e))
 		}
 	}
