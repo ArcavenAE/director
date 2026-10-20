@@ -260,3 +260,106 @@ func TestShimQueuesNoCappedNotice(t *testing.T) {
 		t.Fatalf("the shim queued %d notices, want %d (the %d capped must stay in the file only): %q", len(p.pending), queued, capped, p.pending)
 	}
 }
+
+// cashp C3 amended 2026-10-20 (review 5586449061 item 2, design section 6 and 8):
+// the window bounds the parent's life, the collapse covers only listed clusters
+// still out, and each listed back names those still out.
+
+// hubWatchWin is hubWatch with the hub-move window set, so a test can hold a
+// parent open as long as it needs.
+func hubWatchWin(lostAfter time.Duration, cap int, window time.Duration) (*PresenceWatch, *wclock) {
+	th := defaultWatchThresholds()
+	th.LostAfter, th.AlertCap, th.HubMoveWindow = lostAfter, cap, window
+	return newPresenceWatch(th), newWclock()
+}
+
+// shownFor counts events of a kind for one unit that would reach the reader.
+func shownFor(evs []watchEvent, unit, kind string) int {
+	n := 0
+	for _, e := range evs {
+		if e.Unit == unit && e.Kind == kind && !e.Collapsed && !e.Capped {
+			n++
+		}
+	}
+	return n
+}
+
+func TestHubMovePartialReturnNamesTheClustersStillOutAndConvertsAtTheWindow(t *testing.T) {
+	w, c := hubWatch(time.Minute, 6)
+	threeUp(t, w, c)
+	open := runPasses(w, c, 3)
+	if shown(open, "hub-moved") != 1 {
+		t.Fatalf("CONTROL FAILED: the parent should be open: %+v", open)
+	}
+	back := runPasses(w, c, 2, rowsFor("c1")...)
+	named := false
+	for _, e := range back {
+		if e.Kind == "back" && e.Unit == "c1" && strings.Contains(e.Text, "c2") && strings.Contains(e.Text, "c3") {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("c1's back should name c2 and c3 as still out: %+v", back)
+	}
+	later := runPasses(w, c, 6, rowsFor("c1")...) // past the 2 minute window with c1 back
+	if count(later, "hub-moved-converted") != 1 {
+		t.Fatalf("the window bounds the parent: it converts once with c2 and c3 out, got %+v", later)
+	}
+	if shownFor(later, "c2", "lost") != 1 || shownFor(later, "c3", "lost") != 1 {
+		t.Fatalf("c2 and c3 each raise a shown lost at their own bound, got %+v", later)
+	}
+}
+
+func TestHubMoveAClusterOutsideTheParentIsNeverCollapsed(t *testing.T) {
+	w, c := hubWatchWin(time.Minute, 6, 30*time.Minute)
+	runPasses(w, c, 2, rowsFor("c1", "c2")...)
+	open := runPasses(w, c, 3)
+	if shown(open, "hub-moved") != 1 {
+		t.Fatalf("CONTROL FAILED: the parent listing c1 and c2 should be open: %+v", open)
+	}
+	runPasses(w, c, 2, rowsFor("c4")...) // c4 appears while the parent is open
+	if u := w.Unit("c4"); u == nil || u.Status != unitPresent {
+		t.Fatal("CONTROL FAILED: c4 should be present")
+	}
+	gone := runPasses(w, c, 5)
+	if shownFor(gone, "c4", "absent") != 1 || shownFor(gone, "c4", "lost") != 1 {
+		t.Fatalf("c4 is not listed, so its absent and lost are shown, not collapsed: %+v", gone)
+	}
+}
+
+func TestHubMoveAListedClusterThatReturnsAndLeavesAgainIsShown(t *testing.T) {
+	w, c := hubWatchWin(time.Minute, 6, 30*time.Minute)
+	runPasses(w, c, 2, rowsFor("c1", "c2")...)
+	runPasses(w, c, 3)
+	back := runPasses(w, c, 2, rowsFor("c1")...)
+	if shownFor(back, "c1", "back") != 1 {
+		t.Fatalf("CONTROL FAILED: c1 should be back: %+v", back)
+	}
+	again := runPasses(w, c, 5)
+	if shownFor(again, "c1", "absent") != 1 {
+		t.Fatalf("c1 came back and left again while the parent is open: its absent is shown, got %+v", again)
+	}
+	if shownFor(again, "c2", "absent") != 0 {
+		t.Fatalf("c2 is still out and listed: its events stay collapsed, got %+v", again)
+	}
+}
+
+func TestAlertCapHourIsWallClockSoHostSleepCountsTowardIt(t *testing.T) {
+	w, c := hubWatch(time.Minute, 1)
+	up := rowsFor("keep", "c1", "c2", "c3")
+	runPasses(w, c, 2, up...)
+	first := runPasses(w, c, 5, rowsFor("keep", "c2", "c3")...)
+	if shownFor(first, "c1", "lost") != 1 {
+		t.Fatalf("CONTROL FAILED: the first lost uses the cap of 1: %+v", first)
+	}
+	c.wall = c.wall.Add(40 * time.Minute) // the host sleeps: wall time moves, the monotonic clock does not
+	second := runPasses(w, c, 5, rowsFor("keep", "c3")...)
+	if shownFor(second, "c2", "lost") != 0 {
+		t.Fatalf("40 minutes of sleep still sit inside the cap's hour: c2's lost is held, got %+v", second)
+	}
+	c.wall = c.wall.Add(30 * time.Minute)
+	third := runPasses(w, c, 5, rowsFor("keep")...)
+	if shownFor(third, "c3", "lost") != 1 {
+		t.Fatalf("the hour has passed on the wall clock: c3's lost is shown, got %+v", third)
+	}
+}
