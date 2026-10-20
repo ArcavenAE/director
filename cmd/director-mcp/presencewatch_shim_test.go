@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -395,4 +396,52 @@ func newWatchStoreUnit(t *testing.T, fx *watchFx, name string) *watchUnit {
 		t.Fatal(err)
 	}
 	return w.Unit(name)
+}
+
+// failPutKV is the hub's bucket with writes refused and reads answering: the
+// case where the heartbeat's Put fails and the pass still runs.
+type failPutKV struct{ jetstream.KeyValue }
+
+func (failPutKV) Put(context.Context, string, []byte) (uint64, error) {
+	return 0, errors.New("put refused")
+}
+
+// cashp C1, review 5586151571: the want is the ts of the last write ATTEMPTED.
+// When a tick's Put fails and reads still answer, the previous tick's row is
+// not this tick's row, so the pass is self-unseen and no absence is inferred.
+func TestWatchFailedOwnWriteIsSelfUnseenNotAnInference(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	fx := newWatchFx(t, ctx, 0, true)
+	fx.put("c1", "s1", "working")
+	fx.tick()
+	fx.put("c1", "s1", "working")
+	fx.tick()
+	if count(fx.events(), "self-unseen") != 0 {
+		t.Fatalf("CONTROL FAILED: sighted passes raised self-unseen: %+v", fx.events())
+	}
+
+	// the cluster's row is gone, the director's own write now fails, reads answer
+	if err := fx.kv.Delete(ctx, "presence.c1.supervisor.s1"); err != nil {
+		t.Fatal(err)
+	}
+	g, err := fx.bus.globalReady(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.kv = failPutKV{g.kv}
+	time.Sleep(1100 * time.Millisecond) // the row's ts has one second resolution
+	for i := 0; i < 3; i++ {
+		if msg := fx.bus.writeGlobalPresence(ctx, "working"); msg == "" {
+			t.Fatal("CONTROL FAILED: the refused write should report a failure")
+		}
+		fx.tickNoBeat()
+	}
+	ev := fx.events()
+	if count(ev, "absent") != 0 {
+		t.Fatalf("a pass whose own write failed must not infer absence from the stale own row, got %+v", ev)
+	}
+	if count(ev, "self-unseen") != 1 {
+		t.Fatalf("self-unseen should be recorded once, got %+v", ev)
+	}
 }
