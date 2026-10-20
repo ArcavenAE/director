@@ -4,7 +4,8 @@ package main
 // how much is waiting, how old the oldest waiting message is, and which shim
 // revision the seat's live session runs. It is computed from the durables'
 // ack floors and the stream's stored timestamps, so it touches no seat: it
-// creates no consumer, acks nothing and writes no presence row.
+// creates no consumer (the presence buckets are listed from stream info, not
+// with kv.Keys, whose watcher is one), acks nothing and writes no presence row.
 //
 // Diagnostic, not a gate: it always exits 0 once it has printed a report.
 //
@@ -291,6 +292,33 @@ var (
 	unreadScanCap    = 2000
 )
 
+// quietKeys lists a bucket's live keys without creating a consumer. kv.Keys
+// opens a watcher, which is an ephemeral consumer on the bucket's stream, so
+// it reads the stream's subject list from stream info and drops the keys whose
+// latest entry is a delete or purge marker (Get reports those as not found).
+// It returns no error for an empty bucket.
+func quietKeys(ctx context.Context, js jetstream.JetStream, bucket string, kv jetstream.KeyValue) ([]string, error) {
+	stream, err := js.Stream(ctx, "KV_"+bucket)
+	if err != nil {
+		return nil, err
+	}
+	prefix := "$KV." + bucket + "."
+	info, err := stream.Info(ctx, jetstream.WithSubjectFilter(prefix+">"))
+	if err != nil {
+		return nil, err
+	}
+	var keys []string
+	for subj := range info.State.Subjects {
+		k := strings.TrimPrefix(subj, prefix)
+		if _, err := kv.Get(ctx, k); errors.Is(err, jetstream.ErrKeyNotFound) {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys, nil
+}
+
 // readUnread builds the local report. Its only calls are reads: consumer and
 // stream info, stored-message gets, and presence key reads.
 func readUnread(ctx context.Context, js jetstream.JetStream, now time.Time) (unreadReport, error) {
@@ -303,8 +331,8 @@ func readUnread(ctx context.Context, js jetstream.JetStream, now time.Time) (unr
 	if kv, err := js.KeyValue(ctx, "AGENT_STATE"); err != nil {
 		r.Warnings = append(r.Warnings, "presence bucket AGENT_STATE unreadable: "+err.Error()+"; presence below is NOT established")
 	} else {
-		keys, err := kv.Keys(ctx)
-		if err != nil && !errors.Is(err, jetstream.ErrNoKeysFound) {
+		keys, err := quietKeys(ctx, js, "AGENT_STATE", kv)
+		if err != nil {
 			r.Warnings = append(r.Warnings, "presence keys unreadable: "+err.Error()+"; presence below is NOT established")
 		}
 		for _, k := range keys {
@@ -870,8 +898,8 @@ func readUnreadGlobal(ctx context.Context, nc *nats.Conn, domain string, now tim
 	if kv, err := gjs.KeyValue(ctx, globalPresenceBucket); err != nil {
 		presenceWarn = "presence bucket " + globalPresenceBucket + " unreadable: " + err.Error() + "; presence below is NOT established"
 	} else {
-		keys, err := kv.Keys(ctx)
-		if err != nil && !errors.Is(err, jetstream.ErrNoKeysFound) {
+		keys, err := quietKeys(ctx, gjs, globalPresenceBucket, kv)
+		if err != nil {
 			presenceWarn = "presence keys unreadable: " + err.Error() + "; presence below is NOT established"
 		}
 		for _, k := range keys {
