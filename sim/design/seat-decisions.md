@@ -74,14 +74,16 @@ no instance id is stored:
 
 **States.** `decided-by-seat`, then `confirmed` or `overridden`; an
 overridden decision becomes `reworked` once every affected row is resolved.
-No other move exists, and none happens on a clock.
+A two-path record (section 8) starts as `paths-open` and moves to
+`decided-by-seat` only by `pick`. No other move exists, and none happens on
+a clock.
 
 | command (actor director) | effect | refuses when |
 |---|---|---|
 | `dws decision add --from FILE` | parses one `seat-decision@1` block and appends `decided-by-seat` | a field is missing, unknown or repeated; the id exists; the test is not eight oks; the estimate is over 4 |
 | `dws decision actual <id> --hours H --source S` | records the actual figure | the id is unknown |
 | `dws decision confirm <id> --words W --ref R` | `confirmed`; W is the operator's words, R the relay id | not `decided-by-seat`; W empty |
-| `dws decision override <id> --words W --ref R --instead I` | `overridden`; prints the affected list (section 6) | not `decided-by-seat`; W empty |
+| `dws decision override <id> --words W --ref R --instead I` | `overridden`; prints the decision's own `changes` (D1), and from D2 the full affected list of section 6 | not `decided-by-seat`; W empty |
 | `dws decision rework <id>` | `reworked` | any affected row is still open (section 6) |
 | `dws decisions [--json] [--unconfirmed] [--daily]` | lists decisions; `--daily` prints the daily line | never; it writes nothing |
 
@@ -120,15 +122,33 @@ dws set <slug> --waits decision:<id> [--waits ask:<card id> ...]
 dws set <slug> --unwait decision:<id>
 ```
 
-- `decision:<id>` is a new link type. `dws` refuses it unless the id is a
-  decision in the same fold.
-- `ask:<card>` keeps K13: the card must be open in a fresh Desk snapshot.
-  `--blocked operator --ask` keeps working and means one `ask:` wait.
-- Edges are stored as links, so `dws show --json` carries them and `refresh`
-  names them as not read, as it does `ask:` today.
-- A row stays waiting until the edge is removed or the decision is
-  confirmed. A confirmed decision's edges are shown as met, not deleted, so
-  the history of what waited on what stays in the ledger.
+- **A decision edge is not a link.** `--waits decision:<id>` appends a
+  `wait` event (`{"event": "wait", "ws": <slug>, "add": [<id>]}`, or
+  `"remove"`), and the fold keeps a row's decision edges in their own field,
+  `waits`, apart from `links`. Main's `dws link [--remove]` adds and drops any
+  string in `links` with no check but the `relay:` and `msg:` forms
+  (`cmd_link`, `typed_link`, and the fold's `link` branch). So `link` gains
+  one refusal: a link that starts with `decision:` is refused, with the text
+  "a decision edge is set with dws set --waits, which holds it to the
+  window". The only way an edge enters or leaves is `--waits` and
+  `--unwait`, where the window and the removal checks below run.
+- `--waits decision:<id>` is refused unless the id is a decision in the same
+  fold.
+- `--unwait decision:<id>` is refused while the decision is
+  `decided-by-seat`: an edge cannot be dropped before a confirm, so a PR
+  cannot stop waiting by losing its edge. A row that is abandoned while the
+  decision is unconfirmed is parked instead (section 5). After a confirm the
+  edge is shown as met and may stay; after an override, `--unwait` is how a
+  row is marked as redone on the new choice (section 6).
+- `ask:<card>` waits keep K13 and stay links, as today: the card must be
+  open in a fresh Desk snapshot, and `--blocked operator --ask` keeps working
+  and means one `ask:` wait. The window and `merge-guard` read decision edges
+  only.
+- `dws show --json` carries `waits` beside `links`. A confirmed decision's
+  edges are shown as met, not deleted, so the history of what waited on
+  what stays in the ledger.
+- The actor is director, as for every `dws` write: a seat asks, and director
+  sets or removes the edge on the seat's word (section 2).
 
 Rows whose owners do not link their work get no edges (the card's stated
 cost). Nothing infers an edge from text.
@@ -145,6 +165,9 @@ is not `parked`. Each dependent names its change with a `pr:` link.
 2. it already has three dependents; or
 3. the call comes more than five days (120 hours, by the ledger clock) after
    the decision's `add` event.
+
+The same three checks run when `dws stage` or `dws park` would move a row
+with a decision edge out of `parked`, since that makes it a dependent again.
 
 The refusal text ends with "window full: stop, and the decision goes to the
 top of the operator's list", and `dws decisions --unconfirmed` lists a full
@@ -163,7 +186,9 @@ STOP <repo>#<n>: waits on seat decision <id>, not confirmed (seat-decide-window)
 and exits 1. A ledger it cannot read stops too, as every other read in
 `merge-guard` does. A PR the ledger does not link is not stopped by this
 read; that is the same limit as section 4, and the stacked-PR rule still
-governs the order of the ready PRs.
+governs the order of the ready PRs. The read also covers only merges made
+through `merge-guard`: a merge typed past it, by any session, is not stopped,
+as `merge-guard`'s own header says of every check it runs.
 
 ## 6. The order, and the affected list on override
 
@@ -176,14 +201,17 @@ governs the order of the ready PRs.
 4. then the seat-hours an override would throw away, most first: the
    decision's `actual_h` where recorded, else its `estimate_h`.
 
-Ties keep id order, so two runs on the same ledger print the same list.
+Ties are broken by seat label, then date, then the number `<n>` compared as
+a number, so `-10` sorts after `-2` and two runs on the same ledger print the
+same list.
 
 **Affected list.** `dws decision override` prints, and `dws decisions --json`
 carries, every row with an edge to the decision, each with its stage and its
 `pr:` links, plus the decision's own `changes`. `rework` refuses while any of
-those rows still has its edge to this decision and is not `parked`. A seat
-removes the edge (`--unwait`) when it has redone the row on the new choice,
-and parks the row when it closed the work. None of them can be merged, since
+those rows still has its edge to this decision and is not `parked`. When a
+seat has redone the row on the new choice, director removes the edge on its
+word (`--unwait`, allowed once the decision is overridden), and when the seat
+closed the work, director parks the row. None of them can be merged, since
 section 5 stops every merge until a confirm. So "reworked" means every
 affected row was closed or redone, as card 5 defines it.
 
@@ -210,23 +238,39 @@ The card covers a choice that waits on the operator: an open Desk card, not
 a seat decision. Its record is a decision event of a second kind:
 
 ```
-dws decision paths --card <card id> --evidence E --estimate H --row-a SLUG --row-b SLUG \
-                   --why-waiting W --test-a "1 ok ... 8 ok" --test-b "1 ok ... 8 ok"
+dws decision paths <id> --card <card id> --evidence E --why-waiting W \
+                   --row-a SLUG --estimate-a H --test-a "1 ok ... 8 ok" \
+                   --row-b SLUG --estimate-b H --test-b "1 ok ... 8 ok"
 ```
 
-It refuses unless all four parts hold as recorded: the two estimates add to
-4 seat-hours or less (part 1); the card is open in a fresh snapshot, so it
-waits on the operator (part 2; `--why-waiting` says why the seats would
-otherwise idle); `--evidence` names the evidence before either path starts
-(part 3); and each path's test reads eight oks (part 4). A third path is
-refused. Each row gets a `decision:<id>` edge.
+The record's state is `paths-open` until `pick`. It refuses unless all four
+parts hold as recorded: the two estimates add to 4 seat-hours or less (part
+1); the card is open in a fresh snapshot, so it waits on the operator (part
+2; `--why-waiting` says why the seats would otherwise idle); `--evidence`
+names the evidence before either path starts (part 3); and each path's test
+reads eight oks (part 4).
+
+**Two paths, and no third.** `paths` writes the edges from its two rows
+itself, in the same append. Then:
+- a second `paths` naming a card that already has a `paths-open` record is
+  refused;
+- `--waits decision:<id>` on a `paths-open` record is refused for every row,
+  since section 5's first check refuses an edge to any decision that is not
+  `decided-by-seat`, and `paths-open` is not; so the two rows `paths` wrote
+  are the only edges it can ever have;
+- `--unwait` on a `paths-open` record is refused, as for a `decided-by-seat`
+  one, and `merge-guard` stops a PR on either row, since the record is not
+  `confirmed`.
 
 When the evidence arrives, `dws decision pick <id> --winner a|b --result R`
 records it. The loser's row must already be `parked` with its PR closed as a
 draft (refresh reads that), and `--result` must name where the loser's lessons
-went in the winner's PR notes. The winner then becomes an ordinary
-`decided-by-seat` record and goes through section 3: the operator still
-confirms it.
+went in the winner's PR notes. `pick` moves the same record, same id, from
+`paths-open` to `decided-by-seat`, with the winner as `chosen` and the
+winner's estimate as `estimate_h`. The winner's row keeps its edge, as the
+decision's one dependent, and the record goes through section 3: the
+operator still confirms it. `pick` on a record that is not `paths-open` is
+refused.
 
 ## 9. Build split (stacked-PR rule d: one chain)
 
@@ -235,8 +279,8 @@ each based on the one before, merged in order:
 
 | link | repo | contents | tests, red first |
 |---|---|---|---|
-| D1 | director | section 3: decision events, `add --from`, `actual`, `confirm`, `override`, `rework` (state checks only), `decisions --json/--unconfirmed/--daily` | `verify-dws-decisions.sh`: one fixture per refusal in section 3's table; a skip leaves the state unchanged; no command moves a state on a clock (fixed `DWS_NOW` a year later, state unchanged) |
-| D2 | director, based on D1 | sections 4, 5, 6 and 8: `--waits`/`--unwait`, the window refusals, the order, the affected list, `rework`'s row check, `paths` and `pick`, and the `merge-guard` read | each window refusal; the order with a tie; `merge-guard` STOP on a waiting PR and on an unreadable ledger, PROCEED once confirmed (extends `verify-merge-guard.sh`) |
+| D1 | director | section 3: decision events, `add --from`, `actual`, `confirm`, `override`, `rework` (state checks only), `decisions --json/--unconfirmed/--daily` | `verify-dws-decisions.sh`: one fixture per refusal in section 3's table; a skip leaves the state unchanged; no command moves a state on a clock (`DWS_TEST_CLOCK=1` with `DWS_NOW` a year later, state unchanged; without `DWS_TEST_CLOCK=1`, `dws` ignores `DWS_NOW`) |
+| D2 | director, based on D1 | sections 4, 5, 6 and 8: `--waits`/`--unwait`, the window refusals, the order, the affected list, `rework`'s row check, `paths` and `pick`, and the `merge-guard` read | each window refusal; `dws link X decision:<id>` refused; `--unwait` before a confirm refused; un-parking a fourth dependent refused; a second `paths` on the same card refused; `--waits` to a `paths-open` id refused; `pick` on a record not `paths-open` refused; the order with a tie, and `-10` after `-2`; `merge-guard` STOP on a waiting PR, on a `paths-open` row and on an unreadable ledger, PROCEED once confirmed (extends `verify-merge-guard.sh`) |
 | D3 | director, based on D2 | section 7: the `board-html` section | `verify-board-html.sh`: the empty ledger line; order matches `dws decisions --unconfirmed`; no colour-only state |
 
 The Desk mirror (section 3) is director's own step and goes with D1's
@@ -245,6 +289,9 @@ once with `add --from`, so the trial's counts come from one place.
 
 ## 10. Not covered
 
+- A `paths` record whose Desk card the operator rules before `pick` is not
+  handled here: the seats' paths still wait, and director closes the record
+  by hand. Whether that should be a state of its own is open.
 - Who may write the Desk's confirm or override is honour-only, as for every
   Desk answer: the answer row carries no author.
 - A seat that acts without sending the record is not seen by any of this.
