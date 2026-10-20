@@ -218,7 +218,7 @@ def fold(path=LEDGER, tally=None):
     a re-open that resets a row are both in it (K8)."""
     rows, torn = {}, 0
     try:
-        f = open(path, encoding="utf-8")
+        f = open(path, "rb")
     except FileNotFoundError:
         return rows, 0
     with f:
@@ -226,7 +226,7 @@ def fold(path=LEDGER, tally=None):
             if not line.strip():
                 continue
             try:
-                e = json.loads(line)
+                e = json.loads(line.decode("utf-8"))
             except ValueError:
                 torn += 1
                 continue
@@ -1018,13 +1018,20 @@ def need_file(path):
         raise Refused(f"the rulings path {path} exists and is not a file")
 
 
+def ledger_has_lines():
+    """True when the ledger holds any non-blank line: lines that all parse but fold to no row
+    are not an empty ledger."""
+    with open(LEDGER, "rb") as f:
+        return any(l.strip() for l in f)
+
+
 def fold_records(path):
     """The records in file order, each with replaced_by (the ids whose replaces
     names it), how many lines could not be read, and the replaces pointers that
     resolve to nothing or to another kind. A pointer is never guessed at."""
     records, torn = [], 0
     try:
-        f = open(path, encoding="utf-8")
+        f = open(path, "rb")
     except FileNotFoundError:
         return records, 0, []
     with f:
@@ -1032,7 +1039,7 @@ def fold_records(path):
             if not line.strip():
                 continue
             try:
-                e = json.loads(line)
+                e = json.loads(line.decode("utf-8"))
             except ValueError:
                 torn += 1
                 continue
@@ -1310,6 +1317,15 @@ def ring_status(r, t_now):
     return "rung"
 
 
+CLAIMS_NOTE = "idle minutes and mail are the caller's claims; dws cannot see either"
+_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")
+
+
+def printable(text):
+    """Text from a record, made safe for a terminal: control and bidi runes shown as \\uXXXX."""
+    return _UNSAFE.sub(lambda m: "\\u%04x" % ord(m.group()), str(text))
+
+
 def cmd_ring(a):
     if a.actor != "director":
         raise Refused(f"actor {a.actor!r} may not ring a seat; only director does")
@@ -1327,7 +1343,7 @@ def cmd_ring(a):
                           f"(the cap is {RING_CAP}); report it as stuck, with its blocker if it showed one (Q6)")
         append({"ts": t_now, "actor": a.actor, "event": "ring", "seat": seat,
                 "idle_minutes": a.idle_minutes, "mail": a.mail}, RINGS)
-    print(f"dws: recorded a ring for {seat}")
+    print(f"dws: recorded a ring for {seat} ({CLAIMS_NOTE})")
 
 
 def cmd_ring_note(a):
@@ -1360,12 +1376,14 @@ def cmd_rings(a):
                      "rings_total": len(r["rings"]), "last_ring": r["last_ring"], "first_turn": r["first_turn"],
                      "ack": r["ack"], "blocker": r["blocker"], "blocker_at": r["blocker_at"]}
     if a.json:
-        json.dump({"file": RINGS, "torn": torn, "seats": out}, sys.stdout, indent=2, ensure_ascii=False)
+        json.dump({"file": RINGS, "torn": torn, "note": CLAIMS_NOTE, "seats": out}, sys.stdout, indent=2, ensure_ascii=False)
         print()
     else:
         for seat, v in out.items():
-            extra = f"  blocker: {v['blocker']}" if v["blocker"] else ""
-            print(f"{seat}  {v['status']}  rings in the last hour {v['rings_in_window']}  last ring {v['last_ring']}{extra}")
+            extra = f"  blocker: {printable(v['blocker'])}" if v["blocker"] else ""
+            print(f"{printable(seat)}  {v['status']}  rings in the last hour {v['rings_in_window']}  last ring {v['last_ring']}{extra}")
+        if out:
+            print(f"note: {CLAIMS_NOTE}")
     if torn:
         print(f"dws: {torn} unreadable line(s) in {RINGS} skipped, not repaired", file=sys.stderr)
 
@@ -1439,6 +1457,8 @@ def cmd_grant_confirm(a):
         raise Refused(f"the Desk snapshot is {why}; a session reads the Desk and runs desk-snapshot write --answers")
     if "answered" not in snap:
         raise Refused("the Desk snapshot is UNREAD for answers: it was written without --answers")
+    if not isinstance(snap["answered"], list) or not all(isinstance(x, str) for x in snap["answered"]):
+        raise Refused("the Desk snapshot is UNREAD for answers: its answered field is not a list of card ids")
     if card not in snap["answered"]:
         raise Refused(f"card {card!r} is not answered in the Desk snapshot read at {snap['read_at']}; "
                       "a draft grant has no effect until the operator answers its card")
@@ -1451,13 +1471,14 @@ def cmd_grant_confirm(a):
             n += 1
             rid = f"{g['id']}-confirmed-{n}"
         rec = {"kind": "grant", "id": rid, "ts": now(), "actor": a.actor, "tag": "mirror",
-               "source": stored_form(f"Desk card {card}, answered per the snapshot read {snap['read_at']}"),
+               "source": stored_form(f"Desk card {card}, answered per the snapshot read {snap['read_at']}; "
+                                     "the quote is the session's claim of the operator's words, not read by dws"),
                "subject": g["subject"], "scope": g["scope"], "to": g["to"], "state": "confirmed",
                "text": g["text"], "card": card, "quote": quote, "replaces": g["id"]}
         if g.get("expires"):
             rec["expires"] = g["expires"]
         append(rec, path)
-    print(f"dws: wrote grant {rid}, confirmed on card {card}, replacing {a.id}")
+    print(f"dws: wrote grant {rid}, confirmed on card {card}, replacing {a.id}; the quote is the session's claim, not read by dws")
 
 
 # K11: the reconciler. It reads the Desk snapshot, the ledger, rulings.jsonl,
@@ -1502,7 +1523,7 @@ def cmd_reconcile(a):
     if os.path.isfile(LEDGER):
         try:
             rows, torn = fold()
-            if torn and not rows:
+            if not rows and (torn or ledger_has_lines()):
                 sources["ledger"] = {"state": "UNREAD", "why": f"{LEDGER} has no readable row (torn {torn})"}
             else:
                 sources["ledger"] = {"state": "read", "read_at": t_now, "torn": torn}
@@ -1743,10 +1764,12 @@ def main(argv):
     ih.add_argument("--json", action="store_true")
     ih.set_defaults(fn=cmd_inherit)
 
-    rg = sub.add_parser("ring", help="record a ring of an idle seat with mail; at most 3 an hour (K14)")
+    rg = sub.add_parser("ring", help="record a ring of an idle seat with mail; at most 3 an hour (K14). --idle-minutes and --mail are the caller's claims; dws cannot see either")
     rg.add_argument("seat")
-    rg.add_argument("--idle-minutes", dest="idle_minutes", type=int, required=True)
-    rg.add_argument("--mail", type=int, required=True)
+    rg.add_argument("--idle-minutes", dest="idle_minutes", type=int, required=True,
+                    help="minutes the seat has been idle, the caller's claim (dws cannot see it)")
+    rg.add_argument("--mail", type=int, required=True,
+                    help="messages waiting for the seat, the caller's claim (dws cannot see it)")
     rg.set_defaults(fn=cmd_ring)
 
     rn = sub.add_parser("ring-note", help="record a ring's first turn, ack or blocker (K14)")
@@ -1767,7 +1790,7 @@ def main(argv):
     gf = sub.add_parser("grant-confirm", help="record a grant as confirmed once its card is answered (K10)")
     gf.add_argument("id")
     gf.add_argument("--card", required=True)
-    gf.add_argument("--quote", required=True, help="the operator's answer, as read from the Desk")
+    gf.add_argument("--quote", required=True, help="the session's claim of the operator's answer (dws cannot check it)")
     gf.set_defaults(fn=cmd_grant_confirm)
 
     rc2 = sub.add_parser("reconcile", help="propose changes from the stores; writes no record (K11)")

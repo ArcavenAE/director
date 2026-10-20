@@ -122,6 +122,14 @@ grep -E '^ledger +read .*torn 1' "$root/m3" >/dev/null && ok "a partly torn ledg
 fresh 4; : >"$DIRECTOR_STATE/workstreams.jsonl"
 "$DWS" reconcile --json >"$root/m4" 2>/dev/null
 [[ "$(q "d['sources']['ledger']['state']" <"$root/m4")" == "read" ]] && ok "an empty ledger file is read, with no rows" || bad "an empty ledger file is read, with no rows"
+# round 3 (review 5580315151): lines that parse but fold to no row are UNREAD too
+fresh 5; printf '%s\n' '{}' '{"ts":"2026-09-01T10:00:00Z","actor":"director","tag":"judgment","event":"move","ws":"nobody","stage":"done"}' >"$DIRECTOR_STATE/workstreams.jsonl"
+"$DWS" reconcile --json >"$root/m5" 2>/dev/null && rc=0 || rc=$?
+[[ "$rc" == 0 && "$(q "d['sources']['ledger']['state']" <"$root/m5")" == "UNREAD" ]] && ok "a ledger whose lines parse but fold to no row reads UNREAD" || bad "parsed but zero rows reads UNREAD" "rc=$rc $(q "d['sources']['ledger']" <"$root/m5")"
+[[ "$(q "sorted(n['check'] for n in d['not_run'] if n['check'] in ('unmoved','blocked-no-open-card','card-pr-merged','duplicate-open-cards'))" <"$root/m5")" == "['blocked-no-open-card', 'card-pr-merged', 'duplicate-open-cards', 'unmoved']" && "$(q "d['queue']['at_least']" <"$root/m5")" == "True" ]] && ok "its checks are listed as not run and the queue reads at least n" || bad "zero rows: checks not run and at least n"
+fresh 6; printf '\377\376 not utf8\n' >>"$DIRECTOR_STATE/workstreams.jsonl"; printf '\377bad\n' >>"$DIRECTOR_STATE/rulings.jsonl"
+"$DWS" reconcile --json >"$root/m6" 2>"$root/e6" && rc=0 || rc=$?
+[[ "$rc" == 0 ]] && ! grep -q Traceback "$root/e6" && [[ "$(q "[d['sources']['ledger'].get('torn'), d['sources']['rulings'].get('torn')]" <"$root/m6")" == "[1, 1]" ]] && ok "a non-UTF-8 line in the ledger or rulings is a torn line, not a traceback" || bad "non-UTF-8 line" "rc=$rc $(head -c 300 "$root/e6")"
 
 # --- 6. an expiry that does not parse is named; a date-only expiry runs to the end of that day --------
 fresh 5

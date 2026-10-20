@@ -62,6 +62,16 @@ snap '[{"card":"other"}]' 1
 if conf >/dev/null 2>"$root/e"; then bad "confirm refuses while the card is unanswered"; else grep -q 'not answered' "$root/e" && ok "confirm refuses while the card is unanswered" || bad "confirm refuses while the card is unanswered" "$(cat "$root/e")"; fi
 [[ "$(wc -l <"$RULINGS" | tr -d ' ')" == "$before" ]] && ok "nothing written while unanswered" || bad "nothing written while unanswered"
 
+# round 3 (review 5580328752): a malformed answered field is UNREAD, never a substring match
+snap '[{"card":"other"}]' 1
+python3 - "$DIRECTOR_STATE/desk-snapshot.json" <<'P'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p)); d["answered"] = "xx-grant-card-1-xx"; json.dump(d, open(p, "w"))
+P
+if conf >/dev/null 2>"$root/e"; then bad "confirm refuses an answered field that is a string"; else grep -q 'UNREAD' "$root/e" && ok "confirm refuses an answered field that is a string (UNREAD)" || bad "string answered refusal says UNREAD" "$(cat "$root/e")"; fi
+[[ "$(wc -l <"$RULINGS" | tr -d ' ')" == "$before" ]] && ok "nothing written on that refusal too" || bad "nothing written on a string answered field"
+"$DWS" grant-confirm --help 2>&1 | grep -q "session's claim" && ok "the --quote help says the quote is the session's claim" || bad "--quote help states the limit"
+
 snap '[{"card":"grant-card-1"}]' 1
 if "$DWS" grant-confirm g1 --card grant-card-1 >/dev/null 2>&1; then bad "confirm needs the operator's quoted answer"; else ok "confirm needs the operator's quoted answer"; fi
 conf >"$root/o" 2>"$root/e" && ok "confirm records once the card is answered" || bad "confirm records once the card is answered" "$(cat "$root/e")"
@@ -70,6 +80,7 @@ last="$(tail -1 "$RULINGS")"
 j() { python3 -c "import json,sys; d=json.loads(sys.argv[1]); print($1)" "$last"; }
 [[ "$(j "d['kind'], d['state'], d['replaces'], d['card']")" == "grant confirmed g1 grant-card-1" ]] && ok "the record is a confirmed grant replacing the draft, with the card" || bad "the record is a confirmed grant replacing the draft, with the card"
 [[ "$(j "d['subject']+'|'+d['scope']+'|'+d['to']+'|'+d['expires']")" == "merge ArcavenAE docs PRs|ArcavenAE repos, docs-only PRs, ready and approved at head|director|2026-11-20" ]] && ok "bounds are copied from the draft" || bad "bounds are copied from the draft"
+[[ "$(j "d['source']")" == *"session's claim"* ]] && ok "the confirmed record says the quote is the session's claim" || bad "the record states the quote limit" "$last"
 [[ "$(j "d['quote']")" == "yes, confirm it" ]] && ok "the operator's words are stored as given" || bad "the operator's words are stored as given"
 grep -q '"id": *"g1"' "$RULINGS" && [[ "$(grep -c '"state": *"draft"' "$RULINGS")" == "2" ]] && ok "the draft line is untouched" || bad "the draft line is untouched"
 "$DWS" records --json | python3 -c "import json,sys; d=json.load(sys.stdin); r=[x for x in d['records'] if x['id']=='g1'][0]; print(r['replaced_by'])" | grep -q . && ok "records shows the draft as replaced" || bad "records shows the draft as replaced"
