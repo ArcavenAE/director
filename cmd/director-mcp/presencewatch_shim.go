@@ -191,6 +191,9 @@ func (p *presenceWatcher) noticeText(e watchEvent) string {
 	case "appeared":
 		return fmt.Sprintf("presence: %s seen", e.Unit)
 	case "present-after-gap":
+		if e.Text != "" {
+			return fmt.Sprintf("presence: %s present after a gap in the watch, not a return; %s", e.Unit, e.Text)
+		}
 		return fmt.Sprintf("presence: %s present after a gap in the watch, not a return", e.Unit)
 	case "absent-before-gap":
 		return fmt.Sprintf("presence: %s absent before a gap in the watch", e.Unit)

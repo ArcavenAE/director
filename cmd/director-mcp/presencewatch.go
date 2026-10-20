@@ -643,6 +643,9 @@ type hubParent struct {
 	// returns, and does not re-enter if it leaves again (design section 6). A
 	// state file from before this field reads as every listed cluster still out.
 	Out []string `json:"out,omitempty"`
+	// Gap lists the listed clusters first seen present after a watch gap, with
+	// present-after-gap and no back, so the closing notice can name them.
+	Gap []string `json:"gap,omitempty"`
 }
 
 // stillOut is the listed clusters not yet back, as the parent holds them.
@@ -677,8 +680,9 @@ func (w *PresenceWatch) hubMove(now time.Time, ev *[]watchEvent) {
 		return
 	}
 	if p := w.Parent; p != nil {
+		before := p.stillOut()
 		var out []string
-		for _, n := range p.stillOut() {
+		for _, n := range before {
 			if u := w.Units[n]; u == nil || u.Status != unitPresent {
 				out = append(out, n)
 			}
@@ -687,25 +691,48 @@ func (w *PresenceWatch) hubMove(now time.Time, ev *[]watchEvent) {
 		if p.Out == nil {
 			p.Out = []string{}
 		}
-		if len(out) > 0 {
-			// each listed back names the clusters still out
+		// The one event that takes a listed cluster out of the still-out set
+		// (back, or present-after-gap on the first pass after a gap) names the
+		// clusters still out, and is shown even in the cluster's flap spell.
+		for _, n := range before {
+			if u := w.Units[n]; u == nil || u.Status != unitPresent {
+				continue
+			}
 			for i := range *ev {
-				if e := &(*ev)[i]; e.Kind == "back" && e.Unit != "" && inCluster(e.Unit, p.Clusters) && !strings.Contains(e.Unit, "/") {
+				e := &(*ev)[i]
+				if e.Unit != n || (e.Kind != "back" && e.Kind != "present-after-gap") {
+					continue
+				}
+				e.Collapsed = false
+				if len(out) > 0 {
 					e.Text = "still out: " + strings.Join(out, ", ")
+				}
+				if e.Kind == "present-after-gap" {
+					p.Gap = append(p.Gap, n)
 				}
 			}
 		}
 		switch {
 		case len(out) == 0:
-			*ev = append(*ev, watchEvent{At: now, Kind: "hub-moved-closed", Text: "every cluster the hub-moved parent listed is back"})
+			text := "every cluster the hub-moved parent listed is seen present"
+			if len(p.Gap) > 0 {
+				text += "; seen present only after a watch gap: " + strings.Join(p.Gap, ", ")
+			}
+			*ev = append(*ev, watchEvent{At: now, Kind: "hub-moved-closed", Text: text})
 			w.Parent = nil
 		case now.Sub(p.Opened) >= w.th.HubMoveWindow:
-			*ev = append(*ev, watchEvent{At: now, Kind: "hub-moved-converted", Text: fmt.Sprintf("%s passed with %s still out; each is reported on its own lost bound", w.th.HubMoveWindow, strings.Join(out, ", "))})
+			named := make([]string, 0, len(out))
 			for _, n := range out {
 				if u := w.Units[n]; u != nil {
 					u.Lost = false
+					if u.Status == unitAsleep {
+						// declared sleep is not loss: no lost while it sleeps
+						n += " (asleep)"
+					}
 				}
+				named = append(named, n)
 			}
+			*ev = append(*ev, watchEvent{At: now, Kind: "hub-moved-converted", Text: fmt.Sprintf("%s passed with %s still out; each absent one is reported on its own lost bound", w.th.HubMoveWindow, strings.Join(named, ", "))})
 			w.Parent = nil
 		}
 		return
