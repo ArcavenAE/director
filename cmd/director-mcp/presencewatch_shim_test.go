@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -84,8 +85,19 @@ func (fx *watchFx) restart() {
 	fx.wire()
 }
 
-// tick advances the injected clock one heartbeat and runs the watch.
+// tick is one heartbeat as the shim runs it: the director's own row is written
+// (writeGlobalPresence), then the injected clock advances and the watch runs.
 func (fx *watchFx) tick() {
+	fx.t.Helper()
+	if msg := fx.bus.writeGlobalPresence(fx.ctx, "working"); msg != "" {
+		fx.t.Fatal(msg)
+	}
+	fx.tickNoBeat()
+}
+
+// tickNoBeat advances the injected clock and runs the watch without writing the
+// director's own row, as a heartbeat that did not reach the hub would.
+func (fx *watchFx) tickNoBeat() {
 	fx.t.Helper()
 	fx.clk.tick()
 	fx.bus.watchTick(fx.ctx)
@@ -244,8 +256,8 @@ func TestWatchHubRestartIsBlindNotAbsent(t *testing.T) {
 	fx.tick()
 
 	fx.rig.stopHub()
-	fx.tick()
-	fx.tick()
+	fx.tickNoBeat()
+	fx.tickNoBeat()
 	fx.rig.startHub()
 	fx.put("c1", "s1", "working")
 	fx.tick()
@@ -331,5 +343,105 @@ func TestWatchNoticeReachesWaitAndSummaryOnce(t *testing.T) {
 	out, err = toolSummary(ctx, fx.bus, json.RawMessage(`{}`))
 	if err != nil || len(notice(out)) == 0 {
 		t.Fatalf("inbox_summary should carry the new notice, got %v, %v", notice(out), err)
+	}
+}
+
+// cashp C1: a hub that lost the director's own row (replaced or flushed) is not
+// the hub this director writes to, so no cluster is called gone from its reads.
+func TestWatchFlushedHubIsSelfUnseenNotEveryClusterGone(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	fx := newWatchFx(t, ctx, 0, true)
+	fx.put("c1", "s1", "working")
+	fx.tick()
+	fx.put("c1", "s1", "working")
+	fx.tick()
+	if u := newWatchStoreUnit(t, fx, "c1/s1"); u == nil || u.Status != unitPresent {
+		t.Fatalf("CONTROL FAILED: c1/s1 should be present on sighted passes, got %+v", u)
+	}
+	if count(fx.events(), "self-unseen") != 0 {
+		t.Fatalf("CONTROL FAILED: sighted passes raised self-unseen: %+v", fx.events())
+	}
+
+	// the hub is flushed: every row is gone, including the director's own.
+	own := fx.bus.globalCfg.presenceKey(fx.bus.instance)
+	if err := fx.kv.Delete(ctx, "presence.c1.supervisor.s1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.kv.Delete(ctx, own); err != nil {
+		t.Fatal(err)
+	}
+	fx.tickNoBeat()
+	fx.tickNoBeat()
+	fx.tickNoBeat()
+	ev := fx.events()
+	if count(ev, "absent") != 0 {
+		t.Fatalf("a flushed hub must not read as every cluster leaving, got %+v", ev)
+	}
+	if count(ev, "self-unseen") != 1 {
+		t.Fatalf("self-unseen should be recorded once, got %+v", ev)
+	}
+
+	// the director writes its row again: sighted, and a missing cluster counts again.
+	fx.tick()
+	if count(fx.events(), "self-seen") != 1 {
+		t.Fatalf("the own row back should be recorded once, got %+v", fx.events())
+	}
+}
+
+func newWatchStoreUnit(t *testing.T, fx *watchFx, name string) *watchUnit {
+	t.Helper()
+	w, err := newWatchStore(fx.dir).Load(defaultWatchThresholds())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w.Unit(name)
+}
+
+// failPutKV is the hub's bucket with writes refused and reads answering: the
+// case where the heartbeat's Put fails and the pass still runs.
+type failPutKV struct{ jetstream.KeyValue }
+
+func (failPutKV) Put(context.Context, string, []byte) (uint64, error) {
+	return 0, errors.New("put refused")
+}
+
+// cashp C1, review 5586151571: the want is the ts of the last write ATTEMPTED.
+// When a tick's Put fails and reads still answer, the previous tick's row is
+// not this tick's row, so the pass is self-unseen and no absence is inferred.
+func TestWatchFailedOwnWriteIsSelfUnseenNotAnInference(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	fx := newWatchFx(t, ctx, 0, true)
+	fx.put("c1", "s1", "working")
+	fx.tick()
+	fx.put("c1", "s1", "working")
+	fx.tick()
+	if count(fx.events(), "self-unseen") != 0 {
+		t.Fatalf("CONTROL FAILED: sighted passes raised self-unseen: %+v", fx.events())
+	}
+
+	// the cluster's row is gone, the director's own write now fails, reads answer
+	if err := fx.kv.Delete(ctx, "presence.c1.supervisor.s1"); err != nil {
+		t.Fatal(err)
+	}
+	g, err := fx.bus.globalReady(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.kv = failPutKV{g.kv}
+	time.Sleep(1100 * time.Millisecond) // the row's ts has one second resolution
+	for i := 0; i < 3; i++ {
+		if msg := fx.bus.writeGlobalPresence(ctx, "working"); msg == "" {
+			t.Fatal("CONTROL FAILED: the refused write should report a failure")
+		}
+		fx.tickNoBeat()
+	}
+	ev := fx.events()
+	if count(ev, "absent") != 0 {
+		t.Fatalf("a pass whose own write failed must not infer absence from the stale own row, got %+v", ev)
+	}
+	if count(ev, "self-unseen") != 1 {
+		t.Fatalf("self-unseen should be recorded once, got %+v", ev)
 	}
 }
