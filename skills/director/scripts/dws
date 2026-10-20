@@ -1254,8 +1254,8 @@ def cmd_queue(a):
 # K18: `digest`, the operator digest and the close-or-kill list, rendered on demand from the
 # reconciler and the queue (design rows 8 and 9; Q1 and Q7 as ruled). Nothing runs it on a
 # clock: a session runs it. It prints to stdout and writes the same text to
-# $DIRECTOR_STATE/digest.md; it runs the reconciler, so reconcile's own proposals file is
-# refreshed, and it writes no other store. The interrupt list below is the Q1 default list
+# $DIRECTOR_STATE/digest.md and nothing else: it builds the reconciler's report in memory
+# (reconcile_report) and does not write reconcile-proposals.json. The interrupt list below is the Q1 default list
 # (b), a default for the operator to edit here: an outage; a console step or a
 # recommendation expiring before the next digest; a seat blocked on your ask. An item whose
 # source a script cannot read is "check not run", and one whose store is UNREAD says UNREAD;
@@ -1269,13 +1269,8 @@ DIGEST_INTERRUPTS = (
 
 
 def cmd_digest(a):
-    import contextlib
-    import io
     t_now = now()
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        cmd_reconcile(argparse.Namespace(json=True, out=None))
-    rec = json.loads(buf.getvalue())
+    rec, _ = reconcile_report()
     queue, snap = queue_report()
     rows, lsrc, _, _ = board_sources()
     src = rec["sources"]
@@ -1865,7 +1860,9 @@ def reconcile_proposals_path():
     return os.path.join(STATE, "reconcile-proposals.json")
 
 
-def cmd_reconcile(a):
+def reconcile_report():
+    """The reconciler's report and the ledger's torn count, built from the stores and written nowhere.
+    cmd_reconcile writes the proposals file; the digest reads the report and writes only digest.md."""
     t_now = now()
     when = parse_time(t_now)
     sources, not_run, proposals = {}, [], []
@@ -1989,6 +1986,12 @@ def cmd_reconcile(a):
     unread = sorted(k for k, v in sources.items() if v["state"] == "UNREAD")
     queue = {"count": len(desk_open) if desk_open is not None else None, "at_least": bool(unread)}
     report = {"read_at": t_now, "sources": sources, "queue": queue, "proposals": proposals, "not_run": not_run}
+    return report, torn
+
+
+def cmd_reconcile(a):
+    report, torn = reconcile_report()
+    sources, queue, proposals, not_run = report["sources"], report["queue"], report["proposals"], report["not_run"]
 
     out = a.out or reconcile_proposals_path()
     tmp = f"{out}.{os.getpid()}.tmp"
