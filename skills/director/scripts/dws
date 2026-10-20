@@ -210,7 +210,7 @@ def fold(path=LEDGER, tally=None):
     a re-open that resets a row are both in it (K8)."""
     rows, torn = {}, 0
     try:
-        f = open(path, encoding="utf-8")
+        f = open(path, "rb")
     except FileNotFoundError:
         return rows, 0
     with f:
@@ -218,7 +218,7 @@ def fold(path=LEDGER, tally=None):
             if not line.strip():
                 continue
             try:
-                e = json.loads(line)
+                e = json.loads(line.decode("utf-8"))
             except ValueError:
                 torn += 1
                 continue
@@ -1010,13 +1010,20 @@ def need_file(path):
         raise Refused(f"the rulings path {path} exists and is not a file")
 
 
+def ledger_has_lines():
+    """True when the ledger holds any non-blank line: lines that all parse but fold to no row
+    are not an empty ledger."""
+    with open(LEDGER, "rb") as f:
+        return any(l.strip() for l in f)
+
+
 def fold_records(path):
     """The records in file order, each with replaced_by (the ids whose replaces
     names it), how many lines could not be read, and the replaces pointers that
     resolve to nothing or to another kind. A pointer is never guessed at."""
     records, torn = [], 0
     try:
-        f = open(path, encoding="utf-8")
+        f = open(path, "rb")
     except FileNotFoundError:
         return records, 0, []
     with f:
@@ -1024,7 +1031,7 @@ def fold_records(path):
             if not line.strip():
                 continue
             try:
-                e = json.loads(line)
+                e = json.loads(line.decode("utf-8"))
             except ValueError:
                 torn += 1
                 continue
@@ -1281,7 +1288,7 @@ def cmd_reconcile(a):
     if os.path.isfile(LEDGER):
         try:
             rows, torn = fold()
-            if torn and not rows:
+            if not rows and (torn or ledger_has_lines()):
                 sources["ledger"] = {"state": "UNREAD", "why": f"{LEDGER} has no readable row (torn {torn})"}
             else:
                 sources["ledger"] = {"state": "read", "read_at": t_now, "torn": torn}
