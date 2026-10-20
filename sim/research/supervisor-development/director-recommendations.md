@@ -86,7 +86,7 @@ confirm-back practice.*
 JUDGMENT. An amendment, not a new entry, so it takes no R-number; R-115 is left
 unused rather than renumbering the candidates after it again.*
 
-*Status, 2026-10-20: landed in the wardrobe role library, supervisor 7.0.0
+*Status, 2026-10-20: landed in the fleet role library, supervisor 7.0.0
 (its EMITS section), not in the register. The register entry R-110 is unchanged.*
 
 ---
