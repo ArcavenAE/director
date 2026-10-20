@@ -74,7 +74,7 @@ has() { q "any(p['kind']=='$1' and p['subject']=='$2' for p in d['proposals'])" 
 [[ "$(q "d['sources']['desk']['read_at']" <"$root/j2")" == "2026-10-20T09:00:00Z" ]] && ok "desk prints the snapshot's read time" || bad "desk prints the snapshot's read time"
 [[ "$(q "d['sources']['ledger']['torn']" <"$root/j2")" == "1" ]] && ok "a torn ledger line is counted, not repaired" || bad "a torn ledger line is counted, not repaired"
 [[ "$(q "d['sources']['rings']['state']" <"$root/j2")" == "UNREAD" ]] && ok "rings stays UNREAD (no file yet)" || bad "rings stays UNREAD (no file yet)"
-[[ "$(q "d['queue']['count'], d['queue']['at_least']" <"$root/j2")" == "(4, True)" ]] && ok "queue reads at least 4 while rings is UNREAD" || bad "queue reads at least 4 while rings is UNREAD" "$(q "d['queue']" <"$root/j2")"
+[[ "$(q "d['queue']['count'], d['queue']['at_least']" <"$root/j2")" == "4 True" ]] && ok "queue reads at least 4 while rings is UNREAD" || bad "queue reads at least 4 while rings is UNREAD" "$(q "d['queue']" <"$root/j2")"
 for c in recommendation-sell-by ask-unacked harvest-due; do
   [[ "$(q "'$c' in [n['check'] for n in d['not_run']]" <"$root/j2")" == "True" ]] && ok "$c is listed as not run" || bad "$c is listed as not run"
 done
@@ -93,7 +93,7 @@ J
 [[ "$(q "any(p['kind'] in ('blocked-no-open-card','card-pr-merged','duplicate-open-cards') for p in d['proposals'])" <"$root/j3")" == "False" ]] && ok "no Desk-based proposal from an UNREAD Desk" || bad "no Desk-based proposal from an UNREAD Desk"
 [[ "$(q "'blocked-no-open-card' in [n['check'] for n in d['not_run']]" <"$root/j3")" == "True" ]] && ok "Desk checks are listed as not run" || bad "Desk checks are listed as not run"
 [[ "$(q "d['queue']['count']" <"$root/j3")" == "None" ]] && ok "queue count unknown while the Desk is UNREAD" || bad "queue count unknown while the Desk is UNREAD"
-[[ "$(q "has('x') or any(p['kind']=='unmoved' for p in d['proposals'])" <"$root/j3" 2>/dev/null || echo True)" == "True" ]] && ok "ledger-only checks still run" || bad "ledger-only checks still run"
+[[ "$(q "any(p['kind']=='unmoved' and p['subject']=='old' for p in d['proposals'])" <"$root/j3")" == "True" ]] && ok "ledger-only checks still run" || bad "ledger-only checks still run"
 
 # --- 4. only director-class callers: an unknown flag is refused ----------------
 "$DWS" reconcile --apply >/dev/null 2>&1 && bad "reconcile has no apply flag" || ok "reconcile has no apply flag"

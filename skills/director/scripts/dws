@@ -44,6 +44,13 @@ its own rulings.lock beside it. It never creates the file, refuses the exclusion
 `records [--json]` folds the file: replaces is an explicit id pointer; a target is marked
 replaced_by, and a pointer to a missing id or another kind is counted, never guessed.
 
+K11: `reconcile [--json] [--out FILE]` reads the Desk snapshot, the ledger, rulings.jsonl,
+rings.jsonl and the PR state the ledger observed, and writes proposals (tag proposal) to
+$DIRECTOR_STATE/reconcile-proposals.json. It appends no record to any store. Each source
+prints its last-read time or UNREAD, the queue count reads "at least n" while any source is
+UNREAD, and a check with no readable source (recommendation sell-by, an ask unacked past
+its window, a harvest due) is listed as not run, never counted as zero.
+
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
 """
@@ -1137,6 +1144,169 @@ def cmd_records(a):
         print(f"dws: {torn} unreadable line(s) in {path} skipped, not repaired", file=sys.stderr)
 
 
+# K11: the reconciler. It reads the Desk snapshot, the ledger, rulings.jsonl,
+# rings.jsonl and the PR state the ledger observed, and writes proposals to a
+# file of their own. It never appends a record to any store; director applies or
+# drops each proposal (section 4 of the redesign, SOUL section 8). Every source
+# prints its last-read time or UNREAD, a queue count reads "at least n" while any
+# source is UNREAD, and a check whose source does not exist is listed as not run,
+# never read as zero.
+#
+# Operator-editable, diagnostic only (ADR-007): a row not yet merged whose last
+# move is older than this many days is close-or-kill input. A provisional value;
+# the design leaves the idea threshold open (section 7).
+UNMOVED_DAYS = {"default": 14, "idea": 14}
+UNMOVED_STAGES = ("idea", "defined", "designed", "building", "in review")
+# Checks that have no store a script can read yet. They are named in every run.
+NOT_RUN_ALWAYS = (
+    ("recommendation-sell-by", "no store of recommendations yet"),
+    ("ask-unacked", "the ask ledger is the bus's (askledger.go); a script cannot read it yet"),
+    ("harvest-due", "no harvest register a script can read yet (R-179)"),
+)
+DESK_CHECKS = ("blocked-no-open-card", "card-pr-merged", "duplicate-open-cards")
+
+
+def reconcile_proposals_path():
+    return os.path.join(STATE, "reconcile-proposals.json")
+
+
+def cmd_reconcile(a):
+    t_now = now()
+    when = parse_time(t_now)
+    sources, not_run, proposals = {}, [], []
+
+    snap, why = desk_snapshot()
+    if snap is None:
+        sources["desk"] = {"state": "UNREAD", "why": why}
+    else:
+        sources["desk"] = {"state": "read", "read_at": snap["read_at"]}
+    desk_open = set(snap["open"]) if snap else None
+
+    rows, torn = ({}, 0)
+    if os.path.isfile(LEDGER):
+        try:
+            rows, torn = fold()
+            sources["ledger"] = {"state": "read", "read_at": t_now, "torn": torn}
+        except OSError as err:
+            sources["ledger"] = {"state": "UNREAD", "why": f"{LEDGER} cannot be read ({type(err).__name__})"}
+    else:
+        sources["ledger"] = {"state": "UNREAD", "why": f"no ledger at {LEDGER}"}
+    ledger_ok = sources["ledger"]["state"] == "read"
+
+    path = rulings_path()
+    records = []
+    if os.path.isfile(path):
+        try:
+            records, rtorn, _ = fold_records(path)
+            sources["rulings"] = {"state": "read", "read_at": t_now, "torn": rtorn}
+        except OSError as err:
+            sources["rulings"] = {"state": "UNREAD", "why": f"{path} cannot be read ({type(err).__name__})"}
+    else:
+        sources["rulings"] = {"state": "UNREAD", "why": f"no rulings file at {path}"}
+
+    rings = os.path.join(STATE, "rings.jsonl")
+    sources["rings"] = ({"state": "UNREAD", "why": f"no rings file at {rings}; K14 has not built it"}
+                        if not os.path.isfile(rings) else {"state": "UNREAD", "why": "rings.jsonl exists and has no reader yet (K14)"})
+
+    checked = [o.get("checked_at") for row in rows.values() for link, o in row["observed"].items()
+               if link.startswith("pr:") and isinstance(o, dict)]
+    checked = sorted(c for c in checked if parse_ts(c))
+    sources["prs"] = ({"state": "read", "read_at": checked[-1], "from": "PR observations in the ledger"} if checked
+                      else {"state": "UNREAD", "why": "the ledger holds no PR observation; run dws refresh"})
+
+    def merged(row):
+        return [l for l, o in row["observed"].items()
+                if l.startswith("pr:") and (o.get("seen") or {}).get("state") == "merged"]
+
+    if ledger_ok and desk_open is not None:
+        for slug, row in sorted(rows.items()):
+            cards = [l[4:] for l in row["links"] if ASK.match(l)]
+            open_cards = [c for c in cards if c in desk_open]
+            if operator_blocked(row["blocked"]) and not open_cards and row["stage"] != "parked":
+                proposals.append({"kind": "blocked-no-open-card", "subject": slug,
+                                  "why": "blocked on the operator and no linked ask is open on the Desk",
+                                  "evidence": {"links": row["links"], "desk_read_at": snap["read_at"]}})
+            if open_cards and merged(row):
+                proposals.append({"kind": "card-pr-merged", "subject": slug,
+                                  "why": "a linked PR merged and the card is still open; director checks the result and closes it (Q5)",
+                                  "evidence": {"cards": open_cards, "prs": merged(row)}})
+            if len(open_cards) > 1:
+                proposals.append({"kind": "duplicate-open-cards", "subject": slug,
+                                  "why": "two open cards on one workstream",
+                                  "evidence": {"cards": open_cards}})
+    else:
+        for c in DESK_CHECKS:
+            not_run.append({"check": c, "why": "the " + ("Desk" if desk_open is None else "ledger") + " source is UNREAD"})
+
+    if ledger_ok:
+        for slug, row in sorted(rows.items()):
+            if row["stage"] not in UNMOVED_STAGES:
+                continue
+            moved = parse_ts(row["last_moved"])
+            days = UNMOVED_DAYS.get(row["stage"], UNMOVED_DAYS["default"])
+            if moved and (when - moved).days >= days:
+                proposals.append({"kind": "unmoved", "subject": slug,
+                                  "why": f"not moved for {(when - moved).days} days (threshold {days}); close-or-kill input",
+                                  "evidence": {"stage": row["stage"], "last_moved": row["last_moved"]}})
+    else:
+        not_run.append({"check": "unmoved", "why": "the ledger is UNREAD"})
+
+    if sources["rulings"]["state"] == "read":
+        for r in records:
+            exp = r.get("expires")
+            if r.get("kind") != "grant" or not isinstance(exp, str) or r["replaced_by"]:
+                continue
+            try:
+                end = datetime.datetime.strptime(exp, "%Y-%m-%dT%H:%M:%SZ" if "T" in exp else "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+            except ValueError:
+                continue
+            if end < when:
+                proposals.append({"kind": "grant-expired", "subject": str(r.get("id")),
+                                  "why": f"grant expired {exp}; confirm a renewal or let it lapse",
+                                  "evidence": {"state": r.get("state"), "scope": r.get("scope"), "expires": exp}})
+    else:
+        not_run.append({"check": "grant-expired", "why": "the rulings file is UNREAD"})
+
+    for check, why in NOT_RUN_ALWAYS:
+        not_run.append({"check": check, "why": why})
+    for p in proposals:
+        p["tag"] = "proposal"
+        p["id"] = f"{p['kind']}:{p['subject']}"
+
+    unread = sorted(k for k, v in sources.items() if v["state"] == "UNREAD")
+    queue = {"count": len(desk_open) if desk_open is not None else None, "at_least": bool(unread)}
+    report = {"read_at": t_now, "sources": sources, "queue": queue, "proposals": proposals, "not_run": not_run}
+
+    out = a.out or reconcile_proposals_path()
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    tmp = f"{out}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, out)
+
+    if a.json:
+        json.dump(report, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+        return
+    for name in ("desk", "ledger", "rulings", "rings", "prs"):
+        v = sources[name]
+        print(f"{name:<8} " + (f"read {v['read_at']}" if v["state"] == "read" else f"UNREAD  {v['why']}"))
+    if queue["count"] is None:
+        print("queue    UNREAD (the Desk is not read)")
+    else:
+        print(f"queue    {'at least ' if queue['at_least'] else ''}{queue['count']} open card(s)")
+    for p in proposals:
+        print(f"propose  {p['id']}  {p['why']}")
+    for n in not_run:
+        print(f"not run  {n['check']}  {n['why']}")
+    print(f"proposals written to {out}; no record was written")
+    if torn:
+        print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="dws", description="director workstream ledger (W1)")
     p.add_argument("--actor", default="director", help="the writer, a claim checked against the writer table")
@@ -1224,6 +1394,11 @@ def main(argv):
     rr.add_argument("--json", action="store_true")
     rr.add_argument("--kind", choices=RECORD_KINDS)
     rr.set_defaults(fn=cmd_records)
+
+    rc2 = sub.add_parser("reconcile", help="propose changes from the stores; writes no record (K11)")
+    rc2.add_argument("--json", action="store_true")
+    rc2.add_argument("--out", help="the proposals file (default $DIRECTOR_STATE/reconcile-proposals.json)")
+    rc2.set_defaults(fn=cmd_reconcile)
 
     a, extra = p.parse_known_args(argv)
     if extra and not (a.cmd == "record" and a.kind == "exclusion"):
