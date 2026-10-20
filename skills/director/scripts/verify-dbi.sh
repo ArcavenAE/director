@@ -274,10 +274,10 @@ done
 newrepo gb
 fx commit "$root/remotes/gb.git" $((NOW-30*DAY)) "_kos/ideas/a.md=$(idea A 'Superseded by b.md.')" "_kos/ideas/b.md=$(idea B)" "_kos/ideas/c.md=$(idea C)"
 checkout gb
-printf '%s\n' "$root/orc/*/_kos/ideas/*.md" >"$DIRECTOR_STATE/idea-roots.conf"
-PATH="$root/gitfail:$PATH" FAKE_GIT_FAIL=show FAKE_GIT_FAIL_ARG=b.md run >"$root/j" 2>/dev/null
+printf '%s\n' "$root/orc/gb/_kos/ideas/*.md" >"$DIRECTOR_STATE/idea-roots.conf"
+PATH="$root/gitfail:$PATH" FAKE_GIT_FAIL=show FAKE_GIT_FAIL_ARG=ideas/b.md run >"$root/j" 2>/dev/null
 [[ "$(q "any(r['path'].startswith('gb/') for r in d['rows'])" <"$root/j")" == "False" ]] && ok "show failing for b.md only: no idea of that repo is listed (a is not no pointer)" || bad "gb: listed" "$(q "d['rows']" <"$root/j")"
-[[ "$(q "d['unverified']['kinds'].get('git read',0)>=3" <"$root/j")" == "True" ]] && ok "show failing for b.md only: all three ideas of the repo are counted unverified, git read" || bad "gb: unverified" "$(q "d['unverified']" <"$root/j")"
+[[ "$(q "d['unverified']['kinds'].get('git read',0)==3" <"$root/j")" == "True" ]] && ok "show failing for b.md only: all three ideas of the repo are counted unverified, git read" || bad "gb: unverified" "$(q "d['unverified']" <"$root/j")"
 cfg
 grep -q 'GIT_NO_LAZY_FETCH' "$here/dbi" && ok "git reads set GIT_NO_LAZY_FETCH" || bad "git reads set GIT_NO_LAZY_FETCH"
 

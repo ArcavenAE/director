@@ -123,11 +123,23 @@ def plan_roots():
                 break
             fixed.append(c)
         fixed_real = os.path.realpath("/".join(fixed) or "/")
+        # a skip component is excluded anywhere at or below the nearest enclosing checkout, even
+        # when the root line names it; with no enclosing checkout, only below the fixed prefix
+        base, up = fixed_real, fixed_real
+        while True:
+            if os.path.exists(os.path.join(up, ".git")):
+                base = up
+                break
+            if os.path.dirname(up) == up:
+                break
+            up = os.path.dirname(up)
+        matched = False
         for k in range(len(parts) - 1, 0, -1):
             repos = sorted(d for d in glob.glob("/".join(parts[:k])) if os.path.isdir(d) and os.path.exists(os.path.join(d, ".git")))
             if repos:
+                matched = True
                 for d in repos:
-                    rel = os.path.relpath(os.path.realpath(d), fixed_real)
+                    rel = os.path.relpath(os.path.realpath(d), base)
                     comps = [c for c in rel.split(os.sep) if c not in ("", ".", "..")]
                     bad = [c for c in comps if c in SKIP_DIRS or fnmatch.fnmatch(c, "*-wt-*")]
                     if bad:
@@ -136,6 +148,8 @@ def plan_roots():
                         seen.add((d, "/".join(parts[k:])))
                         plan.append((d, "/".join(parts[k:])))
                 break
+        if not matched:
+            skipped.append({"path": line, "why": "root line matches no repo"})
     return plan, skipped
 
 
@@ -332,11 +346,17 @@ def main(argv):
                             if rx.match(os.path.relpath(os.path.join(root_, fn), repo)):
                                 unv(kind)
             continue
-        sha = git(repo, "rev-parse", f"refs/remotes/origin/{br}").stdout.decode().strip()
+        sha, serr = git_ok(repo, "rev-parse", f"refs/remotes/origin/{br}")
+        sha = (sha or "").strip()
+        if serr:
+            git_errors.append(f"{os.path.basename(repo)}: {serr}")
         tag = "unreachable" if rh is None else ("current" if rh[1] == sha else "stale")
         asof = None
         if tag != "current":
-            asof = git(repo, "log", "-1", "--format=%cs", f"refs/remotes/origin/{br}").stdout.decode().strip() or None
+            out, aerr = git_ok(repo, "log", "-1", "--format=%cs", f"refs/remotes/origin/{br}")
+            asof = (out or "").strip() or None
+            if aerr:
+                git_errors.append(f"{os.path.basename(repo)}: {aerr}")
         info[repo] = (f"refs/remotes/origin/{br}", tag, asof)
         ref = info[repo][0]
         tree_text, err = git_ok(repo, "ls-tree", "-r", "--name-only", ref)
@@ -352,6 +372,7 @@ def main(argv):
                                 unv("git read")
             continue
         tree = tree_text.splitlines()
+        read_keys, failed = [], 0
         for d, pat in plan:
             if d != repo:
                 continue
@@ -364,9 +385,10 @@ def main(argv):
                 if text is None or ct is None:
                     git_errors.append(f"{os.path.basename(repo)}/{path}: {err or err2}")
                     unread_kinds.add("git read")
-                    unv("git read")
+                    failed += 1
                     continue
                 ct = ct.strip()
+                read_keys.append((repo, path))
                 lines = text.splitlines()
                 title = next((l[2:].strip() for l in lines if l.startswith("# ")), os.path.basename(path))
                 status = next((m.group(1).lower() for m in (STATUS.match(l) for l in lines[:40]) if m), "")
@@ -375,6 +397,12 @@ def main(argv):
                                        "resolved": status in RESOLVED or name in parked,
                                        "quiet": (t_now - int(ct)) // 86400 if ct.isdigit() else None,
                                        "remote": tag, "as_of": asof}
+        if failed:
+            # one failed read leaves every idea of the repo unverified: a successor that failed
+            # to read would otherwise make its predecessor read as no pointer
+            for k in read_keys:
+                ideas.pop(k, None)
+            unv("git read", len(read_keys) + failed)
 
     bd = bd_tickets()
     if bd is None:
