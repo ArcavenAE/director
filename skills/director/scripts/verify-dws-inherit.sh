@@ -46,6 +46,7 @@ rec "{$g,\"id\":\"g-expired\",\"to\":\"team-a/architect\",\"state\":\"confirmed\
 rec "{$g,\"id\":\"g-draft\",\"to\":\"team-a/architect\",\"state\":\"draft\",\"tag\":\"proposal\"}"
 rec "{$g,\"id\":\"g-old\",\"to\":\"team-a/architect\",\"state\":\"confirmed\",\"expires\":\"2026-12-01\"}"
 rec "{$g,\"id\":\"g-new\",\"to\":\"team-a/architect\",\"state\":\"confirmed\",\"expires\":\"2026-12-02\",\"replaces\":\"g-old\"}"
+rec "{$g,\"id\":\"g-today\",\"to\":\"team-a/architect\",\"state\":\"confirmed\",\"expires\":\"2026-10-20\"}"
 rec "{$g,\"id\":\"g-other\",\"to\":\"team-b/builder\",\"state\":\"confirmed\"}"
 t='"ts":"2026-10-20T10:00:00Z","actor":"director","tag":"judgment"'
 printf '%s\n' "{$t,\"event\":\"open\",\"ws\":\"ws1\",\"title\":\"one\",\"owner\":\"team-a/architect\",\"stage\":\"designed\",\"links\":[\"ask:c1\",\"ask:c-closed\"]}" >"$LEDGER"
@@ -60,7 +61,7 @@ before="$(shasum -a 256 "$LEDGER" "$RULINGS" "$DIRECTOR_STATE/desk-snapshot.json
 ids() { q "sorted(x['id'] for x in d['$1'])" <"$root/j"; }
 [[ "$(ids terms)" == "['t2', 't3']" ]] && ok "standing terms: the replacement and the untouched one" || bad "standing terms" "$(ids terms)"
 [[ "$(q "[(x['id'], x['replaced_by']) for x in d['replaced_terms']]" <"$root/j")" == "[('t1', ['t2'])]" ]] && ok "a replaced term is marked with its replacement, not standing" || bad "a replaced term is marked with its replacement"
-[[ "$(ids grants)" == "['g-live', 'g-new', 'g-noexp']" ]] && ok "grants in force: confirmed, live or with no expiry, not replaced" || bad "grants in force" "$(ids grants)"
+[[ "$(ids grants)" == "['g-live', 'g-new', 'g-noexp', 'g-today']" ]] && ok "grants in force: confirmed, live, with no expiry or expiring today (a date-only expiry holds through that day), not replaced" || bad "grants in force" "$(ids grants)"
 [[ "$(ids pending_grants)" == "['g-draft']" ]] && ok "a draft grant is listed as pending, never in force" || bad "pending grants" "$(ids pending_grants)"
 [[ "$(ids expired_grants)" == "['g-expired']" ]] && ok "an expired grant is listed as expired" || bad "expired grants" "$(ids expired_grants)"
 [[ "$(q "[(x['ws'], x['card']) for x in d['open_asks']]" <"$root/j")" == "[('ws1', 'c1')]" ]] && ok "open asks: only the role's rows and only cards open on the Desk" || bad "open asks" "$(q "d['open_asks']" <"$root/j")"
