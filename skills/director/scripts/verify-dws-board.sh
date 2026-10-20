@@ -81,7 +81,7 @@ fresh 6; store
 printf '# Board\r\nintro\r\n%s\r\nSTALE\r\n%s\r\nSee ask:ghostcr here.\r\n' "$B" "$E" >"$BOARD"
 "$DWS" board-state >/dev/null 2>"$root/e" && ok "board-state accepts CRLF markers" || bad "CRLF markers accepted" "$(cat "$root/e")"
 grep -q 'STALE' "$BOARD" && bad "the stale block is replaced on a CRLF board" || ok "the stale block is replaced on a CRLF board"
-[[ "$(grep -c "^$B"$'\r'"\$" "$BOARD")" == 1 && "$(grep -c "^$E"$'\r'"\$" "$BOARD")" == 1 ]] && ok "one marker pair, still CRLF" || bad "one CRLF marker pair" "$(cat -A "$BOARD" | head -12)"
+[[ "$(grep -c "^$B" "$BOARD")" == 1 && "$(grep -c "^$E" "$BOARD")" == 1 && "$(grep -c "^$B"$'\r'"\$" "$BOARD")" == 1 && "$(grep -c "^$E"$'\r'"\$" "$BOARD")" == 1 ]] && ok "one marker pair counting every marker line, and it is CRLF" || bad "one CRLF marker pair" "$(cat -A "$BOARD" | head -12)"
 [[ "$(sed -n 1,2p "$BOARD" | tr -d '\r')" == $'# Board\nintro' && "$(tail -1 "$BOARD" | tr -d '\r')" == 'See ask:ghostcr here.' ]] && ok "text outside the markers is unchanged" || bad "CRLF text outside unchanged"
 ! LC_ALL=C grep -v $'\r$' "$BOARD" | grep -q . && ok "every line of the board still ends in CRLF, the block included" || bad "all lines CRLF" "$(LC_ALL=C grep -vc $'\r$' "$BOARD") line(s) lack CR"
 "$DWS" board-check --json >"$root/j" 2>/dev/null
