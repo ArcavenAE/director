@@ -440,6 +440,7 @@ assert not [x for x in dele if x.endswith("-2026-09-30") or x.endswith("-2026-10
 ackrun >/dev/null 2>&1
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["days"]==["2026-09-30","2026-10-01","2026-10-02","2026-10-03","2026-10-04","2026-10-05","2026-10-06","2026-10-19","2026-10-20"], d["days"]' "$state/dash-writer.json" && ok "ack drops from its record only the days it was told to delete, and adds today" || bad "ack days" "$(cat "$state/dash-writer.json")"
 rm -f "$state/dash-writer.json"
+runout run
 ackrun >/dev/null 2>&1
 [[ "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["runs"],d["last_run"])' "$state/dash-writer.json")" == "1 2026-10-20T18:00:00Z" ]] && ok "ack records the run and its count" || bad "ack"
 NOW_OVERRIDE="2026-10-20T18:20:00Z" run run >"$root/out.json" 2>/dev/null
@@ -486,6 +487,18 @@ PY
 NOW_OVERRIDE="2026-10-20T23:59:00Z" runout run
 NOW_OVERRIDE="2026-10-21T00:01:00Z" ackrun >/dev/null 2>&1
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["days"]==["2026-10-07","2026-10-20"] and d["last_run"]=="2026-10-20T23:59:00Z" and d["runs"]==4, d' "$state/dash-writer.json" && ok "an ack after midnight records the day the run wrote, drops only the day it deleted, and keeps the run's time" || bad "ack across midnight" "$(cat "$state/dash-writer.json")"
+python3 - "$state/dash-writer.json" <<'PY'
+import json, sys
+json.dump({"last_run": "2026-10-20T10:00:00Z", "runs": 3, "days": ["2026-10-15", "2026-10-19"]}, open(sys.argv[1], "w"))
+PY
+cp "$state/dash-writer.json" "$root/dw.before"
+run ack --at 2026-10-20T18:00:00Z --deleted 2026-10-15 >/dev/null 2>&1; rc=$?
+[[ $rc -eq 2 ]] && cmp -s "$state/dash-writer.json" "$root/dw.before" && ok "an ack naming a day the run did not report as expired (10-15 is still inside 14 days) is exit 2 and records nothing" || bad "ack unreported day" "rc=$rc"
+run ack --at 2026-10-20T18:00:00Z --deleted 2026-13-45 >/dev/null 2>&1; rc=$?
+[[ $rc -eq 2 ]] && cmp -s "$state/dash-writer.json" "$root/dw.before" && ok "an ack naming a day that is not on the calendar is exit 2 and records nothing" || bad "ack impossible date" "rc=$rc"
+run ack --at 2026-10-20T18:00:00Z --deleted 2026-10-06 >/dev/null 2>&1; rc=$?
+[[ $rc -eq 0 ]] && ok "control: the cutoff day itself is a day an ack may name" || bad "ack cutoff day" "rc=$rc"
+rm -f "$state/dash-writer.json"
 run ack >/dev/null 2>&1; [[ $? -eq 2 ]] && ok "an ack with no --at is a usage error" || bad "ack without --at"
 rm -f "$state/dash-writer.json"
 # a yq that is not the mikefarah v4 build is not trusted, whatever it prints

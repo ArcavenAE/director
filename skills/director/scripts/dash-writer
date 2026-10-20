@@ -536,10 +536,16 @@ def cmd_ack(at, deleted):
     except ValueError:
         print("dash-writer: --at is the run's time, as printed in its ack field", file=sys.stderr)
         sys.exit(2)
-    if not all(re.fullmatch(day_re, d) for d in deleted):
+    st = read_state()
+    try:
+        for d in deleted:
+            datetime.datetime.strptime(d, "%Y-%m-%d")  # a real calendar day, not just a date-shaped string
+    except ValueError:
         print("dash-writer: --deleted is a comma list of days, as printed in the run's ack field", file=sys.stderr)
         sys.exit(2)
-    st = read_state()
+    if not set(deleted) <= set(expired_days(st, t_now)):
+        print("dash-writer: --deleted names a day the run did not report as expired", file=sys.stderr)
+        sys.exit(2)
     days = sorted({d for d in st.get("days", []) if isinstance(d, str) and re.fullmatch(day_re, d)} - set(deleted)
                   | {t_now.strftime("%Y-%m-%d")})
     st = {"last_run": at, "runs": int(st.get("runs", 0)) + 1, "days": days}
