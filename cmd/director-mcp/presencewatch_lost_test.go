@@ -202,3 +202,33 @@ func TestThresholdHardRowsStillFail(t *testing.T) {
 		t.Fatal("an existing row keeps today's behavior: a bad value is an error")
 	}
 }
+
+func TestThresholdSoftRowWithANonStringValueKeepsTheDefaultAndSaysWhy(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "thresholds.json"), []byte(`{"presence_lost_after":30,"presence_lost_after_max":["24h"],"presence_flap_quiet":"20m"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	table, notes, err := loadThresholdsNotes(dir)
+	if err != nil {
+		t.Fatalf("a non-string value in a soft row must not fail the whole table: %v", err)
+	}
+	if table[thresholdPresenceLostAfter] != 30*time.Minute || table[thresholdPresenceLostAfterMax] != 24*time.Hour {
+		t.Fatalf("defaults kept, got %v", table)
+	}
+	if table[thresholdPresenceFlapQuiet] != 20*time.Minute {
+		t.Fatalf("a good row in the same file still applies: %v", table)
+	}
+	if len(notes) != 2 {
+		t.Fatalf("one note per bad soft row, got %q", notes)
+	}
+}
+
+func TestThresholdHardRowWithANonStringValueStillFails(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "thresholds.json"), []byte(`{"presence_flap_quiet":20}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadThresholdsNotes(dir); err == nil {
+		t.Fatal("an older row keeps today's behavior")
+	}
+}

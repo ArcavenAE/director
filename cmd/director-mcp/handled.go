@@ -130,9 +130,23 @@ func loadThresholdsNotes(dir string) (map[string]time.Duration, []string, error)
 	if err != nil {
 		return nil, nil, fmt.Errorf("threshold table: %w", err)
 	}
-	var raw map[string]string
-	if err := json.Unmarshal(b, &raw); err != nil {
+	var rawAny map[string]json.RawMessage
+	if err := json.Unmarshal(b, &rawAny); err != nil {
 		return nil, nil, fmt.Errorf("threshold table %s: %w", filepath.Join(dir, "thresholds.json"), err)
+	}
+	raw := map[string]string{}
+	for k, m := range rawAny {
+		var v string
+		if err := json.Unmarshal(m, &v); err != nil {
+			// a value that is not a string: a soft row keeps its default and says so, and
+			// the older rows keep failing the table as they always have
+			if softThresholds[k] {
+				notes = append(notes, fmt.Sprintf("threshold table: %s = %s is not a duration string; the default is kept", k, string(m)))
+				continue
+			}
+			return nil, nil, fmt.Errorf("threshold table %s: %w", filepath.Join(dir, "thresholds.json"), err)
+		}
+		raw[k] = v
 	}
 	for k, v := range raw {
 		if _, isCount := defaultCounts[k]; isCount {
