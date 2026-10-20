@@ -1022,8 +1022,8 @@ def board_markers(lines):
     """(begin, end) line indexes of the one generated block, (None, None) when there is none.
     Anything else (a lone marker, two blocks, the end first) is refused: dws never guesses
     which text is generated."""
-    begins = [i for i, l in enumerate(lines) if l.rstrip("\n") == BOARD_BEGIN]
-    ends = [i for i, l in enumerate(lines) if l.rstrip("\n") == BOARD_END]
+    begins = [i for i, l in enumerate(lines) if l.rstrip("\r\n") == BOARD_BEGIN]
+    ends = [i for i, l in enumerate(lines) if l.rstrip("\r\n") == BOARD_END]
     if not begins and not ends:
         return None, None
     if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0]:
@@ -1079,9 +1079,12 @@ def cmd_board_state(a):
             raw = f.read()
         lines = raw.decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
         begin, end = board_markers(lines)
-        block = [l + "\n" for l in board_block(now())]
+        # the board's own line ending: CRLF when its first line ends in one, so a board
+        # kept with CRLF is not left half converted
+        eol = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+        block = [l + eol for l in board_block(now())]
         if begin is None:
-            new = block + ["\n"] + lines
+            new = block + [eol] + lines
         else:
             new = lines[:begin] + block + lines[end + 1:]
         data = "".join(new).encode("utf-8", errors="surrogateescape")
