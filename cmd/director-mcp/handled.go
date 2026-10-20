@@ -111,6 +111,9 @@ func loadThresholds(dir string) (map[string]time.Duration, error) {
 		return nil, fmt.Errorf("threshold table %s: %w", filepath.Join(dir, "thresholds.json"), err)
 	}
 	for k, v := range raw {
+		if _, soft := dossierDefaults[k]; soft {
+			continue // read softly by loadDossierThresholds, never by this hard path
+		}
 		if _, known := defaultThresholds[k]; !known {
 			return nil, fmt.Errorf("threshold table %s: unknown key %q (a misspelled row would silently keep its default)", filepath.Join(dir, "thresholds.json"), k)
 		}
