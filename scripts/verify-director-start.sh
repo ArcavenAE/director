@@ -129,6 +129,7 @@ check "the launcher hands the config the seat launcher under DIRECTOR_HOME" bash
 mkdir -p "$root/bin"
 # a stand-in MCP server, run by whichever bash `env bash` finds
 procmatch="$here/scripts/director-procmatch"
+pc() { local rc=0; "$procmatch" "$@" >/dev/null 2>&1 </dev/null || rc=$?; echo "$rc"; }  # exit code of one invocation
 cat >"$root/bin/director-mcp-seat" <<'MCP'
 #!/usr/bin/env bash
 sleep 30; true   # the trailing command keeps this script's own process from being replaced by sleep
@@ -144,17 +145,45 @@ spawn() { # run a stand-in in its own process group; $mcp is its pid, which is a
 spawn env DIRECTOR_LAUNCH_VIA_CONFIG=control-id "$root/bin/director-mcp-seat"
 sleep 1
 if ps eww -o command= -p "$mcp" 2>/dev/null | grep -q "DIRECTOR_LAUNCH_VIA_CONFIG=control-id"; then can_prove=1; else can_prove=0; fi
+if [[ "$can_prove" == 1 ]]; then
+  # item 1: the stand-in's pid plus 2^32 has the same low 32 bits, so a matcher that
+  # passed it on would read the stand-in. Its low 32 bits are not 0 or all ones.
+  check "matcher: the stand-in's pid plus 2^32 is refused with exit 3, not read as the stand-in" test "$(pc --id control-id --pid "$((mcp + 4294967296))")" = 3
+fi
 kill -- "-$mcp" 2>/dev/null || true; wait "$mcp" 2>/dev/null || true
 skipped=0
-if [[ "$can_prove" == 0 ]]; then echo "SKIP the prove checks on real processes: this interpreter's process environment is hidden"; skipped=10; fi
+if [[ "$can_prove" == 0 ]]; then echo "SKIP the prove checks on real processes: this interpreter's process environment is hidden"; skipped=11; fi
+
+# item 2: a process with an empty argv[0], built by a compiled stand-in so its
+# arguments and environment are exactly what the test says
+if command -v cc >/dev/null 2>&1; then
+  printf '#include <unistd.h>\nint main(void){ sleep(30); return 0; }\n' >"$root/slp.c"
+  printf '#include <unistd.h>\n#include <stdio.h>\nint main(int c,char**v){ char*a[]={v[2],0}; char*e[]={v[3],v[4],0}; printf("%%d\\n",(int)getpid()); fflush(stdout); execve(v[1],a,e); return 1; }\n' >"$root/ex.c"
+  if cc -o "$root/slp" "$root/slp.c" 2>/dev/null && cc -o "$root/ex" "$root/ex.c" 2>/dev/null; then
+    argv_start() { # argv0, first env entry; sets apid (a live process with that layout) and aw
+      "$root/ex" "$root/slp" "$1" "$2" "DIRECTOR_LAUNCH_VIA_CONFIG=argv-id" >"$root/argvpid" & aw=$!
+      sleep 1; apid="$(cat "$root/argvpid")"
+    }
+    argv_start "" "X=/q/director-mcp"
+    check "matcher: an empty argv[0] stays empty, so an env entry is not the program" test "$(pc --id argv-id --pid "$apid")" = 1
+    kill "$apid" 2>/dev/null || true; wait "$aw" 2>/dev/null || true
+    argv_start "/x/director-mcp" "X=/q/other"
+    check "matcher: a real argv[0] still parses as the program (control)" test "$(pc --id argv-id --pid "$apid")" = 0
+    kill "$apid" 2>/dev/null || true; wait "$aw" 2>/dev/null || true
+  else skipped=$((skipped+2)); echo "SKIP the empty argv[0] checks: the stand-ins did not compile"; fi
+else skipped=$((skipped+2)); echo "SKIP the empty argv[0] checks: no C compiler"; fi
 
 # the matcher on its own, over argv and environment lists, so the cases a real
 # process cannot show (another interpreter, an entry inside another variable) are run
+# Exit codes: 0 match, 1 refused, 2 usage or unreadable, 3 a pid that is not a plain 1..2^31-1.
+# A refusal must be exit 1 exactly, so a matcher that is missing or broken (127, 2) cannot pass a negative.
 pm() { # id, json; the matcher's exit status
-  printf '%s' "$2" | "$procmatch" --id "$1" --stdin
+  local rc=0
+  printf '%s' "$2" | "$procmatch" --id "$1" --stdin >/dev/null 2>&1 || rc=$?
+  return "$rc"
 }
-pm_yes() { local name="$1"; shift; if pm "$@"; then ok "$name"; else bad "$name"; fi; }
-pm_no()  { local name="$1"; shift; if pm "$@"; then bad "$name" "matched"; else ok "$name"; fi; }
+pm_yes() { local name="$1" rc=0; shift; pm "$@" || rc=$?; if [[ "$rc" == 0 ]]; then ok "$name"; else bad "$name" "exit $rc"; fi; }
+pm_no()  { local name="$1" rc=0; shift; pm "$@" || rc=$?; if [[ "$rc" == 1 ]]; then ok "$name"; else bad "$name" "exit $rc, want 1"; fi; }
 pm_yes "matcher: the server binary with the config's variable matches" id1 '{"argv":["/x/director-mcp"],"env":["A=b","DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
 pm_yes "matcher: the seat script under bash matches" id1 '{"argv":["/bin/bash","/x/director-mcp-seat"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
 pm_no  "matcher: a longer basename is not the server" id1 '{"argv":["/x/director-mcp-evil"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
@@ -165,6 +194,16 @@ pm_no  "matcher: the inherited variable alone is not the config's" id1 '{"argv":
 pm_no  "matcher: a longer id is not ours" id1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id19"]}'
 pm_no  "matcher: trailing text is not ours" id1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1 trailing"]}'
 pm_no  "matcher: an entry inside another variable is not ours" id1 '{"argv":["/x/director-mcp"],"env":["OTHER=x DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
+# review 5590394340 item 3: one entry for the key, and it is ours
+pm_no  "matcher: a duplicate key with another value first is refused" id1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=other","DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
+pm_no  "matcher: a duplicate key with ours first is refused" id1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1","DIRECTOR_LAUNCH_VIA_CONFIG=other"]}'
+pm_no  "matcher: the same entry twice is refused" id1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=id1","DIRECTOR_LAUNCH_VIA_CONFIG=id1"]}'
+# item 4: the matcher has its own distinct exits
+check "matcher: no arguments is a usage exit, 2, not a refusal" test "$(pc)" = 2
+# item 1: a pid is a plain number from 1 to 2^31-1; a wider one would be cut to 32 bits by the kernel call
+for bad_pid in 0 -5 abc 2147483648 99999999999 ""; do
+  check "matcher: pid '$bad_pid' is refused with exit 3" test "$(pc --id x --pid "$bad_pid")" = 3
+done
 pm_no  "matcher: an id that contains a dot does not match a different id" id.1 '{"argv":["/x/director-mcp"],"env":["DIRECTOR_LAUNCH_VIA_CONFIG=idx1"]}'
 
 cat >"$root/claude-session" <<'STUB'
