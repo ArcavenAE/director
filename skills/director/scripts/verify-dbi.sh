@@ -4,8 +4,10 @@
 # closed pointers, successors and cycles, parked and resolved ideas, the quiet
 # threshold, never-read roots, an unreachable bd named instead of read as "no
 # pointer", read-by-ref from the default branch, no fetch, no prompt, and the
-# pool deadline. The fixtures are built with git fast-import (no commit is made,
-# so nothing here signs or bypasses signing), bd and gh are stubs first on PATH.
+# pool deadline. The fixtures are built with git fast-import, which writes
+# unsigned commit objects into scratch repos under a temp directory that is never
+# pushed; whether the signing rules cover such objects is an open question for the
+# operator. bd and gh are stubs first on PATH.
 #
 # Usage: skills/director/scripts/verify-dbi.sh   Exit nonzero on any miss.
 set -euo pipefail
