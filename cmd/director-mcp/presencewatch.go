@@ -94,6 +94,9 @@ type watchUnit struct {
 	MissRun     int         `json:"miss_run"`
 	Transitions []time.Time `json:"transitions,omitempty"`
 	Flapping    bool        `json:"flapping,omitempty"`
+	// Lost is set on a cluster unit once its absence has raised lost, so one
+	// absence raises it once; a return clears it.
+	Lost bool `json:"lost,omitempty"`
 }
 
 // watchGap is a span the watch did not observe.
@@ -125,6 +128,11 @@ type PresenceWatch struct {
 	// SelfUnseen is set while the passes do not contain this director's own
 	// current row, so the hub read is not known to be the hub it writes to.
 	SelfUnseen bool `json:"self_unseen,omitempty"`
+	// Bounds is the last good lost_after each cluster's presence record carried,
+	// clamped, kept because the row expires when the cluster leaves. BoundNotes is
+	// the raw value already reported as ignored or clamped, so each is said once.
+	Bounds     map[string]time.Duration `json:"bounds,omitempty"`
+	BoundNotes map[string]string        `json:"bound_notes,omitempty"`
 	// Foreign lists each key under presence. that is not the shape the shim
 	// writes (D4), once, so it is reported once.
 	Foreign []string `json:"foreign,omitempty"`
@@ -356,6 +364,7 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 				}
 				w.Units[name] = u
 			}
+			w.noteBound(cl, rec.LostAfter, now, &ev)
 			u.Unknown = false
 			u.MissRun = 0
 			u.SeenRun++
@@ -405,6 +414,7 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 		}
 	}
 	w.deriveClusters(now, gap, &ev)
+	w.raiseLost(now, &ev)
 	for _, u := range w.Units {
 		if u.Flapping && len(u.Transitions) > 0 && now.Sub(u.Transitions[len(u.Transitions)-1]) >= w.th.FlapQuiet {
 			u.Flapping = false
@@ -527,4 +537,77 @@ func (w *PresenceWatch) AbsenceDuration(unit string, now time.Time) time.Duratio
 		d = 0
 	}
 	return d
+}
+
+// noteBound takes the lost_after a cluster's presence record carries (cashp
+// design section 5). A value that does not parse as a positive duration is
+// ignored for that cluster, with one event; one above the director's maximum is
+// clamped to it, with one event. Neither fails the watch.
+func (w *PresenceWatch) noteBound(cluster, raw string, now time.Time, ev *[]watchEvent) {
+	if raw == "" {
+		delete(w.Bounds, cluster)
+		delete(w.BoundNotes, cluster)
+		return
+	}
+	note := func(kind, text string) {
+		if w.BoundNotes[cluster] == raw {
+			return
+		}
+		if w.BoundNotes == nil {
+			w.BoundNotes = map[string]string{}
+		}
+		w.BoundNotes[cluster] = raw
+		*ev = append(*ev, watchEvent{At: now, Kind: kind, Unit: cluster, Text: text})
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		delete(w.Bounds, cluster)
+		note("lost-after-ignored", fmt.Sprintf("lost_after %q is not a positive duration; the director's own bound is used", raw))
+		return
+	}
+	if w.th.LostMax > 0 && d > w.th.LostMax {
+		note("lost-after-clamped", fmt.Sprintf("lost_after %s is above the maximum %s; %s is used", raw, w.th.LostMax, w.th.LostMax))
+		d = w.th.LostMax
+	} else {
+		delete(w.BoundNotes, cluster)
+	}
+	if w.Bounds == nil {
+		w.Bounds = map[string]time.Duration{}
+	}
+	w.Bounds[cluster] = d
+}
+
+// bound is the away-to-lost bound for a cluster: its own good lost_after, else
+// the director's row. Zero means no bound is set, and nothing is raised.
+func (w *PresenceWatch) bound(cluster string) time.Duration {
+	if d, ok := w.Bounds[cluster]; ok {
+		return d
+	}
+	return w.th.LostAfter
+}
+
+// raiseLost raises lost, once per absence, for each cluster whose absence
+// (less host sleep) has reached its bound. It runs only on a sighted pass: the
+// blind and self-unseen passes return before it.
+func (w *PresenceWatch) raiseLost(now time.Time, ev *[]watchEvent) {
+	names := make([]string, 0, len(w.Units))
+	for n, u := range w.Units {
+		if u.Kind == "cluster" {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		u := w.Units[n]
+		if u.Status != unitAbsent {
+			u.Lost = false
+			continue
+		}
+		b := w.bound(n)
+		if u.Lost || u.Unknown || b <= 0 || w.AbsenceDuration(n, now) < b {
+			continue
+		}
+		u.Lost = true
+		*ev = append(*ev, watchEvent{At: now, Kind: "lost", Unit: n, Text: b.String(), Collapsed: u.Flapping})
+	}
 }

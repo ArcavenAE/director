@@ -72,6 +72,16 @@ var defaultThresholds = map[string]time.Duration{
 	thresholdPresenceFlapWindow: time.Hour,
 	thresholdPresenceFlapQuiet:  15 * time.Minute,
 	thresholdPresenceHoldSellBy: 8 * time.Hour,
+	// the cluster-gone alert's bound and its ceiling for a cluster's own value
+	thresholdPresenceLostAfter:    30 * time.Minute,
+	thresholdPresenceLostAfterMax: 24 * time.Hour,
+}
+
+// softThresholds are the rows a bad value cannot fail: the table keeps the
+// default and loadThresholdsNotes says so. The older rows keep failing loudly.
+var softThresholds = map[string]bool{
+	thresholdPresenceLostAfter:    true,
+	thresholdPresenceLostAfterMax: true,
 }
 
 // ledgerLockTimeout bounds how long a writer waits for the flock. A holder that
@@ -93,34 +103,46 @@ func stateDir() (string, error) {
 
 // loadThresholds returns the table: the defaults, overridden by the durations
 // in thresholds.json when it exists. A value that is not a positive duration
-// is an error, never a silent fall back to the default.
-func loadThresholds(dir string) (map[string]time.Duration, error) {
-	out := map[string]time.Duration{}
+// is an error, never a silent fall back to the default, except in the soft rows
+// (softThresholds): those keep their default and come back as a note each.
+func loadThresholdsNotes(dir string) (map[string]time.Duration, []string, error) {
+	out, notes := map[string]time.Duration{}, []string(nil)
 	for k, v := range defaultThresholds {
 		out[k] = v
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "thresholds.json"))
 	if errors.Is(err, os.ErrNotExist) {
-		return out, nil
+		return out, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("threshold table: %w", err)
+		return nil, nil, fmt.Errorf("threshold table: %w", err)
 	}
 	var raw map[string]string
 	if err := json.Unmarshal(b, &raw); err != nil {
-		return nil, fmt.Errorf("threshold table %s: %w", filepath.Join(dir, "thresholds.json"), err)
+		return nil, nil, fmt.Errorf("threshold table %s: %w", filepath.Join(dir, "thresholds.json"), err)
 	}
 	for k, v := range raw {
 		if _, known := defaultThresholds[k]; !known {
-			return nil, fmt.Errorf("threshold table %s: unknown key %q (a misspelled row would silently keep its default)", filepath.Join(dir, "thresholds.json"), k)
+			return nil, nil, fmt.Errorf("threshold table %s: unknown key %q (a misspelled row would silently keep its default)", filepath.Join(dir, "thresholds.json"), k)
 		}
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
-			return nil, fmt.Errorf("threshold table: %s = %q is not a positive duration", k, v)
+			if softThresholds[k] {
+				notes = append(notes, fmt.Sprintf("threshold table: %s = %q is not a positive duration; the default %s is kept", k, v, defaultThresholds[k]))
+				continue
+			}
+			return nil, nil, fmt.Errorf("threshold table: %s = %q is not a positive duration", k, v)
 		}
 		out[k] = d
 	}
-	return out, nil
+	return out, notes, nil
+}
+
+// loadThresholds is loadThresholdsNotes without the notes, for the callers that
+// have nowhere to put them.
+func loadThresholds(dir string) (map[string]time.Duration, error) {
+	t, _, err := loadThresholdsNotes(dir)
+	return t, err
 }
 
 // handledKey is a message's position on a stream. It keys only the rejected
@@ -690,12 +712,4 @@ func toolCatalogHandled(gcfg *globalConfig, cueOn, handledOn bool) []toolDef {
 			"required": []string{"message_id", "tier", "disposition"},
 		},
 	})
-}
-
-// loadThresholdsNotes is loadThresholds with the soft rows of the cluster-gone
-// alert: a bad value in one of those keeps its default and is returned as a
-// note, so one bad row cannot stop the presence watch (cashp design section 5).
-func loadThresholdsNotes(dir string) (map[string]time.Duration, []string, error) {
-	t, err := loadThresholds(dir)
-	return t, nil, err
 }

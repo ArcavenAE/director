@@ -74,13 +74,13 @@ func TestLostNotBeforeTheBound(t *testing.T) {
 }
 
 func TestLostClusterValueOverridesTheDefault(t *testing.T) {
-	w, c := absentCluster(t, 30*time.Minute, 24*time.Hour, "1m")
+	w, c := absentCluster(t, 30*time.Minute, 24*time.Hour, "2m")
 	var all []watchEvent
-	for i := 0; i < 6; i++ { // 3 minutes, well under the 30 minute row
+	for i := 0; i < 8; i++ { // 4 minutes, well under the 30 minute row
 		all = append(all, sighted(w, c)...)
 	}
 	if count(all, "lost") != 1 {
-		t.Fatalf("a cluster's own 1m bound should raise lost, got %+v", all)
+		t.Fatalf("a cluster's own 2m bound should raise lost, got %+v", all)
 	}
 }
 

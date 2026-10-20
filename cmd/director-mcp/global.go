@@ -887,6 +887,12 @@ func (g *globalTier) writePresence(ctx context.Context, self Sender, instance st
 		"state":     state,
 		"ts":        time.Now().UTC().Format(time.RFC3339),
 	}
+	// The cluster's cluster-gone bound, stamped by whatever launched this seat
+	// (cashp design section 5). Absent when nothing stamped it; the watch then
+	// uses its own row.
+	if v := os.Getenv("DIRECTOR_PRESENCE_LOST_AFTER"); v != "" {
+		rec["lost_after"] = v
+	}
 	body, _ := json.Marshal(rec)
 	_, err := g.kv.Put(ctx, g.cfg.presenceKey(instance), body)
 	if err == nil {
