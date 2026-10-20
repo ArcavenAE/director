@@ -1225,6 +1225,8 @@ def cmd_grant_confirm(a):
         raise Refused(f"the Desk snapshot is {why}; a session reads the Desk and runs desk-snapshot write --answers")
     if "answered" not in snap:
         raise Refused("the Desk snapshot is UNREAD for answers: it was written without --answers")
+    if not isinstance(snap["answered"], list) or not all(isinstance(x, str) for x in snap["answered"]):
+        raise Refused("the Desk snapshot is UNREAD for answers: its answered field is not a list of card ids")
     if card not in snap["answered"]:
         raise Refused(f"card {card!r} is not answered in the Desk snapshot read at {snap['read_at']}; "
                       "a draft grant has no effect until the operator answers its card")
@@ -1237,13 +1239,14 @@ def cmd_grant_confirm(a):
             n += 1
             rid = f"{g['id']}-confirmed-{n}"
         rec = {"kind": "grant", "id": rid, "ts": now(), "actor": a.actor, "tag": "mirror",
-               "source": stored_form(f"Desk card {card}, answered per the snapshot read {snap['read_at']}"),
+               "source": stored_form(f"Desk card {card}, answered per the snapshot read {snap['read_at']}; "
+                                     "the quote is the session's claim of the operator's words, not read by dws"),
                "subject": g["subject"], "scope": g["scope"], "to": g["to"], "state": "confirmed",
                "text": g["text"], "card": card, "quote": quote, "replaces": g["id"]}
         if g.get("expires"):
             rec["expires"] = g["expires"]
         append(rec, path)
-    print(f"dws: wrote grant {rid}, confirmed on card {card}, replacing {a.id}")
+    print(f"dws: wrote grant {rid}, confirmed on card {card}, replacing {a.id}; the quote is the session's claim, not read by dws")
 
 
 # K11: the reconciler. It reads the Desk snapshot, the ledger, rulings.jsonl,
@@ -1524,7 +1527,7 @@ def main(argv):
     gf = sub.add_parser("grant-confirm", help="record a grant as confirmed once its card is answered (K10)")
     gf.add_argument("id")
     gf.add_argument("--card", required=True)
-    gf.add_argument("--quote", required=True, help="the operator's answer, as read from the Desk")
+    gf.add_argument("--quote", required=True, help="the session's claim of the operator's answer (dws cannot check it)")
     gf.set_defaults(fn=cmd_grant_confirm)
 
     rc2 = sub.add_parser("reconcile", help="propose changes from the stores; writes no record (K11)")
