@@ -214,7 +214,7 @@ def fold(path=LEDGER, tally=None):
     a re-open that resets a row are both in it (K8)."""
     rows, torn = {}, 0
     try:
-        f = open(path, encoding="utf-8")
+        f = open(path, "rb")
     except FileNotFoundError:
         return rows, 0
     with f:
@@ -222,7 +222,7 @@ def fold(path=LEDGER, tally=None):
             if not line.strip():
                 continue
             try:
-                e = json.loads(line)
+                e = json.loads(line.decode("utf-8"))
             except ValueError:
                 torn += 1
                 continue
@@ -1014,13 +1014,20 @@ def need_file(path):
         raise Refused(f"the rulings path {path} exists and is not a file")
 
 
+def ledger_has_lines():
+    """True when the ledger holds any non-blank line: lines that all parse but fold to no row
+    are not an empty ledger."""
+    with open(LEDGER, "rb") as f:
+        return any(l.strip() for l in f)
+
+
 def fold_records(path):
     """The records in file order, each with replaced_by (the ids whose replaces
     names it), how many lines could not be read, and the replaces pointers that
     resolve to nothing or to another kind. A pointer is never guessed at."""
     records, torn = [], 0
     try:
-        f = open(path, encoding="utf-8")
+        f = open(path, "rb")
     except FileNotFoundError:
         return records, 0, []
     with f:
@@ -1028,7 +1035,7 @@ def fold_records(path):
             if not line.strip():
                 continue
             try:
-                e = json.loads(line)
+                e = json.loads(line.decode("utf-8"))
             except ValueError:
                 torn += 1
                 continue
@@ -1353,6 +1360,8 @@ def cmd_grant_confirm(a):
         raise Refused(f"the Desk snapshot is {why}; a session reads the Desk and runs desk-snapshot write --answers")
     if "answered" not in snap:
         raise Refused("the Desk snapshot is UNREAD for answers: it was written without --answers")
+    if not isinstance(snap["answered"], list) or not all(isinstance(x, str) for x in snap["answered"]):
+        raise Refused("the Desk snapshot is UNREAD for answers: its answered field is not a list of card ids")
     if card not in snap["answered"]:
         raise Refused(f"card {card!r} is not answered in the Desk snapshot read at {snap['read_at']}; "
                       "a draft grant has no effect until the operator answers its card")
@@ -1365,13 +1374,14 @@ def cmd_grant_confirm(a):
             n += 1
             rid = f"{g['id']}-confirmed-{n}"
         rec = {"kind": "grant", "id": rid, "ts": now(), "actor": a.actor, "tag": "mirror",
-               "source": stored_form(f"Desk card {card}, answered per the snapshot read {snap['read_at']}"),
+               "source": stored_form(f"Desk card {card}, answered per the snapshot read {snap['read_at']}; "
+                                     "the quote is the session's claim of the operator's words, not read by dws"),
                "subject": g["subject"], "scope": g["scope"], "to": g["to"], "state": "confirmed",
                "text": g["text"], "card": card, "quote": quote, "replaces": g["id"]}
         if g.get("expires"):
             rec["expires"] = g["expires"]
         append(rec, path)
-    print(f"dws: wrote grant {rid}, confirmed on card {card}, replacing {a.id}")
+    print(f"dws: wrote grant {rid}, confirmed on card {card}, replacing {a.id}; the quote is the session's claim, not read by dws")
 
 
 # K11: the reconciler. It reads the Desk snapshot, the ledger, rulings.jsonl,
@@ -1416,7 +1426,7 @@ def cmd_reconcile(a):
     if os.path.isfile(LEDGER):
         try:
             rows, torn = fold()
-            if torn and not rows:
+            if not rows and (torn or ledger_has_lines()):
                 sources["ledger"] = {"state": "UNREAD", "why": f"{LEDGER} has no readable row (torn {torn})"}
             else:
                 sources["ledger"] = {"state": "read", "read_at": t_now, "torn": torn}
@@ -1676,7 +1686,7 @@ def main(argv):
     gf = sub.add_parser("grant-confirm", help="record a grant as confirmed once its card is answered (K10)")
     gf.add_argument("id")
     gf.add_argument("--card", required=True)
-    gf.add_argument("--quote", required=True, help="the operator's answer, as read from the Desk")
+    gf.add_argument("--quote", required=True, help="the session's claim of the operator's answer (dws cannot check it)")
     gf.set_defaults(fn=cmd_grant_confirm)
 
     rc2 = sub.add_parser("reconcile", help="propose changes from the stores; writes no record (K11)")
