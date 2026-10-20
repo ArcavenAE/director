@@ -111,5 +111,16 @@ if LC_ALL=C grep -q $'\342\200\256' "$root/t3" || grep -q $'\033' "$root/t3"; th
 grep -qF 'u202e' "$root/t3" && ok "the escaped rune is shown as text (u202e)" || bad "escaped rune shown" "$(cat "$root/t3")"
 "$DWS" rings --json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['seats']['team-c/reader']['blocker'])" | grep -q 'second line' && ok "the JSON keeps the blocker words as given" || bad "JSON blocker as given"
 
+# round 3b (review 5580459915): the JSON output carries no raw control or bidi rune either
+"$DWS" ring-note team-c/reader blocker --text "$(printf 'a\342\200\256b\342\200\250c\342\200\213d\342\201\247e\302\205f\342\200\217g')" >/dev/null 2>&1
+"$DWS" rings --json >"$root/j3" 2>/dev/null
+python3 - "$root/j3" <<'P' && ok "the rings JSON holds no raw control or bidi rune (six measured)" || bad "raw control or bidi rune in the rings JSON"
+import json, re, sys
+raw = open(sys.argv[1], encoding="utf-8").read()
+bad = re.findall("[\x80-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]", raw)
+sys.exit(1 if bad else 0)
+P
+"$DWS" rings --json | python3 -c "import json,sys; d=json.load(sys.stdin); b=d['seats']['team-c/reader']['blocker']; sys.exit(0 if '\u202e' in b and '\u0085' in b else 1)" && ok "the escaped JSON parses back to the words as given" || bad "JSON round trip"
+
 echo "dws rings: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
