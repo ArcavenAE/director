@@ -188,7 +188,13 @@ not present and stays still out. While the parent is open:
   still-out cluster that is `asleep` at conversion gets no `lost` while it
   sleeps, since declared sleep is not loss (section 5); the conversion notice
   names it as asleep, and it raises `lost` later only if it goes absent and
-  reaches its bound.
+  reaches its bound. This is a guard, not a path the watch reaches today: a
+  parent lists only clusters that are absent; an instance becomes asleep only
+  from present, and a cluster is asleep only when every instance is; and no
+  unit is ever removed. So a listed cluster reaches asleep only through a
+  present instance, which ends its still-out state first. The rule keeps a
+  state file from another version, or a later change to those paths, from
+  converting an asleep cluster into a `lost`.
 
 **Amended 2026-10-20.** As first written, the parent converted only "after
 `presence_hub_move_window` passes with none back", and the collapse covered
@@ -309,8 +315,10 @@ All in director unless named. Each starts with a one-command premise check.
      gap leaves the still-out set with `present-after-gap` and no `back`; that
      event names the clusters still out, and when it is the last, the closing
      notice says seen present and names it;
-   - **asleep straggler:** a still-out cluster asleep at conversion gets no
-     `lost`, and the conversion notice names it as asleep;
+   - **asleep straggler (guard):** a still-out cluster asleep at conversion
+     gets no `lost`, and the conversion notice names it as asleep. No
+     sequence of passes reaches this state, so the test sets the unit's status
+     directly and says it is a guard;
    - **back in a flap spell:** a listed cluster's `back` during its flap spell
      is shown and names the clusters still out.
 4. **C4. The key** (section 7): `dedupe_key` on the hub-side notices, and the
