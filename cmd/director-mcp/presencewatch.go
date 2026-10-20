@@ -59,11 +59,18 @@ type watchThresholds struct {
 	// LostMax the most a cluster's own value may set (cashp design section 5).
 	LostAfter time.Duration
 	LostMax   time.Duration
+	// HubMoveMin clusters going absent within HubMoveWindow, when no other
+	// cluster is present, open one hub-moved parent; AlertCap is the most lost
+	// and hub-moved notices shown per hour (cashp design section 6).
+	HubMoveMin    int
+	HubMoveWindow time.Duration
+	AlertCap      int
 }
 
 func defaultWatchThresholds() watchThresholds {
 	return watchThresholds{FlapCount: 4, FlapWindow: time.Hour, FlapQuiet: 15 * time.Minute,
-		LostAfter: 30 * time.Minute, LostMax: 24 * time.Hour}
+		LostAfter: 30 * time.Minute, LostMax: 24 * time.Hour,
+		HubMoveMin: 2, HubMoveWindow: 2 * time.Minute, AlertCap: 6}
 }
 
 // Unit statuses.
@@ -97,6 +104,8 @@ type watchUnit struct {
 	// Lost is set on a cluster unit once its absence has raised lost, so one
 	// absence raises it once; a return clears it.
 	Lost bool `json:"lost,omitempty"`
+	// AbsentAt is when a cluster unit last turned absent, for the hub-move check.
+	AbsentAt time.Time `json:"absent_at,omitempty"`
 }
 
 // watchGap is a span the watch did not observe.
@@ -116,6 +125,9 @@ type watchEvent struct {
 	// Collapsed marks a transition inside a flapping spell: it is recorded in
 	// the file and left out of the notice.
 	Collapsed bool `json:"collapsed,omitempty"`
+	// Capped marks a lost or hub-moved event held back by the hourly cap: it is
+	// recorded and not shown.
+	Capped bool `json:"capped,omitempty"`
 }
 
 // PresenceWatch is the whole watch state.
@@ -131,6 +143,13 @@ type PresenceWatch struct {
 	// Bounds is the last good lost_after each cluster's presence record carried,
 	// clamped, kept because the row expires when the cluster leaves. BoundNotes is
 	// the raw value already reported as ignored or clamped, so each is said once.
+	// Parent is the open hub-moved parent, if any. Shown, CapSaid and CapHeld keep
+	// the hourly cap across a restart (cashp design section 6).
+	Parent  *hubParent  `json:"parent,omitempty"`
+	Shown   []time.Time `json:"alerts_shown,omitempty"`
+	CapSaid time.Time   `json:"cap_said,omitempty"`
+	CapHeld int         `json:"cap_held,omitempty"`
+
 	Bounds     map[string]time.Duration `json:"bounds,omitempty"`
 	BoundNotes map[string]string        `json:"bound_notes,omitempty"`
 	// Foreign lists each key under presence. that is not the shape the shim
@@ -414,7 +433,10 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 		}
 	}
 	w.deriveClusters(now, gap, &ev)
+	w.hubMove(now, &ev)
 	w.raiseLost(now, &ev)
+	w.collapseUnderParent(&ev)
+	w.capAlerts(now, &ev)
 	for _, u := range w.Units {
 		if u.Flapping && len(u.Transitions) > 0 && now.Sub(u.Transitions[len(u.Transitions)-1]) >= w.th.FlapQuiet {
 			u.Flapping = false
@@ -492,7 +514,7 @@ func (w *PresenceWatch) deriveClusters(now time.Time, gap bool, ev *[]watchEvent
 				*ev = append(*ev, watchEvent{At: now, Kind: "back", Unit: cl})
 			}
 		case unitAbsent:
-			u.Since = last[cl]
+			u.Since, u.AbsentAt = last[cl], now
 			w.transition(u, cl, now, ev, "absent", "")
 		default:
 			u.Since = last[cl]
@@ -609,5 +631,177 @@ func (w *PresenceWatch) raiseLost(now time.Time, ev *[]watchEvent) {
 		}
 		u.Lost = true
 		*ev = append(*ev, watchEvent{At: now, Kind: "lost", Unit: n, Text: b.String(), Collapsed: u.Flapping})
+	}
+}
+
+// hubParent is one open hub-moved parent: the clusters it lists, which went
+// absent together while no other cluster was present.
+type hubParent struct {
+	Opened   time.Time `json:"opened"`
+	Clusters []string  `json:"clusters"`
+	// Out is the listed clusters still out: a listed cluster leaves it when it
+	// returns, and does not re-enter if it leaves again (design section 6). A
+	// state file from before this field reads as every listed cluster still out.
+	Out []string `json:"out,omitempty"`
+	// Gap lists the listed clusters first seen present after a watch gap, with
+	// present-after-gap and no back, so the closing notice can name them.
+	Gap []string `json:"gap,omitempty"`
+}
+
+// stillOut is the listed clusters not yet back, as the parent holds them.
+func (p *hubParent) stillOut() []string {
+	if p.Out == nil {
+		return p.Clusters
+	}
+	return p.Out
+}
+
+// inCluster reports whether a unit name (a cluster, or cluster/instance) belongs to
+// a cluster in set.
+func inCluster(name string, set []string) bool {
+	cl, _, _ := strings.Cut(name, "/")
+	for _, s := range set {
+		if s == cl {
+			return true
+		}
+	}
+	return false
+}
+
+// hubMove opens, closes or converts the hub-moved parent (cashp design section
+// 6). It runs only on a sighted pass. At least HubMoveMin clusters going absent
+// within HubMoveWindow, with no cluster left present, is a hub move and not N
+// separate losses. The parent closes when every listed cluster is back. The window
+// bounds its life: when it has passed with any listed cluster still out, the
+// parent converts and each still-out cluster raises its own lost at its own
+// bound, at once if that bound has passed, so a real loss is not hidden behind it.
+func (w *PresenceWatch) hubMove(now time.Time, ev *[]watchEvent) {
+	if w.th.HubMoveMin <= 0 || w.th.HubMoveWindow <= 0 {
+		return
+	}
+	if p := w.Parent; p != nil {
+		before := p.stillOut()
+		var out []string
+		for _, n := range before {
+			if u := w.Units[n]; u == nil || u.Status != unitPresent {
+				out = append(out, n)
+			}
+		}
+		p.Out = out
+		if p.Out == nil {
+			p.Out = []string{}
+		}
+		// The one event that takes a listed cluster out of the still-out set
+		// (back, or present-after-gap on the first pass after a gap) names the
+		// clusters still out, and is shown even in the cluster's flap spell.
+		for _, n := range before {
+			if u := w.Units[n]; u == nil || u.Status != unitPresent {
+				continue
+			}
+			for i := range *ev {
+				e := &(*ev)[i]
+				if e.Unit != n || (e.Kind != "back" && e.Kind != "present-after-gap") {
+					continue
+				}
+				e.Collapsed = false
+				if len(out) > 0 {
+					e.Text = "still out: " + strings.Join(out, ", ")
+				}
+				if e.Kind == "present-after-gap" {
+					p.Gap = append(p.Gap, n)
+				}
+			}
+		}
+		switch {
+		case len(out) == 0:
+			text := "every cluster the hub-moved parent listed is seen present"
+			if len(p.Gap) > 0 {
+				text += "; seen present only after a watch gap: " + strings.Join(p.Gap, ", ")
+			}
+			*ev = append(*ev, watchEvent{At: now, Kind: "hub-moved-closed", Text: text})
+			w.Parent = nil
+		case now.Sub(p.Opened) >= w.th.HubMoveWindow:
+			named := make([]string, 0, len(out))
+			for _, n := range out {
+				if u := w.Units[n]; u != nil {
+					u.Lost = false
+					if u.Status == unitAsleep {
+						// declared sleep is not loss: no lost while it sleeps
+						n += " (asleep)"
+					}
+				}
+				named = append(named, n)
+			}
+			*ev = append(*ev, watchEvent{At: now, Kind: "hub-moved-converted", Text: fmt.Sprintf("%s passed with %s still out; each absent one is reported on its own lost bound", w.th.HubMoveWindow, strings.Join(named, ", "))})
+			w.Parent = nil
+		}
+		return
+	}
+	var gone []string
+	for n, u := range w.Units {
+		if u.Kind != "cluster" {
+			continue
+		}
+		if u.Status == unitPresent {
+			return // another cluster is still here: not a hub move
+		}
+		if u.Status == unitAbsent && !u.AbsentAt.IsZero() && now.Sub(u.AbsentAt) < w.th.HubMoveWindow {
+			gone = append(gone, n)
+		}
+	}
+	if len(gone) < w.th.HubMoveMin {
+		return
+	}
+	sort.Strings(gone)
+	w.Parent = &hubParent{Opened: now, Clusters: gone, Out: gone}
+	*ev = append(*ev, watchEvent{At: now, Kind: "hub-moved", Text: fmt.Sprintf("clusters %s went absent together; per-cluster absent and lost notices are held while this is open", strings.Join(gone, ", "))})
+}
+
+// collapseUnderParent marks the pass's absent and lost events collapsed while a
+// parent is open, for the listed clusters still out only: they stay in the event
+// file and are left out of the notices. Every other cluster, including a listed
+// one that came back and left again, is raised as usual.
+func (w *PresenceWatch) collapseUnderParent(ev *[]watchEvent) {
+	if w.Parent == nil {
+		return
+	}
+	for i := range *ev {
+		e := &(*ev)[i]
+		if (e.Kind == "absent" || e.Kind == "lost") && inCluster(e.Unit, w.Parent.stillOut()) {
+			e.Collapsed = true
+		}
+	}
+}
+
+// capAlerts holds back lost and hub-moved notices past AlertCap per hour: the
+// event stays in the file, marked capped, and one line per hour says how many
+// were held. back and every other kind are never capped.
+func (w *PresenceWatch) capAlerts(now time.Time, ev *[]watchEvent) {
+	if w.th.AlertCap <= 0 {
+		return
+	}
+	cut := now.Add(-time.Hour)
+	keep := w.Shown[:0]
+	for _, t := range w.Shown {
+		if t.After(cut) {
+			keep = append(keep, t)
+		}
+	}
+	w.Shown = keep
+	for i := range *ev {
+		e := &(*ev)[i]
+		if (e.Kind != "lost" && e.Kind != "hub-moved") || e.Collapsed {
+			continue
+		}
+		if len(w.Shown) < w.th.AlertCap {
+			w.Shown = append(w.Shown, now)
+			continue
+		}
+		e.Capped = true
+		w.CapHeld++
+	}
+	if w.CapHeld > 0 && (w.CapSaid.IsZero() || now.Sub(w.CapSaid) >= time.Hour) {
+		*ev = append(*ev, watchEvent{At: now, Kind: "alerts-capped", Text: fmt.Sprintf("%d lost or hub-moved notice(s) recorded and not shown (cap %d an hour); see %s", w.CapHeld, w.th.AlertCap, watchEventsFile)})
+		w.CapSaid, w.CapHeld = now, 0
 	}
 }

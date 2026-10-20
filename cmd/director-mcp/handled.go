@@ -54,6 +54,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -75,13 +76,25 @@ var defaultThresholds = map[string]time.Duration{
 	// the cluster-gone alert's bound and its ceiling for a cluster's own value
 	thresholdPresenceLostAfter:    30 * time.Minute,
 	thresholdPresenceLostAfterMax: 24 * time.Hour,
+	// a hub move is clusters going absent within this window (section 6)
+	thresholdPresenceHubMoveWindow: 2 * time.Minute,
+}
+
+// defaultCounts are the whole-number rows of the threshold table, read by
+// loadCountRows from the same thresholds.json. Both are soft rows.
+var defaultCounts = map[string]int{
+	thresholdPresenceHubMoveMin: 2,
+	thresholdPresenceAlertCap:   6,
 }
 
 // softThresholds are the rows a bad value cannot fail: the table keeps the
 // default and loadThresholdsNotes says so. The older rows keep failing loudly.
 var softThresholds = map[string]bool{
-	thresholdPresenceLostAfter:    true,
-	thresholdPresenceLostAfterMax: true,
+	thresholdPresenceLostAfter:     true,
+	thresholdPresenceLostAfterMax:  true,
+	thresholdPresenceHubMoveWindow: true,
+	thresholdPresenceHubMoveMin:    true,
+	thresholdPresenceAlertCap:      true,
 }
 
 // ledgerLockTimeout bounds how long a writer waits for the flock. A holder that
@@ -136,6 +149,9 @@ func loadThresholdsNotes(dir string) (map[string]time.Duration, []string, error)
 		raw[k] = v
 	}
 	for k, v := range raw {
+		if _, isCount := defaultCounts[k]; isCount {
+			continue // read by loadCountRows
+		}
 		if _, known := defaultThresholds[k]; !known {
 			return nil, nil, fmt.Errorf("threshold table %s: unknown key %q (a misspelled row would silently keep its default)", filepath.Join(dir, "thresholds.json"), k)
 		}
@@ -726,4 +742,46 @@ func toolCatalogHandled(gcfg *globalConfig, cueOn, handledOn bool) []toolDef {
 			"required": []string{"message_id", "tier", "disposition"},
 		},
 	})
+}
+
+// loadCountRows reads the count rows of the cluster-gone alert (a minimum and a
+// cap, whole numbers, not durations) from the same thresholds.json. A value that
+// is not a positive whole number keeps its default and comes back as a note.
+// A file that cannot be read gives the defaults: loadThresholdsNotes reports it.
+func loadCountRows(dir string) (map[string]int, []string) {
+	out, notes := map[string]int{}, []string(nil)
+	for k, v := range defaultCounts {
+		out[k] = v
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "thresholds.json"))
+	if err != nil {
+		return out, nil
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(b, &raw) != nil {
+		return out, nil
+	}
+	keys := make([]string, 0, len(defaultCounts))
+	for k := range defaultCounts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		m, ok := raw[k]
+		if !ok {
+			continue
+		}
+		var v string
+		if json.Unmarshal(m, &v) != nil {
+			notes = append(notes, fmt.Sprintf("threshold table: %s = %s is not a string holding a whole number; the default %d is kept", k, string(m), defaultCounts[k]))
+			continue
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			notes = append(notes, fmt.Sprintf("threshold table: %s = %q is not a positive whole number; the default %d is kept", k, v, defaultCounts[k]))
+			continue
+		}
+		out[k] = n
+	}
+	return out, notes
 }
