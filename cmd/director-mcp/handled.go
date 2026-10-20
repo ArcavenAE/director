@@ -757,7 +757,7 @@ func loadCountRows(dir string) (map[string]int, []string) {
 	if err != nil {
 		return out, nil
 	}
-	var raw map[string]string
+	var raw map[string]json.RawMessage
 	if json.Unmarshal(b, &raw) != nil {
 		return out, nil
 	}
@@ -767,8 +767,13 @@ func loadCountRows(dir string) (map[string]int, []string) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		v, ok := raw[k]
+		m, ok := raw[k]
 		if !ok {
+			continue
+		}
+		var v string
+		if json.Unmarshal(m, &v) != nil {
+			notes = append(notes, fmt.Sprintf("threshold table: %s = %s is not a string holding a whole number; the default %d is kept", k, string(m), defaultCounts[k]))
 			continue
 		}
 		n, err := strconv.Atoi(v)
