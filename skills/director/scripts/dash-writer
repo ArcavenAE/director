@@ -12,12 +12,14 @@ prints the batch, and the session applies it with one ArtifactData batch of at m
 
 Sources, read only: `dws show --json` (the ledger folded by dws's own fold, so the page cannot fold
 differently), `marvel --cluster C get sessions --columns team,role,name,state,health,last-active`
-once for each cluster in $DIRECTOR_STATE/dash-clusters.txt (command: $DASH_MARVEL, default marvel),
-$DIRECTOR_STATE/desk-snapshot.json. Local lists the operator keeps, one entry per line (this design
-names no canonical source for the first two, so they are files):
-  dash-clusters.txt    director's cluster list; absent: the sessions panel is refused, never empty
-  dash-areas.txt       the Desk's area labels
-  dash-area-map.tsv    <workstream slug><TAB><area label>; a row with no entry is `unlabelled`
+once for each cluster named under `clusters:` in $HOME/.marvel/config.yaml (command: $DASH_MARVEL, default
+marvel), and $DIRECTOR_STATE/desk-snapshot.json. The config is read for the KEY NAMES under `clusters:`
+and nothing else; no value in it is read into a variable or emitted. A config that is missing, has no
+`clusters:` block, or writes it in flow style refuses the sessions panel, never an empty one. The Desk's
+area labels are the `areas` list the snapshot records; no snapshot, or no list, labels nothing.
+Two local files the operator keeps, one entry per line, because no canonical source holds them:
+  dash-area-map.tsv    <workstream slug><TAB><area label>; a ledger row carries no area, so this maps
+                       the slug to a Desk area; a row with no entry (or an unlisted area) is `unlabelled`
   dash-withhold.txt    private names, whole words, any case; must be mode 0600 or no title is written
 
 It writes exactly the fields of section 3 and nothing else:
@@ -91,6 +93,47 @@ def read_list(name):
         return None, path
     except OSError:
         return None, path
+
+
+def cluster_names():
+    """The key names under `clusters:` in the marvel config, or None when they cannot be read.
+
+    Reads lines and keeps only each key; a value is never stored, so none can reach the output.
+    """
+    try:
+        with open(os.path.join(HOME, ".marvel", "config.yaml"), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    names, at, child = [], None, None
+    for line in lines:
+        if at is None:
+            if re.match(r"clusters:\s*(#.*)?$", line):  # an inline or flow value is not a block of keys
+                at = True
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            break
+        if child is None:
+            child = indent
+        if indent != child:
+            continue
+        k = re.match(r"([^\s:#'\"{\[\]][^:#]*?):(\s|$)", line.lstrip(" "))
+        if k and k.group(1) not in names:
+            names.append(k.group(1))
+    return names or None
+
+
+def snapshot_areas():
+    """The area labels the Desk snapshot records, or [] when it has none."""
+    try:
+        with open(os.path.join(STATE, "desk-snapshot.json"), encoding="utf-8") as f:
+            a = json.load(f).get("areas")
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [x for x in a if isinstance(x, str) and x and x.isprintable()] if isinstance(a, list) else []
 
 
 class Refusals:
@@ -321,15 +364,14 @@ def build(t_text, t_now):
                 withhold = None
         except OSError:
             withhold = None
-    areas, _ = read_list("dash-areas.txt")
-    areas = areas or []
+    areas = snapshot_areas()
     area_map = {}
     amap, _ = read_list("dash-area-map.tsv")
     for line in amap or []:
         if "\t" in line:
             k, v = line.split("\t", 1)
             area_map[k.strip()] = v.strip()
-    clusters, _ = read_list("dash-clusters.txt")
+    clusters = cluster_names()
     data, why = ledger()
     panels = {p: {"rows": [], "counts": {}, "refusal": Refusals()} for p in PANELS}
     ledger_rows = data.get("rows", []) if data else []

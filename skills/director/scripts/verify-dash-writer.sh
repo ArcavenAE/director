@@ -10,6 +10,9 @@
 #   - a panel over 256 KiB is written with no rows and a refusal;
 #   - the three checks, the 30-minute floor, the 14-day delete, and read-only behaviour.
 # The Desk's own write rule (test 8) and the page (tests 1, 5 to 7) live in the Desk artifact, not here.
+# Clusters come from the `clusters` keys of the marvel config under the scratch HOME (key names only; every
+# value in the fixture carries a canary that must never appear), and Desk areas from the `areas` the Desk
+# snapshot records; neither has a file of its own.
 # Every run is under `env -i` with a scratch HOME and DIRECTOR_STATE, a fixture marvel on PATH, no
 # MARVEL_SOCKET. Written for bash 3.2 and bash 5.
 #
@@ -120,12 +123,17 @@ TOK="ghp_""$(python3 -c 'print("Z"*30)')"
   printf '{"ts":"2026-10-20T10:00:00Z","actor":"refresh","tag":"mirror","event":"refresh-run","at":"2026-10-20T10:00:00Z","rows":14,"links":3,"warnings":0}\n'
 } >"$root/ledger.lines"
 seed <"$root/ledger.lines"
-echo '{"read_at":"2026-10-20T10:00:00Z","cards":1,"open":["c1"],"by_status":{"open":1},"ids":{"c1":"open"}}' >"$state/desk-snapshot.json"
-printf 'alpha\n' >"$state/dash-clusters.txt"
-printf 'Ops\nResearch\n' >"$state/dash-areas.txt"
+echo '{"read_at":"2026-10-20T10:00:00Z","cards":1,"open":["c1"],"by_status":{"open":1},"ids":{"c1":"open"},"areas":["Ops","Research"]}' >"$state/desk-snapshot.json"
 printf 'linked-one\tOps\nwaits\tResearch\nidea-a\tNowhere\n' >"$state/dash-area-map.tsv"
 printf 'Bartholomew\n' >"$state/dash-withhold.txt"; chmod 600 "$state/dash-withhold.txt"
 
+setclusters() { # names...: a marvel config whose cluster entries hold values that must never be read
+  mkdir -p "$root/home/.marvel"
+  { echo "# comment"; echo "default_cluster: CANARY-TOP-5520"; echo "token: CANARY-TOKEN-8801"; echo "clusters:"
+    for n in "$@"; do echo "  $n:"; echo "    url: https://CANARY-URL-4410.example.test"; echo "    credentials:"; echo "      secret: CANARY-SECRET-3392"; echo "    nested:"; echo "      deep: CANARY-DEEP-7714"; done
+    echo "other:"; echo "  notacluster: CANARY-OTHER-6620"; } >"$root/home/.marvel/config.yaml"
+}
+setclusters alpha
 pyc() { python3 -c "$1" "$root/out.json"; }
 runout() { run "$@" >"$root/out.json" 2>"$root/err"; }
 
@@ -227,7 +235,7 @@ assert ref.get("health:grammar") == 1 and ref.get("last_active:unreadable") == 1
 ' && ok "state and health are matched to marvel's grammar: parked reasons dropped, exit codes as printed, failed tagged terminal, wrong order and long cells unreadable, a bad state drops the row" || bad "session grammar"
 grep -q 'secret\|budget exceeded' "$root/out.json" && bad "free text after a session cell never lands" || ok "free text inside a session cell never lands"
 
-printf 'alpha\nrenamed\n' >"$state/dash-clusters.txt"; runout run
+setclusters alpha renamed; runout run
 pyc '
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -236,13 +244,13 @@ assert not [r for r in p["rows"] if r["cluster"] == "renamed"], "no rows from a 
 assert p["refusal"].get("table:header") == 1, p["refusal"]
 ' && ok "a renamed column draws no rows from that cluster and sets refusal" || bad "renamed column"
 for c in missing extra; do
-  printf "good\n$c\n" >"$state/dash-clusters.txt"; runout run
+  setclusters good $c; runout run
   pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
 assert p["refusal"].get("table:header")==1 and all(r["cluster"]=="good" for r in p["rows"]), p["refusal"]' \
    && ok "a $c column draws no rows from that cluster and sets refusal" || bad "$c column"
 done
-printf 'cuts\n' >"$state/dash-clusters.txt"; runout run
+setclusters cuts; runout run
 pyc '
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -251,7 +259,7 @@ ids = [r["id"] for r in p["rows"]]
 assert ids == ["arcaven-builder-g5-0"], ids
 assert p["refusal"].get("row:unreadable") == 3, p["refusal"]
 ' && ok "a cell that runs into its neighbour, a row with a tab and a short row are each refused alone; the clean row is drawn and no value shifts" || bad "unreadable rows" "$(cat "$root/out.json" | head -c 400)"
-printf 'good\nnowhere\n' >"$state/dash-clusters.txt"; runout run
+setclusters good nowhere; runout run
 pyc '
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -259,15 +267,57 @@ p = [x["data"] for x in d["writes"] if x["doc_id"] == "sessions" and x["collecti
 assert p["counts"]["not_reached"] == ["nowhere: not reached at 2026-10-20T18:00:00Z"], p["counts"]
 assert all(r["cluster"] == "good" for r in p["rows"])
 ' && ok "a cluster that does not answer is one line, not reached at T, and no rows" || bad "not reached"
-printf 'bad/name\n' >"$state/dash-clusters.txt"; runout run
+setclusters 'bad/name'; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
 assert p["rows"]==[] and p["refusal"].get("cluster:charset")==1, p' && ok "a cluster name that is not on the list's grammar writes nothing" || bad "cluster charset"
-rm -f "$state/dash-clusters.txt"; runout run
+rm -f "$root/home/.marvel/config.yaml"; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
 assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "with no cluster list the sessions panel is refused, never written empty as if read" || bad "no cluster list"
-printf 'alpha\n' >"$state/dash-clusters.txt"
+setclusters alpha
+
+# the config reader: key names only
+setclusters alpha beta; runout run
+grep -q 'CANARY' "$root/out.json" "$root/err" && bad "no config value reaches the output" "$(grep -o 'CANARY[A-Z0-9-]*' "$root/out.json" "$root/err" | head -3)" || ok "no value under a cluster key, and no other config value, reaches the output or stderr"
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
+assert sorted({r["cluster"] for r in p["rows"]})==["alpha"] and p["counts"]["not_reached"]==["beta: not reached at 2026-10-20T18:00:00Z"], (p["counts"], p["rows"][:1])' \
+  && ok "the clusters are the key names under clusters: in the marvel config, in order, and nothing else in the file is one" || bad "config key names"
+printf 'clusters: {alpha: {url: CANARY-FLOW-1}}\n' >"$root/home/.marvel/config.yaml"; runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
+assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p'
+[[ $? -eq 0 ]] && ! grep -q CANARY "$root/out.json" && ok "a flow-style clusters mapping is unreadable: refused, and no value is echoed" || bad "flow-style clusters"
+printf 'clusters: {}\n  alpha:\n    url: CANARY-FLOW-2\n' >"$root/home/.marvel/config.yaml"; runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
+assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "a clusters key with an inline value takes no keys from the lines under it" || bad "inline clusters value"
+printf 'default_cluster: x\n' >"$root/home/.marvel/config.yaml"; runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
+assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "a config with no clusters key refuses the sessions panel" || bad "no clusters key"
+setclusters alpha
+
+# the area reader: the Desk snapshot's areas
+runout run
+grep -q '"area": "Ops"' "$root/out.json" && ok "an area on the Desk snapshot labels a workstream the area map points at" || bad "snapshot area used"
+python3 - "$state/desk-snapshot.json" <<'P'
+import json, sys
+p = sys.argv[1]; s = json.load(open(p)); s["areas"] = ["Research"]; json.dump(s, open(p, "w"))
+P
+runout run
+{ grep -q '"area": "Ops"' "$root/out.json" && bad "an area absent from the snapshot is not used" || ok "an area the snapshot does not list reads unlabelled, even when the map names it"; }
+python3 - "$state/desk-snapshot.json" <<'P'
+import json, sys
+p = sys.argv[1]; s = json.load(open(p)); del s["areas"]; json.dump(s, open(p, "w"))
+P
+runout run
+{ grep -q '"area": "Ops"\|"area": "Research"' "$root/out.json" && bad "no areas key labels nothing" || ok "a snapshot with no areas key labels nothing"; }
+python3 - "$state/desk-snapshot.json" <<'P'
+import json, sys
+p = sys.argv[1]; s = json.load(open(p)); s["areas"] = ["Ops", "Research"]; json.dump(s, open(p, "w"))
+P
 
 # ---------------------------------------------------------------- the checks (the writer's half of test 9)
 checks() { runout run; python3 -c '
