@@ -34,7 +34,7 @@ section Interrupts | grep -qi 'blocked on your ask.*UNREAD' && ok "with the Desk
 # --- fixtures --------------------------------------------------------------------------------------------
 printf '{"c1":{"status":"open"},"c2":{"status":"open"}}' >"$root/cards.json"
 "$SNAP" write --cards "$root/cards.json" --reported 2 >/dev/null
-DWS_NOW=2026-10-10T00:00:00Z "$DWS" open alpha --title a --owner director --stage building --blocked operator --ask c1 >/dev/null
+"$DWS" open alpha --title a --owner director --stage building --blocked operator --ask c1 >/dev/null
 DWS_NOW=2026-09-01T00:00:00Z "$DWS" open oldidea --title "an old idea" --owner director --stage idea >/dev/null
 DWS_NOW=2026-10-19T00:00:00Z "$DWS" open fresh --title f --owner director --stage building >/dev/null
 printf '%s\n' '{"kind":"grant","id":"g-old","ts":"2026-09-01T00:00:00Z","actor":"director","tag":"mirror","source":"s","subject":"x","scope":"y","to":"director","state":"confirmed","text":"t","expires":"2026-10-01"}' >"$RULINGS"

@@ -57,6 +57,10 @@ card-ingest's format. `grant-confirm <id> --card C --quote WORDS` records the gr
 (replacing the draft, which is never edited) only when the fresh Desk snapshot lists C as answered;
 the quote is the session's claim of the operator's words.
 
+K18: `digest` renders the operator digest and the close-or-kill list on demand, from the reconciler and the
+queue, to stdout and $DIRECTOR_STATE/digest.md; nothing runs it on a clock. Its interrupt list is the Q1
+default list (DIGEST_INTERRUPTS), for the operator to edit.
+
 K12: `queue [--json]` is the operator's queue: the open Desk cards joined to ledger rows by their ask: links.
 A card whose linked PRs are all observed draft, merged or closed is hidden until director closes it; any other
 open card is shown, and a card no row links is "unclassified, shown". The checks that need card fields the
@@ -1176,7 +1180,8 @@ QUEUE_NOT_RUN = [
 ]
 
 
-def cmd_queue(a):
+def queue_report():
+    """The queue as data: (report, snapshot). cmd_queue prints it; the digest reads it."""
     rows, lsrc, snap, dsrc = board_sources()
     report = {"sources": {"ledger": lsrc, "desk": dsrc}, "shown": None, "hidden": None, "counts": None,
               "not_run": QUEUE_NOT_RUN}
@@ -1208,6 +1213,12 @@ def cmd_queue(a):
             shown.append(item)
         report.update({"shown": shown, "hidden": hidden,
                        "counts": {"open": len(snap["open"]), "shown": len(shown), "hidden": len(hidden)}})
+    return report, snap
+
+
+def cmd_queue(a):
+    report, snap = queue_report()
+    lsrc, dsrc = report["sources"]["ledger"], report["sources"]["desk"]
     if a.json:
         json.dump(report, sys.stdout, indent=2, ensure_ascii=False)
         print()
@@ -1228,6 +1239,94 @@ def cmd_queue(a):
             print(f"  {x['card']}  on {x['ws']}: {w['link']} is {w['state']} (checked {w['checked_at']})")
     for n in QUEUE_NOT_RUN:
         print(f"not run  {n['check']}: {n['why']}")
+
+
+# K18: `digest`, the operator digest and the close-or-kill list, rendered on demand from the
+# reconciler and the queue (design rows 8 and 9; Q1 and Q7 as ruled). Nothing runs it on a
+# clock: a session runs it. It prints to stdout and writes the same text to
+# $DIRECTOR_STATE/digest.md; it runs the reconciler, so reconcile's own proposals file is
+# refreshed, and it writes no other store. The interrupt list below is the Q1 default list
+# (b), a default for the operator to edit here: an outage; a console step or a
+# recommendation expiring before the next digest; a seat blocked on your ask. An item whose
+# source a script cannot read is "check not run", and one whose store is UNREAD says UNREAD;
+# neither is ever read as "none".
+DIGEST_INTERRUPTS = (
+    ("an outage", "no outage source a script can read"),
+    ("a console step or a recommendation expiring before the next digest",
+     "the Desk snapshot holds no card expiry and recommendations have no store"),
+    ("a seat blocked on your ask", None),
+)
+
+
+def cmd_digest(a):
+    import contextlib
+    import io
+    t_now = now()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        cmd_reconcile(argparse.Namespace(json=True, out=None))
+    rec = json.loads(buf.getvalue())
+    queue, snap = queue_report()
+    rows, lsrc, _, _ = board_sources()
+    src = rec["sources"]
+
+    def stext(v):
+        return f"read {v['read_at']}" if v["state"] == "read" else f"UNREAD ({v['why']})"
+
+    out = [f"# Digest, generated {t_now} by dws digest (on demand)", "",
+           "sources: " + "; ".join(f"{k} {stext(v)}" for k, v in sorted(src.items())), "",
+           "## Interrupts",
+           "The default list (Q1 b); the operator edits DIGEST_INTERRUPTS in dws."]
+    for item, why in DIGEST_INTERRUPTS:
+        if why is not None:
+            out.append(f"- {item}: check not run ({why})")
+        elif snap is None or rows is None:
+            out.append(f"- {item}: UNREAD ({'the Desk snapshot' if snap is None else 'the ledger'} is UNREAD)")
+        else:
+            blocked = [f"{r['slug']} (card {l[4:]})" for r in sorted_rows(rows) if operator_blocked(r["blocked"])
+                       for l in r["links"] if ASK.match(l) and l[4:] in snap["open"]]
+            out.append(f"- {item}: " + (", ".join(blocked) if blocked else "none"))
+    out += ["", "## Queue"]
+    if queue["counts"] is None:
+        out.append(f"UNREAD ({queue['sources']['desk']['why']})")
+    else:
+        c = queue["counts"]
+        out.append(f"{c['open']} open, {c['shown']} shown, {c['hidden']} hidden by the presentation check (dws queue lists them)")
+    out += ["", "## Close-or-kill"]
+    unmoved = [p for p in rec["proposals"] if p["kind"] == "unmoved"]
+    if any(n["check"] == "unmoved" for n in rec["not_run"]):
+        out.append("UNREAD (the ledger is UNREAD)")
+    elif not unmoved:
+        out.append("none")
+    for p in unmoved:
+        ev = p.get("evidence", {})
+        out.append(f"- {p['subject']}  {ev.get('stage', '')}  {p['why']}")
+    out += ["", "## Other proposals"]
+    others = [p for p in rec["proposals"] if p["kind"] != "unmoved"]
+    if not others:
+        out.append("none")
+    for p in others:
+        out.append(f"- {p['kind']}: {p['subject']}  {p['why']}")
+    out += ["", "## Not run"]
+    for n in rec["not_run"] + queue["not_run"]:
+        out.append(f"- {n['check']}: {n['why']}")
+    text = "\n".join(out) + "\n"
+    os.makedirs(STATE, exist_ok=True)
+    path = os.path.join(STATE, "digest.md")
+    fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".digest.md.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    sys.stdout.write(text)
 
 
 # K9: rulings.jsonl, the store of rulings, grants and terms (R-201, R-204, R-184).
@@ -1983,6 +2082,9 @@ def main(argv):
     qu = sub.add_parser("queue", help="the operator's queue: open Desk cards with the presentation check applied; read only (K12)")
     qu.add_argument("--json", action="store_true")
     qu.set_defaults(fn=cmd_queue)
+
+    dg = sub.add_parser("digest", help="the operator digest and close-or-kill list, rendered on demand to stdout and digest.md (K18)")
+    dg.set_defaults(fn=cmd_digest)
 
     w = sub.add_parser("show")
     w.add_argument("--json", action="store_true")
