@@ -239,7 +239,7 @@ func (b *Bus) startPresenceWatch(logf func(string, ...any)) error {
 		if err != nil {
 			return watchScan{KeysErr: true}
 		}
-		return g.watchScan(ctx)
+		return g.watchScan(ctx, g.cfg.presenceKey(b.instance))
 	}
 	b.watch = newPresenceWatcher(store, w, scan, logf)
 	b.watch.hold = newHeldStore(dir)
@@ -357,19 +357,36 @@ func (b *Bus) presenceNotices() []string {
 }
 
 // watchScan reads GLOBAL_PRESENCE for the watch: every key under presence.
-// except a director's own rows, with its value parsed. A failed keys call is
+// except a director's own rows (this session's own row, selfKey, is read for the
+// self check of cashp design section 4 and never becomes a unit), with its value parsed. A failed keys call is
 // KeysErr; a key whose value cannot be fetched is Unfetched; a value that does
 // not parse as a record has no Rec.
-func (g *globalTier) watchScan(ctx context.Context) watchScan {
+func (g *globalTier) watchScan(ctx context.Context, selfKey string) watchScan {
+	want := time.Unix(g.selfPut.Load(), 0).UTC()
 	keys, err := g.kv.Keys(ctx)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrNoKeysFound) {
-			return watchScan{}
+			// an empty bucket is a hub without this director's row: self-unseen, not
+			// every cluster leaving
+			return watchScan{SelfCheck: true, SelfWant: want}
 		}
 		return watchScan{KeysErr: true}
 	}
-	var sc watchScan
+	sc := watchScan{SelfCheck: true, SelfWant: want}
 	for _, k := range keys {
+		if k == selfKey {
+			if entry, err := g.kv.Get(ctx, k); err == nil {
+				var rec struct {
+					TS string `json:"ts"`
+				}
+				if json.Unmarshal(entry.Value(), &rec) == nil {
+					if ts, perr := time.Parse(time.RFC3339, rec.TS); perr == nil {
+						sc.SelfSeen, sc.SelfTS = true, ts
+					}
+				}
+			}
+			continue
+		}
 		if !strings.HasPrefix(k, "presence.") || isDirectorKey(k) {
 			continue
 		}

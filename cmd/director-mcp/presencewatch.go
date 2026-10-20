@@ -113,6 +113,9 @@ type PresenceWatch struct {
 	Sleeps   []watchGap            `json:"sleeps,omitempty"`
 	Downs    []watchGap            `json:"downs,omitempty"`
 	Blind    bool                  `json:"blind,omitempty"`
+	// SelfUnseen is set while the passes do not contain this director's own
+	// current row, so the hub read is not known to be the hub it writes to.
+	SelfUnseen bool `json:"self_unseen,omitempty"`
 	// Foreign lists each key under presence. that is not the shape the shim
 	// writes (D4), once, so it is reported once.
 	Foreign []string `json:"foreign,omitempty"`
@@ -263,6 +266,23 @@ func (w *PresenceWatch) Observe(now time.Time, mono time.Duration, scan watchSca
 	if w.Blind {
 		w.Blind = false
 		ev = append(ev, watchEvent{At: now, Kind: "sighted", Text: "hub readable again"})
+	}
+	if scan.SelfCheck && (!scan.SelfSeen || scan.SelfTS.Before(scan.SelfWant)) {
+		// Not sighted (cashp design section 4): this pass cannot show that the hub
+		// read is the hub this director writes to, so it infers nothing, as a
+		// blind pass does.
+		if !w.SelfUnseen {
+			w.SelfUnseen = true
+			ev = append(ev, watchEvent{At: now, Kind: "self-unseen", Text: "this director's own presence row is not in the hub read; no absence is inferred from it"})
+		}
+		for _, u := range w.Units {
+			u.Unknown = true
+		}
+		return ev
+	}
+	if w.SelfUnseen {
+		w.SelfUnseen = false
+		ev = append(ev, watchEvent{At: now, Kind: "self-seen", Text: "this director's own row is in the hub read again"})
 	}
 
 	seen := map[string]*watchRec{}

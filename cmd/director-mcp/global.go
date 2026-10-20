@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -435,6 +436,10 @@ type globalTier struct {
 	// violations is the connection's record of publish permission violations,
 	// shared with the Bus (nil in a tier built without one).
 	violations *violationRing
+
+	// selfPut is the unix second of the ts in the last presence row this session
+	// wrote, which the watch's self check compares with the row it reads back.
+	selfPut atomic.Int64
 
 	cfg      globalConfig
 	js       jetstream.JetStream
@@ -884,6 +889,11 @@ func (g *globalTier) writePresence(ctx context.Context, self Sender, instance st
 	}
 	body, _ := json.Marshal(rec)
 	_, err := g.kv.Put(ctx, g.cfg.presenceKey(instance), body)
+	if err == nil {
+		if ts, perr := time.Parse(time.RFC3339, rec["ts"].(string)); perr == nil {
+			g.selfPut.Store(ts.Unix())
+		}
+	}
 	return err
 }
 

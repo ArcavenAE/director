@@ -84,8 +84,19 @@ func (fx *watchFx) restart() {
 	fx.wire()
 }
 
-// tick advances the injected clock one heartbeat and runs the watch.
+// tick is one heartbeat as the shim runs it: the director's own row is written
+// (writeGlobalPresence), then the injected clock advances and the watch runs.
 func (fx *watchFx) tick() {
+	fx.t.Helper()
+	if msg := fx.bus.writeGlobalPresence(fx.ctx, "working"); msg != "" {
+		fx.t.Fatal(msg)
+	}
+	fx.tickNoBeat()
+}
+
+// tickNoBeat advances the injected clock and runs the watch without writing the
+// director's own row, as a heartbeat that did not reach the hub would.
+func (fx *watchFx) tickNoBeat() {
 	fx.t.Helper()
 	fx.clk.tick()
 	fx.bus.watchTick(fx.ctx)
@@ -244,8 +255,8 @@ func TestWatchHubRestartIsBlindNotAbsent(t *testing.T) {
 	fx.tick()
 
 	fx.rig.stopHub()
-	fx.tick()
-	fx.tick()
+	fx.tickNoBeat()
+	fx.tickNoBeat()
 	fx.rig.startHub()
 	fx.put("c1", "s1", "working")
 	fx.tick()
@@ -334,15 +345,6 @@ func TestWatchNoticeReachesWaitAndSummaryOnce(t *testing.T) {
 	}
 }
 
-// beat is the heartbeat's order: the director's own row first, then the pass.
-func (fx *watchFx) beat() {
-	fx.t.Helper()
-	if msg := fx.bus.writeGlobalPresence(fx.ctx, "working"); msg != "" {
-		fx.t.Fatal(msg)
-	}
-	fx.tick()
-}
-
 // cashp C1: a hub that lost the director's own row (replaced or flushed) is not
 // the hub this director writes to, so no cluster is called gone from its reads.
 func TestWatchFlushedHubIsSelfUnseenNotEveryClusterGone(t *testing.T) {
@@ -350,9 +352,9 @@ func TestWatchFlushedHubIsSelfUnseenNotEveryClusterGone(t *testing.T) {
 	defer cancel()
 	fx := newWatchFx(t, ctx, 0, true)
 	fx.put("c1", "s1", "working")
-	fx.beat()
+	fx.tick()
 	fx.put("c1", "s1", "working")
-	fx.beat()
+	fx.tick()
 	if u := newWatchStoreUnit(t, fx, "c1/s1"); u == nil || u.Status != unitPresent {
 		t.Fatalf("CONTROL FAILED: c1/s1 should be present on sighted passes, got %+v", u)
 	}
@@ -368,9 +370,9 @@ func TestWatchFlushedHubIsSelfUnseenNotEveryClusterGone(t *testing.T) {
 	if err := fx.kv.Delete(ctx, own); err != nil {
 		t.Fatal(err)
 	}
-	fx.tick()
-	fx.tick()
-	fx.tick()
+	fx.tickNoBeat()
+	fx.tickNoBeat()
+	fx.tickNoBeat()
 	ev := fx.events()
 	if count(ev, "absent") != 0 {
 		t.Fatalf("a flushed hub must not read as every cluster leaving, got %+v", ev)
@@ -380,7 +382,7 @@ func TestWatchFlushedHubIsSelfUnseenNotEveryClusterGone(t *testing.T) {
 	}
 
 	// the director writes its row again: sighted, and a missing cluster counts again.
-	fx.beat()
+	fx.tick()
 	if count(fx.events(), "self-seen") != 1 {
 		t.Fatalf("the own row back should be recorded once, got %+v", fx.events())
 	}
