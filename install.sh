@@ -78,12 +78,24 @@ install_one "$SRC/skills/director/scripts/card-ingest" "$DIRECTOR_HOME/bin/card-
 # The draft sweep (5yupe): a read-only list of fleet drafts nobody has reviewed and
 # fleet PRs merged with no review. It runs from beside nothing, so a copy install is whole.
 install_one "$SRC/skills/director/scripts/draft-sweep" "$DIRECTOR_HOME/bin/draft-sweep"
+# dbi, the stalled big ideas scan (ld16k): the sweep's Stalled ideas block runs it from the bin home.
+install_one "$SRC/skills/director/scripts/dbi" "$DIRECTOR_HOME/bin/dbi"
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"
 
 STATE="${DIRECTOR_STATE:-$HOME/.director/state}"
 mkdir -p "$STATE"
+# The default idea roots for dbi (stalled-big-ideas.md section 3). Written only when the file is
+# absent: the operator edits it, and an install never overwrites an operator's file.
+if [ -L "$STATE/idea-roots.conf" ]; then
+  # cp would write through the link, possibly into a file this script does not own.
+  echo "refusing to write through a symlink: $STATE/idea-roots.conf" >&2
+  REFUSED+=("$STATE/idea-roots.conf")
+elif [ ! -e "$STATE/idea-roots.conf" ]; then
+  cp "$SRC/skills/director/idea-roots.conf" "$STATE/idea-roots.conf"
+  echo "  $STATE/idea-roots.conf (default roots, edit freely)"
+fi
 echo "state root: $STATE  (operational; never committed)"
 if [ "${#REFUSED[@]}" -gt 0 ]; then
   echo "not installed, because a plain file is in the way (move it aside; this script never deletes your files):" >&2
