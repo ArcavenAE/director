@@ -61,7 +61,10 @@ K19: `board-state` rewrites only the text between `<!-- state:begin -->` and `<!
 $DIRECTOR_STATE/board.md from the ledger and the Desk snapshot (the block goes first when there are no
 markers; a malformed pair is refused and nothing is written; dws never creates board.md). `board-check
 [--json]` lists the `ask:<id>` and `ws:<slug>` ids in the prose that resolve to no record, exits 0, and
-says "not checked" for an id whose store is UNREAD.
+says "not checked" for an id whose store is UNREAD. The block takes its line ending from the board's first
+line (CRLF if that line ends in one, else LF), so a board already mixed gets one ending in the block and keeps
+its other lines as they are: the rule is cheap to state and never rewrites authored text; it is not a claim
+that a mixed board is well formed.
 
 K11: `reconcile [--json] [--out FILE]` reads the Desk snapshot, the ledger, rulings.jsonl,
 rings.jsonl and the PR state the ledger observed, and writes proposals (tag proposal) to
