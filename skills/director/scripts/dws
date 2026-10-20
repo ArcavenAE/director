@@ -1391,7 +1391,7 @@ def cmd_rings(a):
                      "rings_total": len(r["rings"]), "last_ring": r["last_ring"], "first_turn": r["first_turn"],
                      "ack": r["ack"], "blocker": r["blocker"], "blocker_at": r["blocker_at"]}
     if a.json:
-        json.dump({"file": RINGS, "torn": torn, "note": CLAIMS_NOTE, "seats": out}, sys.stdout, indent=2, ensure_ascii=False)
+        json.dump({"file": RINGS, "torn": torn, "note": CLAIMS_NOTE, "seats": out}, sys.stdout, indent=2, ensure_ascii=True)
         print()
     else:
         for seat, v in out.items():
