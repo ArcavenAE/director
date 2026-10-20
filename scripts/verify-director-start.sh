@@ -140,7 +140,8 @@ DIRECTOR_LAUNCH_ID=control-id "$root/bin/director-mcp-seat" & cpid=$!
 sleep 1
 if ps eww -o command= -p "$cpid" 2>/dev/null | grep -q 'DIRECTOR_LAUNCH_ID=control-id'; then can_prove=1; else can_prove=0; fi
 kill "$cpid" 2>/dev/null || true; wait "$cpid" 2>/dev/null || true
-if [[ "$can_prove" == 0 ]]; then echo "SKIP the prove checks: this interpreter's process environment is hidden from ps"; fi
+skipped=0
+if [[ "$can_prove" == 0 ]]; then echo "SKIP the prove checks: this interpreter's process environment is hidden from ps"; skipped=6; fi
 cat >"$root/claude-session" <<'STUB'
 #!/usr/bin/env bash
 # a stand-in session: starts the director MCP server the way claude would, then
@@ -149,6 +150,8 @@ case "${STUB_MCP:-yes}" in
   yes)   "$STUB_BIN/director-mcp-seat" & mcp=$! ;;
   noid)  env -u DIRECTOR_LAUNCH_ID "$STUB_BIN/director-mcp-seat" & mcp=$! ;;
   other) env DIRECTOR_LAUNCH_ID=some-other-launch "$STUB_BIN/director-mcp-seat" & mcp=$! ;;
+  argid) env -u DIRECTOR_LAUNCH_ID "$STUB_BIN/director-mcp-seat" "DIRECTOR_LAUNCH_ID=$DIRECTOR_LAUNCH_ID" & mcp=$! ;;
+  prefix) env DIRECTOR_LAUNCH_ID="${DIRECTOR_LAUNCH_ID}9" "$STUB_BIN/director-mcp-seat" & mcp=$! ;;
   none)  mcp= ;;
 esac
 sleep 1
@@ -173,6 +176,11 @@ if [[ "$can_prove" == 1 ]]; then
   check "prove with an MCP server that lacks the launch id is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
   sess other
   check "prove with an MCP server carrying another launch id is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
+  # review 5589085560: the id as an argument, or as the start of a longer id, is not the launch id
+  sess argid
+  check "prove with the launch id passed as an argument is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
+  sess prefix
+  check "prove with a launch id that only starts with ours is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
 fi
 rm -f "$home/.director/state/launch-proof"
 if env -i HOME="$home" PATH="$PATH" LANG="${LANG:-C}" "$start" prove >"$root/o" 2>&1; then bad "prove outside a launched session is refused" "exit 0"; else ok "prove outside a launched session is refused"; fi
@@ -234,6 +242,12 @@ if run_step --apply >"$root/o" 2>&1; then bad "a proof older than 7 days is refu
 mkproof fresh "$(sha "$cfg")" 60
 rm "$home/.director/state/launches/fresh"
 if run_step --apply >"$root/o" 2>&1; then bad "a proof with no launch record is refused" "exit 0"; else ok "a proof with no launch record is refused"; fi
+# a proof id that is a path to a hand-written file is not a launch record
+printf 'id=x\npid=1\nstarted=1\nconfig_sha256=%s\nsession=d\n' "$(sha "$cfg")" >"$root/forged-record"
+printf 'id=%s\nproved=%s\nmcp_pid=2\nconfig_sha256=%s\n' "$root/forged-record" "$(date +%s)" "$(sha "$cfg")" >"$home/.director/state/launch-proof"
+if run_step --apply >"$root/o" 2>&1; then bad "a proof id that is a path is refused" "exit 0"; else ok "a proof id that is a path is refused"; fi
+printf 'id=%s\nproved=%s\nmcp_pid=2\nconfig_sha256=%s\n' "../launches/../../../forged" "$(date +%s)" "$(sha "$cfg")" >"$home/.director/state/launch-proof"
+if run_step --apply >"$root/o" 2>&1; then bad "a proof id with .. is refused" "exit 0"; else ok "a proof id with .. is refused"; fi
 mkproof fresh "$(sha "$cfg")" 60
 check "none of the refusals changed the file" cmp -s "$scratch" "$root/claude.json.orig"
 
@@ -280,5 +294,5 @@ check "invalid JSON is reported as STOP" grep -q '^STOP' "$root/o"
 check "invalid JSON leaves the file untouched" cmp -s "$scratch" "$root/bad.orig"
 
 echo "---"
-echo "$pass passed, $fail failed"
+echo "$pass passed, $fail failed, $skipped skipped"
 [[ "$fail" -eq 0 ]]
