@@ -132,7 +132,7 @@ def plan_roots():
                     real = os.path.realpath(d)
                     # the walk starts at the repo's parent, so a root naming run/x directly
                     # still finds the checkout above run/
-                    base, up = fixed_real, os.path.dirname(real)
+                    base, up = os.path.dirname(real), os.path.dirname(real)
                     while True:
                         if os.path.exists(os.path.join(up, ".git")):
                             base = up
