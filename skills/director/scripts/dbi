@@ -29,7 +29,14 @@ Pointers are found in the artifact's own text (bd ids, owner/repo#n, "superseded
 artifact's path or file name. A PR or issue that cites an artifact without the artifact
 naming it is not searched for (a search per idea would spend the gh quota); the board's
 ruling requests (design pointer 3) are not read yet. An idea that does not resolve a
-successor it names treats it as no pointer.
+successor it names treats it as no pointer. A failed git read (ls-tree, show or log) is
+unverified under the kind "git read", with the error in "git_errors"; git never lazily
+fetches (GIT_NO_LAZY_FETCH) and never prompts. A missing or unreadable idea-roots.conf, or
+one that names no root, exits 2: an empty scan must not read as "nothing is stalled".
+Limits: gh answers "Could not resolve" both for a ref that does not exist and for a private
+repo the token cannot see, so the second reads as a dangling reference. The remote step
+is bounded by REMOTE_DEADLINE plus up to CALL_TIMEOUT, since a worker that has started
+but not yet registered its process when the deadline passes finishes its own call first.
 """
 import argparse, concurrent.futures, datetime, fnmatch, glob, json, os, re, signal, subprocess, sys, time
 
@@ -55,6 +62,9 @@ def now():
 
 def threshold(a):
     if a.threshold_days is not None:
+        if a.threshold_days < 0:
+            print("dbi: --threshold-days must be 0 or more", file=sys.stderr)
+            sys.exit(2)
         return a.threshold_days
     try:
         with open(os.path.join(STATE, "thresholds.json"), encoding="utf-8") as f:
@@ -69,12 +79,22 @@ def threshold(a):
     sys.exit(2)
 
 
-def read_lines(path):
+def read_lines(path, required=False):
+    """The non-blank, non-comment lines of a file. A missing file is empty when it is
+    optional and a loud exit 2 when it is required; any other read error is always loud,
+    so a file that cannot be read never reads as a clean scan."""
     try:
         with open(path, encoding="utf-8") as f:
             return [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
-    except OSError:
-        return []
+    except FileNotFoundError:
+        if not required:
+            return []
+        print(f"dbi: no roots file at {path}; without it nothing is scanned and an empty report would "
+              "read as no stalled ideas. Create it, one path or glob per line", file=sys.stderr)
+        sys.exit(2)
+    except (OSError, UnicodeDecodeError) as err:
+        print(f"dbi: cannot read {path} ({type(err).__name__}: {err}); not scanning", file=sys.stderr)
+        sys.exit(2)
 
 
 def rel_regex(pattern):
@@ -86,15 +106,29 @@ def rel_regex(pattern):
 
 def plan_roots():
     """(repo dir, relative path pattern) pairs, and the skips. A root glob selects repos and a
-    path pattern inside them; it is never expanded against a working tree's files."""
+    path pattern inside them; it is never expanded against a working tree's files. A repo is
+    skipped when, below the glob's fixed prefix and after resolving symlinks, a path component
+    is run, forks, contrib or a *-wt-* directory."""
+    roots_file = os.path.join(STATE, "idea-roots.conf")
+    lines = read_lines(roots_file, required=True)
+    if not lines:
+        print(f"dbi: {roots_file} names no root; nothing would be scanned", file=sys.stderr)
+        sys.exit(2)
     plan, skipped, seen = [], [], set()
-    for line in read_lines(os.path.join(STATE, "idea-roots.conf")):
+    for line in lines:
         parts = os.path.expanduser(line).split("/")
+        fixed = []
+        for c in parts:
+            if any(ch in c for ch in "*?["):
+                break
+            fixed.append(c)
+        fixed_real = os.path.realpath("/".join(fixed) or "/")
         for k in range(len(parts) - 1, 0, -1):
             repos = sorted(d for d in glob.glob("/".join(parts[:k])) if os.path.isdir(d) and os.path.exists(os.path.join(d, ".git")))
             if repos:
                 for d in repos:
-                    comps = d.strip("/").split("/")
+                    rel = os.path.relpath(os.path.realpath(d), fixed_real)
+                    comps = [c for c in rel.split(os.sep) if c not in ("", ".", "..")]
                     bad = [c for c in comps if c in SKIP_DIRS or fnmatch.fnmatch(c, "*-wt-*")]
                     if bad:
                         skipped.append({"path": d, "why": f"never read: path component {bad[0]!r}"})
@@ -106,7 +140,23 @@ def plan_roots():
 
 
 def git(repo, *args, timeout=30):
-    return subprocess.run(["git", "-C", repo, *args], capture_output=True, timeout=timeout)
+    """A read-only git call that cannot prompt and cannot lazily fetch a missing object
+    (a partial clone would otherwise reach its promisor remote and break the no-fetch rule)."""
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_NO_LAZY_FETCH"] = "1"
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
+
+
+def git_ok(repo, *args):
+    """(stdout text, None) or (None, error text). A failed read is never an empty answer."""
+    try:
+        p = git(repo, *args)
+    except (OSError, subprocess.SubprocessError) as err:
+        return None, f"git {args[0]}: {type(err).__name__}: {err}"
+    if p.returncode != 0:
+        return None, f"git {args[0]} exited {p.returncode}: {p.stderr.decode('utf-8', 'replace').strip()[:200]}"
+    return p.stdout.decode("utf-8", "replace"), None
 
 
 def ssh_env():
@@ -261,7 +311,7 @@ def main(argv):
     repos = sorted({d for d, _ in plan})
     remote = ask_remotes(repos)
     parked = {l.split()[0] for l in read_lines(os.path.join(STATE, "ideas-parked.txt"))}
-    unverified, unread_kinds = {}, set()
+    unverified, unread_kinds, git_errors = {}, set(), []
 
     def unv(kind, n=1):
         unverified[kind] = unverified.get(kind, 0) + n
@@ -272,14 +322,15 @@ def main(argv):
         rh = remote.get(repo)
         br = local_ref(repo, rh[0] if rh else None)
         if br is None:
-            unread_kinds.add("remote unreachable")
+            kind = "remote unreachable" if rh is None else "no local default ref"
+            unread_kinds.add(kind)
             for d, pat in plan:
                 if d == repo:
                     rx = rel_regex(pat)
                     for root_, _, files in os.walk(os.path.join(repo, os.path.dirname(pat) or ".")):
                         for fn in files:
                             if rx.match(os.path.relpath(os.path.join(root_, fn), repo)):
-                                unv("remote unreachable")
+                                unv(kind)
             continue
         sha = git(repo, "rev-parse", f"refs/remotes/origin/{br}").stdout.decode().strip()
         tag = "unreachable" if rh is None else ("current" if rh[1] == sha else "stale")
@@ -288,7 +339,19 @@ def main(argv):
             asof = git(repo, "log", "-1", "--format=%cs", f"refs/remotes/origin/{br}").stdout.decode().strip() or None
         info[repo] = (f"refs/remotes/origin/{br}", tag, asof)
         ref = info[repo][0]
-        tree = git(repo, "ls-tree", "-r", "--name-only", ref).stdout.decode("utf-8", "replace").splitlines()
+        tree_text, err = git_ok(repo, "ls-tree", "-r", "--name-only", ref)
+        if tree_text is None:
+            git_errors.append(f"{os.path.basename(repo)}: {err}")
+            unread_kinds.add("git read")
+            for d, pat in plan:
+                if d == repo:
+                    rx = rel_regex(pat)
+                    for root_, _, files in os.walk(os.path.join(repo, os.path.dirname(pat) or ".")):
+                        for fn in files:
+                            if rx.match(os.path.relpath(os.path.join(root_, fn), repo)):
+                                unv("git read")
+            continue
+        tree = tree_text.splitlines()
         for d, pat in plan:
             if d != repo:
                 continue
@@ -296,11 +359,17 @@ def main(argv):
             for path in tree:
                 if not rx.match(path) or (repo, path) in ideas:
                     continue
-                text = git(repo, "show", f"{ref}:{path}").stdout.decode("utf-8", "replace")
+                text, err = git_ok(repo, "show", f"{ref}:{path}")
+                ct, err2 = git_ok(repo, "log", "-1", "--format=%ct", ref, "--", path) if err is None else (None, None)
+                if text is None or ct is None:
+                    git_errors.append(f"{os.path.basename(repo)}/{path}: {err or err2}")
+                    unread_kinds.add("git read")
+                    unv("git read")
+                    continue
+                ct = ct.strip()
                 lines = text.splitlines()
                 title = next((l[2:].strip() for l in lines if l.startswith("# ")), os.path.basename(path))
                 status = next((m.group(1).lower() for m in (STATUS.match(l) for l in lines[:40]) if m), "")
-                ct = git(repo, "log", "-1", "--format=%ct", ref, "--", path).stdout.decode().strip()
                 name = f"{os.path.basename(repo)}/{path}"
                 ideas[(repo, path)] = {"path": name, "title": title, "text": text, "ref": ref, "path_in": path,
                                        "resolved": status in RESOLVED or name in parked,
@@ -387,7 +456,7 @@ def main(argv):
     rows.sort(key=lambda x: (-x["quiet_days"], x["path"]))
     json.dump({"read_at": t_text, "threshold_days": thr, "rows": rows,
                "unverified": {"count": sum(unverified.values()), "kinds": unverified},
-               "unread": sorted(unread_kinds), "skipped": skipped}, sys.stdout, indent=2, ensure_ascii=False)
+               "unread": sorted(unread_kinds), "skipped": skipped, "git_errors": git_errors}, sys.stdout, indent=2, ensure_ascii=False)
     print()
     return 0
 
