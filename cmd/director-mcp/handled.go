@@ -691,3 +691,11 @@ func toolCatalogHandled(gcfg *globalConfig, cueOn, handledOn bool) []toolDef {
 		},
 	})
 }
+
+// loadThresholdsNotes is loadThresholds with the soft rows of the cluster-gone
+// alert: a bad value in one of those keeps its default and is returned as a
+// note, so one bad row cannot stop the presence watch (cashp design section 5).
+func loadThresholdsNotes(dir string) (map[string]time.Duration, []string, error) {
+	t, err := loadThresholds(dir)
+	return t, nil, err
+}

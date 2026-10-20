@@ -56,6 +56,9 @@ const (
 	thresholdPresenceFlapWindow = "presence_flap_window"
 	thresholdPresenceFlapQuiet  = "presence_flap_quiet"
 	thresholdPresenceHoldSellBy = "presence_hold_sell_by"
+	// the cluster-gone alert's bound (cashp design section 5)
+	thresholdPresenceLostAfter    = "presence_lost_after"
+	thresholdPresenceLostAfterMax = "presence_lost_after_max"
 )
 
 // presenceWatcher is the watch as the shim holds it.

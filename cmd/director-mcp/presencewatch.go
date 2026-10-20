@@ -20,6 +20,10 @@ import (
 type watchRec struct {
 	State string    `json:"state"`
 	TS    time.Time `json:"ts"`
+	// LostAfter is the optional lost_after field of the record, as written: a
+	// duration string the cluster's own admin preference carries (cashp design
+	// section 5). It is judged in Observe, never trusted as it stands.
+	LostAfter string `json:"lost_after,omitempty"`
 }
 
 // watchRow is one key of the bucket in one pass. Unfetched is a key whose
@@ -51,10 +55,15 @@ type watchThresholds struct {
 	FlapCount  int
 	FlapWindow time.Duration
 	FlapQuiet  time.Duration
+	// LostAfter is the away-to-lost bound when a cluster carries none, and
+	// LostMax the most a cluster's own value may set (cashp design section 5).
+	LostAfter time.Duration
+	LostMax   time.Duration
 }
 
 func defaultWatchThresholds() watchThresholds {
-	return watchThresholds{FlapCount: 4, FlapWindow: time.Hour, FlapQuiet: 15 * time.Minute}
+	return watchThresholds{FlapCount: 4, FlapWindow: time.Hour, FlapQuiet: 15 * time.Minute,
+		LostAfter: 30 * time.Minute, LostMax: 24 * time.Hour}
 }
 
 // Unit statuses.
