@@ -713,3 +713,9 @@ func toolCatalogHandled(gcfg *globalConfig, cueOn, handledOn bool) []toolDef {
 		},
 	})
 }
+
+// loadCountRows reads the count rows of the cluster-gone alert (a minimum and a
+// cap, whole numbers, not durations) from the same thresholds.json.
+func loadCountRows(dir string) (map[string]int, []string) {
+	return map[string]int{thresholdPresenceHubMoveMin: 2, thresholdPresenceAlertCap: 6}, nil
+}

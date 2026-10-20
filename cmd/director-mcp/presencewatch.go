@@ -59,11 +59,18 @@ type watchThresholds struct {
 	// LostMax the most a cluster's own value may set (cashp design section 5).
 	LostAfter time.Duration
 	LostMax   time.Duration
+	// HubMoveMin clusters going absent within HubMoveWindow, when no other
+	// cluster is present, open one hub-moved parent; AlertCap is the most lost
+	// and hub-moved notices shown per hour (cashp design section 6).
+	HubMoveMin    int
+	HubMoveWindow time.Duration
+	AlertCap      int
 }
 
 func defaultWatchThresholds() watchThresholds {
 	return watchThresholds{FlapCount: 4, FlapWindow: time.Hour, FlapQuiet: 15 * time.Minute,
-		LostAfter: 30 * time.Minute, LostMax: 24 * time.Hour}
+		LostAfter: 30 * time.Minute, LostMax: 24 * time.Hour,
+		HubMoveMin: 2, HubMoveWindow: 2 * time.Minute, AlertCap: 6}
 }
 
 // Unit statuses.
@@ -116,6 +123,9 @@ type watchEvent struct {
 	// Collapsed marks a transition inside a flapping spell: it is recorded in
 	// the file and left out of the notice.
 	Collapsed bool `json:"collapsed,omitempty"`
+	// Capped marks a lost or hub-moved event held back by the hourly cap: it is
+	// recorded and not shown.
+	Capped bool `json:"capped,omitempty"`
 }
 
 // PresenceWatch is the whole watch state.

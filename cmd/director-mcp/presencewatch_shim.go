@@ -59,6 +59,10 @@ const (
 	// the cluster-gone alert's bound (cashp design section 5)
 	thresholdPresenceLostAfter    = "presence_lost_after"
 	thresholdPresenceLostAfterMax = "presence_lost_after_max"
+	// count rows, read by loadCountRows: not durations
+	thresholdPresenceHubMoveMin    = "presence_hub_move_min"
+	thresholdPresenceHubMoveWindow = "presence_hub_move_window"
+	thresholdPresenceAlertCap      = "presence_alert_cap"
 )
 
 // presenceWatcher is the watch as the shim holds it.
