@@ -194,6 +194,8 @@ func (p *presenceWatcher) noticeText(e watchEvent) string {
 		return fmt.Sprintf("presence: key %s does not have the shape a supervisor writes and is not counted", e.Text)
 	case "lost":
 		return fmt.Sprintf("presence: cluster %s lost: absent %s, past its %s bound (host sleep not counted)", e.Unit, p.w.AbsenceDuration(e.Unit, e.At).Round(time.Second), e.Text)
+	case "hub-moved", "hub-moved-closed", "hub-moved-converted", "alerts-capped":
+		return "presence: " + e.Text
 	case "lost-after-ignored", "lost-after-clamped":
 		return fmt.Sprintf("presence: cluster %s: %s", e.Unit, e.Text)
 	case "flapping":
@@ -239,6 +241,10 @@ func (b *Bus) startPresenceWatch(logf func(string, ...any)) error {
 	th := defaultWatchThresholds()
 	th.LostAfter = table[thresholdPresenceLostAfter]
 	th.LostMax = table[thresholdPresenceLostAfterMax]
+	th.HubMoveWindow = table[thresholdPresenceHubMoveWindow]
+	counts, cnotes := loadCountRows(dir)
+	th.HubMoveMin, th.AlertCap = counts[thresholdPresenceHubMoveMin], counts[thresholdPresenceAlertCap]
+	notes = append(notes, cnotes...)
 	th.FlapWindow = table[thresholdPresenceFlapWindow]
 	th.FlapQuiet = table[thresholdPresenceFlapQuiet]
 	store := newWatchStore(dir)
