@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -312,24 +313,108 @@ func oneDirectorErr(addr string, live []map[string]any, scan presenceScan) error
 		len(live), globalPresenceBucket, strings.Join(who, ", "), addr)
 }
 
+// reservedClusterNames are ledger entries that are not clusters: the director's
+// own row and the stand-in team the ledger uses for it.
+var reservedClusterNames = map[string]bool{roleDirector: true, globalTeam: true, "": true}
+
+// clusterOf is the cluster named by a global address, or "" when the address
+// does not parse (the refusal then lists the clusters and claims none).
+func clusterOf(addr string) string {
+	cluster, _, err := parseGlobalAddress(addr)
+	if err != nil {
+		return ""
+	}
+	return cluster
+}
+
+// seenClusterListCap bounds the list in a refusal, so one text stays readable.
+const seenClusterListCap = 20
+
+// unknownClusterClause says, for a cluster nothing is registered under, only
+// what this director's ask ledger saw (cluster-address rulings O3, K6): never
+// "never", always "not seen ... since the record start", and always that
+// nothing was sent. With no view it keeps the older wording.
+func unknownClusterClause(cluster string, seen *seenView) string {
+	if seen == nil {
+		return "the cluster name is likely wrong"
+	}
+	const sent = "nothing was sent"
+	if seen.err != nil {
+		return fmt.Sprintf("the ask ledger could not be read (%v), so whether this director has seen the cluster is NOT established; `marvel config` lists the cluster names; %s", seen.err, sent)
+	}
+	var start, last time.Time
+	known := map[string]bool{}
+	for _, e := range seen.entries {
+		if reservedClusterNames[e.Cluster] {
+			continue
+		}
+		known[e.Cluster] = true
+		if start.IsZero() || e.FirstSeen.Before(start) {
+			start = e.FirstSeen
+		}
+		if e.Cluster == cluster && e.LastSeen.After(last) {
+			last = e.LastSeen
+		}
+	}
+	if seen.state != seenLedger || len(known) == 0 {
+		return "this director keeps no record of the clusters it has seen, so the name may be wrong; `marvel config` lists the cluster names; " + sent
+	}
+	if !last.IsZero() {
+		return fmt.Sprintf("this director last saw cluster %q at %s (%s ago), so the name is probably right and the cluster may be down; %s",
+			cluster, last.UTC().Format(time.RFC3339), humanAge(seen.now.Sub(last)), sent)
+	}
+	names := make([]string, 0, len(known))
+	for c := range known {
+		names = append(names, c)
+	}
+	sort.Strings(names)
+	list := strings.Join(names, ", ")
+	if len(names) > seenClusterListCap {
+		list = strings.Join(names[:seenClusterListCap], ", ") + fmt.Sprintf(" and %d more", len(names)-seenClusterListCap)
+	}
+	return fmt.Sprintf("not seen by this director since %s (the start of its record); clusters seen by this director: %s; %s",
+		start.UTC().Format(time.RFC3339), list, sent)
+}
+
+// readSeen reads the ask ledger's hub principals for the refusal text. It only
+// reads, and a failed read is carried into the text, never hidden.
+func (g *globalTier) readSeen(ctx context.Context) *seenView {
+	v := &seenView{now: time.Now()}
+	if g.local == nil {
+		return v
+	}
+	v.entries, v.state, v.err = readGlobalSeen(ctx, g.local)
+	return v
+}
+
 // noGlobalPresenceErr is the R-92 liveness refusal at the global tier. The
 // subject here is fully determined by the address, so the only resolution
 // question left is whether anyone is alive to consume it; zero live records
 // refuses before publish rather than storing a message no session filters.
 // noGlobalPresenceErr states the refusal and nothing beyond what the scan
 // established. Every branch refuses; they differ only in what they claim.
-func noGlobalPresenceErr(addr, prefix string, scan presenceScan) error {
-	return &presenceRefusalErr{err: noGlobalPresenceText(addr, prefix, scan), unreadable: scan.Unreadable > 0}
+func noGlobalPresenceErr(addr, prefix string, scan presenceScan, seen *seenView) error {
+	return &presenceRefusalErr{err: noGlobalPresenceText(addr, prefix, scan, seen), unreadable: scan.Unreadable > 0}
 }
 
-func noGlobalPresenceText(addr, prefix string, scan presenceScan) error {
+// seenView is what the send path read of the ask ledger's hub principals, for
+// the wrong-cluster-name refusal (R-92, O3 of the cluster-address rulings). A
+// nil view means the ledger was not consulted.
+type seenView struct {
+	state   seenState
+	entries map[string]globalEntry
+	err     error
+	now     time.Time
+}
+
+func noGlobalPresenceText(addr, prefix string, scan presenceScan, seen *seenView) error {
 	const refused = "no session would consume this send, so it is refused rather than stored on a subject nobody reads (R-92 liveness)"
 	const refusedUnestablished = "refused rather than stored on a subject nobody reads (R-92 liveness)"
 	switch {
 	case scan.Keys == 0:
 		return fmt.Errorf("no presence record exists at all in %s: the bucket is empty, so no session of any kind has registered. %s for %s", globalPresenceBucket, refused, addr)
 	case scan.TeamMatched == 0:
-		return fmt.Errorf("nothing is registered under %q in %s for %s, though %d other presence key(s) exist; the cluster name is likely wrong. %s", teamScope(prefix), globalPresenceBucket, addr, scan.Keys, refused)
+		return fmt.Errorf("nothing is registered under %q in %s for %s, though %d other presence key(s) exist; %s. %s", teamScope(prefix), globalPresenceBucket, addr, scan.Keys, unknownClusterClause(clusterOf(addr), seen), refused)
 	case scan.Matched == 0:
 		return fmt.Errorf("the cluster is live (%d key(s) under %q in %s) but nothing matches %q for %s; the role is wrong, or that seat is down. %s", scan.TeamMatched, teamScope(prefix), globalPresenceBucket, prefix, addr, refused)
 	case scan.Unreadable > 0:
@@ -872,7 +957,11 @@ func (g *globalTier) publish(ctx context.Context, e *Envelope, body []byte) (*je
 		return nil, &presenceReadErr{fmt.Errorf("reading %s: %w (%s)", globalPresenceBucket, err, hubHint(g.cfg))}
 	}
 	if len(live) == 0 {
-		return nil, noGlobalPresenceErr(e.Recipient.Address, prefix, scan)
+		var seen *seenView
+		if scan.Keys > 0 && scan.TeamMatched == 0 {
+			seen = g.readSeen(ctx)
+		}
+		return nil, noGlobalPresenceErr(e.Recipient.Address, prefix, scan, seen)
 	}
 	if role == roleDirector {
 		if err := oneDirectorErr(e.Recipient.Address, live, scan); err != nil {
