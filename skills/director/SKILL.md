@@ -213,11 +213,22 @@ The sweep order on the tick, which is the drain and the Desk read that the
 hook's three-line checklist asks about:
 
 1. Drain the bus inbox: `inbox_summary`, then `wait_for_message` with `max`
-   above 1 until `remaining` is 0 or the reply is the silence note.
-2. Record the drain: `standing-hook beat`.
+   above 1 until `remaining` is 0 or the reply is the silence note. This gives
+   the messages to answer.
+2. Record the drain: `standing-hook beat`. This gives `last-drain`.
 3. Read answered Desk cards and refresh the snapshot: `desk-snapshot write`.
-4. Move the rows: `dws refresh --local` (`board-html` runs it on render).
-5. Answer QUERYs and act on MERGE RECOMMENDED, through `merge-guard`.
+   This gives `desk-snapshot.json`.
+4. Move the rows: `dws refresh --local` (`board-html` runs it on render). This
+   gives the moved rows.
+5. If `$DIRECTOR_STATE/digest.md` is older than 12 hours, run `dws digest`. This
+   gives the digest the operator reads twice a day, by event and not by timer:
+   a session runs it on its own tick, and nothing runs on silence. The digest is
+   read-only output, so it is not an action fired on a clock.
+6. Answer QUERYs and act on MERGE RECOMMENDED, through `merge-guard`. This gives
+   the replies and merges.
+
+When a step stops producing anything the next step uses, propose cutting or
+combining it. This is a prompt to propose, never a gate.
 
 Once K19 lands, step 4 is followed by `dws board-state` ("state first").
 
@@ -294,12 +305,16 @@ the captures and moves what has hardened into `sim/requirements.md`.
    only reports and does not write the register is session-1 behavior in a new
    costume; writing the register is the point.
 6. For an episode that produced a correction or an escalation, add a section
-   headed `Retrospective and coaching` to the report: what the seat should do
-   differently next time. Coaching is recorded under that heading, in the
-   harvest report, and never on a channel of its own, since a second channel is
-   where messages go unread (R-118). An episode with neither a correction nor
-   an escalation needs no such section, and the step is never a gate on a
-   handoff or a shift.
+   headed `Retrospective and coaching` to the report. Take the facts first, from
+   the ledger, the relay log or the transcript, so the section does not turn
+   into competing narratives. Then answer four questions: what was supposed to
+   happen, what did happen, what was right or wrong with what happened, and what
+   the seat should do differently next time. Each fix names the seat that owns
+   it. Before dispatching work of the same kind, read the last retrospective for
+   it. Coaching is recorded under that heading, in the harvest report, and never
+   on a channel of its own, since a second channel is where messages go unread
+   (R-118). An episode with neither a correction nor an escalation needs no such
+   section, and the step is never a gate on a handoff or a shift.
 
 Do not renumber existing requirements. New ones take the next R number.
 
