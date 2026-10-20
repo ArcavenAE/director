@@ -47,7 +47,7 @@ when the notes have accumulated. Say which mode you are in, once, at the start.
 
 ## Mode: sweep
 
-The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
+The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
 
 1. Run `${DIRECTOR_HOME:-$HOME/.director}/bin/dsi`. It writes `$DIRECTOR_STATE/sessions.json` (props) and
    `roster.md` (scenery). Defaults to `~/.director/state`, 4-day window.
@@ -61,6 +61,11 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`) are inst
    shown in the sweep reply only, under Drafts: they are not appended to `board.md` and not fed to `dws`. With no config
    it prints a GAP line; show that line, never skip the step silently.
    It exits 0 whether it finds nothing or a lot, so read its lines, never its exit code.
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/dbi --json` (read only, no fetch; it asks each repo's remote, so
+   allow up to a minute) and record it with `standing-hook scan-beat` (as in the Standing checklist). Its
+   `rows` are the Stalled ideas block, its `unverified.count` the Unverified line. Exit 2 means it could not
+   run (no `stalled_idea_days` in `$DIRECTOR_STATE/thresholds.json`, or no `idea-roots.conf`): print
+   `Stalled ideas: not run (<its stderr line>)`, never an empty block. A scan that did not run is not "none".
 4. Present, in this shape and no other:
 
 ```
@@ -72,9 +77,20 @@ Stranded (N)  [dead process, ask never answered]
 7. <session> - <the ask in one line>  (died Nh ago)
 
 Running, not blocked: <names>
+Stalled ideas (N)  [research or design, no live forward pointer, quiet <threshold>d+]
+9. <repo>/<path> - <title>  (quiet 23d; pointers all closed)
+10. <repo>/<path> - <title>  (quiet 16d; no pointer; as of 2026-09-21, remote unreachable)
+Unverified ideas: K  [bd: 4; remote unreachable: 2]
 Drafts: <draft-sweep lines, GAP lines included, or "none">
 Uncaptured: <one line each, or "none">
 ```
+
+Stalled ideas: at most five lines, oldest quiet first, then `(+M more)`; number them on from the last
+block; the reason is the row's `reason`; a row with `remote` other than `current` shows `as of <as_of>` and,
+for `unreachable`, `remote unreachable`. Unverified ideas are counted apart and never in N; omit that line
+when K is 0 and name only kinds of source in the bracket. The block presents and stops: the operator
+revives, parks (a line in `$DIRECTOR_STATE/ideas-parked.txt`) or drops. The five-line cap and the
+threshold are the design's provisional values (`sim/design/stalled-big-ideas.md` section 7), not rulings.
 
 One line per item. No narrative, no context paragraphs, no confidence notes
 in the list. Detail on request, by number. Session 1's operator complaint was
@@ -194,7 +210,9 @@ questions crowds them out. Three scripts in `scripts/` give them one.
 - `standing-hook` is a prompt hook. Wired as a Claude Code `UserPromptSubmit`
   hook, it prints the drain age and the three-line checklist before each
   answer. After every drain, run `standing-hook beat` to record it. With no
-  heartbeat it says the age is unknown; it never invents one.
+  heartbeat it says the age is unknown; it never invents one. Its last line gives
+  the age of the last stalled-ideas scan (`dbi`, run by the sweep, then
+  `standing-hook scan-beat`), read from a file: the hook never runs the scan.
   `verify-standing-hook.sh` proves it.
 - `reference/relay-template.md` is the form to fill before a relay.
 - `composer-check` looks at a pane before an inject that ends in Enter. It

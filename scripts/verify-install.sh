@@ -22,7 +22,7 @@ run_install() { # $1 = scratch home
 
 targets() { # every target install.sh places, relative to the scratch home
   printf '%s\n' claude/skills/director claude/skills/stansfield claude/commands/director.md \
-    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install director/bin/draft-sweep director/bin/card-ingest
+    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install director/bin/draft-sweep director/bin/card-ingest director/bin/dbi
 }
 
 # Positive control: a clean home installs everything and exits 0.
@@ -56,13 +56,13 @@ grep -q 'run `scripts/board-html`' "$skill" \
 # The list is the skill's: every installed-path call it makes. Each must exist in the checkout as the fallback.
 BINHOME='${DIRECTOR_HOME:-$HOME/.director}/bin'
 names="$(grep -o -E '\.director\}/bin/[A-Za-z0-9_-]+' "$skill" | sed 's#.*/bin/##' | sort -u | tr '\n' ' ')"
-for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi; do
   case " $names " in *" $n "*) ok "the skill references $n";; *) bad "the skill references $n" "list: $names";; esac
 done
 for n in $names; do
   [[ -x "$here/skills/director/scripts/$n" || "$n" == board-html ]] && ok "every installed-path call resolves in the checkout: $n" || bad "every installed-path call resolves in the checkout: $n"
 done
-for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi; do
   [[ -x "$clean/director/bin/$n" ]] && ok "install puts $n in the bin home, executable" || bad "install puts $n in the bin home, executable"
   grep -qF "$BINHOME/$n" "$skill" && ok "skill calls $n from the bin home" || bad "skill calls $n from the bin home"
   [[ -x "$here/skills/director/scripts/$n" ]] && ok "the fallback scripts/$n exists in the checkout" || bad "the fallback scripts/$n exists in the checkout"
@@ -116,7 +116,7 @@ grep -qF 'refresh --local' "$fn" && grep -qF 'dws unlinked' "$fn" && grep -qF --
 # A copy install runs from the bin home with no checkout beside it.
 cp_home="$root/copy"; mkdir -p "$cp_home"
 CLAUDE_HOME="$cp_home/claude" DIRECTOR_HOME="$cp_home/director" DIRECTOR_STATE="$cp_home/state" "$here/install.sh" --copy >"$cp_home/out" 2>&1 || true
-for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi; do
   [[ -f "$cp_home/director/bin/$n" && ! -L "$cp_home/director/bin/$n" && -x "$cp_home/director/bin/$n" ]] && ok "copy install puts a real executable $n in the bin home" || bad "copy install puts a real executable $n in the bin home"
 done
 # draft-sweep (5yupe) is installed for the sweep to call; it needs no checkout beside it.
@@ -129,6 +129,14 @@ DIRECTOR_STATE="$cp_home/state" "$cp_home/director/bin/dsx" >"$cp_home/dsx" 2>&1
 mkdir -p "$cp_home/home"; HOME="$cp_home/home" DIRECTOR_STATE="$cp_home/state" "$cp_home/director/bin/dsi" >"$cp_home/dsi" 2>&1; rc=$?
 [[ $rc -eq 0 ]] && ok "installed dsi runs from the bin home" || bad "installed dsi runs from the bin home" "rc=$rc"
 set -e
+
+# The default idea roots (ld16k): written when absent, never over an operator's file.
+cf="$clean/director/state/idea-roots.conf"
+[[ -s "$cf" ]] && grep -q '_kos/ideas' "$cf" && ok "a clean install writes the default idea-roots.conf" || bad "a clean install writes the default idea-roots.conf"
+echo "# mine" >"$cf"
+run_install "$clean" && [[ "$(cat "$cf")" == "# mine" ]] && ok "a second install leaves an edited idea-roots.conf alone" || bad "a second install leaves an edited idea-roots.conf alone"
+cp "$here/skills/director/idea-roots.conf" "$root/roots.conf"
+[[ "$(grep -vc -E '^(#|$)' "$root/roots.conf")" == 7 ]] && ok "the shipped default names the design's seven roots" || bad "the shipped default names the design's seven roots"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
