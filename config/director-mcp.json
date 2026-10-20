@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "director": {
+      "type": "stdio",
+      "command": "${HOME}/.director/bin/director-mcp-seat",
+      "args": [],
+      "env": {
+        "DIRECTOR_AGENT_ID": "${DIRECTOR_AGENT_ID}",
+        "DIRECTOR_CLUSTER": "${DIRECTOR_CLUSTER}",
+        "DIRECTOR_GLOBAL_DOMAIN": "${DIRECTOR_GLOBAL_DOMAIN}",
+        "DIRECTOR_GLOBAL_ROLE": "${DIRECTOR_GLOBAL_ROLE}",
+        "DIRECTOR_TEAM": "${DIRECTOR_TEAM}",
+        "DIRECTOR_WORKSPACE": "${DIRECTOR_WORKSPACE}",
+        "NATS_URL": "${NATS_URL}"
+      }
+    }
+  }
+}

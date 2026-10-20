@@ -85,6 +85,15 @@ PATH=/nowhere
 SEAT
 rm -f "$root/out"
 if run_start start >"$root/stdout" 2>&1; then bad "a bad seat file is refused" "exit 0"; else ok "a bad seat file is refused"; fi
+# a well-formed line for a key that is not on the list is refused too
+cat >"$home/.director/seat.env" <<SEAT
+DIRECTOR_AGENT_ID=fake-director
+DIRECTOR_TEAM=fake-team
+DIRECTOR_WORKSPACE=fake-ws
+LD_PRELOAD=/nowhere
+SEAT
+rm -f "$root/out"
+if run_start start >"$root/stdout" 2>&1; then bad "a key off the list is refused" "exit 0"; else ok "a key off the list is refused"; fi
 check "a command in a seat file is never run" bash -c "[[ ! -e '$root/pwned' ]]"
 check "claude was not run for a bad seat file" bash -c "[[ ! -e '$root/out' ]]"
 
@@ -98,7 +107,7 @@ check "the config holds no literal identity" python3 -c "
 import json,re
 d=json.load(open('$cfg'))
 env=d['mcpServers']['director'].get('env',{})
-assert env, 'env block missing'
+assert env, "env block missing"
 bad=[k for k,v in env.items() if not re.fullmatch(r'\\$\\{[A-Z_]+\\}', v)]
 assert not bad, bad
 "

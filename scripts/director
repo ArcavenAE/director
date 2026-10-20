@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]
+#
+# Starts a Claude Code session as the director, on purpose. The director MCP
+# server comes from config/director-mcp.json in this repo, handed to claude with
+# --mcp-config, so a session is a director only when it was started here and not
+# because of the folder it opened in.
+#
+# Identity (agent id, cluster, global domain and role, team, workspace, broker
+# url) is never in the repo and never in the session folder. It comes from a
+# small per-host file, ${DIRECTOR_HOME:-$HOME/.director}/seat.env, or from flags.
+# The file is data: only the allowed KEY=value lines are read, and nothing in it
+# is executed.
+#
+#   first start   director start
+#   restart       director start --resume director
+#   other cluster director start --cluster <name>
+#
+# Exit: 0 claude ran and exited 0 (the exit status of claude is passed through),
+# 2 usage, 3 STOP (a required value is missing, or the seat file is not valid).
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+config="$here/config/director-mcp.json"
+keys=(DIRECTOR_AGENT_ID DIRECTOR_CLUSTER DIRECTOR_GLOBAL_DOMAIN DIRECTOR_GLOBAL_ROLE DIRECTOR_TEAM DIRECTOR_WORKSPACE NATS_URL)
+required=(DIRECTOR_AGENT_ID DIRECTOR_TEAM DIRECTOR_WORKSPACE)
+
+usage() { printf 'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n' >&2; exit 2; }
+stop() { printf 'STOP: %s\n' "$*" >&2; exit 3; }
+
+[[ "${1:-}" == start ]] || usage
+shift
+
+cluster_flag="" resume="" seat_file="${DIRECTOR_HOME:-$HOME/.director}/seat.env"
+while (($#)); do
+  case "$1" in
+    --cluster)   [[ $# -ge 2 ]] || usage; cluster_flag="$2"; shift 2 ;;
+    --resume)    [[ $# -ge 2 ]] || usage; resume="$2"; shift 2 ;;
+    --seat-file) [[ $# -ge 2 ]] || usage; seat_file="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+allowed() { local k; for k in "${keys[@]}"; do [[ "$k" == "$1" ]] && return 0; done; return 1; }
+
+# values live in V_<KEY> variables, since the macOS system bash has no associative arrays
+get() { local n="V_$1"; printf %s "${!n:-}"; }
+put() { printf -v "V_$1" %s "$2"; }
+if [[ -f "$seat_file" ]]; then
+  n=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n+1))
+    [[ -z "${line//[[:space:]]/}" || "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" =~ ^([A-Z_]+)=([A-Za-z0-9._:/@+-]*)$ ]] && allowed "${BASH_REMATCH[1]}"; then
+      put "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    else
+      stop "$seat_file line $n is not an allowed KEY=value line (keys: ${keys[*]}); nothing was run"
+    fi
+  done <"$seat_file"
+fi
+
+if [[ -n "$cluster_flag" ]]; then put DIRECTOR_CLUSTER "$cluster_flag"; fi
+if [[ -z "$(get NATS_URL)" ]]; then put NATS_URL nats://127.0.0.1:4222; fi
+
+missing=()
+for k in "${required[@]}"; do [[ -n "$(get "$k")" ]] || missing+=("$k"); done
+if ((${#missing[@]})); then
+  stop "missing ${missing[*]}; put them in $seat_file as KEY=value lines or pass them by flag (--cluster covers DIRECTOR_CLUSTER only)"
+fi
+
+for k in "${keys[@]}"; do export "$k=$(get "$k")"; done
+
+args=(--mcp-config "$config")
+if [[ -n "$resume" ]]; then args+=(--resume "$resume"); else args+=(-n director); fi
+
+exec "${CLAUDE_BIN:-claude}" "${args[@]}"
