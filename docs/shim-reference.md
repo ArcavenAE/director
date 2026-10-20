@@ -676,6 +676,17 @@ A session holding a role adds `role` (for example `"role": "reviewer"`).
 for a binary built without VCS stamping (`-buildvcs=false`, or outside a
 repository). A row with no `rev` comes from a shim older than LR-3.
 
+A global row may also carry `lost_after`, a duration string such as `"45m"`:
+the cluster's own bound for the cluster-gone alert (how long it may be absent
+before director's presence watch raises `lost`). The shim writes it only when
+`DIRECTOR_PRESENCE_LOST_AFTER` is set in its environment, and omits it
+otherwise; director reads it as an optional field and uses its own
+`presence_lost_after` row (default 30 minutes) when it is absent. A value that
+is not a positive duration is ignored, and one above director's
+`presence_lost_after_max` (default 24 hours) is clamped to it. Where one cluster
+has several supervisor rows, the value on the last row read for that cluster
+decides, and the rows are read in key order.
+
 Global rows add `cluster` and `role`, and a `tier` column in the merged
 roster. The record carries the harness's own view of nothing: `state` is
 the last value the model set, `ts` is the shim's timer. A record whose pid
