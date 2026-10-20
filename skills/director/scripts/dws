@@ -1243,7 +1243,7 @@ def cmd_inherit(a):
         return
     for name in ("rulings", "ledger", "desk"):
         v = sources[name]
-        print(f"{name:<8} " + (f"read {v['read_at']}" if v["state"] == "read" else f"UNREAD  {v['why']}"))
+        print(f"{name:<8} " + (f"read {v['read_at']}" + (f" (torn {v['torn']})" if v.get("torn") else "") if v["state"] == "read" else f"UNREAD  {v['why']}"))
 
     def section(title, items, fmt):
         if items is None:
