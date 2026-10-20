@@ -318,11 +318,21 @@ func oneDirectorErr(addr string, live []map[string]any, scan presenceScan) error
 // refuses before publish rather than storing a message no session filters.
 // noGlobalPresenceErr states the refusal and nothing beyond what the scan
 // established. Every branch refuses; they differ only in what they claim.
-func noGlobalPresenceErr(addr, prefix string, scan presenceScan) error {
-	return &presenceRefusalErr{err: noGlobalPresenceText(addr, prefix, scan), unreadable: scan.Unreadable > 0}
+func noGlobalPresenceErr(addr, prefix string, scan presenceScan, seen *seenView) error {
+	return &presenceRefusalErr{err: noGlobalPresenceText(addr, prefix, scan, seen), unreadable: scan.Unreadable > 0}
 }
 
-func noGlobalPresenceText(addr, prefix string, scan presenceScan) error {
+// seenView is what the send path read of the ask ledger's hub principals, for
+// the wrong-cluster-name refusal (R-92, O3 of the cluster-address rulings). A
+// nil view means the ledger was not consulted.
+type seenView struct {
+	state   seenState
+	entries map[string]globalEntry
+	err     error
+	now     time.Time
+}
+
+func noGlobalPresenceText(addr, prefix string, scan presenceScan, seen *seenView) error {
 	const refused = "no session would consume this send, so it is refused rather than stored on a subject nobody reads (R-92 liveness)"
 	const refusedUnestablished = "refused rather than stored on a subject nobody reads (R-92 liveness)"
 	switch {
@@ -872,7 +882,7 @@ func (g *globalTier) publish(ctx context.Context, e *Envelope, body []byte) (*je
 		return nil, &presenceReadErr{fmt.Errorf("reading %s: %w (%s)", globalPresenceBucket, err, hubHint(g.cfg))}
 	}
 	if len(live) == 0 {
-		return nil, noGlobalPresenceErr(e.Recipient.Address, prefix, scan)
+		return nil, noGlobalPresenceErr(e.Recipient.Address, prefix, scan, nil)
 	}
 	if role == roleDirector {
 		if err := oneDirectorErr(e.Recipient.Address, live, scan); err != nil {

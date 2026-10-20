@@ -177,7 +177,7 @@ func TestGlobalPresenceRefusalDistinguishesItsCases(t *testing.T) {
 	seen := map[string]string{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := noGlobalPresenceErr(addr, prefix, tt.scan)
+			err := noGlobalPresenceErr(addr, prefix, tt.scan, nil)
 			if err == nil {
 				t.Fatal("every case must refuse")
 			}
@@ -192,7 +192,7 @@ func TestGlobalPresenceRefusalDistinguishesItsCases(t *testing.T) {
 				t.Errorf("want R-92 named, got:\n%s", got)
 			}
 		})
-		err := noGlobalPresenceErr(addr, prefix, tt.scan)
+		err := noGlobalPresenceErr(addr, prefix, tt.scan, nil)
 		if prev, dup := seen[err.Error()]; dup {
 			t.Errorf("%q and %q produce the IDENTICAL sentence: %s", tt.name, prev, err)
 		}
