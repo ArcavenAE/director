@@ -519,11 +519,11 @@ chmod 000 "$root/proj/-work-aae-orc/rt2.jsonl"
 if [[ -r "$root/proj/-work-aae-orc/rt2.jsonl" ]]; then skp "an unreadable top-level transcript: this user can read a mode 000 file"
 else
   run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
-  python3 - "$root/j1" <<'PY' && ok "an unreadable top-level transcript is a GAP in the header and a count of files, not a quiet drop in +N research" || bad "unreadable top-level transcript"
+  python3 - "$root/j1" <<'PY' && ok "an unreadable top-level transcript is a GAP in the header and a count of files, counted once and not as research" || bad "unreadable top-level transcript"
 import json, sys
 d = json.load(open(sys.argv[1]))
-assert d["counts"]["research_unreadable"] == 1, d["counts"]
-assert "GAP research-transcripts 1 unreadable" in d["header"], d["header"]
+assert d["counts"]["transcripts_unreadable"] == 1 and d["counts"]["research_unreadable"] == 0, d["counts"]
+assert "GAP transcripts 1 unreadable" in d["header"], d["header"]
 PY
 fi
 chmod 600 "$root/proj/-work-aae-orc/rt2.jsonl"; rm -f "$root/proj/-work-aae-orc/rt2.jsonl"
@@ -538,6 +538,42 @@ d = json.load(open(sys.argv[1]))
 assert d["counts"]["research_unreadable"] == 0 and "GAP research" not in d["header"], d["header"]
 PY
 rm -f "$root/proj/-work-aae-orc/noname.jsonl"
+
+# a transcript whose identity cannot be read is a gap in the MAIN tally: every count that reads transcripts says so
+# and its record is a gap, never a bare count
+blindcheck() { # $1 what; run with a week window, appending records, and read the lines and the newest records
+  rm -f "$state/introspector/records.jsonl"
+  run --since today --window week --config "$conf" --json >"$root/j1" 2>/dev/null
+  python3 - "$root/j1" "$state/introspector/records.jsonl" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+L = d["lines"]
+for name in ("denials", "bus-errors"):
+    assert [l for l in L if (l.startswith("GAP " + name) or l.startswith(name + " ")) and "transcripts" in l and "unreadable" in l and "GAP" in l], (name, L)
+w = [l for l in L if l.startswith("weekly")]
+assert w and "host-local paths GAP" in w[0], L
+assert not [l for l in L if "+GAP research" in l], L
+recs = [json.loads(x) for x in open(sys.argv[2])]
+for name in ("denials", "bus-errors", "weekly"):
+    r = [x for x in recs if x["line"] == name]
+    assert r and all(x["state"] == "gap" and "n" not in x for x in r), (name, r)
+PY
+}
+mk "$root/proj/-work-aae-orc/bld.jsonl" --agent builder --ok 5 --den 1
+chmod 000 "$root/proj/-work-aae-orc/bld.jsonl"
+if [[ -r "$root/proj/-work-aae-orc/bld.jsonl" ]]; then skp "a blind main transcript: this user can read a mode 000 file"
+else
+  blindcheck builder && ok "a director transcript plus an unreadable builder transcript: denials, bus-errors and the weekly host-local count are gaps naming transcripts, and their records are gaps" || bad "blind builder case"
+fi
+chmod 600 "$root/proj/-work-aae-orc/bld.jsonl"; rm -f "$root/proj/-work-aae-orc/bld.jsonl"
+cp "$root/proj/-work-aae-orc/s1.jsonl" "$root/s1.keep"
+chmod 000 "$root/proj/-work-aae-orc/s1.jsonl"
+if [[ -r "$root/proj/-work-aae-orc/s1.jsonl" ]]; then skp "the only main transcript unreadable: this user can read a mode 000 file"
+else
+  blindcheck director && ok "the only main transcript unreadable: no bare zero, the same gaps in lines and records" || bad "blind sole transcript case"
+fi
+chmod 600 "$root/proj/-work-aae-orc/s1.jsonl"; cp "$root/s1.keep" "$root/proj/-work-aae-orc/s1.jsonl"; rm -f "$root/s1.keep"
+rm -f "$state/introspector/records.jsonl"
 
 # ================================================================ properties of the script itself
 [[ "$(grep -c -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")" == 0 ]] && ok "P1 the script names no Desk, bus send, inject or gh call (the name send_message is read from transcripts, never run)" || bad "P1" "$(grep -n -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")"

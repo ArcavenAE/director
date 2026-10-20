@@ -259,7 +259,7 @@ def agent_name(path):
 def blank_tally():
     return {"results": 0, "denials": 0, "denials_substring": 0, "bus_errors": 0, "director_calls": 0,
             "lag_over_1h": 0, "oversize": 0, "send_rejections": 0, "host_local_paths": 0,
-            "week_results": 0, "week_denials": 0, "unreadable": 0}
+            "week_results": 0, "week_denials": 0, "unreadable": 0, "files_unreadable": 0}
 
 
 SEND = b"mcp__director__send_message"
@@ -457,8 +457,8 @@ def scan_transcripts(cfg, since, t_now):
         else:
             nm = names.get(p)
         if nm is UNREADABLE:
-            # no identity, so it cannot be shown to be a non-research file: counted, never scanned as a zero
-            research["unreadable"] += 1
+            # no identity, so its class is unknown and it cannot pass the research exclusion: a gap in the main tally
+            main["files_unreadable"] += 1
         elif nm in cfg["exclude_agent_names"]:
             excluded += 1
             if nm in cfg["research_agent_names"]:  # the one thing read from a dropped file: its anchored denials
@@ -624,6 +624,16 @@ class Line:
         self.id, self.text, self.state, self.n, self.d, self.band = id_, text, state, n, d, band
         self.ids = ids or []
         self.shown = True
+
+
+def blind_gap(ln, n, rows):
+    """A count that reads transcripts when n of them could not be read: a gap, never a bare count."""
+    note = f"GAP transcripts: {n} unreadable"
+    ln.state, ln.n, ln.d, ln.shown = "gap", None, None, True
+    if not ln.text:
+        ln.text = f"GAP {ln.id} last {last_good(rows, ln.id) or 'never'} (transcripts: {n} unreadable)"
+    else:
+        ln.text += f" ({note})"
 
 
 def fmt_line(id_, rest, ptr="-"):
@@ -840,10 +850,13 @@ def line_weekly(tally, cfg, rows, t_now):
     mt = [os.stat(p).st_mtime for p in cfg["ledgers"] if os.path.isfile(p)]
     led = f"ledger {int((t_now - datetime.datetime.fromtimestamp(max(mt), UTC)).days)}d" if mt else "ledger none"
     gapn = tally["denials_substring"] - tally["denials"]
-    hl = f"GAP ({tally['unreadable']} unreadable send lines)" if tally["unreadable"] else str(tally["host_local_paths"])
+    blind = tally["unreadable"] or tally["files_unreadable"]
+    why = ", ".join(x for x in (f"{tally['unreadable']} unreadable send lines" if tally["unreadable"] else "",
+                                f"{tally['files_unreadable']} unreadable transcripts" if tally["files_unreadable"] else "") if x)
+    hl = f"GAP ({why})" if blind else str(tally["host_local_paths"])
     text = (f"drain lag over 1h {tally['lag_over_1h']}; oversize drains {tally['oversize']}; send rejections {tally['send_rejections']}; "
             f"host-local paths {hl}; {led}; precision gap {gapn}")
-    return Line("weekly", fmt_line("weekly", text), state="gap" if tally["unreadable"] else "count", n=tally["host_local_paths"], band="none")
+    return Line("weekly", fmt_line("weekly", text), state="gap" if blind else "count", n=tally["host_local_paths"], band="none")
 
 
 # ----------------------------------------------------------------------------------- main
@@ -920,6 +933,10 @@ def main():
         tally, research, secrets, excluded, scanned = scan
         lines.append(line_denials(tally, research, tally, rows, cfg, t_now, provisional))
         lines.append(line_bus(tally, rows))
+    if tally["files_unreadable"]:
+        for ln in lines:
+            if ln.id in ("denials", "bus-errors"):
+                blind_gap(ln, tally["files_unreadable"], rows)
     lines.append(line_not_installed(cfg, rows, t_now))
     lines.append(line_disk(cfg, rows))
     lines.append(line_stale_page(cfg, rows, t_now))
@@ -929,6 +946,7 @@ def main():
     counts = dict(tally)
     counts["denials_research"] = research["denials"]
     counts["research_unreadable"] = research["unreadable"]
+    counts["transcripts_unreadable"] = tally["files_unreadable"]
     counts["excluded"] = excluded
     counts["scanned"] = scanned
 
@@ -936,6 +954,7 @@ def main():
     header = (f"introspect {cfg['host']} since {since.strftime('%H:%MZ') if since == today else stamp(since)} rev {rev[:7] if rev else '(not built)'} "
               f"({nb if nb is not None else 'unknown'} behind origin/main, fetched {stamp(fa) if fa else 'never'}) "
               f"not covered: {', '.join(others) if others else 'none'} excluded {excluded}/{scanned} "
+              + (f"GAP transcripts {tally['files_unreadable']} unreadable " if tally["files_unreadable"] else "")
               + (f"GAP research-transcripts {research['unreadable']} unreadable " if research["unreadable"] else "") +
               f"bands: {'provisional until ' + cfg['band.sell_by'] if provisional else 'past sell-by ' + cfg['band.sell_by']}")
     shown = [ln for ln in lines if ln.shown]
