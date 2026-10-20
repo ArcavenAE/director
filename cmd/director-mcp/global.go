@@ -438,7 +438,8 @@ type globalTier struct {
 	violations *violationRing
 
 	// selfPut is the unix second of the ts in the last presence row this session
-	// wrote, which the watch's self check compares with the row it reads back.
+	// tried to write, which the watch's self check compares with the row it reads
+	// back.
 	selfPut atomic.Int64
 
 	cfg      globalConfig
@@ -888,12 +889,13 @@ func (g *globalTier) writePresence(ctx context.Context, self Sender, instance st
 		"ts":        time.Now().UTC().Format(time.RFC3339),
 	}
 	body, _ := json.Marshal(rec)
-	_, err := g.kv.Put(ctx, g.cfg.presenceKey(instance), body)
-	if err == nil {
-		if ts, perr := time.Parse(time.RFC3339, rec["ts"].(string)); perr == nil {
-			g.selfPut.Store(ts.Unix())
-		}
+	// The ts is recorded before the Put, whether or not it succeeds: the watch
+	// compares the row it reads back with the last write ATTEMPTED, so a tick whose
+	// Put failed does not let the previous tick's row read as current.
+	if ts, perr := time.Parse(time.RFC3339, rec["ts"].(string)); perr == nil {
+		g.selfPut.Store(ts.Unix())
 	}
+	_, err := g.kv.Put(ctx, g.cfg.presenceKey(instance), body)
 	return err
 }
 

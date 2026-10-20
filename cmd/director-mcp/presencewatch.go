@@ -38,7 +38,7 @@ type watchScan struct {
 	// SelfCheck says the scan carries the evidence that the hub read is the hub
 	// this director writes to (cashp design section 4): SelfSeen is whether this
 	// director's own row was in the bucket, SelfTS its ts, and SelfWant the ts of
-	// the row this session last wrote. A scan with SelfCheck false makes no claim.
+	// the row this session last tried to write. A scan with SelfCheck false makes no claim.
 	SelfCheck bool
 	SelfSeen  bool
 	SelfTS    time.Time
