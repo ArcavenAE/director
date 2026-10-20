@@ -508,36 +508,100 @@ func TestParseArgsDossier(t *testing.T) {
 	}
 }
 
-func writeHandoff(t *testing.T, body string) string {
+func putHandoff(t *testing.T, dir, name, body string, mod time.Time) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "handoff.md")
+	_ = os.MkdirAll(dir, 0o700)
+	p := filepath.Join(dir, name)
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	_ = os.Chtimes(p, mod, mod)
 	return p
 }
 
+const (
+	hdOK      = "# handoff\nstuff\nHANDOFF-COMPLETE\n\n"
+	hdPartial = "# handoff\nstuff\n"
+	nonePhr   = "no valid authored handoff; this dossier may back acceptance"
+	unreadPhr = "handoff location unreadable; this dossier does not back acceptance"
+)
+
 // t6p-1: a dossier backs acceptance only when no valid authored handoff exists.
+// The fixtures use the seat layout, <dir>/<agent-instance>-<date>.md, in scratch.
 func TestDossierAcceptanceSwitch(t *testing.T) {
-	valid := writeHandoff(t, "# handoff\nstuff\nHANDOFF-COMPLETE\n\n")
-	partial := writeHandoff(t, "# handoff\nstuff\n")
-	midfile := writeHandoff(t, "HANDOFF-COMPLETE\nthen more text\n")
-	link := filepath.Join(t.TempDir(), "link.md")
-	_ = os.Symlink(valid, link)
+	now := time.Now()
+	pred := "arcaven-architect-g6-1"
+	type f struct {
+		name, body string
+		age        time.Duration
+	}
 	for name, c := range map[string]struct {
-		path string
-		want string
+		files []f
+		want  func(dir string) string
 	}{
-		"valid":           {valid, "authored handoff present: " + valid + "; this dossier does not back acceptance"},
-		"partial":         {partial, "no valid authored handoff; this dossier may back acceptance"},
-		"marker not last": {midfile, "no valid authored handoff; this dossier may back acceptance"},
-		"absent":          {filepath.Join(t.TempDir(), "none.md"), "no valid authored handoff; this dossier may back acceptance"},
-		"unknown":         {"", "no valid authored handoff; this dossier may back acceptance"},
-		"symlink":         {link, "no valid authored handoff; this dossier may back acceptance"},
+		"valid newest": {[]f{{pred + "-2026-10-10.md", hdOK, 0}}, func(d string) string {
+			return "authored handoff present: " + filepath.Join(d, pred+"-2026-10-10.md") + "; this dossier does not back acceptance"
+		}},
+		"partial newest": {[]f{{pred + "-2026-10-10.md", hdPartial, 0}}, func(string) string { return nonePhr }},
+		"older valid, newer partial: the newest decides": {[]f{
+			{pred + "-2026-10-09.md", hdOK, 48 * time.Hour}, {pred + "-2026-10-10.md", hdPartial, 0}}, func(string) string { return nonePhr }},
+		"older partial, newer valid": {[]f{
+			{pred + "-2026-10-09.md", hdPartial, 48 * time.Hour}, {pred + "-2026-10-10.md", hdOK, 0}}, func(d string) string {
+			return "authored handoff present: " + filepath.Join(d, pred+"-2026-10-10.md") + "; this dossier does not back acceptance"
+		}},
+		"same date, mtime decides": {[]f{
+			{pred + "-2026-10-10.md", hdOK, 3 * time.Hour}, {pred + "-2026-10-10.md.tmp", hdOK, 0}}, func(d string) string {
+			return "authored handoff present: " + filepath.Join(d, pred+"-2026-10-10.md") + "; this dossier does not back acceptance"
+		}},
+		"marker not last":          {[]f{{pred + "-2026-10-10.md", "HANDOFF-COMPLETE\nmore text\n", 0}}, func(string) string { return nonePhr }},
+		"another seat's file only": {[]f{{"arcaven-architect-g6-2-2026-10-10.md", hdOK, 0}, {"arcaven-architect-g6-1-2-2026-10-10.md", hdOK, 0}}, func(string) string { return nonePhr }},
+		"no files":                 {nil, func(string) string { return nonePhr }},
 	} {
-		if got := acceptanceLine(c.path); got != c.want {
+		dir := filepath.Join(t.TempDir(), "handoff")
+		_ = os.MkdirAll(dir, 0o700)
+		for _, x := range c.files {
+			putHandoff(t, dir, x.name, x.body, now.Add(-x.age))
+		}
+		if got := acceptanceLine(dir, pred); got != c.want(dir) {
 			t.Errorf("%s: %q", name, got)
 		}
+	}
+	// a link is refused even when its target is valid
+	dir := filepath.Join(t.TempDir(), "handoff")
+	real := putHandoff(t, t.TempDir(), "real.md", hdOK, now)
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.Symlink(real, filepath.Join(dir, pred+"-2026-10-10.md"))
+	if got := acceptanceLine(dir, pred); got != nonePhr {
+		t.Errorf("symlink: %q", got)
+	}
+}
+
+// Could not look: never "may back acceptance".
+func TestDossierAcceptanceUnreadableFailsClosed(t *testing.T) {
+	pred := "arcaven-architect-g6-1"
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	_ = os.MkdirAll(locked, 0o700)
+	putHandoff(t, locked, pred+"-2026-10-10.md", hdOK, time.Now())
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(locked, 0o700)
+	notDir := filepath.Join(root, "afile")
+	_ = os.WriteFile(notDir, []byte("x"), 0o600)
+	for name, dir := range map[string]string{
+		"unreadable directory": locked, "missing directory": filepath.Join(root, "nope"),
+		"a file, not a directory": notDir, "location unknown": "",
+	} {
+		if os.Geteuid() == 0 && name == "unreadable directory" {
+			continue // root reads a mode 0 directory
+		}
+		if got := acceptanceLine(dir, pred); got != unreadPhr {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+	if got := acceptanceLine(filepath.Join(root, "locked"), ""); got != unreadPhr {
+		t.Errorf("predecessor unknown: %q", got)
 	}
 }
 
@@ -545,11 +609,12 @@ func TestDossierHeaderAndJSONCarryAcceptance(t *testing.T) {
 	state := dossierScratch(t)
 	ctx, url, _ := scratchBus(t)
 	o := baseOpts(state)
-	o.HandoffPath = writeHandoff(t, "x\nHANDOFF-COMPLETE\n")
+	hp := putHandoff(t, filepath.Join(state, "handoff"), "builder-old-2026-10-20.md", hdOK, time.Now())
+	o.HandoffDir = filepath.Join(state, "handoff")
 	out, _, _ := runOnce(t, ctx, url, o)
 	_, js := dossierFiles(t, state, "builder-new")
 	for name, text := range map[string]string{"stdout": out, "json": js} {
-		if !strings.Contains(text, "authored handoff present: "+o.HandoffPath+"; this dossier does not back acceptance") {
+		if !strings.Contains(text, "authored handoff present: "+hp+"; this dossier does not back acceptance") {
 			t.Errorf("%s lacks the acceptance line", name)
 		}
 	}
