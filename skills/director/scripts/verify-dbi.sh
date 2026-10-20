@@ -161,11 +161,13 @@ git init -q "$root/orc"
 cat >>"$DIRECTOR_STATE/idea-roots.conf" <<C
 $root/orc/run/*/_kos/ideas/*.md
 $root/orc/*-wt-*/_kos/ideas/*.md
+$root/orc/run/x/_kos/ideas/*.md
+$root/orc/r6-wt-a/_kos/ideas/*.md
 C
 run >"$root/j" 2>"$root/e"
 r4="$(q "sorted(r['path'] for r in d['rows'] if r['path'].startswith('r4/'))" <"$root/j")"
 [[ "$r4" == "['r4/_kos/ideas/live.md']" ]] && ok "4: a graveyard status and a parked path are not listed" || bad "4" "$r4"
-[[ "$(q "any(r['path'].startswith(('run/','r6-wt-a')) for r in d['rows'])" <"$root/j")" == "False" ]] && ok "6: run/ and a worktree directory are never read" || bad "6: never read"
+[[ "$(q "any(r['path'].startswith(('run/','x/','r6-wt-a')) for r in d['rows'])" <"$root/j")" == "False" ]] && ok "6: run/ and a worktree directory are never read" || bad "6: never read"
 [[ "$(q "len(d['skipped'])>=2 and any('run' in x['path'] for x in d['skipped']) and any('-wt-' in x['path'] for x in d['skipped'])" <"$root/j")" == "True" ]] && ok "6: a root that names run/ or a worktree directory is still excluded, and the skips are logged" || bad "6: skips logged" "$(q "d['skipped']" <"$root/j")"
 cfg
 
