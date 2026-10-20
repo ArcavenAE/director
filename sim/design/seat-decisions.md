@@ -74,9 +74,9 @@ no instance id is stored:
 
 **States.** `decided-by-seat`, then `confirmed` or `overridden`; an
 overridden decision becomes `reworked` once every affected row is resolved.
-A two-path record (section 8) starts as `paths-open` and moves to
-`decided-by-seat` only by `pick`. No other move exists, and none happens on
-a clock.
+A two-path record (section 8) starts as `paths-open` and leaves it only by
+`pick`, to `decided-by-seat`, or by `withdraw`, to `withdrawn`, which is
+final. No other move exists, and none happens on a clock.
 
 | command (actor director) | effect | refuses when |
 |---|---|---|
@@ -252,8 +252,11 @@ reads eight oks (part 4).
 
 **Two paths, and no third.** `paths` writes the edges from its two rows
 itself, in the same append. Then:
-- a second `paths` naming a card that already has a `paths-open` record is
-  refused;
+- a second `paths` naming a card that already has a paths record, in any
+  state, is refused, for as long as the ledger holds that record. One card
+  gets one pair of paths, ever: after `pick` the card can still be open, and
+  a new pair would give it a third live path. A card that is reworked and
+  reposted gets a new card id, and so may get a new pair;
 - `--waits decision:<id>` on a `paths-open` record is refused for every row,
   since section 5's first check refuses an edge to any decision that is not
   `decided-by-seat`, and `paths-open` is not; so the two rows `paths` wrote
@@ -272,6 +275,19 @@ decision's one dependent, and the record goes through section 3: the
 operator still confirms it. `pick` on a record that is not `paths-open` is
 refused.
 
+**When the operator rules the card first.** The paths exist because the card
+was waiting on the operator, so the operator may rule it before the
+evidence picks:
+- **For one of the two paths.** Director records it as `pick` with that path
+  as the winner and the ruling as `--result`, then `confirm` with the
+  operator's words and relay id. The loser is parked first, as for any pick.
+- **For neither path, or for something else.** `dws decision withdraw <id>
+  --words W --ref R` moves the record from `paths-open` to `withdrawn`, with
+  the operator's words kept. It refuses unless both rows are `parked`, so no
+  path is left building on a record that no longer stands, and it refuses a
+  record that is not `paths-open`. A `withdrawn` record takes no edge, no
+  pick and no confirm, and its rows' edges are shown as ended, not met.
+
 ## 9. Build split (stacked-PR rule d: one chain)
 
 All three builds edit `dws` or read its output, so they land as one chain,
@@ -280,7 +296,7 @@ each based on the one before, merged in order:
 | link | repo | contents | tests, red first |
 |---|---|---|---|
 | D1 | director | section 3: decision events, `add --from`, `actual`, `confirm`, `override`, `rework` (state checks only), `decisions --json/--unconfirmed/--daily` | `verify-dws-decisions.sh`: one fixture per refusal in section 3's table; a skip leaves the state unchanged; no command moves a state on a clock (`DWS_TEST_CLOCK=1` with `DWS_NOW` a year later, state unchanged; without `DWS_TEST_CLOCK=1`, `dws` ignores `DWS_NOW`) |
-| D2 | director, based on D1 | sections 4, 5, 6 and 8: `--waits`/`--unwait`, the window refusals, the order, the affected list, `rework`'s row check, `paths` and `pick`, and the `merge-guard` read | each window refusal; `dws link X decision:<id>` refused; `--unwait` before a confirm refused; un-parking a fourth dependent refused; a second `paths` on the same card refused; `--waits` to a `paths-open` id refused; `pick` on a record not `paths-open` refused; the order with a tie, and `-10` after `-2`; `merge-guard` STOP on a waiting PR, on a `paths-open` row and on an unreadable ledger, PROCEED once confirmed (extends `verify-merge-guard.sh`) |
+| D2 | director, based on D1 | sections 4, 5, 6 and 8: `--waits`/`--unwait`, the window refusals, the order, the affected list, `rework`'s row check, `paths`, `pick` and `withdraw`, and the `merge-guard` read | each window refusal; `dws link X decision:<id>` refused; `--unwait` before a confirm refused; un-parking a fourth dependent refused; a second `paths` on the same card refused; a second `paths` on the same card after `pick`, and after `withdraw`, refused; `--waits` to a `paths-open` id refused; `--unwait` on a `paths-open` record refused; `pick` on a record not `paths-open` refused; `withdraw` with a row not parked refused, and on a record not `paths-open` refused; the order with a tie, and `-10` after `-2`; `merge-guard` STOP on a waiting PR, on a `paths-open` row and on an unreadable ledger, PROCEED once confirmed (extends `verify-merge-guard.sh`) |
 | D3 | director, based on D2 | section 7: the `board-html` section | `verify-board-html.sh`: the empty ledger line; order matches `dws decisions --unconfirmed`; no colour-only state |
 
 The Desk mirror (section 3) is director's own step and goes with D1's
@@ -289,9 +305,12 @@ once with `add --from`, so the trial's counts come from one place.
 
 ## 10. Not covered
 
-- A `paths` record whose Desk card the operator rules before `pick` is not
-  handled here: the seats' paths still wait, and director closes the record
-  by hand. Whether that should be a state of its own is open.
+- **Stored `decision:` strings.** Before D2, `dws link` takes any string, so
+  a link reading `decision:...` could already sit in a row's `links`. D2
+  does not convert one: it stays an untyped link, is never read as an edge,
+  and `dws show` lists it as untyped. On director's ledger as of 2026-10-20
+  there are none (`grep -c 'decision:' workstreams.jsonl`: 0), so no
+  migration is needed.
 - Who may write the Desk's confirm or override is honour-only, as for every
   Desk answer: the answer row carries no author.
 - A seat that acts without sending the record is not seen by any of this.
