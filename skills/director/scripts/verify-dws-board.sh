@@ -76,6 +76,17 @@ for shape in "begin-only" "end-only" "end-before-begin" "two-pairs"; do
   if "$DWS" board-state >/dev/null 2>"$root/e"; then bad "malformed markers ($shape) are refused"; else cmp -s "$BOARD" "$root/m" && ok "malformed markers ($shape) are refused and the board is untouched" || bad "board changed on refusal ($shape)"; fi
 done
 
+# --- review 5586620341: a board with CRLF line endings ---------------------------------------------------------
+fresh 6; store
+printf '# Board\r\nintro\r\n%s\r\nSTALE\r\n%s\r\nSee ask:ghostcr here.\r\n' "$B" "$E" >"$BOARD"
+"$DWS" board-state >/dev/null 2>"$root/e" && ok "board-state accepts CRLF markers" || bad "CRLF markers accepted" "$(cat "$root/e")"
+grep -q 'STALE' "$BOARD" && bad "the stale block is replaced on a CRLF board" || ok "the stale block is replaced on a CRLF board"
+[[ "$(grep -c "^$B"$'\r'"\$" "$BOARD")" == 1 && "$(grep -c "^$E"$'\r'"\$" "$BOARD")" == 1 ]] && ok "one marker pair, still CRLF" || bad "one CRLF marker pair" "$(cat -A "$BOARD" | head -12)"
+[[ "$(sed -n 1,2p "$BOARD" | tr -d '\r')" == $'# Board\nintro' && "$(tail -1 "$BOARD" | tr -d '\r')" == 'See ask:ghostcr here.' ]] && ok "text outside the markers is unchanged" || bad "CRLF text outside unchanged"
+! LC_ALL=C grep -v $'\r$' "$BOARD" | grep -q . && ok "every line of the board still ends in CRLF, the block included" || bad "all lines CRLF" "$(LC_ALL=C grep -vc $'\r$' "$BOARD") line(s) lack CR"
+"$DWS" board-check --json >"$root/j" 2>/dev/null
+[[ "$(q "[x['token'] for x in d['unresolved']]" <"$root/j")" == "['ask:ghostcr']" ]] && ok "board-check on a CRLF board reads the prose, not the block" || bad "CRLF board-check" "$(cat "$root/j")"
+
 # --- UNREAD sources are said, never read as empty ----------------------------------------------------------
 fresh 4; authored >"$BOARD"
 "$DWS" board-state >/dev/null 2>&1 && ok "board-state writes with every store missing" || bad "board-state with no stores"
