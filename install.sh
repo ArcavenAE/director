@@ -80,6 +80,9 @@ install_one "$SRC/skills/director/scripts/card-ingest" "$DIRECTOR_HOME/bin/card-
 install_one "$SRC/skills/director/scripts/draft-sweep" "$DIRECTOR_HOME/bin/draft-sweep"
 # dbi, the stalled big ideas scan (ld16k): the sweep's Stalled ideas block runs it from the bin home.
 install_one "$SRC/skills/director/scripts/dbi" "$DIRECTOR_HOME/bin/dbi"
+# dash-writer, the operations dashboard's writer step (ghxv2): the sweep's tick runs it from the bin home.
+install_one "$SRC/skills/director/scripts/dash-writer" "$DIRECTOR_HOME/bin/dash-writer"
+# dws is installed above; dash-writer reads it from beside itself.
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"

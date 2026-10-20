@@ -1,0 +1,491 @@
+#!/usr/bin/env python3
+"""dash-writer - shape the operations dashboard's documents for the Desk's second tab.
+
+ghxv2, sim/design/ops-dashboard.md sections 3 and 4 (the field list approved by the operator
+2026-10-20, with dash_meta.checks added). One added step in director's sweep, in a session: a
+script cannot write artifact data (finding-director-glst), so this script reads the sources and
+prints the batch, and the session applies it with one ArtifactData batch of at most 50 writes.
+
+  dash-writer run [--force]   print {"writes": [...], ...}; nothing is written but the output
+  dash-writer ack             the batch was applied: record the run (the 30-minute floor, the run count)
+  dash-writer --help
+
+Sources, read only: `dws show --json` (the ledger folded by dws's own fold, so the page cannot fold
+differently), `marvel --cluster C get sessions --columns team,role,name,state,health,last-active`
+once for each cluster in $DIRECTOR_STATE/dash-clusters.txt (command: $DASH_MARVEL, default marvel),
+$DIRECTOR_STATE/desk-snapshot.json. Local lists the operator keeps, one entry per line (this design
+names no canonical source for the first two, so they are files):
+  dash-clusters.txt    director's cluster list; absent: the sessions panel is refused, never empty
+  dash-areas.txt       the Desk's area labels
+  dash-area-map.tsv    <workstream slug><TAB><area label>; a row with no entry is `unlabelled`
+  dash-withhold.txt    private names, whole words, any case; must be mode 0600 or no title is written
+
+It writes exactly the fields of section 3 and nothing else:
+  dash_panels/<panel>  panel, as_of, writer, rows, counts, refusal
+  dash_daily/<panel>-<day>  panel, day, counts   (kept 14 days: the batch deletes the day that aged out)
+  dash_meta/writer     last_run, runs, reader, checks
+A row holds only id, stage, age_h, area, title (ledger rows) or id, stage, health, last_active,
+cluster (session rows). Never a token, key, socket path, settings value, message body, note text,
+`next`, `repos`, or a person's name. Every failure is counted in the panel's `refusal` by field and
+reason, never by value; a placeholder is a fixed word, so nothing from a failed value reaches a document.
+
+A panel over 256 KiB is not written cut short: its rows are dropped and its refusal says so.
+Exit 0 on every reading; exit 2 for a usage error. DWS_NOW overrides the clock only with DWS_TEST_CLOCK=1.
+"""
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+HOME = os.path.expanduser("~")
+STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
+HERE = os.path.dirname(os.path.realpath(__file__))
+STAGES = ["idea", "defined", "designed", "building", "in review", "merged", "released", "deployed", "accepted", "parked"]
+FLIGHT = ("defined", "designed", "building", "in review")
+DOC_CAP = 256 * 1024
+MAX_WRITES = 50
+FLOOR_MIN = 30
+KEEP_DAYS = 14
+TITLE_MAX = 120
+COLUMNS = "team,role,name,state,health,last-active"
+HEADER = ["TEAM", "ROLE", "AGENT NAME", "STATE", "HEALTH", "LAST-ACTIVE"]
+PANELS = ("waiting", "where-work-sits", "in-flight", "sessions")
+READER = "dws show --json; marvel get sessions"
+
+ID_RE = re.compile(r"[a-z0-9.-]{1,80}")
+STATE_RE = re.compile(r"(pending|running|limited|succeeded|failed|crashloop-backoff|crashed)(?: \((.*)\))?", re.S)
+HEALTH_RE = re.compile(r"(healthy|unhealthy|unknown)( \(stalled\))?(?: (\(logged-out\)|\(parked(?:: .*)?\)))?", re.S)
+ACTIVE_RE = re.compile(r"(?:[-–—]|[0-9<][0-9a-z .<>()+-]*|stale[0-9a-z .<>()+-]*)\*?")
+PATH_RE = re.compile(r"(~/|/Users/|/home/|/private/|/tmp/|/var/|(?:^|\s)/[^\s/]*/)")
+TOKEN_RE = re.compile(r"(ghp_|gho_|ghs_|github_pat_|xox|sk-|AKIA|[A-Za-z0-9+/]{24,})")
+TOKEN_PREFIX = ("ghp_", "gho_", "ghs_", "github_pat_", "xox", "sk-", "AKIA")
+CLUSTER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+class Usage(Exception):
+    pass
+
+
+def now():
+    fixed = os.environ.get("DWS_NOW") if os.environ.get("DWS_TEST_CLOCK") == "1" else None
+    t = fixed or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return t, datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+
+
+def parse_ts(s):
+    try:
+        return datetime.datetime.strptime(str(s), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+
+
+def read_list(name):
+    path = os.path.join(STATE, name)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")], path
+    except FileNotFoundError:
+        return None, path
+    except OSError:
+        return None, path
+
+
+class Refusals:
+    def __init__(self):
+        self.c = {}
+
+    def add(self, field, reason):
+        k = f"{field}:{reason}"
+        self.c[k] = self.c.get(k, 0) + 1
+
+
+def free_text_reason(value, withhold):
+    """Why a free-text value (id, title, last_active) is refused, or None. The reason is a fixed word."""
+    if not isinstance(value, str) or not value or not all(c.isprintable() for c in value):
+        return "control"
+    if PATH_RE.search(value):
+        return "path"
+    if "://" in value or "@" in value:
+        return "url"
+    if TOKEN_RE.search(value) or value.startswith(TOKEN_PREFIX):
+        return "token"
+    for name in withhold:
+        if re.search(r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])", value, re.I):
+            return "withheld-name"
+    return None
+
+
+# ----------------------------------------------------------------------------------- sources
+def ledger():
+    exe = os.path.join(HERE, "dws")
+    try:
+        p = subprocess.run([sys.executable, exe, "show", "--json"], capture_output=True, timeout=60, stdin=subprocess.DEVNULL, env=os.environ.copy())
+        if p.returncode != 0:
+            return None, "dws show failed"
+        return json.loads(p.stdout.decode("utf-8")), None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None, "dws show could not be read"
+
+
+def parse_table(text):
+    """(rows of six cells, refusal reasons). Refuses the whole table on a header mismatch and a row alone
+    when it cannot be cut cleanly; never draws a shifted value."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if not lines:
+        return None, ["header"]
+    head = lines[0].rstrip("\n")
+    offs, pos = [], 0
+    for i, lab in enumerate(HEADER):
+        if not head.startswith(lab, pos):
+            return None, ["header"]
+        offs.append(pos)
+        pos += len(lab)
+        if i < len(HEADER) - 1:
+            spaces = len(head[pos:]) - len(head[pos:].lstrip(" "))
+            if spaces < 2:
+                return None, ["header"]
+            pos += spaces
+    if head[pos:].strip():
+        return None, ["header"]
+    rows, bad = [], []
+    for ln in lines[1:]:
+        if not ln.strip():
+            break
+        if any(ord(c) < 32 or ord(c) == 127 for c in ln):
+            bad.append("row")
+            continue
+        if len(ln) <= offs[-1]:
+            bad.append("row")
+            continue
+        cells, ok = [], True
+        for i, o in enumerate(offs):
+            if ln[o] == " ":
+                ok = False
+                break
+            if i > 0 and ln[o - 2:o] != "  ":
+                ok = False
+                break
+            end = offs[i + 1] if i + 1 < len(offs) else len(ln)
+            cells.append(ln[o:end].rstrip())
+        if not ok or any(not c for c in cells):
+            bad.append("row")
+            continue
+        rows.append(cells)
+    return rows, bad
+
+
+def sessions_for(cluster, refusal):
+    marvel = os.environ.get("DASH_MARVEL", "marvel")
+    try:
+        p = subprocess.run([marvel, "--cluster", cluster, "get", "sessions", "--columns", COLUMNS], capture_output=True,
+                           timeout=60, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode != 0:
+        return None
+    return p.stdout.decode("utf-8", "replace")
+
+
+def clean_state(cell):
+    m = STATE_RE.fullmatch(cell)
+    if not m:
+        return None
+    base, suffix = m.group(1), m.group(2)
+    if suffix is None:
+        return base
+    if base == "failed":
+        return "failed (terminal)"
+    if base in ("succeeded", "crashed") and re.fullmatch(r"exit [0-9]{1,3}", suffix):
+        return f"{base} ({suffix})"
+    return None
+
+
+def clean_health(cell):
+    if re.search(r"\(parked.*\(stalled\)", cell, re.S) or "\n" in cell:
+        return None
+    m = HEALTH_RE.fullmatch(cell)
+    if not m:
+        return None
+    base, stalled, tail = m.group(1), m.group(2) or "", m.group(3) or ""
+    if tail.startswith("(parked"):
+        tail = " (parked)"
+    elif tail:
+        tail = " " + tail
+    return base + stalled + tail
+
+
+# ----------------------------------------------------------------------------------- panels
+def hours_since(ts_s, t_now):
+    t = parse_ts(ts_s)
+    if t is None:
+        return None
+    return max(0.0, round((t_now - t).total_seconds() / 3600.0, 1))
+
+
+def ledger_row(r, t_now, areas, area_map, withhold, refusal, with_title=True):
+    slug = r.get("slug", "")
+    stage = r.get("stage")
+    if not isinstance(slug, str) or not ID_RE.fullmatch(slug):
+        refusal.add("id", "charset")
+        return None
+    why = free_text_reason(slug, withhold)
+    if why:
+        refusal.add("id", why)
+        return None
+    if stage not in STAGES:
+        refusal.add("stage", "unknown")
+        return None
+    row = {"id": slug, "stage": stage}
+    age = hours_since(r.get("last_moved"), t_now)
+    if age is None:
+        refusal.add("age_h", "not-a-number")
+        row["age_h"] = ""
+    else:
+        row["age_h"] = age
+    label = area_map.get(slug)
+    if label is not None and label in areas:
+        row["area"] = label
+    else:
+        refusal.add("area", "unlabelled")
+        row["area"] = "unlabelled"
+    if with_title:
+        title = r.get("title", "")
+        if withhold is None:
+            row["title"] = "(title withheld: withhold-file)"
+            refusal.add("title", "withhold-file")
+        elif not isinstance(title, str) or len(title) > TITLE_MAX:
+            row["title"] = "(title withheld: length)"
+            refusal.add("title", "length")
+        else:
+            why = free_text_reason(title, withhold)
+            if why:
+                row["title"] = f"(title withheld: {why})"
+                refusal.add("title", why)
+            else:
+                row["title"] = title
+    return row
+
+
+def session_rows(clusters, withhold, refusal, t_text):
+    rows, counts, not_reached = [], {}, []
+    for cluster in clusters:
+        if not CLUSTER_RE.fullmatch(cluster):
+            refusal.add("cluster", "charset")
+            continue
+        text = sessions_for(cluster, refusal)
+        if text is None:
+            not_reached.append(f"{cluster}: not reached at {t_text}")
+            continue
+        cells, bad = parse_table(text)
+        if cells is None:
+            refusal.add("table", "header")
+            continue
+        for _ in bad:
+            refusal.add("row", "unreadable")
+        n = 0
+        for team, role, name, state, health, active in cells:
+            why = None if ID_RE.fullmatch(name) else "charset"
+            why = why or free_text_reason(name, withhold)
+            if why:
+                refusal.add("id", why)
+                continue
+            st = clean_state(state)
+            if st is None:
+                refusal.add("stage", "grammar")
+                continue
+            hl = clean_health(health)
+            if hl is None:
+                refusal.add("health", "grammar")
+                hl = "unreadable"
+            la = active
+            if len(la) > 40 or not ACTIVE_RE.fullmatch(la) or free_text_reason(la, withhold):
+                refusal.add("last_active", "unreadable")
+                la = "unreadable"
+            rows.append({"id": name, "stage": st, "health": hl, "last_active": la, "cluster": cluster})
+            n += 1
+        counts[cluster] = n
+    return rows, counts, not_reached
+
+
+def build(t_text, t_now):
+    withhold_raw, wpath = read_list("dash-withhold.txt")
+    withhold = withhold_raw or []
+    if withhold_raw is not None:
+        try:
+            if os.stat(wpath).st_mode & 0o077:
+                withhold = None
+        except OSError:
+            withhold = None
+    areas, _ = read_list("dash-areas.txt")
+    areas = areas or []
+    area_map = {}
+    amap, _ = read_list("dash-area-map.tsv")
+    for line in amap or []:
+        if "\t" in line:
+            k, v = line.split("\t", 1)
+            area_map[k.strip()] = v.strip()
+    clusters, _ = read_list("dash-clusters.txt")
+    data, why = ledger()
+    panels = {p: {"rows": [], "counts": {}, "refusal": Refusals()} for p in PANELS}
+    ledger_rows = data.get("rows", []) if data else []
+    wl = withhold if withhold is not None else []
+
+    def lrow(r, refusal):
+        # a withhold file that is too open withholds every title
+        row = ledger_row(r, t_now, areas, area_map, wl, refusal)
+        if row is not None and withhold is None:
+            row["title"] = "(title withheld: withhold-file)"
+        return row
+
+    if data is None:
+        for p in ("waiting", "where-work-sits", "in-flight"):
+            panels[p]["refusal"].add("ledger", "unread")
+    else:
+        ref = panels["waiting"]["refusal"]
+        for r in ledger_rows:
+            blocked = r.get("blocked")
+            if isinstance(blocked, str) and blocked.strip().lower() == "operator" and r.get("stage") != "parked":
+                row = lrow(r, ref)
+                if row:
+                    panels["waiting"]["rows"].append(row)
+        panels["waiting"]["rows"].sort(key=lambda x: -(x["age_h"] if isinstance(x["age_h"], (int, float)) else 0))
+        panels["waiting"]["counts"] = {"blocked_on_operator": len(panels["waiting"]["rows"])}
+        by = {}
+        ideas_opened = []
+        for r in ledger_rows:
+            st = r.get("stage")
+            if st in STAGES:
+                by[st] = by.get(st, 0) + 1
+            if st == "idea" and isinstance(r.get("opened"), str):
+                ideas_opened.append(r["opened"][:10])
+        c = {st: by.get(st, 0) for st in STAGES}
+        c["ideas_oldest_opened"] = min(ideas_opened) if ideas_opened else ""
+        panels["where-work-sits"]["counts"] = c
+        fl = []
+        for r in ledger_rows:
+            if r.get("stage") in FLIGHT:
+                row = lrow(r, panels["in-flight"]["refusal"])
+                if row:
+                    fl.append(row)
+        fl.sort(key=lambda x: (-(x["age_h"] if isinstance(x["age_h"], (int, float)) else 0), x["id"]))
+        panels["in-flight"]["rows"] = fl
+        panels["in-flight"]["counts"] = {"in_flight": len(fl)}
+    sref = panels["sessions"]["refusal"]
+    if not clusters:
+        sref.add("clusters", "unread")
+        panels["sessions"]["counts"] = {"not_reached": []}
+    else:
+        rows, counts, nr = session_rows(clusters, wl, sref, t_text)
+        panels["sessions"]["rows"] = rows
+        panels["sessions"]["counts"] = dict(counts, not_reached=nr)
+    return panels, data, wl
+
+
+def checks_of(data, t_now):
+    out = []
+    last = (data or {}).get("last_refresh") if data else None
+    at = parse_ts(last["at"]) if isinstance(last, dict) else None
+    if at is None:
+        out.append({"name": "refresh-ran-today", "holds": False, "observed": "never"})
+    else:
+        age = (t_now - at).total_seconds()
+        out.append({"name": "refresh-ran-today", "holds": 0 <= age <= 86400, "observed": last["at"]})
+    snap = os.path.join(STATE, "desk-snapshot.json")
+    state_word = "missing"
+    if os.path.isfile(snap):
+        try:
+            json.load(open(snap, encoding="utf-8"))
+            state_word = "exists"
+        except (OSError, ValueError):
+            state_word = "unreadable"
+    out.append({"name": "desk-snapshot-exists", "holds": state_word == "exists", "observed": state_word})
+    n = 0
+    for r in (data or {}).get("rows", []) if data else []:
+        st = r.get("stage")
+        if st in STAGES and STAGES.index(st) > 0 and not r.get("links"):
+            n += 1
+    out.append({"name": "rows-past-idea-linked", "holds": data is not None and n == 0, "observed": f"{n} rows past idea with no link" if data is not None else "ledger unread"})
+    return out
+
+
+def state_path():
+    return os.path.join(STATE, "dash-writer.json")
+
+
+def read_state():
+    try:
+        d = json.load(open(state_path(), encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def size_of(doc):
+    return len(json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def cmd_run(force):
+    t_text, t_now = now()
+    st = read_state()
+    last = parse_ts(st.get("last_run"))
+    if last and not force and 0 <= (t_now - last).total_seconds() < FLOOR_MIN * 60:
+        print(json.dumps({"skipped": f"last run {st['last_run']}, under the {FLOOR_MIN}-minute floor", "writes": []}))
+        return
+    panels, data, _ = build(t_text, t_now)
+    today = t_now.strftime("%Y-%m-%d")
+    old = (t_now - datetime.timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")
+    writes = []
+    for name in PANELS:
+        p = panels[name]
+        doc = {"panel": name, "as_of": t_text, "writer": "director", "rows": p["rows"], "counts": p["counts"], "refusal": dict(sorted(p["refusal"].c.items()))}
+        if size_of(doc) > DOC_CAP:
+            doc["rows"] = []
+            doc["refusal"] = dict(doc["refusal"], **{"panel:over-256KiB": 1})
+        writes.append({"action": "set", "collection": "dash_panels", "doc_id": name, "data": doc})
+    for name in PANELS:
+        writes.append({"action": "set", "collection": "dash_daily", "doc_id": f"{name}-{today}",
+                       "data": {"panel": name, "day": today, "counts": panels[name]["counts"]}})
+        writes.append({"action": "delete", "collection": "dash_daily", "doc_id": f"{name}-{old}"})
+    meta = {"last_run": t_text, "runs": int(st.get("runs", 0)) + 1, "reader": READER, "checks": checks_of(data, t_now)}
+    writes.append({"action": "set", "collection": "dash_meta", "doc_id": "writer", "data": meta})
+    if len(writes) > MAX_WRITES:
+        print(json.dumps({"refused": f"{len(writes)} writes is over the {MAX_WRITES} cap", "writes": []}))
+        return
+    print(json.dumps({"writes": writes}, ensure_ascii=False, indent=1))
+
+
+def cmd_ack():
+    t_text, _ = now()
+    st = read_state()
+    st = {"last_run": t_text, "runs": int(st.get("runs", 0)) + 1}
+    os.makedirs(STATE, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".dash-writer.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(st, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, state_path())
+    print(f"recorded run {st['runs']} at {t_text}")
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("--help", "-h"):
+        print(__doc__)
+        return
+    if a[0] == "run" and set(a[1:]) <= {"--force"}:
+        cmd_run("--force" in a)
+    elif a[0] == "ack" and len(a) == 1:
+        cmd_ack()
+    else:
+        print("usage: dash-writer run [--force] | ack | --help", file=sys.stderr)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()
