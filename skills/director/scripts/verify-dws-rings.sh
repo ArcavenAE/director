@@ -91,5 +91,10 @@ print(n)")" == "1" ]] && ok "only the planted torn line is unreadable" || bad "o
 at 2026-10-21T12:00:00Z
 "$DWS" reconcile --json >"$root/r" 2>/dev/null; [[ "$(q "d['sources']['rings']['state']" <"$root/r")" == "read" ]] && ok "reconcile reads rings.jsonl" || bad "reconcile reads rings.jsonl"
 
+# a rings file with no readable line is UNREAD to reconcile (as for the other stores)
+mkdir -p "$root/st2"; printf 'junk\n{broken\n' >"$root/st2/rings.jsonl"
+DIRECTOR_STATE="$root/st2" "$DWS" reconcile --json >"$root/r2" 2>/dev/null
+[[ "$(q "d['sources']['rings']['state']" <"$root/r2")" == "UNREAD" ]] && ok "reconcile reads a malformed rings file as UNREAD" || bad "reconcile reads a malformed rings file as UNREAD"
+
 echo "dws rings: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

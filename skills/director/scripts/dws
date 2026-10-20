@@ -1442,8 +1442,11 @@ def cmd_reconcile(a):
 
     if os.path.isfile(RINGS):
         try:
-            _, rtorn2 = fold_rings()
-            sources["rings"] = {"state": "read", "read_at": t_now, "torn": rtorn2}
+            rseats, rtorn2 = fold_rings()
+            if rtorn2 and not rseats:
+                sources["rings"] = {"state": "UNREAD", "why": f"{RINGS} has no readable line (torn {rtorn2})"}
+            else:
+                sources["rings"] = {"state": "read", "read_at": t_now, "torn": rtorn2}
         except OSError as err:
             sources["rings"] = {"state": "UNREAD", "why": f"{RINGS} cannot be read ({type(err).__name__})"}
     else:
