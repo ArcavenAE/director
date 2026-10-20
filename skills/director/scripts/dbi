@@ -123,23 +123,24 @@ def plan_roots():
                 break
             fixed.append(c)
         fixed_real = os.path.realpath("/".join(fixed) or "/")
-        # a skip component is excluded anywhere at or below the nearest enclosing checkout, even
-        # when the root line names it; with no enclosing checkout, only below the fixed prefix
-        base, up = fixed_real, fixed_real
-        while True:
-            if os.path.exists(os.path.join(up, ".git")):
-                base = up
-                break
-            if os.path.dirname(up) == up:
-                break
-            up = os.path.dirname(up)
         matched = False
         for k in range(len(parts) - 1, 0, -1):
             repos = sorted(d for d in glob.glob("/".join(parts[:k])) if os.path.isdir(d) and os.path.exists(os.path.join(d, ".git")))
             if repos:
                 matched = True
                 for d in repos:
-                    rel = os.path.relpath(os.path.realpath(d), base)
+                    real = os.path.realpath(d)
+                    # the walk starts at the repo's parent, so a root naming run/x directly
+                    # still finds the checkout above run/
+                    base, up = fixed_real, os.path.dirname(real)
+                    while True:
+                        if os.path.exists(os.path.join(up, ".git")):
+                            base = up
+                            break
+                        if os.path.dirname(up) == up:
+                            break
+                        up = os.path.dirname(up)
+                    rel = os.path.relpath(real, base)
                     comps = [c for c in rel.split(os.sep) if c not in ("", ".", "..")]
                     bad = [c for c in comps if c in SKIP_DIRS or fnmatch.fnmatch(c, "*-wt-*")]
                     if bad:
