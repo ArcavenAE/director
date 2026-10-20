@@ -44,6 +44,11 @@ its own rulings.lock beside it. It never creates the file, refuses the exclusion
 `records [--json]` folds the file: replaces is an explicit id pointer; a target is marked
 replaced_by, and a pointer to a missing id or another kind is counted, never guessed.
 
+K10: `grant-card <id> [--out FILE]` renders the Desk card that shows a draft grant's bounds, in
+card-ingest's format. `grant-confirm <id> --card C --quote WORDS` records the grant as confirmed
+(replacing the draft, which is never edited) only when the fresh Desk snapshot lists C as answered;
+the quote is the session's claim of the operator's words.
+
 K11: `reconcile [--json] [--out FILE]` reads the Desk snapshot, the ledger, rulings.jsonl,
 rings.jsonl and the PR state the ledger observed, and writes proposals (tag proposal) to
 $DIRECTOR_STATE/reconcile-proposals.json. It appends no record to any store. Each source
@@ -1144,6 +1149,96 @@ def cmd_records(a):
         print(f"dws: {torn} unreadable line(s) in {path} skipped, not repaired", file=sys.stderr)
 
 
+# K10: the grant confirm card. A draft grant has no effect. grant-card renders a
+# Desk card (card-ingest's format) that shows the draft's bounds; the operator
+# answers it on the Desk; grant-confirm then records the confirmed grant, and
+# only when the fresh Desk snapshot lists that card as answered. dws cannot read
+# an answer's content (the snapshot holds only which cards have one), so the
+# quote is the session's claim of the operator's words, stored as given, in the
+# same way --actor is a claim. The draft line is never edited; the confirmed
+# record replaces it.
+GRANT_CARD_DAYS = 7
+
+
+def draft_grant(records, gid):
+    for r in records:
+        if r.get("id") == gid:
+            if r.get("kind") != "grant":
+                raise Refused(f"{gid!r} is a {r.get('kind')} record, not a grant")
+            if r.get("state") != "draft":
+                raise Refused(f"grant {gid!r} is {r.get('state')}, not a draft; only a draft is confirmed on a card")
+            if r["replaced_by"]:
+                raise Refused(f"grant {gid!r} is already replaced by {', '.join(map(str, r['replaced_by']))}")
+            return r
+    raise Refused(f"no grant {gid!r} in the rulings file")
+
+
+def cmd_grant_card(a):
+    path = rulings_path()
+    need_file(path)
+    records, _, _ = fold_records(path)
+    g = draft_grant(records, a.id)
+    until = (parse_time(now()) + datetime.timedelta(days=GRANT_CARD_DAYS)).strftime("%Y-%m-%d")
+    expires = g.get("expires") or "no expiry"
+    card = f"""Source: {g.get('source', 'none recorded')} (draft grant {g['id']} in rulings.jsonl)
+
+## Card 1. Confirm this grant: {g.get('subject', '')}?
+
+**IN SHORT.** Director drafted a grant from your words. It has no effect until you confirm it here, and the bounds are listed below so you can check them.
+
+**Problem.** Acting inside a grant is not an ask, so a grant has to show its limits before it counts. Draft {g['id']} is waiting for your answer.
+
+**Terms.** Subject: {g.get('subject', '')}. Scope: {g.get('scope', '')}. To: {g.get('to', '')}. Expires: {expires}. Your words as recorded: {g.get('text', '')}
+
+**Options.**
+1. *Confirm it.* The grant counts from your answer, inside exactly the bounds above. The cost is that director acts within them without asking, one line per use in the digest.
+2. *Do not confirm.* The draft stays a draft and director asks for each action. The cost is one ask per action.
+
+**Recommendation.** Option 1, if the bounds match what you said.
+
+**Valid until** {until}. Director re-checks it then.
+"""
+    if a.out:
+        with open(a.out, "w", encoding="utf-8") as f:
+            f.write(card)
+        print(f"dws: wrote the card for grant {g['id']} to {a.out}")
+    else:
+        sys.stdout.write(card)
+
+
+def cmd_grant_confirm(a):
+    if a.actor != "director":
+        raise Refused(f"actor {a.actor!r} may not confirm a grant; only director does")
+    quote = nonblank("quote", a.quote)
+    card = record_id("card", a.card)
+    path = rulings_path()
+    need_file(path)
+    snap, why = desk_snapshot()
+    if snap is None:
+        raise Refused(f"the Desk snapshot is {why}; a session reads the Desk and runs desk-snapshot write --answers")
+    if "answered" not in snap:
+        raise Refused("the Desk snapshot is UNREAD for answers: it was written without --answers")
+    if card not in snap["answered"]:
+        raise Refused(f"card {card!r} is not answered in the Desk snapshot read at {snap['read_at']}; "
+                      "a draft grant has no effect until the operator answers its card")
+    with Locked(os.path.join(os.path.dirname(path) or ".", "rulings.lock")):
+        records, _, _ = fold_records(path)
+        g = draft_grant(records, a.id)
+        taken = {r.get("id") for r in records}
+        rid, n = f"{g['id']}-confirmed", 1
+        while rid in taken:
+            n += 1
+            rid = f"{g['id']}-confirmed-{n}"
+        rec = {"kind": "grant", "id": rid, "ts": now(), "actor": a.actor, "tag": "mirror",
+               "source": stored_form(f"Desk card {card}, answered per the snapshot read {snap['read_at']}"),
+               "subject": g["subject"], "scope": g["scope"], "to": g["to"], "state": "confirmed",
+               "text": g["text"], "card": card, "quote": quote, "replaces": g["id"]}
+        if g.get("expires"):
+            rec["expires"] = g["expires"]
+        append(rec, path)
+    print(f"dws: wrote grant {rid}, confirmed on card {card}, replacing {a.id}")
+
+
 # K11: the reconciler. It reads the Desk snapshot, the ledger, rulings.jsonl,
 # rings.jsonl and the PR state the ledger observed, and writes proposals to a
 # file of their own. It never appends a record to any store; director applies or
@@ -1394,6 +1489,17 @@ def main(argv):
     rr.add_argument("--json", action="store_true")
     rr.add_argument("--kind", choices=RECORD_KINDS)
     rr.set_defaults(fn=cmd_records)
+
+    gc = sub.add_parser("grant-card", help="render the Desk card that shows a draft grant's bounds (K10)")
+    gc.add_argument("id")
+    gc.add_argument("--out")
+    gc.set_defaults(fn=cmd_grant_card)
+
+    gf = sub.add_parser("grant-confirm", help="record a grant as confirmed once its card is answered (K10)")
+    gf.add_argument("id")
+    gf.add_argument("--card", required=True)
+    gf.add_argument("--quote", required=True, help="the operator's answer, as read from the Desk")
+    gf.set_defaults(fn=cmd_grant_confirm)
 
     rc2 = sub.add_parser("reconcile", help="propose changes from the stores; writes no record (K11)")
     rc2.add_argument("--json", action="store_true")

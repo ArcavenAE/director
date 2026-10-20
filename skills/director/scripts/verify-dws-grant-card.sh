@@ -32,11 +32,18 @@ RULINGS="$DIRECTOR_STATE/rulings.jsonl"
 "$DWS" record grant --id g-conf --source "operator relay R-3" --subject "x" --scope "y" --to "director" \
   --state confirmed --text "already confirmed" >/dev/null
 
+snap() {  # ANSWERS_JSON
+  printf '{"grant-card-1":{"status":"open"},"other":{"status":"open"}}' >"$root/cards.json"
+  printf '%s' "$1" >"$root/answers.json"
+  "$SNAP" write --cards "$root/cards.json" --reported 2 --answers "$root/answers.json" --answers-reported "$2" >/dev/null
+}
+
 # --- the card ---------------------------------------------------------------
 "$DWS" grant-card g1 --out "$root/card.md" >"$root/o" 2>"$root/e" && ok "grant-card renders a draft" || bad "grant-card renders a draft" "$(cat "$root/e")"
 for w in "merge ArcavenAE docs PRs" "ArcavenAE repos, docs-only PRs, ready and approved at head" "director" "2026-11-20" "merge docs-only PRs that are ready and approved" "operator relay R-1" "g1"; do
   grep -qF -- "$w" "$root/card.md" && ok "the card shows: $w" || bad "the card shows: $w"
 done
+snap '[]' 0
 "$CI" parse "$root/card.md" --area grants --owner director --prefix grant >"$root/o2" 2>"$root/e2" \
   && ok "card-ingest accepts the rendered card" || bad "card-ingest accepts the rendered card" "$(cat "$root/e2")"
 "$DWS" grant-card g-noexp >"$root/c2" 2>/dev/null && grep -q 'no expiry' "$root/c2" && ok "a grant with no expiry says so on the card" || bad "a grant with no expiry says so on the card"
@@ -47,14 +54,10 @@ if grep -q 'takes effect\|absent a ruling' "$root/card.md"; then bad "the card h
 # --- confirm ------------------------------------------------------------------
 before="$(wc -l <"$RULINGS" | tr -d ' ')"
 conf() { "$DWS" grant-confirm g1 --card grant-card-1 --quote "yes, confirm it" "$@"; }
+rm -f "$DIRECTOR_STATE/desk-snapshot.json"
 if conf >"$root/o" 2>"$root/e"; then bad "confirm refuses with no Desk snapshot"; else grep -q 'UNREAD' "$root/e" && ok "confirm refuses with no Desk snapshot (UNREAD)" || bad "confirm refuses with no Desk snapshot (UNREAD)" "$(cat "$root/e")"; fi
 [[ "$(wc -l <"$RULINGS" | tr -d ' ')" == "$before" ]] && ok "nothing written on that refusal" || bad "nothing written on that refusal"
 
-snap() {  # ANSWERS_JSON
-  printf '{"grant-card-1":{"status":"open"},"other":{"status":"open"}}' >"$root/cards.json"
-  printf '%s' "$1" >"$root/answers.json"
-  "$SNAP" write --cards "$root/cards.json" --reported 2 --answers "$root/answers.json" --answers-reported "$2" >/dev/null
-}
 snap '[{"card":"other"}]' 1
 if conf >/dev/null 2>"$root/e"; then bad "confirm refuses while the card is unanswered"; else grep -q 'not answered' "$root/e" && ok "confirm refuses while the card is unanswered" || bad "confirm refuses while the card is unanswered" "$(cat "$root/e")"; fi
 [[ "$(wc -l <"$RULINGS" | tr -d ' ')" == "$before" ]] && ok "nothing written while unanswered" || bad "nothing written while unanswered"
