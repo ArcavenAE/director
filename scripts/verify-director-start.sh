@@ -127,11 +127,20 @@ check "the launcher hands the config the seat launcher under DIRECTOR_HOME" bash
 # review item 1: a session the launcher started, whose director MCP server is
 # running under it and carries the launch id, can write the proof
 mkdir -p "$root/bin"
+# a stand-in MCP server, run by whichever bash `env bash` finds
 cat >"$root/bin/director-mcp-seat" <<'MCP'
 #!/usr/bin/env bash
-sleep 30
+sleep 30; true   # the trailing command keeps this script's own process from being replaced by sleep
 MCP
 chmod +x "$root/bin/director-mcp-seat"
+# control: macOS hides the environment of system-protected binaries, and `prove` reads
+# the server's environment. If the stand-in's interpreter is one (the system bash 3.2),
+# the prove checks cannot run here, and are skipped rather than counted either way.
+DIRECTOR_LAUNCH_ID=control-id "$root/bin/director-mcp-seat" & cpid=$!
+sleep 1
+if ps eww -o command= -p "$cpid" 2>/dev/null | grep -q 'DIRECTOR_LAUNCH_ID=control-id'; then can_prove=1; else can_prove=0; fi
+kill "$cpid" 2>/dev/null || true; wait "$cpid" 2>/dev/null || true
+if [[ "$can_prove" == 0 ]]; then echo "SKIP the prove checks: this interpreter's process environment is hidden from ps"; fi
 cat >"$root/claude-session" <<'STUB'
 #!/usr/bin/env bash
 # a stand-in session: starts the director MCP server the way claude would, then
@@ -139,6 +148,7 @@ cat >"$root/claude-session" <<'STUB'
 case "${STUB_MCP:-yes}" in
   yes)   "$STUB_BIN/director-mcp-seat" & mcp=$! ;;
   noid)  env -u DIRECTOR_LAUNCH_ID "$STUB_BIN/director-mcp-seat" & mcp=$! ;;
+  other) env DIRECTOR_LAUNCH_ID=some-other-launch "$STUB_BIN/director-mcp-seat" & mcp=$! ;;
   none)  mcp= ;;
 esac
 sleep 1
@@ -151,13 +161,19 @@ sess() { # STUB_MCP value; runs start with the stand-in session
   env -i HOME="$home" PATH="$PATH" LANG="${LANG:-C}" CLAUDE_BIN="$root/claude-session" STUB_BIN="$root/bin" \
     STUB_START="$start" STUB_PROVE_OUT="$root/prove.out" STUB_MCP="$1" "$start" start >"$root/stdout" 2>&1 || true
 }
-sess yes
+rm -rf "$home/.director/state"
+run_start start >"$root/stdout" 2>&1 || true
 check "start leaves a launch record" bash -c "ls '$home'/.director/state/launches/* >/dev/null 2>&1"
-check "prove inside a launched session with its MCP server writes the proof" bash -c "grep -q 'rc=0' '$root/prove.out' && [[ -s '$home/.director/state/launch-proof' ]]"
-sess none
-check "prove with no MCP server under the session is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
-sess noid
-check "prove with an MCP server that lacks the launch id is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
+if [[ "$can_prove" == 1 ]]; then
+  sess yes
+  check "prove inside a launched session with its MCP server writes the proof" bash -c "grep -q 'rc=0' '$root/prove.out' && [[ -s '$home/.director/state/launch-proof' ]]"
+  sess none
+  check "prove with no MCP server under the session is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
+  sess noid
+  check "prove with an MCP server that lacks the launch id is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
+  sess other
+  check "prove with an MCP server carrying another launch id is a STOP" bash -c "grep -q '^STOP' '$root/prove.out' && [[ ! -e '$home/.director/state/launch-proof' ]]"
+fi
 rm -f "$home/.director/state/launch-proof"
 if env -i HOME="$home" PATH="$PATH" LANG="${LANG:-C}" "$start" prove >"$root/o" 2>&1; then bad "prove outside a launched session is refused" "exit 0"; else ok "prove outside a launched session is refused"; fi
 
