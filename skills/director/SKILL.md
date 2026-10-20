@@ -245,7 +245,7 @@ hook's three-line checklist asks about:
    gives the moved rows.
 5. Write the operations dashboard, at most every 30 minutes: run
    `${DIRECTOR_HOME:-$HOME/.director}/bin/dash-writer run`, apply the `writes` it prints as one `ArtifactData`
-   batch (a script cannot write artifact data), then run `dash-writer ack`. When it prints `skipped`, there is
+   batch (a script cannot write artifact data), then run `dash-writer ack --at <ack.at> --deleted <ack.deleted, comma separated>` with the `ack` field the run printed. When it prints `skipped`, there is
    nothing to apply. It reads the ledger, `marvel get sessions` and the Desk snapshot and writes nothing of
    its own; only the fields of `sim/design/ops-dashboard.md` section 3 reach the documents. This gives the
    `dash_*` documents.

@@ -7,7 +7,8 @@ script cannot write artifact data (finding-director-glst), so this script reads 
 prints the batch, and the session applies it with one ArtifactData batch of at most 50 writes.
 
   dash-writer run [--force]   print {"writes": [...], ...}; nothing is written but the output
-  dash-writer ack             the batch was applied: record the run (the 30-minute floor, the run count)
+  dash-writer ack --at T [--deleted D,D]   the batch was applied: record the run (the 30-minute floor, the run
+                               count); T and D are the run's own `ack` field, so the clock at ack time never matters
   dash-writer --help
 
 Sources, read only: `dws show --json` (the ledger folded by dws's own fold, so the page cannot fold
@@ -104,7 +105,7 @@ def load_withhold():
     present but unreadable, not a regular file, not UTF-8, or wider than 0600 is a refusal, never no list."""
     path = os.path.join(STATE, "dash-withhold.txt")
     try:
-        fd = os.open(path, os.O_RDONLY)
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)  # a FIFO must not hang the open
     except FileNotFoundError:
         return [], None
     except OSError:
@@ -135,6 +136,9 @@ def cluster_names():
     if not os.path.isfile(path):
         return None
     try:
+        v = subprocess.run(["yq", "--version"], capture_output=True, timeout=20, stdin=subprocess.DEVNULL)
+        if v.returncode != 0 or not re.fullmatch(r"yq \(https://github.com/mikefarah/yq/?\) version v4\.[0-9.]+\s*", v.stdout.decode("utf-8", "replace")):
+            return None  # not the mikefarah v4 build: its output is not trusted
         p = subprocess.run(["yq", "-o=json", "-I=0", ".clusters | keys", path], capture_output=True, timeout=20,
                            stdin=subprocess.DEVNULL)
         if p.returncode != 0:
@@ -142,8 +146,8 @@ def cluster_names():
         names = json.loads(p.stdout.decode("utf-8"))
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return None
-    if not isinstance(names, list) or not names or not all(isinstance(n, str) and n for n in names):
-        return None
+    if not isinstance(names, list) or not names or not all(isinstance(n, str) and CLUSTER_RE.fullmatch(n) for n in names):
+        return None  # anything that is not a plain cluster name: no value can pass as a key
     return names
 
 
@@ -521,16 +525,24 @@ def cmd_run(force):
             writes.append({"action": "delete", "collection": "dash_daily", "doc_id": f"{name}-{day}"})
     meta = {"last_run": t_text, "runs": int(st.get("runs", 0)) + 1, "reader": READER, "checks": checks_of(data, t_now)}
     writes.append({"action": "set", "collection": "dash_meta", "doc_id": "writer", "data": meta})
-    print(json.dumps({"writes": writes}, ensure_ascii=False, indent=1))
+    print(json.dumps({"writes": writes, "ack": {"at": t_text, "deleted": expired}}, ensure_ascii=False, indent=1))
 
 
-def cmd_ack():
-    t_text, _ = now()
+def cmd_ack(at, deleted):
+    """Record the run `at` named and the days it deleted; this process's own clock is never read."""
+    day_re = r"\d{4}-\d\d-\d\d"
+    try:
+        t_now = datetime.datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        print("dash-writer: --at is the run's time, as printed in its ack field", file=sys.stderr)
+        sys.exit(2)
+    if not all(re.fullmatch(day_re, d) for d in deleted):
+        print("dash-writer: --deleted is a comma list of days, as printed in the run's ack field", file=sys.stderr)
+        sys.exit(2)
     st = read_state()
-    _, t_now = now()
-    gone = set(expired_days(st, t_now))
-    days = sorted({d for d in st.get("days", []) if isinstance(d, str) and re.fullmatch(r"\d{4}-\d\d-\d\d", d)} - gone | {t_now.strftime("%Y-%m-%d")})
-    st = {"last_run": t_text, "runs": int(st.get("runs", 0)) + 1, "days": days}
+    days = sorted({d for d in st.get("days", []) if isinstance(d, str) and re.fullmatch(day_re, d)} - set(deleted)
+                  | {t_now.strftime("%Y-%m-%d")})
+    st = {"last_run": at, "runs": int(st.get("runs", 0)) + 1, "days": days}
     os.makedirs(STATE, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".dash-writer.")
     with os.fdopen(fd, "w") as f:
@@ -538,7 +550,7 @@ def cmd_ack():
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, state_path())
-    print(f"recorded run {st['runs']} at {t_text}")
+    print(f"recorded run {st['runs']} at {at}")
 
 
 def main():
@@ -548,10 +560,10 @@ def main():
         return
     if a[0] == "run" and set(a[1:]) <= {"--force"}:
         cmd_run("--force" in a)
-    elif a[0] == "ack" and len(a) == 1:
-        cmd_ack()
+    elif a[0] == "ack" and len(a) in (3, 5) and a[1] == "--at" and (len(a) == 3 or a[3] == "--deleted"):
+        cmd_ack(a[2], [d for d in (a[4].split(",") if len(a) == 5 else []) if d])
     else:
-        print("usage: dash-writer run [--force] | ack | --help", file=sys.stderr)
+        print("usage: dash-writer run [--force] | ack --at <run time> [--deleted <days>] | --help", file=sys.stderr)
         sys.exit(2)
 
 

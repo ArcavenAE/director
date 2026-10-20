@@ -37,6 +37,11 @@ state="$root/state"
 NOW="2026-10-20T18:00:00Z"
 command -v yq >/dev/null 2>&1 || { echo "FAIL yq (the mikefarah build) is required: dash-writer reads the marvel config with it"; exit 1; }
 YQDIR="$(dirname "$(command -v yq)")"
+ackrun() { # ack with the arguments the last run printed, as SKILL.md says
+  args="$(python3 -c 'import json,sys;a=json.load(open(sys.argv[1]))["ack"];print(a["at"],",".join(a["deleted"]))' "$root/out.json")"
+  at="${args%% *}"; del="${args#* }"
+  run ack --at "$at" ${del:+--deleted "$del"}
+}
 run() { env -i HOME="$root/home" PATH="$root/bin:/usr/bin:/bin:$PYDIR:$YQDIR" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" \
         DWS_TEST_CLOCK=1 DWS_NOW="${NOW_OVERRIDE:-$NOW}" DASH_MARVEL="$root/bin/marvel" TABLES="$root/tables" python3 -I "$W" "$@"; }
 
@@ -286,7 +291,7 @@ assert all(r["cluster"] == "good" for r in p["rows"])
 setclusters 'bad/name'; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
-assert p["rows"]==[] and p["refusal"].get("cluster:charset")==1, p' && ok "a cluster name that is not on the list's grammar writes nothing" || bad "cluster charset"
+assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "a key that is not a plain cluster name refuses the whole sessions panel" || bad "cluster charset"
 rm -f "$root/home/.marvel/config.yaml"; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
@@ -432,10 +437,10 @@ d=json.load(open(sys.argv[1])); w=d["writes"]; dele=sorted(x["doc_id"] for x in 
 assert "refused" not in d and len(w)==49, (len(w), d.get("refused"))
 assert len(dele)==40, dele
 assert not [x for x in dele if x.endswith("-2026-09-30") or x.endswith("-2026-10-06")], "the oldest ten days go first, the rest wait"' && ok "a long backlog is cut to the oldest ten days: 49 writes, never over 50, never refused" || bad "backlog cap"
-run ack >/dev/null 2>&1
+ackrun >/dev/null 2>&1
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["days"]==["2026-09-30","2026-10-01","2026-10-02","2026-10-03","2026-10-04","2026-10-05","2026-10-06","2026-10-19","2026-10-20"], d["days"]' "$state/dash-writer.json" && ok "ack drops from its record only the days it was told to delete, and adds today" || bad "ack days" "$(cat "$state/dash-writer.json")"
 rm -f "$state/dash-writer.json"
-run ack >/dev/null 2>&1
+ackrun >/dev/null 2>&1
 [[ "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["runs"],d["last_run"])' "$state/dash-writer.json")" == "1 2026-10-20T18:00:00Z" ]] && ok "ack records the run and its count" || bad "ack"
 NOW_OVERRIDE="2026-10-20T18:20:00Z" run run >"$root/out.json" 2>/dev/null
 pyc 'import json,sys;d=json.load(open(sys.argv[1]));assert d["writes"]==[] and "30-minute" in d["skipped"], d' && ok "inside the 30-minute floor it writes nothing and says why" || bad "floor"
@@ -473,6 +478,37 @@ pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="in-flight" and x["collection"]=="dash_panels"][0]
 assert p["rows"] and not [k for k in p["refusal"] if k.startswith("withhold-file")], p["refusal"]' && ok "control: an absent withhold file is no list, not a refusal" || bad "absent withhold file"
 mv "$root/w.keep" "$state/dash-withhold.txt"; chmod 600 "$state/dash-withhold.txt"
+# the ack records the run's own time and the days that run deleted, not its own clock
+python3 - "$state/dash-writer.json" <<'PY'
+import json, sys
+json.dump({"last_run": "2026-10-20T10:00:00Z", "runs": 3, "days": ["2026-10-06", "2026-10-07"]}, open(sys.argv[1], "w"))
+PY
+NOW_OVERRIDE="2026-10-20T23:59:00Z" runout run
+NOW_OVERRIDE="2026-10-21T00:01:00Z" ackrun >/dev/null 2>&1
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["days"]==["2026-10-07","2026-10-20"] and d["last_run"]=="2026-10-20T23:59:00Z" and d["runs"]==4, d' "$state/dash-writer.json" && ok "an ack after midnight records the day the run wrote, drops only the day it deleted, and keeps the run's time" || bad "ack across midnight" "$(cat "$state/dash-writer.json")"
+run ack >/dev/null 2>&1; [[ $? -eq 2 ]] && ok "an ack with no --at is a usage error" || bad "ack without --at"
+rm -f "$state/dash-writer.json"
+# a yq that is not the mikefarah v4 build is not trusted, whatever it prints
+cat >"$root/bin/yq" <<'SH'
+#!/bin/sh
+if [ "$1" = "--version" ]; then echo "yq 3.4.3"; exit 0; fi
+echo '["CANARYSTUBVALUE","alpha"]'
+SH
+chmod +x "$root/bin/yq"
+runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
+assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p'
+[[ $? -eq 0 ]] && ! grep -q CANARYSTUBVALUE "$root/out.json" "$root/err" && ok "a yq that is not mikefarah v4 refuses the sessions panel and nothing it printed is shown" || bad "stub yq"
+rm -f "$root/bin/yq"
+# a FIFO at the withhold path is refused like any unreadable file; it must not hang the run
+mv "$state/dash-withhold.txt" "$root/w.keep"; mkfifo "$state/dash-withhold.txt"
+runout run & rp=$!
+i=0; while kill -0 $rp 2>/dev/null && [[ $i -lt 40 ]]; do sleep 0.5; i=$((i+1)); done
+if kill -0 $rp 2>/dev/null; then : <>"$state/dash-withhold.txt"; wait $rp; bad "a FIFO at the withhold path hung the run"
+else wait $rp; refused3 unreadable && ok "a FIFO at the withhold path is refused as unreadable, without hanging" || bad "withhold fifo"; fi
+rm -f "$state/dash-withhold.txt"; mv "$root/w.keep" "$state/dash-withhold.txt"; chmod 600 "$state/dash-withhold.txt"
+
 python3 - "$state/workstreams.jsonl" <<'PY'
 import json, sys
 with open(sys.argv[1], "a") as f:
