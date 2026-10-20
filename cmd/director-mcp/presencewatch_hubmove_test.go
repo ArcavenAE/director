@@ -363,3 +363,79 @@ func TestAlertCapHourIsWallClockSoHostSleepCountsTowardIt(t *testing.T) {
 		t.Fatalf("the hour has passed on the wall clock: c3's lost is shown, got %+v", third)
 	}
 }
+
+// cashp C3, director#359 section 6 and 8 (review 5586988630): a listed cluster
+// leaves the still-out set when the watch first sees it present on a sighted
+// pass, by `back` or by `present-after-gap`.
+
+func textOf(evs []watchEvent, unit, kind string) string {
+	for _, e := range evs {
+		if e.Unit == unit && e.Kind == kind {
+			return e.Text
+		}
+	}
+	return ""
+}
+
+func TestHubMoveSeenAfterAGapLeavesTheStillOutSetAndNamesTheRest(t *testing.T) {
+	w, c := hubWatchWin(30*time.Minute, 6, 30*time.Minute)
+	threeUp(t, w, c)
+	runPasses(w, c, 3)
+	runPasses(w, c, 2, rowsFor("c1")...) // c1 back by a normal return, c2 and c3 still out
+	gapped := c.skip(w, 5*time.Minute, 5*time.Minute, rowsFor("c1", "c2")...)
+	if count(gapped, "watch-down") != 1 || !has(gapped, "c2", "present-after-gap") || has(gapped, "c2", "back") {
+		t.Fatalf("CONTROL FAILED: c2 is first seen after a gap, with no back: %+v", gapped)
+	}
+	txt := textOf(gapped, "c2", "present-after-gap")
+	if !strings.Contains(txt, "c3") || strings.Contains(txt, "c1") {
+		t.Fatalf("the present-after-gap that takes c2 out of the set names c3 only, got %q in %+v", txt, gapped)
+	}
+	last := runPasses(w, c, 3, rowsFor("c1", "c2", "c3")...)
+	closed := textOf(last, "", "hub-moved-closed")
+	if count(last, "hub-moved-closed") != 1 || !strings.Contains(closed, "seen present") || strings.Contains(closed, "back") || !strings.Contains(closed, "c2") {
+		t.Fatalf("the closing notice says seen present and names c2, seen only after a gap, got %q in %+v", closed, last)
+	}
+}
+
+func TestHubMoveAnAsleepStragglerGetsNoLostAtConversionAndIsNamedAsleep(t *testing.T) {
+	w, c := hubWatch(time.Minute, 6)
+	runPasses(w, c, 2, rowsFor("c1", "c2", "c3")...)
+	runPasses(w, c, 3)
+	if w.Parent == nil {
+		t.Fatal("CONTROL FAILED: the parent should be open")
+	}
+	// c3 is asleep and not present; the unit is set directly, since a unit that
+	// is absent cannot become asleep by a transition
+	for _, n := range []string{"c3", "c3/a"} {
+		u := w.Unit(n)
+		u.Status, u.AsleepUntil = unitAsleep, c.wall.Add(24*time.Hour)
+	}
+	later := runPasses(w, c, 8)
+	conv := textOf(later, "", "hub-moved-converted")
+	if count(later, "hub-moved-converted") != 1 || !strings.Contains(conv, "c3 (asleep)") {
+		t.Fatalf("the conversion notice names c3 as asleep, got %q in %+v", conv, later)
+	}
+	if shownFor(later, "c3", "lost") != 0 || shownFor(later, "c2", "lost") != 1 {
+		t.Fatalf("c2 raises its lost and the asleep c3 does not, got %+v", later)
+	}
+}
+
+func TestHubMoveABackInAFlapSpellIsShownAndNamesTheClustersStillOut(t *testing.T) {
+	w, c := hubWatchWin(30*time.Minute, 6, 30*time.Minute)
+	runPasses(w, c, 2, rowsFor("c1", "c2")...)
+	for i := 0; i < 2; i++ { // c1 leaves and returns twice: four transitions, so it is flapping
+		runPasses(w, c, 3, rowsFor("c2")...)
+		runPasses(w, c, 2, rowsFor("c1", "c2")...)
+	}
+	if u := w.Unit("c1"); u == nil || !u.Flapping {
+		t.Fatal("CONTROL FAILED: c1 should be in a flap spell")
+	}
+	runPasses(w, c, 3) // both leave: the parent lists c1 and c2
+	if w.Parent == nil {
+		t.Fatal("CONTROL FAILED: the parent should be open")
+	}
+	back := runPasses(w, c, 2, rowsFor("c1")...)
+	if shownFor(back, "c1", "back") != 1 || !strings.Contains(textOf(back, "c1", "back"), "c2") {
+		t.Fatalf("c1's back during its flap spell is shown and names c2, got %+v", back)
+	}
+}
