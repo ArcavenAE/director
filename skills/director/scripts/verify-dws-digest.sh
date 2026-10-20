@@ -4,8 +4,7 @@
 # on demand only (nothing runs on a clock). It prints to stdout and writes the same text to
 # $DIRECTOR_STATE/digest.md. The interrupt list is the Q1 default (an outage; a console step or
 # recommendation expiring before the next digest; a seat blocked on your ask); an item whose
-# source cannot be read says so and is never "none". Beyond digest.md and reconcile's own
-# proposals file it writes no store.
+# source cannot be read says so and is never "none". It writes digest.md and nothing else.
 #
 # Usage: skills/director/scripts/verify-dws-digest.sh   Exit nonzero on any miss.
 set -euo pipefail
@@ -39,6 +38,8 @@ DWS_NOW=2026-09-01T00:00:00Z "$DWS" open oldidea --title "an old idea" --owner d
 DWS_NOW=2026-10-19T00:00:00Z "$DWS" open fresh --title f --owner director --stage building >/dev/null
 printf '%s\n' '{"kind":"grant","id":"g-old","ts":"2026-09-01T00:00:00Z","actor":"director","tag":"mirror","source":"s","subject":"x","scope":"y","to":"director","state":"confirmed","text":"t","expires":"2026-10-01"}' >"$RULINGS"
 before="$(shasum -a 256 "$LEDGER" "$RULINGS" "$DIRECTOR_STATE/desk-snapshot.json")"
+manifest() { (cd "$DIRECTOR_STATE" && find . -type f ! -name digest.md ! -name 'digest.md.lock' -exec shasum -a 256 {} + | LC_ALL=C sort); }
+mbefore="$(manifest)"
 "$DWS" digest >"$root/o" 2>"$root/e" && ok "digest exits 0 on fixtures" || bad "digest exits 0" "$(cat "$root/e")"
 cmp -s "$root/o" "$DIGEST" && ok "stdout and digest.md are the same text" || bad "stdout equals digest.md"
 [[ "$(shasum -a 256 "$LEDGER" "$RULINGS" "$DIRECTOR_STATE/desk-snapshot.json")" == "$before" ]] && ok "digest writes no ledger, ruling or snapshot" || bad "digest writes no store"
@@ -52,7 +53,8 @@ section Close-or-kill | grep 'oldidea' | grep -qi 'idea' && section Close-or-kil
 section Close-or-kill | grep -q 'fresh' && bad "a moved row is not listed" || ok "a recently moved row is not listed"
 grep -q 'grant-expired' "$DIGEST" && grep -q 'g-old' "$DIGEST" && ok "other reconcile proposals are listed (the expired grant)" || bad "other proposals"
 section 'Not run' | grep -q 'recommendation-sell-by' && ok "the reconciler's not-run checks are carried" || bad "not run carried" "$(section 'Not run')"
-[[ -e "$DIRECTOR_STATE/reconcile-proposals.json" ]] && ok "reconcile's own proposals file was written (the digest runs the reconciler)" || bad "reconcile proposals file"
+[[ "$(manifest)" == "$mbefore" ]] && ok "the state directory holds nothing new and nothing changed but digest.md (review 5586720919)" || bad "digest wrote something besides digest.md" "$(diff <(echo "$mbefore") <(manifest) | head -5)"
+[[ ! -e "$DIRECTOR_STATE/reconcile-proposals.json" ]] && ok "digest does not write reconcile-proposals.json" || bad "reconcile-proposals.json written by digest"
 "$DWS" digest >"$root/o2" 2>/dev/null; cmp -s "$root/o" "$root/o2" && ok "a second run under the same clock is byte for byte the same" || bad "idempotent"
 
 # --- the Q1 default list is documented where the operator edits it -----------------------------------------
