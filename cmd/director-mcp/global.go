@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -435,6 +436,11 @@ type globalTier struct {
 	// violations is the connection's record of publish permission violations,
 	// shared with the Bus (nil in a tier built without one).
 	violations *violationRing
+
+	// selfPut is the unix second of the ts in the last presence row this session
+	// tried to write, which the watch's self check compares with the row it reads
+	// back.
+	selfPut atomic.Int64
 
 	cfg      globalConfig
 	js       jetstream.JetStream
@@ -883,6 +889,12 @@ func (g *globalTier) writePresence(ctx context.Context, self Sender, instance st
 		"ts":        time.Now().UTC().Format(time.RFC3339),
 	}
 	body, _ := json.Marshal(rec)
+	// The ts is recorded before the Put, whether or not it succeeds: the watch
+	// compares the row it reads back with the last write ATTEMPTED, so a tick whose
+	// Put failed does not let the previous tick's row read as current.
+	if ts, perr := time.Parse(time.RFC3339, rec["ts"].(string)); perr == nil {
+		g.selfPut.Store(ts.Unix())
+	}
 	_, err := g.kv.Put(ctx, g.cfg.presenceKey(instance), body)
 	return err
 }
