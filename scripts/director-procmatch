@@ -48,8 +48,9 @@ def read_pid(pid):
     (argc,) = struct.unpack("i", data[:4])
     # Layout: argc, the executable path, NUL padding, then exactly argc arguments, then the
     # environment. The padding is measured, not guessed: the path plus its NULs fill
-    # the next multiple of 8 above the path's length (checked on macOS 26 for path
-    # lengths 6 to 14), so an empty argv[0] is told apart from padding. Skipping every
+    # the next multiple of 8 above the path's length. Measured on Darwin 25.5 only, for
+    # path lengths 1 to 700 against that rule; not measured on Linux, which reads
+    # /proc instead. This is how an empty argv[0] is told apart from padding. Skipping every
     # NUL would swallow an empty argv[0] and make the first environment entry argv[0].
     body = data[4:]
     path_len = body.index(b"\0") if b"\0" in body else len(body)
