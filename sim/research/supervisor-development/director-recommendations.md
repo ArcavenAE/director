@@ -86,6 +86,9 @@ confirm-back practice.*
 JUDGMENT. An amendment, not a new entry, so it takes no R-number; R-115 is left
 unused rather than renumbering the candidates after it again.*
 
+*Status, 2026-10-20: landed in the wardrobe role library, supervisor 7.0.0
+(its EMITS section), not in the register. The register entry R-110 is unchanged.*
+
 ---
 
 ## B. Escalation channels (candidates)
@@ -206,15 +209,24 @@ modes, not as R-numbers.
 
 ## Carried flags
 
-- The spot-report versus periodic-report taxonomy belongs to FM 6-99, which was
-  NOT retrieved; R-113's cadence rests on the exception model and ADP 6-0 para
-  1-59, not on that taxonomy.
-- The one-on-one engagement multipliers are UNCONFIRMED (secondary aggregators);
-  R-113 rests on the cadence finding, which is supported, not on the multipliers.
-- Two ADP chapter-2 passages the synthesis cites (the ADP 6-0 back-brief list in
-  "Command Presence" and the ADP 6-22 candor sentence in "Personal Courage") are
-  cited by section name only, because the paragraph numbers did not survive text
-  extraction; add the exact numbers from the published PDF before any of these
-  candidates is filed as a real entry.
+Status as read on 2026-10-20 from the current publications. Four of the five are closed.
+
+- **CLOSED.** The spot-report versus periodic-report taxonomy belongs to FM 6-99
+  [@fm6-99-2021] (17 May 2021, current). The SPOTREP is report S055: "events that
+  could have an immediate and significant effect on current and future operations".
+  R-113's cadence rests on the exception model and ADP 6-0 para 1-77, not on a
+  spot-versus-periodic pair.
+- **CLOSED.** The back-brief definition is FM 6-0 [@fm6-0-2022] (16 May 2022)
+  Appendix C, C-7, plus the Note under C-8. ADP 6-0 [@adp6-0-2026] (07 July 2026)
+  para 2-58 is "Command Presence"; it has "Backbriefs and rehearsals." only as a
+  bullet, so it is not the definition.
+- **CLOSED.** The ADP 6-22 candor sentence is para 2-13 [@adp6-22-2019] (2019, Change 2):
+  moral courage "also expresses itself as candor".
+- **SUPERSEDED.** The 2019 edition of ADP 6-0 [@adp6-0-2019] was superseded on
+  2026-07-07 by [@adp6-0-2026]. Its para 1-59 (exception reporting) is now 1-77. The
+  1-77 renumbering was carried from the 2026-10-15 check and not re-read on 2026-10-20.
+- **UNCONFIRMED.** The one-on-one engagement multipliers are from secondary
+  aggregators; R-113 rests on the cadence finding, which is supported, not on the
+  multipliers. Not checked.
 - finding-007 (director#66) has no standalone file yet, so R-107 is treated as
   its written form.
