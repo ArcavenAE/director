@@ -42,8 +42,21 @@ the record holds."
   sequence too: the inbox stream's, or the hub's for a global send
   (`sendResult`, `bus.go`). The same N on another cluster, or a send
   result's N, is a different record, and nothing in a bare number says
-  which log it came from. The session's cluster name is `DIRECTOR_CLUSTER`
-  (`global.go`, `globalConfig.Cluster`), empty when it is not set.
+  which log it came from.
+- **Where the cluster name comes from.** `globalConfig.Cluster` cannot be
+  the source: `loadGlobalConfig` returns nil when `DIRECTOR_GLOBAL_DOMAIN`
+  is unset, before it reads `DIRECTOR_CLUSTER` (`global.go:82-88`), and
+  `validate` accepts only a supervisor or director global role
+  (`:144-147`). Taken from there, every worker seat would have no cluster.
+  So the lookup and `auditRefusal` read `os.Getenv("DIRECTOR_CLUSTER")`
+  themselves and check it with `validToken` (`bus.go:425`), the same
+  identity class every other subject token uses; a value that fails is
+  treated as unset, with its own refusal.
+- **Not yet known: which seats have `DIRECTOR_CLUSTER` at all.** marvel main
+  does not set it (`git grep DIRECTOR_CLUSTER` on marvel 695fdff2: no hits);
+  it comes from each session's director MCP configuration. A cluster whose
+  seats lack it gets the unset refusal for every lookup. Test 8 reads that
+  on each cluster.
 - **The read already exists in director, for another reader.** The ask reader
   reads `AGENT_AUDIT` by sequence with `Stream.GetMsg` and creates no consumer
   (`cmd/director-mcp/askreader.go`, `readAudit`). The lookup uses the same
@@ -82,6 +95,13 @@ audit_lookup { "cluster": "<name>", "seq": <integer>, "message_id": "<optional>"
   `Nats-Msg-Id` must equal it, or it plus `-refused`; otherwise the call
   returns `audit_lookup: seq N on <cluster> holds a different message`, and
   not the record.
+- **What the binding does not prove.** With `message_id` omitted, the only
+  binding is the cluster name, which each session declares about itself. Two
+  clusters configured with the same name, or a session configured with the
+  wrong one, read each other's numbers as their own, and nothing in the
+  broker catches it. `message_id` is the binding that ties a number to one
+  record. `stream_created` shows a replaced log only to a caller who recorded
+  the original value; a caller who did not has nothing to compare it with.
 - The stream name is a constant, `AGENT_AUDIT`. The call takes no stream, no
   subject and no filter, so it cannot be pointed at an inbox.
 - It reads the local tier only: the audit log of the cluster this session is
@@ -115,7 +135,7 @@ it visible to the seat that calls it.
 |---|---|
 | `seq` missing, not a whole number, or below 1 | `audit_lookup: seq must be a whole number of 1 or more` |
 | `cluster` missing or not this session's | `audit_lookup: this session is on cluster <own>, not <given>; read it with marvel bus audit <seq> --cluster <given>` |
-| `DIRECTOR_CLUSTER` unset | `audit_lookup: this session names no cluster (DIRECTOR_CLUSTER is unset), so a number cannot be tied to a log` |
+| `DIRECTOR_CLUSTER` unset, or not a valid token | `audit_lookup: this session names no usable cluster (DIRECTOR_CLUSTER is unset or not a valid token), so a number cannot be tied to a log` |
 | no stream | `audit_lookup: cluster <c> has no AGENT_AUDIT stream` |
 | the stream is empty | `audit_lookup: AGENT_AUDIT on <c> holds no records` |
 | N below the first sequence (aged out after 720 hours) | `audit_lookup: seq N on <c> has aged out; the stream holds F to L` |
@@ -157,7 +177,10 @@ without `nats-server`):
    returns the deleted-or-purged text, never the aged-out or past-the-end
    text.
 5b. `cluster` other than the session's, missing, or with `DIRECTOR_CLUSTER`
-   unset, is refused before any broker read, each with its own text.
+   unset, is refused before any broker read, each with its own text. With
+   `DIRECTOR_GLOBAL_DOMAIN` unset and `DIRECTOR_CLUSTER` set (a worker seat),
+   the lookup is bound and answers; with `DIRECTOR_CLUSTER` holding a dot, a
+   star or a space, it gets the unset refusal.
 5c. A `message_id` that is not the record's returns the different-message
    text and none of the record's fields.
 5d. A refused send's result text reads `seq N on cluster <name>` with
