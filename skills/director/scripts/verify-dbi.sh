@@ -185,6 +185,13 @@ run >"$root/j" 2>/dev/null
 [[ "$(q "d['unverified']['count']>=1 and d['unverified']['kinds'].get('bd',0)>=1" <"$root/j")" == "True" ]] && ok "7: it is counted as unverified, kind bd" || bad "7: unverified count" "$(q "d['unverified']" <"$root/j")"
 rm -f "$DBI_FIX/bd.down"
 
+# --- 7: gh unreachable: the ideas that cite a PR are unverified, not read as no pointer ----------------------
+printf 'o/r#7 OPEN\no/r#8 MERGED\n' >"$DBI_FIX/gh.tsv"; touch "$DBI_FIX/gh.down"
+run >"$root/j" 2>/dev/null
+[[ "$(q "'gh' in d['unread'] and d['unverified']['kinds'].get('gh',0)==2" <"$root/j")" == "True" ]] && ok "7: an unreachable gh is named and the two ideas that cite a PR are unverified" || bad "7: gh down" "$(q "[d['unread'], d['unverified']]" <"$root/j")"
+[[ "$(q "any('open-pr' in r['path'] or 'merged-pr' in r['path'] for r in d['rows'])" <"$root/j")" == "False" ]] && ok "7: they are not listed while gh is unread" || bad "7: not listed while gh unread"
+rm -f "$DBI_FIX/gh.down"; : >"$DBI_FIX/gh.tsv"
+
 # --- 7d, 7g: no fetch, tags, stale and unreachable ---------------------------------------------------------
 newrepo r8
 fx commit "$root/remotes/r8.git" $((NOW-40*DAY)) "_kos/ideas/old.md=$(idea Old8)"

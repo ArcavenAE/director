@@ -1,0 +1,396 @@
+#!/usr/bin/env python3
+"""dbi - director big ideas: the scan behind the Stalled ideas block.
+
+S1 of sim/design/stalled-big-ideas.md. Reads the roots in $DIRECTOR_STATE/idea-roots.conf
+(one path or glob per line) and $DIRECTOR_STATE/ideas-parked.txt, applies section 3 of
+the design, and prints one JSON object:
+
+  {"read_at", "threshold_days", "rows": [{path, title, quiet_days, reason, pointers,
+   as_of, remote}], "unverified": {"count", "kinds": {kind: n}}, "unread": [kind...],
+   "skipped": [{path, why}]}
+
+  dbi --json [--threshold-days N]
+
+The quiet threshold has no default (design section 7, item 1: no default applies
+without the operator's ruling). It comes from --threshold-days, else from the key
+stalled_idea_days in $DIRECTOR_STATE/thresholds.json; with neither, dbi exits 2.
+
+Read only and never fetches (section 3). Each repo is asked its default branch and
+commit with `git ls-remote --symref origin HEAD`, which cannot prompt: no terminal
+prompt, ssh in BatchMode, its own session and process group, CALL_TIMEOUT per call and
+REMOTE_DEADLINE for the whole step (calls still running at the deadline have their
+group killed, calls not started are cancelled, and those repos take the unreachable
+path). Files are read by ref from the local origin/<default>, never the working tree.
+A source it cannot reach (bd, gh, a repo with no local default-branch ref) is named in
+the output and the ideas that depend on it count as unverified; none reads as "no pointer".
+
+Pointers are found in the artifact's own text (bd ids, owner/repo#n, "superseded by" and
+"became" naming another idea) and in open or closed bd tickets whose text names the
+artifact's path or file name. A PR or issue that cites an artifact without the artifact
+naming it is not searched for (a search per idea would spend the gh quota); the board's
+ruling requests (design pointer 3) are not read yet. An idea that does not resolve a
+successor it names treats it as no pointer.
+"""
+import argparse, concurrent.futures, datetime, fnmatch, glob, json, os, re, signal, subprocess, sys, time
+
+HOME = os.path.expanduser("~")
+STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
+CALL_TIMEOUT = float(os.environ.get("DBI_CALL_TIMEOUT", "10"))
+REMOTE_DEADLINE = float(os.environ.get("DBI_REMOTE_DEADLINE", "60"))
+POOL = 8
+GH_CALL_CAP = 200
+SKIP_DIRS = ("run", "forks", "contrib")
+RESOLVED = ("complete", "done", "graveyard", "rejected", "superseded", "parked")
+BD_ID = re.compile(r"\baae-orc-[a-z0-9]{4,5}\b")
+GH_REF = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b")
+SUCC = re.compile(r"\b(?:superseded by|became)\s+`?([\w./-]+\.md)", re.I)
+STATUS = re.compile(r"^\W*status\W*:\W*([A-Za-z-]+)", re.I)
+
+
+def now():
+    fixed = os.environ.get("DBI_NOW") if os.environ.get("DBI_TEST_CLOCK") == "1" else None
+    t = fixed or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return t, int(datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp())
+
+
+def threshold(a):
+    if a.threshold_days is not None:
+        return a.threshold_days
+    try:
+        with open(os.path.join(STATE, "thresholds.json"), encoding="utf-8") as f:
+            v = json.load(f).get("stalled_idea_days")
+        if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+            return v
+    except (OSError, ValueError, AttributeError):
+        pass
+    print("dbi: no quiet threshold set. The design (sim/design/stalled-big-ideas.md, section 7, item 1) "
+          "gives it no default until the operator rules; pass --threshold-days N or set stalled_idea_days "
+          f"in {os.path.join(STATE, 'thresholds.json')}", file=sys.stderr)
+    sys.exit(2)
+
+
+def read_lines(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
+    except OSError:
+        return []
+
+
+def rel_regex(pattern):
+    out = ""
+    for ch in pattern:
+        out += "[^/]*" if ch == "*" else "[^/]" if ch == "?" else re.escape(ch)
+    return re.compile(out + r"\Z")
+
+
+def plan_roots():
+    """(repo dir, relative path pattern) pairs, and the skips. A root glob selects repos and a
+    path pattern inside them; it is never expanded against a working tree's files."""
+    plan, skipped, seen = [], [], set()
+    for line in read_lines(os.path.join(STATE, "idea-roots.conf")):
+        parts = os.path.expanduser(line).split("/")
+        for k in range(len(parts) - 1, 0, -1):
+            repos = sorted(d for d in glob.glob("/".join(parts[:k])) if os.path.isdir(d) and os.path.exists(os.path.join(d, ".git")))
+            if repos:
+                for d in repos:
+                    comps = d.strip("/").split("/")
+                    bad = [c for c in comps if c in SKIP_DIRS or fnmatch.fnmatch(c, "*-wt-*")]
+                    if bad:
+                        skipped.append({"path": d, "why": f"never read: path component {bad[0]!r}"})
+                    elif (d, "/".join(parts[k:])) not in seen:
+                        seen.add((d, "/".join(parts[k:])))
+                        plan.append((d, "/".join(parts[k:])))
+                break
+    return plan, skipped
+
+
+def git(repo, *args, timeout=30):
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, timeout=timeout)
+
+
+def ssh_env():
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    prog = env.get("GIT_SSH") or "ssh"
+    env["GIT_SSH_COMMAND"] = f"{prog} -o BatchMode=yes -o ConnectTimeout=5"
+    return env
+
+
+def remote_head(repo, procs):
+    """(default branch, sha) from the remote, or None. One call in its own session and
+    process group, so a hung ssh child dies with it."""
+    p = subprocess.Popen(["git", "-C", repo, "ls-remote", "--symref", "origin", "HEAD"], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=ssh_env(), start_new_session=True)
+    procs[repo] = p
+    try:
+        out, _ = p.communicate(timeout=CALL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        kill_group(p)
+        p.communicate()
+        return None
+    if p.returncode != 0:
+        return None
+    branch = sha = None
+    for line in out.decode("utf-8", "replace").splitlines():
+        if line.startswith("ref: refs/heads/"):
+            branch = line.split("\t")[0][len("ref: refs/heads/"):]
+        elif line.endswith("\tHEAD"):
+            sha = line.split("\t")[0]
+    return (branch, sha) if branch and sha else None
+
+
+def kill_group(p):
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def ask_remotes(repos):
+    results, procs = {}, {}
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=POOL)
+    futs = {ex.submit(remote_head, r, procs): r for r in repos}
+    done, pending = concurrent.futures.wait(futs, timeout=REMOTE_DEADLINE)
+    for f in pending:
+        f.cancel()
+    for r, p in list(procs.items()):
+        if p.poll() is None:
+            kill_group(p)
+    ex.shutdown(wait=True, cancel_futures=True)
+    for f in done:
+        try:
+            results[futs[f]] = f.result()
+        except Exception:
+            results[futs[f]] = None
+    return results
+
+
+def local_ref(repo, branch):
+    cands = [branch] if branch else []
+    p = git(repo, "symbolic-ref", "-q", "refs/remotes/origin/HEAD")
+    if p.returncode == 0:
+        cands.append(p.stdout.decode().strip().rsplit("/", 1)[-1])
+    cands += ["main", "master", "develop"]
+    for b in cands:
+        if b and git(repo, "rev-parse", "-q", "--verify", f"refs/remotes/origin/{b}").returncode == 0:
+            return b
+    return None
+
+
+def bd_tickets():
+    try:
+        p = subprocess.run(["bd", "sql", "--json", "select id, status, description from issues"], capture_output=True, timeout=60)
+        if p.returncode != 0:
+            return None
+        return {r["id"]: r for r in json.loads(p.stdout.decode("utf-8", "replace"))}
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return None
+
+
+class GH:
+    """PR and issue states. state() returns (state, unreachable): a ref gh says it cannot find is
+    a dangling reference (no state, not a failure); any other failure is gh being unreachable."""
+
+    def __init__(self):
+        self.cache, self.calls, self.failed = {}, 0, False
+
+    def state(self, ref, n):
+        key = (ref, n)
+        if key in self.cache:
+            return self.cache[key]
+        st, down = None, False
+        for kind in ("pr", "issue"):
+            if self.calls >= GH_CALL_CAP:
+                down = True
+                break
+            self.calls += 1
+            try:
+                p = subprocess.run(["gh", kind, "view", n, "--repo", ref, "--json", "state"], capture_output=True, timeout=30)
+            except (OSError, subprocess.SubprocessError):
+                down = True
+                break
+            if p.returncode == 0:
+                try:
+                    st = json.loads(p.stdout)["state"]
+                except (ValueError, KeyError):
+                    down = True
+                break
+            err = p.stderr.decode("utf-8", "replace").lower()
+            if "not found" not in err and "could not resolve" not in err:
+                down = True
+                break
+        self.failed = self.failed or down
+        self.cache[key] = (st, down)
+        return st, down
+
+
+def scc(nodes, edges):
+    index, low, on, stack, out, n = {}, {}, set(), [], [], [0]
+
+    def go(v):
+        index[v] = low[v] = n[0]; n[0] += 1
+        stack.append(v); on.add(v)
+        for w in edges.get(v, ()):
+            if w not in index:
+                go(w); low[v] = min(low[v], low[w])
+            elif w in on:
+                low[v] = min(low[v], index[w])
+        if low[v] == index[v]:
+            comp = []
+            while True:
+                w = stack.pop(); on.discard(w); comp.append(w)
+                if w == v:
+                    break
+            out.append(comp)
+    sys.setrecursionlimit(10000)
+    for v in nodes:
+        if v not in index:
+            go(v)
+    return out
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="dbi", description="director big ideas: the stalled ideas scan (S1)")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--threshold-days", type=int, dest="threshold_days")
+    a = ap.parse_args(argv)
+    thr = threshold(a)
+    t_text, t_now = now()
+    plan, skipped = plan_roots()
+    repos = sorted({d for d, _ in plan})
+    remote = ask_remotes(repos)
+    parked = {l.split()[0] for l in read_lines(os.path.join(STATE, "ideas-parked.txt"))}
+    unverified, unread_kinds = {}, set()
+
+    def unv(kind, n=1):
+        unverified[kind] = unverified.get(kind, 0) + n
+
+    ideas = {}  # key (repo, path) -> record
+    info = {}
+    for repo in repos:
+        rh = remote.get(repo)
+        br = local_ref(repo, rh[0] if rh else None)
+        if br is None:
+            unread_kinds.add("remote unreachable")
+            for d, pat in plan:
+                if d == repo:
+                    rx = rel_regex(pat)
+                    for root_, _, files in os.walk(os.path.join(repo, os.path.dirname(pat) or ".")):
+                        for fn in files:
+                            if rx.match(os.path.relpath(os.path.join(root_, fn), repo)):
+                                unv("remote unreachable")
+            continue
+        sha = git(repo, "rev-parse", f"refs/remotes/origin/{br}").stdout.decode().strip()
+        tag = "unreachable" if rh is None else ("current" if rh[1] == sha else "stale")
+        asof = None
+        if tag != "current":
+            asof = git(repo, "log", "-1", "--format=%cs", f"refs/remotes/origin/{br}").stdout.decode().strip() or None
+        info[repo] = (f"refs/remotes/origin/{br}", tag, asof)
+        ref = info[repo][0]
+        tree = git(repo, "ls-tree", "-r", "--name-only", ref).stdout.decode("utf-8", "replace").splitlines()
+        for d, pat in plan:
+            if d != repo:
+                continue
+            rx = rel_regex(pat)
+            for path in tree:
+                if not rx.match(path) or (repo, path) in ideas:
+                    continue
+                text = git(repo, "show", f"{ref}:{path}").stdout.decode("utf-8", "replace")
+                lines = text.splitlines()
+                title = next((l[2:].strip() for l in lines if l.startswith("# ")), os.path.basename(path))
+                status = next((m.group(1).lower() for m in (STATUS.match(l) for l in lines[:40]) if m), "")
+                ct = git(repo, "log", "-1", "--format=%ct", ref, "--", path).stdout.decode().strip()
+                name = f"{os.path.basename(repo)}/{path}"
+                ideas[(repo, path)] = {"path": name, "title": title, "text": text, "ref": ref, "path_in": path,
+                                       "resolved": status in RESOLVED or name in parked,
+                                       "quiet": (t_now - int(ct)) // 86400 if ct.isdigit() else None,
+                                       "remote": tag, "as_of": asof}
+
+    bd = bd_tickets()
+    if bd is None:
+        unread_kinds.add("bd")
+    gh = GH()
+    byname = {}
+    for (repo, path), r in ideas.items():
+        byname.setdefault((repo, os.path.basename(path)), (repo, path))
+    live, closed, edges, bd_dep = {}, {}, {}, {}
+    for key, r in ideas.items():
+        repo, path = key
+        ptr, lv, cl = [], False, False
+        for bid in sorted(set(BD_ID.findall(r["text"]))):
+            st = bd.get(bid, {}).get("status") if bd is not None else None
+            if st is None:
+                continue
+            ptr.append(f"bd:{bid}:{st}")
+            lv, cl = lv or st != "closed", cl or st == "closed"
+        if bd is not None:
+            for bid, t in bd.items():
+                desc = t.get("description") or ""
+                if path in desc or os.path.basename(path) in desc:
+                    ptr.append(f"bd:{bid}:{t.get('status')}")
+                    lv, cl = lv or t.get("status") != "closed", cl or t.get("status") == "closed"
+        r["gh_unknown"] = False
+        for ref_, n in sorted(set(GH_REF.findall(r["text"]))):
+            st, down = gh.state(ref_, n)
+            r["gh_unknown"] = r["gh_unknown"] or down
+            if st is None:
+                continue
+            ptr.append(f"{ref_}#{n}:{st.lower()}")
+            lv, cl = lv or st == "OPEN", cl or st != "OPEN"
+        succ = []
+        for m in SUCC.findall(r["text"]):
+            tgt = byname.get((repo, os.path.basename(m)))
+            if tgt and tgt != key:
+                succ.append(tgt)
+            elif tgt == key:
+                succ.append(tgt)
+        r["pointers"], live[key], closed[key], edges[key] = ptr, lv, cl, succ
+    comps = scc(list(ideas), edges)
+    comp_of = {v: i for i, c in enumerate(comps) for v in c}
+    alive = {}
+
+    def comp_alive(i):
+        if i in alive:
+            return alive[i]
+        alive[i] = False
+        c = comps[i]
+        ok = any(live[v] or ideas[v]["resolved"] or (ideas[v]["quiet"] is not None and ideas[v]["quiet"] < thr) for v in c)
+        if not ok:
+            ok = any(comp_alive(comp_of[w]) for v in c for w in edges[v] if comp_of[w] != i)
+        alive[i] = ok
+        return ok
+
+    rows = []
+    for key, r in ideas.items():
+        if r["resolved"] or r["quiet"] is None or r["quiet"] < thr or comp_alive(comp_of[key]):
+            continue
+        if bd is None:
+            unv("bd")
+            continue
+        if r["gh_unknown"]:
+            unv("gh")
+            continue
+        c = comps[comp_of[key]]
+        if len(c) > 1 or key in edges[key]:
+            reason = "successor cycle"
+        elif edges[key]:
+            reason = "successor stalled"
+        elif r["pointers"] and closed[key]:
+            reason = "pointers all closed"
+        else:
+            reason = "no pointer"
+        rows.append({"path": r["path"], "title": r["title"], "quiet_days": r["quiet"], "reason": reason,
+                     "pointers": r["pointers"], "as_of": r["as_of"], "remote": r["remote"]})
+    if gh.failed:
+        unread_kinds.add("gh")
+    rows.sort(key=lambda x: (-x["quiet_days"], x["path"]))
+    json.dump({"read_at": t_text, "threshold_days": thr, "rows": rows,
+               "unverified": {"count": sum(unverified.values()), "kinds": unverified},
+               "unread": sorted(unread_kinds), "skipped": skipped}, sys.stdout, indent=2, ensure_ascii=False)
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
