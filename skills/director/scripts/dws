@@ -1031,8 +1031,8 @@ def board_markers(lines):
     """(begin, end) line indexes of the one generated block, (None, None) when there is none.
     Anything else (a lone marker, two blocks, the end first) is refused: dws never guesses
     which text is generated."""
-    begins = [i for i, l in enumerate(lines) if l.rstrip("\n") == BOARD_BEGIN]
-    ends = [i for i, l in enumerate(lines) if l.rstrip("\n") == BOARD_END]
+    begins = [i for i, l in enumerate(lines) if l.rstrip("\r\n") == BOARD_BEGIN]
+    ends = [i for i, l in enumerate(lines) if l.rstrip("\r\n") == BOARD_END]
     if not begins and not ends:
         return None, None
     if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0]:
@@ -1088,9 +1088,12 @@ def cmd_board_state(a):
             raw = f.read()
         lines = raw.decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
         begin, end = board_markers(lines)
-        block = [l + "\n" for l in board_block(now())]
+        # the board's own line ending: CRLF when its first line ends in one, so a board
+        # kept with CRLF is not left half converted
+        eol = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+        block = [l + eol for l in board_block(now())]
         if begin is None:
-            new = block + ["\n"] + lines
+            new = block + [eol] + lines
         else:
             new = lines[:begin] + block + lines[end + 1:]
         data = "".join(new).encode("utf-8", errors="surrogateescape")
@@ -1183,6 +1186,7 @@ QUEUE_NOT_RUN = [
 def queue_report():
     """The queue as data: (report, snapshot). cmd_queue prints it; the digest reads it."""
     rows, lsrc, snap, dsrc = board_sources()
+    torn = lsrc.get("torn", 0) if lsrc["state"] == "read" else 0
     report = {"sources": {"ledger": lsrc, "desk": dsrc}, "shown": None, "hidden": None, "counts": None,
               "not_run": QUEUE_NOT_RUN}
     if snap is not None:
@@ -1205,6 +1209,12 @@ def queue_report():
             first = linked[0]
             if prs and not unread and all(p["state"] in QUEUE_HIDDEN_PR for p in prs):
                 p = prs[0]
+                if torn:
+                    # a torn ledger line may hold a PR state (a ready observation that would
+                    # have kept this card), so nothing is hidden on a ledger that is not whole
+                    shown.append({"card": card, "kind": "row", "ws": first["slug"], "stage": first["stage"],
+                                  "note": f"would be hidden ({p['state']}); shown because a torn ledger line may hold a PR state"})
+                    continue
                 hidden.append({"card": card, "ws": p["ws"], "why": {"link": p["link"], "state": p["state"], "checked_at": p["checked_at"]}})
                 continue
             item = {"card": card, "kind": "row", "ws": first["slug"], "stage": first["stage"]}
@@ -1223,7 +1233,7 @@ def cmd_queue(a):
         json.dump(report, sys.stdout, indent=2, ensure_ascii=False)
         print()
         return
-    ltxt = f"read" if lsrc["state"] == "read" else f"UNREAD ({lsrc['why']})"
+    ltxt = ("read" + (f" (torn {lsrc['torn']})" if lsrc.get("torn") else "")) if lsrc["state"] == "read" else f"UNREAD ({lsrc['why']})"
     if snap is None:
         print(f"queue    UNREAD ({dsrc['why']}); ledger {ltxt}")
     else:

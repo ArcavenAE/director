@@ -65,6 +65,19 @@ printf '{"c1":{"status":"open"},"c2":{"status":"closed"},"c3":{"status":"open"},
 "$DWS" queue --json >"$root/j" 2>/dev/null
 [[ "$(q "d['counts']['open']" <"$root/j")" == "6" && "$(hidden)" == "[('c3', 'draft')]" ]] && ok "once director closes the card it leaves the queue (c2 is not hidden any more, it is closed)" || bad "closing a card" "$(q "d['counts']" <"$root/j")"
 
+# --- review 5586679189 item 1: a torn ledger line may hold a PR state, so nothing is hidden on it -------------
+"$SNAP" write --cards "$root/cards.json" --reported 8 >/dev/null
+cp -R "$DIRECTOR_STATE" "$root/state-torn"
+printf 'torn line, perhaps a ready observation\n' >>"$root/state-torn/workstreams.jsonl"
+DIRECTOR_STATE="$root/state-torn" "$DWS" queue --json >"$root/jt" 2>"$root/et" && ok "a partly torn ledger still exits 0" || bad "torn ledger exit" "$(cat "$root/et")"
+[[ "$(q "d['sources']['ledger']['torn']" <"$root/jt")" == "1" ]] && ok "the JSON carries the torn count" || bad "torn count in JSON"
+[[ "$(q "d['hidden']" <"$root/jt")" == "[]" && "$(q "d['counts']['hidden']" <"$root/jt")" == "0" ]] && ok "with a torn ledger line no card is hidden" || bad "no card hidden on a torn ledger" "$(q "d['hidden']" <"$root/jt")"
+[[ "$(q "sorted(x['card'] for x in d['shown'])" <"$root/jt")" == "['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']" ]] && ok "the cards that would have been hidden are shown" || bad "would-be hidden cards shown" "$(q "sorted(x['card'] for x in d['shown'])" <"$root/jt")"
+[[ "$(q "[x['note'] for x in d['shown'] if x['card']=='c2']" <"$root/jt")" == "['would be hidden (merged); shown because a torn ledger line may hold a PR state']" ]] && ok "each says why it is shown" || bad "would-be hidden note" "$(q "[x for x in d['shown'] if x['card']=='c2']" <"$root/jt")"
+DIRECTOR_STATE="$root/state-torn" "$DWS" queue >"$root/tt" 2>&1
+grep -Eq '^queue .*ledger read \(torn 1\)' "$root/tt" && ok "the text output shows (torn 1) as board-state does" || bad "text shows torn count" "$(head -2 "$root/tt")"
+"$SNAP" write --cards "$root/cards2.json" --reported 7 >/dev/null
+
 # --- a stale snapshot, an unreadable ledger -----------------------------------------------------------
 DWS_NOW=2026-10-23T12:00:00Z "$DWS" queue --json >"$root/j" 2>/dev/null
 [[ "$(q "d['sources']['desk']['state']" <"$root/j")" == "UNREAD" && "$(q "d['shown']" <"$root/j")" == "None" ]] && ok "a stale Desk snapshot makes the queue UNREAD" || bad "stale snapshot" "$(cat "$root/j")"
