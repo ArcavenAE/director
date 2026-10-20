@@ -51,6 +51,8 @@ ap.add_argument("--ok", type=int, default=0); ap.add_argument("--den", type=int,
 ap.add_argument("--mid", type=int, default=0); ap.add_argument("--err", type=int, default=0)
 ap.add_argument("--plainerr", type=int, default=0); ap.add_argument("--secret", action="store_true")
 ap.add_argument("--sends", type=int, default=0)
+ap.add_argument("--lag", type=int, default=0); ap.add_argument("--fakelag", type=int, default=0)
+ap.add_argument("--secrets", action="store_true")
 a = ap.parse_args()
 DEN = "Permission for this action was denied by the Claude Code auto mode classifier"
 n = [0]
@@ -70,6 +72,17 @@ with open(a.path, "w") as f:
     for _ in range(a.err): pair(f, "mcp__director__wait_for_message", "nats: consumer not found", True)
     for _ in range(a.plainerr): pair(f, "mcp__director__inbox_summary", "note: consumer not found was seen last week")
     for _ in range(a.sends): pair(f, "mcp__director__send_message", "accepted", False, {"text": "see /Users/someone/work/x"})
+    def wait(sent, data):
+        body = {"count": 1, "messages": [{"message": {"sent_at": sent, "content": {"type": "text", "data": data}}, "tier": "local"}]}
+        pair(f, "mcp__director__wait_for_message", json.dumps(body))
+    for _ in range(a.lag): wait("%sT07:00:00Z" % a.day, "plain")
+    # a content field that carries text shaped like an envelope: it must never be read as one
+    fake = '{"sent_at": "%sT01:00:00Z"}' % a.day
+    for _ in range(a.fakelag): wait("%sT09:59:59Z" % a.day, 'x "sent_at": "%sT01:00:00Z" ' % a.day + fake.replace('"', '\\"'))
+    if a.secrets:
+        pair(f, "Bash", "o " + "ghp_" + "Zq7" * 12)
+        pair(f, "Bash", "o " + "SA" + "B2" * 28)
+        pair(f, "Bash", "o -----BEGIN " + "RSA PRIVATE" + " KEY-----")
     if a.secret:
         key = "AKIA" + "ABCDEFGH" + "IJKLMNOP"
         pair(f, "Bash", "output " + key)
@@ -144,6 +157,7 @@ writeconf() { # extra lines on stdin
     echo "hosts=kinu,mokuzai,corporate"
     echo "roles=operator,builder,director"
     echo "band.sell_by=2026-11-17"
+    echo "band.disk_free_pct=0"
     cat
   } >"$conf"
 }
@@ -173,12 +187,17 @@ case "$hdr" in *"excluded 1/2"*) ok "the header counts excluded transcripts (res
 case "$hdr" in *"provisional until 2026-11-17"*) ok "the header says the bands are provisional before the sell-by date";; *) bad "provisional marker" "$hdr";; esac
 case "$hdr" in *"behind origin/main"*"fetched "*) ok "the header says how far the script is behind origin/main and when it was fetched";; *) bad "behind/fetched" "$hdr";; esac
 body="$root/body"; sed 1d "$root/o" >"$body"
-[[ "$(grep -v -E '^(SECRET-SHAPE|REJECT) ' "$body" | grep -c .)" -le 7 ]] && ok "at most 7 lines after the header (escalation footers aside)" || bad "at most 7 lines" "$(grep -c . "$body")"
-badline="$(grep -v -E '^(denials|bus-errors|not-installed|disk|stale-page|asks|weekly|GAP [a-z-]+|SECRET-SHAPE |REJECT )' "$body" || true)"
+[[ "$(grep -c . "$body")" -le 7 ]] && ok "at most 7 lines after the header, footers included" || bad "at most 7 lines" "$(grep -c . "$body")"
+badline="$(grep -v -E '^(denials|bus-errors|not-installed|disk|stale-page|asks|weekly|GAP [a-z-]+|SECRET-SHAPE |REJECT |\\+[0-9]+ more)' "$body" || true)"
 [[ -z "$badline" ]] && ok "every line is a known id or a GAP line" || bad "closed output" "$badline"
 [[ "$(grep -c -E '\?|should|propose|recommend|rule' "$root/o" || true)" == 0 ]] && ok "P5 nothing in the output asks for an answer" || bad "P5 the output asks for an answer" "$(grep -n -E '\?|should|propose|recommend|rule' "$root/o")"
 [[ "$(grep -E '^[a-zA-Z-]+ ' "$body" | grep -c -v -E '^GAP|SECRET-SHAPE|REJECT')" -ge 1 ]] && ok "a shown line carries an owner" || bad "owner on lines"
 grep -E '^(denials|bus-errors|not-installed|disk|stale-page|asks|weekly)' "$body" | grep -q -v '| owner: ' && bad "each fact line names an owner by role" || ok "each fact line names an owner by role"
+
+# every fact line carries an id field: the natural one where it has one, `-` where it has none
+grep -E '^(denials|bus-errors|not-installed|disk|stale-page|asks|weekly) ' "$root/o" | grep -v -q -E ' \| id: [^ |]+ \| remedy: [a-z-]+ \| owner: [a-z]+$' && bad "every fact line carries id, remedy and owner fields" || ok "every fact line carries id, remedy and owner fields"
+grep '^not-installed ' "$body" | grep -q '| id: [0-9a-f]\{7,40\} |' && ok "not-installed carries a revision as its id" || bad "not-installed id" "$(grep '^not-installed' "$body")"
+grep '^bus-errors ' "$body" | grep -q '| id: - |' && ok "a line with no natural id prints - as its id" || bad "bus-errors id -" "$(grep '^bus-errors' "$body")"
 
 # P7 and anchoring: the director session has 1 real denial and 1 mid-text; the research transcript's is not counted
 grep -q '^GAP denials .*under 2000' "$body" && ok "denials with fewer than 2000 results is a GAP, never a zero" || bad "denials GAP below 2000 results" "$(grep denials "$body")"
@@ -246,7 +265,7 @@ run --since today --window week --config "$conf" --no-append >"$root/o" 2>/dev/n
 grep -q '^weekly ' "$root/o" && ok "the weekly line appears with --window week" || bad "weekly line" "$(tail -3 "$root/o")"
 grep '^weekly ' "$root/o" | grep -q 'host-local paths 2' && ok "weekly counts host-local paths in sends as a number" || bad "host-local count" "$(grep '^weekly' "$root/o")"
 rm -f "$root/proj/-work-aae-orc/s4.jsonl"
-[[ "$(sed 1d "$root/o" | grep -v -E '^(SECRET-SHAPE|REJECT) ' | grep -c .)" -le 7 ]] && ok "the weekly run is still at most 7 lines (escalation footers aside)" || bad "weekly at most 7 lines" "$(cat "$root/o")"
+[[ "$(sed 1d "$root/o" | grep -c .)" -le 7 ]] && ok "the weekly run is still at most 7 lines, footers included" || bad "weekly at most 7 lines" "$(cat "$root/o")"
 
 # denials band: 2400 results, 20 denials is 8.3 per 1000; baseline seeded at about 2.0 per 1000
 mkdir -p "$root/proj/-work-aae-orc"
@@ -263,7 +282,7 @@ chmod 600 "$state/introspector/records.jsonl"
 run --since today --config "$conf" --no-append >"$root/o" 2>/dev/null
 grep '^denials ' "$root/o" | grep -q 'of 2' && ok "denials shows at 2000 results or more and 2x the weekday mean" || bad "denials band shows" "$(grep -i denial "$root/o")"
 grep '^denials ' "$root/o" | grep -q '(provisional)' && ok "the denial band prints as provisional before the sell-by date" || bad "denials provisional" "$(grep '^denials' "$root/o")"
-grep '^denials ' "$root/o" | grep -q 'owner: operator grant' && ok "a denial line names the remedy: operator grant" || bad "denial remedy" "$(grep '^denials' "$root/o")"
+grep '^denials ' "$root/o" | grep -q 'remedy: operator-grant | owner: operator$' && ok "a denial line carries one remedy field and one owner by role, never \"X vs Y\"" || bad "denial remedy" "$(grep '^denials' "$root/o")"
 NOW_OVERRIDE="2026-11-18T18:44:00Z" run --since 2026-10-20 --config "$conf" --no-append >"$root/o" 2>/dev/null
 grep -q '^denials ' "$root/o" && ok "control: the denials line still shows in that run" || bad "control: denials shows past sell-by" "$(grep -i denial "$root/o")"
 grep '^denials ' "$root/o" | grep -q provisional && bad "past sell-by the marker goes" || ok "past the sell-by date the provisional marker is gone"
@@ -329,6 +348,90 @@ run --since today --config "$conf" >/dev/null 2>"$root/err"; rc=$?
 [[ ! -e "$root/co-director/rec" ]] && ok "and it wrote nothing there" || bad "wrote inside a work tree"
 writeconf </dev/null
 
+# ================================================================ round 1 of the review
+# (1) every line after the header, footers included, is at most 7; the lowest-priority ones fold into "+N more"
+mk "$root/proj/-work-aae-orc/sec.jsonl" --agent director --ok 3 --secrets
+echo ok >"$root/bin/asks.mode"
+run --since today --window week --config "$conf" --no-append >"$root/o" 2>/dev/null
+[[ "$(sed 1d "$root/o" | grep -c .)" -eq 7 ]] && ok "with every band and four secret shapes the output is exactly 7 lines after the header" || bad "7 lines" "$(sed 1d "$root/o" | grep -c .)"
+sed 1d "$root/o" | tail -1 | grep -q -E '^\+[0-9]+ more$' && ok "the last line folds the lowest-priority lines into one +N more" || bad "+N more" "$(tail -2 "$root/o")"
+run --since today --window week --config "$conf" --no-append --json >"$root/j" 2>/dev/null
+python3 - "$root/j" "$root/o" <<'PY' && ok "the +N more count is the number of lines folded; --json carries the same capped lines" || bad "fold count"
+import json, sys
+d = json.load(open(sys.argv[1])); L = d["lines"]
+assert len(L) == 7 and L[-1].startswith("+"), L
+n = int(L[-1].split()[0][1:])
+assert n >= 2, L
+assert L[:-1] == open(sys.argv[2]).read().splitlines()[1:7], (L, "text and json agree")
+PY
+rm -f "$root/proj/-work-aae-orc/sec.jsonl"
+
+# (2) a source set that is all unreadable is a GAP and records no zero
+grep -v -e '^checkout.director=' -e '^install.director-mcp=' "$conf" >"$root/c2.conf"; echo "marvel_cmd=$root/bin/no-such-marvel" >>"$root/c2.conf"
+rm -f "$state/introspector/records.jsonl"
+run --since today --config "$root/c2.conf" >"$root/o" 2>"$root/err"
+grep -q '^GAP not-installed last never' "$root/o" && ! grep -q '^not-installed ' "$root/o" && ok "every not-installed source unreadable prints GAP not-installed last <time>, not a hidden line" || bad "all-unreadable GAP" "$(grep -i install "$root/o")"
+python3 - "$state/introspector/records.jsonl" <<'PY' && ok "and the record is a gap with no n, never a count of 0" || bad "all-unreadable record"
+import json, sys
+r = [json.loads(l) for l in open(sys.argv[1])]
+r = [x for x in r if x["line"] == "not-installed"]
+assert r and all(x["state"] == "gap" and "n" not in x for x in r), r
+PY
+
+# (3) the work-tree guard fails closed
+mkdir -p "$root/pybin"; ln -sf "$(command -v python3)" "$root/pybin/python3"
+nogit() { env -i HOME="$root/home" PATH="$root/pybin" LANG=en_US.UTF-8 TMPDIR="$root/t" DIRECTOR_STATE="$state" INTROSPECT_NOW="$NOW" python3 -I "$S" "$@"; }
+writeconf <<<"record_dir=$root/co-director/rec"
+nogit --since today --config "$conf" >"$root/o" 2>"$root/err"; rc=$?
+[[ $rc -eq 2 && ! -e "$root/co-director/rec" ]] && grep -q 'path is inside a git work tree; refusing' "$root/err" && ok "with no git on PATH a record path inside a checkout is refused (exit 2) and nothing is written" || bad "no-git inside checkout" "rc=$rc $(head -2 "$root/err")"
+writeconf <<<"record_dir=$root/clear/rec"
+nogit --since today --config "$conf" >"$root/o" 2>"$root/err"; rc=$?
+[[ $rc -eq 2 && ! -e "$root/clear" ]] && grep -q 'did not answer' "$root/err" && ok "with no git to ask, even a path with no .git above it is refused: exit 2, nothing written" || bad "no-git unknown" "rc=$rc $(head -2 "$root/err")"
+nogit --since today --config "$conf" --no-append >/dev/null 2>&1; rc=$?
+[[ $rc -eq 0 ]] && ok "--no-append needs no git answer and still reads" || bad "no-append without git" "rc=$rc"
+mkdir -p "$root/wt/sub"; echo "gitdir: /nowhere" >"$root/wt/.git"
+writeconf <<<"record_dir=$root/wt/sub/rec"
+nogit --since today --config "$conf" >/dev/null 2>"$root/err"; rc=$?
+[[ $rc -eq 2 && ! -e "$root/wt/sub/rec" ]] && grep -q 'path is inside a git work tree; refusing' "$root/err" && ok "a .git file up the tree is found without git" || bad ".git file" "rc=$rc"
+writeconf </dev/null
+
+# (4) drain lag reads envelope fields only; secret shapes are counts only; a store or spill path is never opened
+mk "$root/proj/-work-aae-orc/lag.jsonl" --agent director --ok 1 --lag 2
+run --since today --config "$conf" --no-append --json >"$root/j" 2>/dev/null
+python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["counts"]["lag_over_1h"]==2' "$root/j" && ok "control: two results whose envelope sent_at is over an hour old count as drain lag 2" || bad "lag control"
+mk "$root/proj/-work-aae-orc/lag.jsonl" --agent director --ok 1 --fakelag 3
+run --since today --config "$conf" --no-append --json >"$root/j" 2>/dev/null
+python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["counts"]["lag_over_1h"]==0' "$root/j" && ok "a sent_at planted in a content field never changes drain lag" || bad "fake sent_at in content" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["counts"]["lag_over_1h"])' "$root/j")"
+rm -f "$root/proj/-work-aae-orc/lag.jsonl"
+mk "$root/proj/-work-aae-orc/sec.jsonl" --agent director --ok 3 --secrets
+rm -f "$state/introspector/records.jsonl"
+run --since today --config "$conf" >"$root/o" 2>"$root/err"
+python3 - "$state/introspector/records.jsonl" <<'PY' && ok "each planted shape (aws key, token, seed, private key) is one count record with its shape name" || bad "shape records"
+import json, sys
+r = [json.loads(l) for l in open(sys.argv[1])]
+cats = sorted(x["cat"] for x in r if x["line"] == "SECRET-SHAPE")
+assert cats == ["aws-key", "gh-token", "nkey-seed", "private-key"] and all(x["n"] == 1 for x in r if x["line"] == "SECRET-SHAPE"), cats
+PY
+sed 1d "$root/o" | grep -c . | grep -qx 7 && grep -q '^+[0-9]* more$' "$root/o" && ok "the footers fold into +N more before any fact line does" || bad "footers fold first" "$(sed 1d "$root/o")"
+grep -q -e ABCDEFGH -e Zq7Zq7 -e B2B2B2 -e 'PRIVATE KEY' "$root/o" "$root/err" "$state/introspector/records.jsonl" && bad "no byte of a planted secret in stdout, stderr or records" "$(grep -l -e ABCDEFGH -e Zq7Zq7 -e B2B2B2 "$root/o" "$root/err" "$state/introspector/records.jsonl")" || ok "no byte of a planted secret reaches stdout, stderr or records"
+rm -f "$root/proj/-work-aae-orc/sec.jsonl"
+run --since today --config "$conf" --no-append --json >"$root/j0" 2>/dev/null
+mkdir -p "$root/proj/-work-aae-orc/nats-global/store" "$root/proj/-work-aae-orc/spill"
+mk "$root/proj/-work-aae-orc/nats-global/store/blk.jsonl" --agent director --ok 50 --den 9 --err 4 --lag 3 --secrets
+mk "$root/proj/-work-aae-orc/spill/s-1.jsonl" --agent director --ok 50 --den 9 --err 4 --lag 3 --secrets
+run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
+cmp -s "$root/j0" "$root/j1" && ok "files under a store or spill path are never read: the counts and lines are identical with them planted" || bad "store or spill read" "$(diff "$root/j0" "$root/j1" | head -4)"
+rm -rf "$root/proj/-work-aae-orc/nats-global" "$root/proj/-work-aae-orc/spill"
+
+# (5) last_harvest unset: seven days and a GAP, not today
+run --since last-harvest --config "$conf" --no-append >"$root/o" 2>/dev/null
+grep -q '^GAP last-harvest last never' "$root/o" && sed -n 1p "$root/o" | grep -q 'since 2026-10-13T00:00Z' && ok "--since last-harvest with no value counts from 7 days back and prints a GAP" || bad "last-harvest fallback" "$(sed -n 1p "$root/o"; grep GAP "$root/o")"
+writeconf <<<"last_harvest=2026-10-18T08:00:00Z"
+run --since last-harvest --config "$conf" --no-append >"$root/o" 2>/dev/null
+sed -n 1p "$root/o" | grep -q 'since 2026-10-18T08:00Z' && ! grep -q '^GAP last-harvest' "$root/o" && ok "a set last_harvest is used, with no GAP" || bad "last-harvest set" "$(sed -n 1p "$root/o")"
+writeconf </dev/null
+grep -q 'last_harvest=' "$repo/skills/director/SKILL.md" && ok "harvest step 6 writes last_harvest after the run" || bad "SKILL.md last_harvest line"
+
 # ================================================================ properties of the script itself
 [[ "$(grep -c -E 'ArtifactData|send_message|broadcast|marvel inject|gh (api|pr|issue)' "$S")" == 0 ]] && ok "P1 the script names no Desk, bus send, inject or gh call" || bad "P1" "$(grep -n -E 'ArtifactData|send_message|broadcast|marvel inject|gh (api|pr|issue)' "$S")"
 python3 - "$S" <<'PY' && ok "the script is Python 3 standard library only" || bad "stdlib only"
@@ -357,8 +460,11 @@ EOF
     sbrun() { env -i HOME="$root/home" PATH="$FIXPATH" LANG=en_US.UTF-8 TMPDIR="$root/t" DIRECTOR_STATE="$state" INTROSPECT_NOW="$NOW" sandbox-exec -f "$prof" python3 -I "$S" "$@"; }
     sbrun --since today --config "$conf" >"$root/o" 2>"$root/err"; rc=$?
     [[ $rc -eq 0 ]] && ok "P3 a full run under a write-deny, network-deny sandbox exits 0" || bad "P3 sandboxed run" "rc=$rc $(head -2 "$root/err")"
-    ctl="$(env -i HOME="$root/home" PATH=/usr/bin:/bin sandbox-exec -f "$prof" /bin/sh -c "echo x >\"$HOME/ins-control-$$\"" 2>&1)"; crc=$?
-    [[ $crc -ne 0 && "$ctl" == *"Operation not permitted"* && ! -e "$HOME/ins-control-$$" ]] && ok "P3 control: a write in the real home is refused by the profile (Operation not permitted)" || bad "P3 control write" "rc=$crc $ctl"
+    # the control target is outside scratch and outside any home (a Desk card on the conflicting rule is pending)
+    cpath="/tmp/ins-control-$$"
+    ctl="$(env -i HOME="$root/home" PATH=/usr/bin:/bin sandbox-exec -f "$prof" /bin/sh -c "echo x >\"$cpath\"" 2>&1)"; crc=$?
+    [[ $crc -ne 0 && "$ctl" == *"Operation not permitted"* && ! -e "$cpath" ]] && ok "P3 control: a write outside scratch is refused by the profile (Operation not permitted)" || bad "P3 control write" "rc=$crc $ctl"
+    rm -f "$cpath"
     in="$(env -i HOME="$root/home" PATH=/usr/bin:/bin sandbox-exec -f "$prof" /bin/sh -c "echo y >\"$root/t/inside\"" 2>&1)"
     [[ -s "$root/t/inside" ]] && ok "P3 control: a write inside scratch succeeds under the same profile" || bad "P3 inside write" "$in"
   else

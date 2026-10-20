@@ -348,6 +348,8 @@ the captures and moves what has hardened into `sim/requirements.md`.
    Run `${DIRECTOR_HOME:-$HOME/.director}/bin/introspect --since last-harvest --window week`
    and cite its counts in this section, and nowhere else: a count is never an R-entry, a rule, a hook, a skill
    trigger or a Desk card, and a pattern that seems to need one goes to the operator as a plain sentence in the report.
+   After that run, write `last_harvest=<the run's time, ISO>` into the introspect config (`$DIRECTOR_STATE/introspector/introspect.conf`);
+   with it unset, `--since last-harvest` counts from 7 days back and prints a GAP.
 
 Do not renumber existing requirements. New ones take the next R number.
 

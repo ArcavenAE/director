@@ -12,7 +12,10 @@ Run points, both steps director already takes (never a timer): the sweep after s
 (`--since today`) and harvest step 6 (`--since last-harvest --window week`). A count is cited under
 harvest step 6 and nowhere else; it never becomes a requirement, a rule, a hook or a card (M1).
 
-Prints a header, then at most 7 lines, one band per line (M2):
+Prints a header, then at most 7 lines in all, footers included, one band per line (M2). When more than 7
+lines apply, the lowest-priority ones (the order below, then notes, then the footers) fold into one final
+`+N more` line. Each fact line ends `| id: <id> | remedy: <remedy> | owner: <role>`; the id is the natural
+one (a revision for not-installed and stale-page, the ask id for asks) and `-` where a line has none:
   denials        classifier denials; shows at 2000+ results and twice the trailing weekday mean
   bus-errors     director tool results flagged as errors that carry a bus phrase
   not-installed  components merged but not installed (director-mcp, marvel, director checkout, this script)
@@ -20,7 +23,8 @@ Prints a header, then at most 7 lines, one band per line (M2):
   stale-page     the stalled-streams page is older than a commit; days since the ledger was written
   asks           REQUESTs with no ack past 15 minutes (director-mcp asks --json)
   weekly         only with --window week
-A source that cannot see prints `GAP <source> last <time> (<reason>)`, never a zero.
+A source that cannot see prints `GAP <source> last <time> (<reason>)`, never a zero; that includes
+not-installed when every source it reads is unreadable.
 
 Every count is anchored: a tool result that opens with the marker string, or a director tool result
 flagged is_error. A substring match is only ever used to print the weekly precision gap.
@@ -28,12 +32,21 @@ Transcripts whose most common agentName is research-supervisor, introspector or 
 skipped by identity (subagent files take their parent session's name), and their denials print as
 `(+N research)`.
 
+What it reads of the bus: transcript lines, to match the anchored markers and the closed list of secret
+shapes (it keeps one count per shape and never the matched text, not even a prefix), and the envelope
+fields (sent_at, message_id, performative, sender, recipient) of results already in a transcript. Drain
+lag takes sent_at from the parsed envelope object and never reads content.data. It never opens the NATS
+store or a spill file: a path under nats-global, store or spill is skipped.
+
 It reads, and quotes nothing. The only thing it writes is $DIRECTOR_STATE/introspector/records.jsonl
 (fixed fields; directory 700, file 600; refuses to append if either is wider; never inside a git
 work tree). The file is history, never a source of truth: the one thing a run reads from it is the
 trailing weekday mean the denial band needs.
 
-Exit 0 on every reading. Exit 2 only for a usage error, or when its write path is inside a work tree.
+Exit 0 on every reading. Exit 2 only for a usage error, or when it cannot show that its write path is
+outside a git work tree: inside one (found by a .git file or directory up the tree, or by git), or git
+cannot run or answer. It then writes nothing. `--no-append` needs no such answer.
+--since last-harvest with no last_harvest in the config counts from 7 days back and prints a GAP.
 
 Values the party left open are PROVISIONAL, not ruled: the denial band (band.denials, default 2000
 results, and band.denials_ratio, default 2), the disk band (band.disk_free_pct, default 10) and the
@@ -77,11 +90,10 @@ OWNER = {"denials": "operator", "bus-errors": "builder", "not-installed": "build
          "stale-page": "director", "asks": "director", "weekly": "director"}
 REMEDY = {"denials": "operator-grant", "bus-errors": "control-owner", "not-installed": "install", "disk": "none",
           "stale-page": "page-refresh", "asks": "none", "weekly": "none"}
-OWNER_TEXT = {"denials": "operator grant", "bus-errors": "builder", "not-installed": "builder", "disk": "operator",
-              "stale-page": "director", "asks": "director", "weekly": "director"}
 EXCLUDE_PATHS = [":(exclude)*_test.go", ":(exclude)*.md", ":(exclude)docs", ":(exclude)sim"]
 FETCH_MAX_AGE = datetime.timedelta(hours=24)
 PRUNE_DAYS = 400
+MAX_LINES = 7
 ASK_AFTER = datetime.timedelta(minutes=15)
 UTC = datetime.timezone.utc
 TFMT = "%Y-%m-%dT%H:%MZ"
@@ -324,26 +336,38 @@ def scan_file(path, since_s, week_s, tally, secrets):
         secrets[s] = secrets.get(s, 0) + 1
 
 
+ENVELOPE = ("sent_at", "message_id", "performative", "sender", "recipient")
+
+
 def lag_over_hour(text, ts):
     try:
         j = json.loads(text)
     except ValueError:
         return 0
-    ms = [w.get("message") for w in j.get("messages", [])] if isinstance(j, dict) and "messages" in j else [j.get("message") if isinstance(j, dict) else None]
+    ms = [w.get("message") for w in j.get("messages", []) if isinstance(w, dict)] if isinstance(j, dict) and "messages" in j else [j.get("message") if isinstance(j, dict) else None]
     n = 0
     try:
         t = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except ValueError:
         return 0
     for m in ms:
-        if isinstance(m, dict) and isinstance(m.get("sent_at"), str):
+        env = {k: m.get(k) for k in ENVELOPE} if isinstance(m, dict) else {}  # the envelope fields only; content is never touched
+        if isinstance(env.get("sent_at"), str):
             try:
-                s = datetime.datetime.fromisoformat(m["sent_at"].replace("Z", "+00:00"))
+                s = datetime.datetime.fromisoformat(env["sent_at"].replace("Z", "+00:00"))
             except ValueError:
                 continue
             if (t - s).total_seconds() > 3600:
                 n += 1
     return n
+
+
+FORBIDDEN = re.compile(r"(^|/)(nats-global|store|[^/]*spill[^/]*)(/|$)", re.I)
+
+
+def forbidden(path):
+    """A path in the NATS store or a spill file: never opened, whatever the config points at."""
+    return bool(FORBIDDEN.search(path))
 
 
 def scan_transcripts(cfg, since, t_now):
@@ -359,6 +383,8 @@ def scan_transcripts(cfg, since, t_now):
         if not os.path.isdir(d) or not any(inc in os.path.basename(d) for inc in cfg["project_include"]):
             continue
         for p in glob.glob(os.path.join(d, "**", "*.jsonl"), recursive=True):
+            if forbidden(p):
+                continue
             try:
                 if os.stat(p).st_mtime >= cutoff:
                     files.append(p)
@@ -470,15 +496,27 @@ def validate(rec, cfg):
     return None
 
 
-def inside_work_tree(path):
-    p = path
+def work_tree_state(path):
+    """"inside", "outside" or "unknown". Fails closed: only a .git-free path that git itself calls
+    not-a-repository is "outside"."""
+    p = os.path.realpath(path)
     while p and not os.path.isdir(p):
         parent = os.path.dirname(p)
         if parent == p:
             break
         p = parent
+    q = p
+    while True:
+        if os.path.lexists(os.path.join(q, ".git")):
+            return "inside"
+        up = os.path.dirname(q)
+        if up == q:
+            break
+        q = up
     rc, out = sh(["git", "-C", p or ".", "rev-parse", "--is-inside-work-tree"])
-    return rc == 0 and out.strip() == "true"
+    if rc == 0:
+        return "inside"
+    return "outside" if rc == 128 else "unknown"
 
 
 def append_records(cfg, recs, t_now):
@@ -526,8 +564,8 @@ class Line:
         self.shown = True
 
 
-def fmt_line(id_, rest, owner):
-    return f"{id_:<14}{rest} | owner: {owner}"
+def fmt_line(id_, rest, ptr="-"):
+    return f"{id_:<14}{rest} | id: {ptr} | remedy: {REMEDY[id_]} | owner: {OWNER[id_]}"
 
 
 def gap(source, rows, reason, line_id=None):
@@ -549,7 +587,7 @@ def line_denials(tally, research, wk, rows, cfg, t_now, provisional):
     ln = Line("denials", "", n=n, d=d, band="over" if over else "none")
     if over:
         rs = f" (+{research['denials']} research)" if research["denials"] else ""
-        ln.text = fmt_line("denials", f"{n}{rs} of {d} results: {rate:.2f}/1000, weekday {mean:.2f}" + (" (provisional)" if provisional else ""), OWNER_TEXT["denials"])
+        ln.text = fmt_line("denials", f"{n}{rs} of {d} results: {rate:.2f}/1000, weekday {mean:.2f}" + (" (provisional)" if provisional else ""))
     else:
         ln.shown = False
     return ln
@@ -561,7 +599,7 @@ def line_bus(tally, rows):
     n = tally["bus_errors"]
     ln = Line("bus-errors", "", n=n, d=tally["director_calls"], band="over" if n else "none")
     if n:
-        ln.text = fmt_line("bus-errors", f"{n} director results flagged as errors with a bus phrase, of {tally['director_calls']} calls", OWNER_TEXT["bus-errors"])
+        ln.text = fmt_line("bus-errors", f"{n} director results flagged as errors with a bus phrase, of {tally['director_calls']} calls")
     else:
         ln.shown = False
     return ln
@@ -581,6 +619,7 @@ def marvel_revision(cmd):
 
 def line_not_installed(cfg, rows, t_now):
     items, stale, any_config = [], [], False
+    revs, unreadable = [], 0
     for key in ("checkout.director", "checkout.marvel"):
         co = cfg[key]
         if co:
@@ -599,8 +638,10 @@ def line_not_installed(cfg, rows, t_now):
         b = behind(co, rev, "cmd/director-mcp") if rev else None
         if b is None:
             items.append("director-mcp unreadable")
+            unreadable += 1
         else:
             total += b
+            revs.append((b, rev[:7]))
             items.append(f"director-mcp {rev[:7]} {b} behind")
     co_m = cfg["checkout.marvel"]
     if co_m:
@@ -608,16 +649,20 @@ def line_not_installed(cfg, rows, t_now):
         b = behind(co_m, rev, ".") if rev else None
         if b is None:
             items.append("marvel unreadable")
+            unreadable += 1
         else:
             total += b
+            revs.append((b, rev[:7]))
             items.append(f"marvel {rev[:7]} {b} behind")
     if co:
         rev = head_of(co)
         b = behind(co, rev, ".") if rev else None
         if b is None:
             items.append("director checkout unreadable")
+            unreadable += 1
         else:
             total += b
+            revs.append((b, rev[:7]))
             items.append(f"director checkout {b} behind")
         installed = os.path.join(os.path.expanduser("~"), ".director", "bin", "introspect")
         src = os.path.join(co, "skills", "director", "scripts", "introspect")
@@ -625,12 +670,18 @@ def line_not_installed(cfg, rows, t_now):
             try:
                 if open(installed, "rb").read() != open(src, "rb").read():
                     total += 1
+                    revs.append((1, rev[:7] if rev else "-"))
                     items.append("this script differs from the checkout")
             except OSError:
                 pass
-    ln = Line("not-installed", "", n=total, band="over" if total else "none")
-    if total:
-        ln.text = fmt_line("not-installed", "; ".join(items), OWNER_TEXT["not-installed"])
+    if not revs:
+        if items:
+            return gap("not-installed", rows, "every source is unreadable: " + "; ".join(items))
+        return gap("not-installed", rows, "no source to read")
+    ptr = max(revs)[1]
+    ln = Line("not-installed", "", n=total, band="over" if total else "none", ids=[ptr] if re.fullmatch(r"[0-9a-f]{7,40}", ptr) else [])
+    if total or unreadable:
+        ln.text = fmt_line("not-installed", "; ".join(items), ptr)
     else:
         ln.shown = False
     return ln
@@ -647,7 +698,7 @@ def line_disk(cfg, rows):
     gib = st.f_bavail * st.f_frsize / 2**30
     ln = Line("disk", "", n=int(pct), d=100, band="over" if pct < cfg["band.disk_free_pct"] else "none")
     if ln.band == "over":
-        ln.text = fmt_line("disk", f"{int(pct)}% free ({int(gib)} GiB) on the hub volume", OWNER_TEXT["disk"])
+        ln.text = fmt_line("disk", f"{int(pct)}% free ({int(gib)} GiB) on the hub volume")
     else:
         ln.shown = False
     return ln
@@ -672,12 +723,16 @@ def line_stale_page(cfg, rows, t_now):
         n = None
     if n is None:
         return gap("stale-page", rows, "origin/main cannot be read")
+    rc, tip = git(co, "rev-parse", "--short=7", "origin/main")
+    tip = tip.strip() if rc == 0 and re.fullmatch(r"[0-9a-f]{7,40}", tip.strip()) else None
     mt = [os.stat(p).st_mtime for p in cfg["ledgers"] if os.path.isfile(p)]
     age = f"; ledger written {int((t_now - datetime.datetime.fromtimestamp(max(mt), UTC)).days)}d ago" if mt else "; ledger not found"
     stem = os.path.splitext(os.path.basename(newest))[0]
-    ln = Line("stale-page", "", n=n, band="over" if n else "none")
+    if n and tip is None:
+        return gap("stale-page", rows, "origin/main cannot be read")
+    ln = Line("stale-page", "", n=n, band="over" if n else "none", ids=[tip] if n else [])
     if n:
-        ln.text = fmt_line("stale-page", f"{stem} written {written.strftime('%m-%d %H:%M')}; {n} director commits since{age}", OWNER_TEXT["stale-page"])
+        ln.text = fmt_line("stale-page", f"{stem} written {written.strftime('%m-%d %H:%M')}; {n} director commits since{age}", tip)
     else:
         ln.shown = False
     return ln
@@ -708,8 +763,10 @@ def line_asks(cfg, rows, t_now):
     ln = Line("asks", "", n=len(old), d=len(data.get("rows", [])), band="over" if old else "none")
     if old:
         oid = str(old[0].get("ask", ""))
-        ln.ids = [oid] if re.fullmatch(r"[0-9A-Z]{26}|[0-9a-z]{10}", oid) else []
-        ln.text = fmt_line("asks", f"{len(old)} REQUESTs unacknowledged past 15m" + (f", oldest {oid}" if ln.ids else ""), OWNER_TEXT["asks"])
+        if not re.fullmatch(r"[0-9A-Z]{26}|[0-9a-z]{10}", oid):
+            return gap("asks", rows, "the oldest unacknowledged ask has no readable id")
+        ln.ids = [oid]
+        ln.text = fmt_line("asks", f"{len(old)} REQUESTs unacknowledged past 15m, oldest {oid}", oid)
     else:
         ln.shown = False
     return ln
@@ -721,7 +778,7 @@ def line_weekly(tally, cfg, rows, t_now):
     gapn = tally["denials_substring"] - tally["denials"]
     text = (f"drain lag over 1h {tally['lag_over_1h']}; oversize drains {tally['oversize']}; send rejections {tally['send_rejections']}; "
             f"host-local paths {tally['host_local_paths']}; {led}; precision gap {gapn}")
-    return Line("weekly", fmt_line("weekly", text, OWNER_TEXT["weekly"]), n=tally["host_local_paths"], band="none")
+    return Line("weekly", fmt_line("weekly", text), n=tally["host_local_paths"], band="none")
 
 
 # ----------------------------------------------------------------------------------- main
@@ -766,15 +823,19 @@ def main():
         except ValueError:
             since = None
         if since is None:
-            since = today
-            notes.append("GAP last-harvest last never (not set in the config; counting from today)")
+            since = today - datetime.timedelta(days=7)
+            notes.append("GAP last-harvest last never (not set in the config; counting from 7 days back)")
     else:
         try:
             since = parse_iso(a["since"])
         except ValueError:
             usage_error("--since is today, last-harvest or an ISO time")
-    if a["append"] and inside_work_tree(cfg["record_dir"]):
-        usage_error("the record path is inside a git work tree; refusing to start")
+    if a["append"]:
+        wt = work_tree_state(cfg["record_dir"])
+        if wt == "inside":
+            usage_error("the record path is inside a git work tree; refusing to start")
+        if wt == "unknown":
+            usage_error("git did not answer whether the record path is inside a git work tree; refusing to start")
 
     rows = read_records(os.path.join(cfg["record_dir"], "records.jsonl"))
     scan = scan_transcripts(cfg, since, t_now)
@@ -810,7 +871,7 @@ def main():
               f"({nb if nb is not None else 'unknown'} behind origin/main, fetched {stamp(fa) if fa else 'never'}) "
               f"not covered: {', '.join(others) if others else 'none'} excluded {excluded}/{scanned} "
               f"bands: {'provisional until ' + cfg['band.sell_by'] if provisional else 'past sell-by ' + cfg['band.sell_by']}")
-    shown = [ln for ln in lines if ln.shown][:7]
+    shown = [ln for ln in lines if ln.shown]
     footer = [f"SECRET-SHAPE {s} {n} files {cfg['host']}" for s, n in sorted(secrets.items())]
 
     recs = []
@@ -834,6 +895,11 @@ def main():
     out_lines += footer
     if rejected.get("client-scope"):
         out_lines.append(f"REJECT client-scope {rejected['client-scope']}")
+    if len(out_lines) > MAX_LINES:
+        # lowest priority folds first: the SECRET-SHAPE footers, then whatever sits last in the order
+        rank = sorted(range(len(out_lines)), key=lambda i: (out_lines[i].startswith("SECRET-SHAPE "), i))
+        keep = set(rank[:MAX_LINES - 1])
+        out_lines = [l for i, l in enumerate(out_lines) if i in keep] + [f"+{len(out_lines) - len(keep)} more"]
     if a["json"]:
         print(json.dumps({"header": header, "lines": out_lines, "counts": counts, "rejected": rejected}, indent=2))
     else:
