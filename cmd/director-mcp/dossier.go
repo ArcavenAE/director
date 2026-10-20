@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -307,10 +308,14 @@ const (
 	handoffUnreadable                     // could not look, or could not read what is there
 )
 
-// handoffFile judges one file: absent or not a regular file is none; a regular
-// file whose last non-empty line is exactly the marker is present; a file that
-// exists but cannot be opened or read is unreadable, never none. Only the tail
-// is read.
+// handoffFile judges one file in three ways. Absent is none. A regular file
+// whose last non-empty line is exactly the marker is present; any other
+// complete read is none. Everything else is unreadable, never none: a stat
+// failure, a directory, a FIFO, a link, a device, a file that cannot be opened
+// or read, or one that changed between the stat and the open. The open is
+// O_NONBLOCK|O_NOFOLLOW and the opened file must be the one that was stat'd
+// (os.SameFile), so a swap in that window cannot turn a read into a hang or a
+// follow. Only the tail is read.
 func handoffFile(path, mark string) handoffState {
 	if mark == "" {
 		mark = handoffMarker
@@ -319,23 +324,24 @@ func handoffFile(path, mark string) handoffState {
 	if errors.Is(err, os.ErrNotExist) {
 		return handoffNone
 	}
-	if err != nil {
+	if err != nil || !fi.Mode().IsRegular() {
 		return handoffUnreadable
 	}
-	if !fi.Mode().IsRegular() {
-		return handoffNone // a link or a directory is refused
-	}
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return handoffUnreadable
 	}
 	defer f.Close()
+	fi2, err := f.Stat()
+	if err != nil || !fi2.Mode().IsRegular() || !os.SameFile(fi, fi2) {
+		return handoffUnreadable
+	}
 	const tail = 4096
-	off := fi.Size() - tail
+	off := fi2.Size() - tail
 	if off < 0 {
 		off = 0
 	}
-	buf := make([]byte, fi.Size()-off)
+	buf := make([]byte, fi2.Size()-off)
 	if _, err := f.ReadAt(buf, off); err != nil && !errors.Is(err, io.EOF) {
 		return handoffUnreadable
 	}
@@ -351,7 +357,7 @@ var handoffDate = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})\.md$`)
 
 // findHandoff decides where the handoff is. A declared path decides alone. With
 // none declared it falls back to listing dir for <predecessor>-<YYYY-MM-DD>.md
-// and judging the newest by name date, then mtime; the newest decides. A
+// and judging the newest by name date; the newest decides. A
 // location that cannot be listed, or an unknown predecessor on the fallback, is
 // unreadable: the dossier never says it may back acceptance when it could not
 // look.
@@ -369,7 +375,6 @@ func findHandoff(h handoffSpec) (handoffState, string, bool) {
 	}
 	type cand struct {
 		path, date string
-		mod        time.Time
 	}
 	var newest *cand
 	for _, e := range ents {
@@ -381,12 +386,8 @@ func findHandoff(h handoffSpec) (handoffState, string, bool) {
 		if m == nil {
 			continue
 		}
-		fi, err := os.Lstat(filepath.Join(dir, e.Name()))
-		if err != nil {
-			return handoffUnreadable, "", true
-		}
-		c := cand{filepath.Join(dir, e.Name()), m[1], fi.ModTime()}
-		if newest == nil || c.date > newest.date || (c.date == newest.date && c.mod.After(newest.mod)) {
+		// The pattern admits one name per date, so the date alone orders them.
+		if c := (cand{filepath.Join(dir, e.Name()), m[1]}); newest == nil || c.date > newest.date {
 			newest = &c
 		}
 	}

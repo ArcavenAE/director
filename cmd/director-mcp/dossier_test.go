@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -552,10 +553,6 @@ func TestDossierAcceptanceSwitch(t *testing.T) {
 			{pred + "-2026-10-09.md", hdPartial, 48 * time.Hour}, {pred + "-2026-10-10.md", hdOK, 0}}, func(d string) string {
 			return "authored handoff present: " + filepath.Join(d, pred+"-2026-10-10.md") + "; this dossier does not back acceptance"
 		}},
-		"same date, mtime decides": {[]f{
-			{pred + "-2026-10-10.md", hdOK, 3 * time.Hour}, {pred + "-2026-10-10.md.tmp", hdOK, 0}}, func(d string) string {
-			return "authored handoff present: " + filepath.Join(d, pred+"-2026-10-10.md") + "; this dossier does not back acceptance"
-		}},
 		"marker not last":          {[]f{{pred + "-2026-10-10.md", "HANDOFF-COMPLETE\nmore text\n", 0}}, func(string) string { return nonePhr }},
 		"another seat's file only": {[]f{{"arcaven-architect-g6-2-2026-10-10.md", hdOK, 0}, {"arcaven-architect-g6-1-2-2026-10-10.md", hdOK, 0}}, func(string) string { return nonePhr }},
 		"no files":                 {nil, func(string) string { return nonePhr }},
@@ -569,12 +566,12 @@ func TestDossierAcceptanceSwitch(t *testing.T) {
 			t.Errorf("%s: %q", name, got)
 		}
 	}
-	// a link is refused even when its target is valid
+	// a link is refused as unreadable even when its target is valid
 	dir := filepath.Join(t.TempDir(), "handoff")
 	real := putHandoff(t, t.TempDir(), "real.md", hdOK, now)
 	_ = os.MkdirAll(dir, 0o700)
 	_ = os.Symlink(real, filepath.Join(dir, pred+"-2026-10-10.md"))
-	if got := accLine(handoffSpec{Dir: dir, Pred: pred}); got != nonePhr {
+	if got := accLine(handoffSpec{Dir: dir, Pred: pred}); got != unreadPhr {
 		t.Errorf("symlink: %q", got)
 	}
 }
@@ -758,5 +755,44 @@ func TestDossierUnreadableHandoffFileFailsClosed(t *testing.T) {
 	}
 	if l, _ := acceptanceLine(handoffSpec{Dir: dir, Pred: pred}); l != unreadPhr {
 		t.Errorf("newest found, mode 000: %q", l)
+	}
+}
+
+// Anything at the handoff name that is not a readable regular file is
+// "does not back acceptance", declared or found: a directory, a FIFO, a link,
+// a file at mode 000. None of them may read as absent.
+func TestDossierNonRegularHandoffFailsClosed(t *testing.T) {
+	pred := "arcaven-architect-g6-1"
+	name := pred + "-2026-10-10.md"
+	mk := map[string]func(p string){
+		"directory": func(p string) { _ = os.MkdirAll(p, 0o700) },
+		"FIFO":      func(p string) { _ = syscall.Mkfifo(p, 0o600) },
+		"symlink": func(p string) {
+			real := putHandoff(t, t.TempDir(), "real.md", hdOK, time.Now())
+			_ = os.Symlink(real, p)
+		},
+		"dangling symlink": func(p string) { _ = os.Symlink(filepath.Join(filepath.Dir(p), "gone"), p) },
+		"mode 000": func(p string) {
+			_ = os.WriteFile(p, []byte(hdOK), 0o600)
+			_ = os.Chmod(p, 0)
+		},
+	}
+	for kind, make := range mk {
+		if kind == "mode 000" && os.Geteuid() == 0 {
+			continue
+		}
+		dir := filepath.Join(t.TempDir(), "handoff")
+		_ = os.MkdirAll(dir, 0o700)
+		found := filepath.Join(dir, name)
+		make(found)
+		declared := filepath.Join(t.TempDir(), "handoff.md")
+		make(declared)
+		for where, h := range map[string]handoffSpec{"found": {Dir: dir, Pred: pred}, "declared": {Path: declared}} {
+			if got := accLine(h); got != unreadPhr {
+				t.Errorf("%s (%s): %q", kind, where, got)
+			}
+		}
+		_ = os.Chmod(found, 0o600)
+		_ = os.Chmod(declared, 0o600)
 	}
 }
