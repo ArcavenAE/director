@@ -1186,11 +1186,18 @@ def cmd_inherit(a):
     when = parse_time(now())
     sources = {}
     path = rulings_path()
-    terms = replaced_terms = grants = pending = expired = None
+    terms = replaced_terms = grants = pending = expired = unchecked = None
     if os.path.isfile(path):
         records, rtorn, _ = fold_records(path)
-        sources["rulings"] = {"state": "read", "read_at": now(), "torn": rtorn}
-        terms, replaced_terms, grants, pending, expired = [], [], [], [], []
+        if rtorn and not records:
+            sources["rulings"] = {"state": "UNREAD", "why": f"{path} has no readable record (torn {rtorn})"}
+        else:
+            sources["rulings"] = {"state": "read", "read_at": now(), "torn": rtorn}
+    else:
+        records = []
+        sources["rulings"] = {"state": "UNREAD", "why": f"no rulings file at {path}"}
+    if sources["rulings"]["state"] == "read":
+        terms, replaced_terms, grants, pending, expired, unchecked = [], [], [], [], [], []
         for r in records:
             if r.get("kind") == "term" and r.get("role") == role:
                 if r["replaced_by"]:
@@ -1204,17 +1211,23 @@ def cmd_inherit(a):
                 if r.get("state") == "draft":
                     pending.append(item)
                 elif r.get("state") == "confirmed":
-                    (expired if end is not None and end < when else grants).append(item)
-    else:
-        sources["rulings"] = {"state": "UNREAD", "why": f"no rulings file at {path}"}
+                    if end is None and isinstance(r.get("expires"), str):
+                        # reconcile lists this grant as not run; it is not claimed to be in force
+                        item["why"] = f"the expiry {r['expires']!r} does not parse"
+                        unchecked.append(item)
+                    else:
+                        (expired if end is not None and end < when else grants).append(item)
 
     open_asks = None
     snap, why = desk_snapshot()
     sources["desk"] = ({"state": "read", "read_at": snap["read_at"]} if snap else {"state": "UNREAD", "why": why})
     if os.path.isfile(LEDGER):
         rows, ltorn = fold()
-        sources["ledger"] = {"state": "read", "read_at": now(), "torn": ltorn}
-        if snap is not None:
+        if not rows and (ltorn or ledger_has_lines()):
+            sources["ledger"] = {"state": "UNREAD", "why": f"{LEDGER} has no readable row (torn {ltorn})"}
+        else:
+            sources["ledger"] = {"state": "read", "read_at": now(), "torn": ltorn}
+        if snap is not None and sources["ledger"]["state"] == "read":
             open_asks = [{"ws": row["slug"], "card": l[4:]} for row in sorted(rows.values(), key=lambda r: r["slug"])
                          if row.get("owner") == role for l in row["links"]
                          if ASK.match(l) and card_status(snap, l[4:]) == "open"]
@@ -1222,7 +1235,8 @@ def cmd_inherit(a):
         sources["ledger"] = {"state": "UNREAD", "why": f"no ledger at {LEDGER}"}
 
     out = {"role": role, "sources": sources, "terms": terms, "replaced_terms": replaced_terms, "grants": grants,
-           "pending_grants": pending, "expired_grants": expired, "open_asks": open_asks}
+           "pending_grants": pending, "expired_grants": expired, "unchecked_grants": unchecked,
+           "open_asks": open_asks}
     if a.json:
         json.dump(out, sys.stdout, indent=2, ensure_ascii=False)
         print()
@@ -1242,6 +1256,7 @@ def cmd_inherit(a):
     section("replaced terms (not standing)", replaced_terms, lambda t: f"{t['id']}  replaced by {', '.join(map(str, t['replaced_by']))}")
     section("grants in force", grants, lambda g: f"{g['id']}  {g['subject']}  scope: {g['scope']}  expires: {g['expires'] or 'no expiry'}")
     section("grants pending confirmation", pending, lambda g: f"{g['id']}  {g['subject']}")
+    section("grants with an unparseable expiry (not in force, check not run)", unchecked, lambda g: f"{g['id']}  {g['subject']}  expires: {g['expires']}")
     section("grants expired", expired, lambda g: f"{g['id']}  {g['subject']}  expired {g['expires']}")
     section("open asks", open_asks, lambda x: f"{x['card']}  on {x['ws']}")
 
