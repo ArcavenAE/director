@@ -233,8 +233,11 @@ def text_of(x):
     return x if isinstance(x, str) else str(x)
 
 
+UNREADABLE = object()  # an identity that could not be read: distinct from None, a readable file with no agentName
+
+
 def agent_name(path):
-    """Most common agentName in a transcript, or None."""
+    """Most common agentName in a transcript, None when it has none, UNREADABLE when it cannot be read."""
     counts = {}
     try:
         with open(path, "rb") as f:
@@ -249,7 +252,7 @@ def agent_name(path):
                 if isinstance(n, str):
                     counts[n] = counts.get(n, 0) + 1
     except OSError:
-        return None
+        return UNREADABLE
     return max(counts, key=counts.get) if counts else None
 
 
@@ -453,7 +456,10 @@ def scan_transcripts(cfg, since, t_now):
             nm = names.get(parent) if parent in names else agent_name(p)
         else:
             nm = names.get(p)
-        if nm in cfg["exclude_agent_names"]:
+        if nm is UNREADABLE:
+            # no identity, so it cannot be shown to be a non-research file: counted, never scanned as a zero
+            research["unreadable"] += 1
+        elif nm in cfg["exclude_agent_names"]:
             excluded += 1
             if nm in cfg["research_agent_names"]:  # the one thing read from a dropped file: its anchored denials
                 n = denial_count(p, since_s, week_s)

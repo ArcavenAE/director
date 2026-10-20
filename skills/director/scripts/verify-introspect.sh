@@ -512,6 +512,33 @@ PY
 fi
 chmod 600 "$root/proj/-work-aae-orc/rs9/subagents/a.jsonl"; rm -rf "$root/proj/-work-aae-orc/rs9" "$root/proj/-work-aae-orc/rs9.jsonl"
 
+# an unreadable TOP-LEVEL transcript has no known identity: it is counted unreadable, never scanned as a silent zero
+mk "$root/proj/-work-aae-orc/rt2.jsonl" --agent retrospector --ok 2 --den 5
+run --since today --config "$conf" --no-append --json >"$root/j0" 2>/dev/null
+chmod 000 "$root/proj/-work-aae-orc/rt2.jsonl"
+if [[ -r "$root/proj/-work-aae-orc/rt2.jsonl" ]]; then skp "an unreadable top-level transcript: this user can read a mode 000 file"
+else
+  run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
+  python3 - "$root/j1" <<'PY' && ok "an unreadable top-level transcript is a GAP in the header and a count of files, not a quiet drop in +N research" || bad "unreadable top-level transcript"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["counts"]["research_unreadable"] == 1, d["counts"]
+assert "GAP research-transcripts 1 unreadable" in d["header"], d["header"]
+PY
+fi
+chmod 600 "$root/proj/-work-aae-orc/rt2.jsonl"; rm -f "$root/proj/-work-aae-orc/rt2.jsonl"
+python3 - "$root/proj/-work-aae-orc/noname.jsonl" <<'PY'
+import json, sys
+open(sys.argv[1], "w").write(json.dumps({"timestamp": "2026-10-20T10:00:01.000Z", "message": {"content": [{"type": "tool_use", "id": "q", "name": "Bash", "input": {}}]}}) + "\n" + json.dumps({"timestamp": "2026-10-20T10:00:02.000Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "q", "content": "fine"}]}}) + "\n")
+PY
+run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
+python3 - "$root/j1" <<'PY' && ok "control: a readable transcript with no agentName is scanned as a main one and is no GAP" || bad "no agentName control"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["counts"]["research_unreadable"] == 0 and "GAP research" not in d["header"], d["header"]
+PY
+rm -f "$root/proj/-work-aae-orc/noname.jsonl"
+
 # ================================================================ properties of the script itself
 [[ "$(grep -c -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")" == 0 ]] && ok "P1 the script names no Desk, bus send, inject or gh call (the name send_message is read from transcripts, never run)" || bad "P1" "$(grep -n -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")"
 python3 - "$S" <<'PY' && ok "the script is Python 3 standard library only" || bad "stdlib only"
