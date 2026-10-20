@@ -49,8 +49,8 @@ def read_pid(pid):
     # Layout: argc, the executable path, NUL padding, then exactly argc arguments, then the
     # environment. The padding is measured, not guessed: the path plus its NULs fill
     # the next multiple of 8 above the path's length. Measured on Darwin 25.5 only, for
-    # 44 path lengths between 1 and 700 (1 to 24, each side of 32, 40, 48 and 64, 127 to
-    # 129, 255 to 257, 500 and 700); not measured on Linux, which reads /proc instead.
+    # 44 path lengths between 1 and 700 (1 to 24, 31 to 33, 39 to 41, 47 to 49, 63 to 65,
+    # 127 to 129, 255 to 257, 500 and 700); not measured on Linux, which reads /proc instead.
     # This is how an empty argv[0] is told apart from padding. Skipping every
     # NUL would swallow an empty argv[0] and make the first environment entry argv[0].
     body = data[4:]
