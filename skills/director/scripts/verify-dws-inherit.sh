@@ -99,5 +99,13 @@ printf '%s\n' "{$g,\"id\":\"g-bad\",\"to\":\"team-a/architect\",\"state\":\"conf
 [[ "$(q "[x['id'] for x in d['unchecked_grants']]" <"$root/jc")" == "['g-bad']" ]] && ok "it is listed as unchecked, with the reason" || bad "unchecked grants" "$(q "d.get('unchecked_grants')" <"$root/jc")"
 "$DWS" reconcile --json >"$root/rc" 2>/dev/null; [[ "$(q "any(n['check']=='grant-expired:g-bad' for n in d['not_run'])" <"$root/rc")" == "True" ]] && ok "reconcile lists the same grant as not run" || bad "reconcile agrees"
 
+# --- round 3b (review 5580468176): a partly torn store shows its torn count ----------------------
+st d; printf '%s\n' "{$tm,\"id\":\"t9\",\"role\":\"team-a/architect\",\"text\":\"x\",\"set_by\":\"director\"}" >"$DIRECTOR_STATE/rulings.jsonl"; printf 'torn line\n' >>"$DIRECTOR_STATE/rulings.jsonl"
+printf '%s\n' "{$t,\"event\":\"open\",\"ws\":\"w1\",\"title\":\"one\",\"owner\":\"team-a/architect\",\"stage\":\"designed\",\"links\":[]}" >"$DIRECTOR_STATE/workstreams.jsonl"; printf 'torn a\ntorn b\n' >>"$DIRECTOR_STATE/workstreams.jsonl"
+"$DWS" inherit team-a/architect >"$root/td" 2>&1
+grep -E '^rulings +read .*\(torn 1\)' "$root/td" >/dev/null && grep -E '^ledger +read .*\(torn 2\)' "$root/td" >/dev/null && ok "the text output shows (torn N) for a partly torn rulings file and ledger" || bad "text shows torn counts" "$(head -4 "$root/td")"
+"$DWS" inherit team-a/architect --json >"$root/jd" 2>/dev/null
+[[ "$(q "[d['sources']['rulings']['torn'], d['sources']['ledger']['torn']]" <"$root/jd")" == "[1, 2]" ]] && ok "the JSON carries the torn counts" || bad "JSON torn counts"
+
 echo "dws inherit: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
