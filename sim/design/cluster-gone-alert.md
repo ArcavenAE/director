@@ -127,10 +127,24 @@ supervisor, or an older shim writes no field, and director uses its own
 env variable that nothing reads. The only shared thing is the field name,
 which `docs/shim-reference.md` documents as part of the presence record.
 
-A value that does not parse as a positive duration is ignored for that
-cluster, with one event naming the cluster; it never fails the watch
-(inferred from the table's own rule that a bad value is an error, applied per
-row so one cluster cannot stop the watch).
+**Bad or extreme values.** These are decisions of this design:
+
+- A per-cluster `lost_after` that does not parse as a positive duration is
+  ignored for that cluster, which uses director's row, with one event naming
+  the cluster. It never fails the watch, so one cluster cannot stop it.
+- A per-cluster value above `presence_lost_after_max` (a director-owned row,
+  provisional default 24 hours) is clamped to that maximum, with one event
+  naming the cluster and both values. A cluster cannot silence its own `lost`
+  by setting a very long bound.
+- A bad value in `thresholds.json` for any of the five rows this design adds
+  (`presence_lost_after`, `presence_lost_after_max`, `presence_hub_move_min`,
+  `presence_hub_move_window`, `presence_alert_cap`) keeps that row's built-in
+  default and raises one notice naming the row. Today a bad row of any kind
+  makes `loadThresholds` return an error (`handled.go:97-110`),
+  `startPresenceWatch` returns it (`presencewatch_shim.go:224-227`), and main
+  only logs "presence watch not started" (`main.go:168-170`), so no alert of
+  any kind is raised. The new rows do not widen that path. The existing rows
+  keep today's behavior; changing them is outside this note.
 
 The cheaper alternative, a director-only row with no marvel stamp, is option
 (b) on card R2.
@@ -188,6 +202,23 @@ copies the sink already holds:
    same key.** The fold adds the copy as a witness ("also seen from the
    cluster's side at <ts>") and does not page again. A sink that holds no open
    item under the key pages, whatever any other sink holds.
+
+   **Only a shown item is a fold target**: one whose notice reached its
+   reader. Exactly two items are open and shown:
+   - a per-cluster `lost` whose notice went out;
+   - an open `hub-moved` parent whose notice went out, for each cluster it
+     lists (its notice names that cluster).
+
+   Not fold targets:
+   - a `lost` held back by the section 6 cap ("recorded and not shown");
+   - a per-cluster `absent` or `lost` collapsed under a parent (only the
+     parent was shown).
+
+   A copy whose key matches only one of these pages. That page is exempt from
+   the cap, because the cap would otherwise rebuild the hole this rule closes,
+   and the held-back item becomes shown, so later copies fold into it. A
+   parent that has closed or converted (section 6) is no longer a target for
+   any cluster, and rule 4 applies.
 3. **A fold never closes, delays or downgrades an item.** Only `back` (hub
    side) or `bus.leaf.up` (cluster side) closes one, each at its own sink.
 4. **An episode ends at close.** A copy that arrives after the item closed
@@ -219,13 +250,26 @@ All in director unless named. Each starts with a one-command premise check.
    self-unseen, not every cluster absent.
 2. **C2. `lost` at a bound** (section 5): the table row `presence_lost_after`
    (30m), the per-cluster `lost_after` field read and cached, host sleep not
-   counted. Tests: lost fires once at the bound; a cluster value overrides the
-   default; a bad value falls back with one event.
+   counted, the clamp, and the bad-row default. Tests: lost fires once at the
+   bound; a cluster value overrides the default; a bad cluster value falls back
+   with one event; a cluster value of 720h is clamped to the maximum with one
+   event; a bad `presence_lost_after` row in `thresholds.json` keeps 30m, raises
+   one notice, and the watch starts.
 3. **C3. Parent and cap** (section 6), on C2.
 4. **C4. The key** (section 7): `dedupe_key` on the hub-side notices, and the
-   sink fold for director's own sink. Tests: a copy with no open item pages; a
-   copy with an open item folds and pages nothing; a copy after close opens a
-   new item.
+   sink fold for director's own sink. Tests:
+   - a copy with no open item pages;
+   - a copy with an open, shown `lost` folds and pages nothing;
+   - a copy after close opens a new item;
+   - **capped:** seven clusters lose their links at separate times within one
+     hour, so no parent opens, and X's `lost` is the seventh, past a cap of 6.
+     A forwarded leaf-down copy for X pages, even though the cap is already
+     reached, and X's item is then shown;
+   - **collapsed:** with a shown parent listing X open, a copy for X folds into
+     the parent and pages nothing. With the parent closed or converted, the
+     same copy pages;
+   - **collapsed, not listed:** a copy for a cluster the open parent does not
+     list pages.
 5. **marvel, separate ticket:** the admin preference and the
    `DIRECTOR_PRESENCE_LOST_AFTER` stamp, plus the shim writing `lost_after`
    (director, folded into C2). Independent of C1, C3 and C4.
@@ -237,12 +281,15 @@ All in director unless named. Each starts with a one-command premise check.
 - **P1 (provisional; source: K7).** Director raises no absence, lost or parent
   alert from a pass that does not contain its own current presence row.
 - **P2 (provisional; source: O4).** A shared dedupe key suppresses a page only
-  at a sink that already holds an open item under that key; no emitter checks
+  at a sink that already holds an open, shown item under that key; no emitter checks
   another path before raising.
 - **P3 (provisional; source: O6).** The away-to-lost bound is read per cluster
   from that cluster's presence record when present, else from director's own
   threshold table, default 30 minutes; director takes no dependency on marvel
-  to read it.
+  to read it, and clamps a cluster's value to a maximum it owns.
+- **P4 (provisional; source: O4 and K7).** A held-back item (capped, or
+  collapsed under a parent) is never a fold target; a copy matching only such
+  an item pages, exempt from the cap.
 
 ## 10. Rulings this note needs
 
