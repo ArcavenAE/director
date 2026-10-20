@@ -1231,6 +1231,15 @@ def ring_status(r, t_now):
     return "rung"
 
 
+CLAIMS_NOTE = "idle minutes and mail are the caller's claims; dws cannot see either"
+_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")
+
+
+def printable(text):
+    """Text from a record, made safe for a terminal: control and bidi runes shown as \\uXXXX."""
+    return _UNSAFE.sub(lambda m: "\\u%04x" % ord(m.group()), str(text))
+
+
 def cmd_ring(a):
     if a.actor != "director":
         raise Refused(f"actor {a.actor!r} may not ring a seat; only director does")
@@ -1248,7 +1257,7 @@ def cmd_ring(a):
                           f"(the cap is {RING_CAP}); report it as stuck, with its blocker if it showed one (Q6)")
         append({"ts": t_now, "actor": a.actor, "event": "ring", "seat": seat,
                 "idle_minutes": a.idle_minutes, "mail": a.mail}, RINGS)
-    print(f"dws: recorded a ring for {seat}")
+    print(f"dws: recorded a ring for {seat} ({CLAIMS_NOTE})")
 
 
 def cmd_ring_note(a):
@@ -1281,12 +1290,14 @@ def cmd_rings(a):
                      "rings_total": len(r["rings"]), "last_ring": r["last_ring"], "first_turn": r["first_turn"],
                      "ack": r["ack"], "blocker": r["blocker"], "blocker_at": r["blocker_at"]}
     if a.json:
-        json.dump({"file": RINGS, "torn": torn, "seats": out}, sys.stdout, indent=2, ensure_ascii=False)
+        json.dump({"file": RINGS, "torn": torn, "note": CLAIMS_NOTE, "seats": out}, sys.stdout, indent=2, ensure_ascii=False)
         print()
     else:
         for seat, v in out.items():
-            extra = f"  blocker: {v['blocker']}" if v["blocker"] else ""
-            print(f"{seat}  {v['status']}  rings in the last hour {v['rings_in_window']}  last ring {v['last_ring']}{extra}")
+            extra = f"  blocker: {printable(v['blocker'])}" if v["blocker"] else ""
+            print(f"{printable(seat)}  {v['status']}  rings in the last hour {v['rings_in_window']}  last ring {v['last_ring']}{extra}")
+        if out:
+            print(f"note: {CLAIMS_NOTE}")
     if torn:
         print(f"dws: {torn} unreadable line(s) in {RINGS} skipped, not repaired", file=sys.stderr)
 
@@ -1662,10 +1673,12 @@ def main(argv):
     rr.add_argument("--kind", choices=RECORD_KINDS)
     rr.set_defaults(fn=cmd_records)
 
-    rg = sub.add_parser("ring", help="record a ring of an idle seat with mail; at most 3 an hour (K14)")
+    rg = sub.add_parser("ring", help="record a ring of an idle seat with mail; at most 3 an hour (K14). --idle-minutes and --mail are the caller's claims; dws cannot see either")
     rg.add_argument("seat")
-    rg.add_argument("--idle-minutes", dest="idle_minutes", type=int, required=True)
-    rg.add_argument("--mail", type=int, required=True)
+    rg.add_argument("--idle-minutes", dest="idle_minutes", type=int, required=True,
+                    help="minutes the seat has been idle, the caller's claim (dws cannot see it)")
+    rg.add_argument("--mail", type=int, required=True,
+                    help="messages waiting for the seat, the caller's claim (dws cannot see it)")
     rg.set_defaults(fn=cmd_ring)
 
     rn = sub.add_parser("ring-note", help="record a ring's first turn, ack or blocker (K14)")

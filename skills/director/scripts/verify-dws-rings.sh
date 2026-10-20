@@ -107,7 +107,7 @@ grep -q "caller" "$root/o3" && ok "the ring output says idle and mail are the ca
 "$DWS" rings >"$root/t3" 2>&1
 grep -q "caller" "$root/t3" && ok "the rings text output says idle and mail are the caller's claims" || bad "rings output states the claim" "$(cat "$root/t3")"
 if LC_ALL=C grep -q $'\342\200\256' "$root/t3" || grep -q $'\033' "$root/t3"; then bad "rings text output escapes bidi and control runes"; else ok "rings text output has no raw bidi or escape rune"; fi
-[[ "$(wc -l <"$root/t3" | tr -d ' ')" == "2" ]] && ok "a newline in blocker text does not start a second line" || bad "a newline in blocker text splits the output" "$(cat "$root/t3")"
+! grep -q '^second line' "$root/t3" && ok "a newline in blocker text does not start a second line" || bad "a newline in blocker text splits the output" "$(cat "$root/t3")"
 grep -qF 'u202e' "$root/t3" && ok "the escaped rune is shown as text (u202e)" || bad "escaped rune shown" "$(cat "$root/t3")"
 "$DWS" rings --json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['seats']['team-c/reader']['blocker'])" | grep -q 'second line' && ok "the JSON keeps the blocker words as given" || bad "JSON blocker as given"
 
