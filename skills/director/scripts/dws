@@ -44,6 +44,10 @@ its own rulings.lock beside it. It never creates the file, refuses the exclusion
 `records [--json]` folds the file: replaces is an explicit id pointer; a target is marked
 replaced_by, and a pointer to a missing id or another kind is counted, never guessed.
 
+K15: `inherit ROLE [--json]` is the by-role read a successor makes (R-204): the role's standing terms
+(a replaced term is marked, not standing), grants in force, pending and expired, and open asks. A
+source it cannot read is UNREAD and its section is none, never an empty list. Read only.
+
 K14: `ring SEAT --idle-minutes N --mail N` records a ring in rings.jsonl (Q6: 10 minutes idle with
 mail, at most 3 rings per seat per hour, then it refuses and the seat is reported stuck);
 `ring-note SEAT first-turn|ack|blocker [--text T]` follows it; `rings [--json]` reads per seat.
@@ -1160,6 +1164,103 @@ def cmd_records(a):
         print(f"dws: {torn} unreadable line(s) in {path} skipped, not repaired", file=sys.stderr)
 
 
+# K15: `inherit <role>`, the by-role read a successor makes (R-204). Read only.
+# Standing terms and the grants made to the role come from rulings.jsonl, the
+# open asks from the ledger rows the role owns that link a card open on the Desk.
+# A source that cannot be read is UNREAD and its section is None, never empty.
+# The role is matched as stored: the same string the term, grant or row carries.
+def grant_end(g):
+    exp = g.get("expires")
+    if not isinstance(exp, str):
+        return None
+    try:
+        end = datetime.datetime.strptime(exp, "%Y-%m-%dT%H:%M:%SZ" if "T" in exp else "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+    # A date-only expiry holds through the end of that day, as in reconcile.
+    return end if "T" in exp else end + datetime.timedelta(days=1)
+
+
+def cmd_inherit(a):
+    role = checked("role", a.role)
+    when = parse_time(now())
+    sources = {}
+    path = rulings_path()
+    terms = replaced_terms = grants = pending = expired = unchecked = None
+    if os.path.isfile(path):
+        records, rtorn, _ = fold_records(path)
+        if rtorn and not records:
+            sources["rulings"] = {"state": "UNREAD", "why": f"{path} has no readable record (torn {rtorn})"}
+        else:
+            sources["rulings"] = {"state": "read", "read_at": now(), "torn": rtorn}
+    else:
+        records = []
+        sources["rulings"] = {"state": "UNREAD", "why": f"no rulings file at {path}"}
+    if sources["rulings"]["state"] == "read":
+        terms, replaced_terms, grants, pending, expired, unchecked = [], [], [], [], [], []
+        for r in records:
+            if r.get("kind") == "term" and r.get("role") == role:
+                if r["replaced_by"]:
+                    replaced_terms.append({"id": r.get("id"), "text": r.get("text"), "replaced_by": r["replaced_by"]})
+                else:
+                    terms.append({"id": r.get("id"), "subject": r.get("subject"), "text": r.get("text"), "set_by": r.get("set_by")})
+            elif r.get("kind") == "grant" and r.get("to") == role and not r["replaced_by"]:
+                item = {"id": r.get("id"), "subject": r.get("subject"), "scope": r.get("scope"),
+                        "expires": r.get("expires"), "text": r.get("text")}
+                end = grant_end(r)
+                if r.get("state") == "draft":
+                    pending.append(item)
+                elif r.get("state") == "confirmed":
+                    if end is None and isinstance(r.get("expires"), str):
+                        # reconcile lists this grant as not run; it is not claimed to be in force
+                        item["why"] = f"the expiry {r['expires']!r} does not parse"
+                        unchecked.append(item)
+                    else:
+                        (expired if end is not None and end < when else grants).append(item)
+
+    open_asks = None
+    snap, why = desk_snapshot()
+    sources["desk"] = ({"state": "read", "read_at": snap["read_at"]} if snap else {"state": "UNREAD", "why": why})
+    if os.path.isfile(LEDGER):
+        rows, ltorn = fold()
+        if not rows and (ltorn or ledger_has_lines()):
+            sources["ledger"] = {"state": "UNREAD", "why": f"{LEDGER} has no readable row (torn {ltorn})"}
+        else:
+            sources["ledger"] = {"state": "read", "read_at": now(), "torn": ltorn}
+        if snap is not None and sources["ledger"]["state"] == "read":
+            open_asks = [{"ws": row["slug"], "card": l[4:]} for row in sorted(rows.values(), key=lambda r: r["slug"])
+                         if row.get("owner") == role for l in row["links"]
+                         if ASK.match(l) and card_status(snap, l[4:]) == "open"]
+    else:
+        sources["ledger"] = {"state": "UNREAD", "why": f"no ledger at {LEDGER}"}
+
+    out = {"role": role, "sources": sources, "terms": terms, "replaced_terms": replaced_terms, "grants": grants,
+           "pending_grants": pending, "expired_grants": expired, "unchecked_grants": unchecked,
+           "open_asks": open_asks}
+    if a.json:
+        json.dump(out, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+        return
+    for name in ("rulings", "ledger", "desk"):
+        v = sources[name]
+        print(f"{name:<8} " + (f"read {v['read_at']}" + (f" (torn {v['torn']})" if v.get("torn") else "") if v["state"] == "read" else f"UNREAD  {v['why']}"))
+
+    def section(title, items, fmt):
+        if items is None:
+            print(f"{title}: UNREAD")
+            return
+        print(f"{title}: {len(items)}")
+        for i in items:
+            print("  " + fmt(i))
+    section("standing terms", terms, lambda t: f"{t['id']}  {t['text']}")
+    section("replaced terms (not standing)", replaced_terms, lambda t: f"{t['id']}  replaced by {', '.join(map(str, t['replaced_by']))}")
+    section("grants in force", grants, lambda g: f"{g['id']}  {g['subject']}  scope: {g['scope']}  expires: {g['expires'] or 'no expiry'}")
+    section("grants pending confirmation", pending, lambda g: f"{g['id']}  {g['subject']}")
+    section("grants with an unparseable expiry (not in force, check not run)", unchecked, lambda g: f"{g['id']}  {g['subject']}  expires: {g['expires']}")
+    section("grants expired", expired, lambda g: f"{g['id']}  {g['subject']}  expired {g['expires']}")
+    section("open asks", open_asks, lambda x: f"{x['card']}  on {x['ws']}")
+
+
 # K14: rings.jsonl, keyed by seat (R-200, Q6). A ring, its first turn, its ack and
 # its blocker, on the dws store shape: append-only, folded on read, one flock
 # (rings.lock) around fold, check and append. Q6's numbers, the operator's: ring
@@ -1672,6 +1773,11 @@ def main(argv):
     rr.add_argument("--json", action="store_true")
     rr.add_argument("--kind", choices=RECORD_KINDS)
     rr.set_defaults(fn=cmd_records)
+
+    ih = sub.add_parser("inherit", help="what a successor inherits for a role: terms, grants, open asks (K15)")
+    ih.add_argument("role")
+    ih.add_argument("--json", action="store_true")
+    ih.set_defaults(fn=cmd_inherit)
 
     rg = sub.add_parser("ring", help="record a ring of an idle seat with mail; at most 3 an hour (K14). --idle-minutes and --mail are the caller's claims; dws cannot see either")
     rg.add_argument("seat")
