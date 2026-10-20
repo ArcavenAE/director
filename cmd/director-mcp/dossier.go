@@ -59,12 +59,16 @@ func parseDossierArgs(rest []string) (cliArgs, error) {
 		switch name {
 		case "--json":
 			out.json = true
-		case "--role", "--predecessor", "--predecessor-state", "--pointer":
+		case "--role", "--predecessor", "--predecessor-state", "--pointer", "--handoff-path", "--handoff-marker":
 			v, err := val()
 			if err != nil {
 				return cliArgs{}, err
 			}
 			switch name {
+			case "--handoff-path":
+				out.handoffPath = v
+			case "--handoff-marker":
+				out.handoffMark = v
 			case "--role":
 				out.role = v
 			case "--predecessor":
@@ -77,6 +81,9 @@ func parseDossierArgs(rest []string) (cliArgs, error) {
 		default:
 			return cliArgs{}, fmt.Errorf("dossier: unknown argument %q (usage: %s)", a, dossierUsage)
 		}
+	}
+	if out.handoffMark != "" && (len(out.handoffMark) > 200 || strings.ContainsAny(out.handoffMark, "\r\n\x00")) {
+		return cliArgs{}, fmt.Errorf("dossier: --handoff-marker must be one line of at most 200 bytes (usage: %s)", dossierUsage)
 	}
 	parts := strings.Split(out.role, "/")
 	if len(parts) != 2 || !dossierToken.MatchString(parts[0]) || !dossierToken.MatchString(parts[1]) {
@@ -128,7 +135,9 @@ type dossierOpts struct {
 	State       string
 	Successor   string
 	DWS         string
-	HandoffDir  string // where seats write handoffs: <state>/handoff; empty when unknown
+	HandoffPath string // the handoff file the predecessor's manifest declares, as the caller filled it in
+	HandoffMark string // the terminal marker the manifest declares; empty means the standing marker
+	HandoffDir  string // fallback only: <state>/handoff, searched for <predecessor>-<date>.md; empty when unknown
 	Now         time.Time
 }
 
@@ -252,7 +261,7 @@ func runDossierCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Wr
 		st = ""
 	}
 	o := dossierOpts{Role: cli.role, Predecessor: cli.pred, PredSource: "flag", PredState: cli.predState,
-		Pointers: cli.pointers, JSON: cli.json, State: st, DWS: os.Getenv("DIRECTOR_DWS"), Now: time.Now()}
+		HandoffPath: cli.handoffPath, HandoffMark: cli.handoffMark, Pointers: cli.pointers, JSON: cli.json, State: st, DWS: os.Getenv("DIRECTOR_DWS"), Now: time.Now()}
 	if o.Predecessor == "" {
 		if p := os.Getenv("MARVEL_PREDECESSOR"); dossierToken.MatchString(p) {
 			o.Predecessor, o.PredSource = p, "env MARVEL_PREDECESSOR"
@@ -281,18 +290,44 @@ func runDossierCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Wr
 
 const handoffMarker = "HANDOFF-COMPLETE"
 
-// handoffFileValid reports whether path is a complete predecessor-authored
-// handoff: a regular file (not a link) whose last non-empty line is exactly the
-// terminal marker. Only the tail is read; a partial file, or one that cannot be
-// read, is not valid.
-func handoffFileValid(path string) bool {
+// handoffSpec says where to look and what ends a complete handoff. Path and
+// Mark come from the predecessor's marvel manifest (`handoff`, `handoff_marker`),
+// filled in by the caller: director does not need marvel to run. Dir and Pred
+// are the fallback only, used when no path is declared.
+type handoffSpec struct {
+	Path, Mark string
+	Dir, Pred  string
+}
+
+type handoffState int
+
+const (
+	handoffNone       handoffState = iota // looked, and there is no valid handoff
+	handoffPresent                        // a valid authored handoff exists
+	handoffUnreadable                     // could not look, or could not read what is there
+)
+
+// handoffFile judges one file: absent or not a regular file is none; a regular
+// file whose last non-empty line is exactly the marker is present; a file that
+// exists but cannot be opened or read is unreadable, never none. Only the tail
+// is read.
+func handoffFile(path, mark string) handoffState {
+	if mark == "" {
+		mark = handoffMarker
+	}
 	fi, err := os.Lstat(path)
-	if err != nil || !fi.Mode().IsRegular() {
-		return false
+	if errors.Is(err, os.ErrNotExist) {
+		return handoffNone
+	}
+	if err != nil {
+		return handoffUnreadable
+	}
+	if !fi.Mode().IsRegular() {
+		return handoffNone // a link or a directory is refused
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		return handoffUnreadable
 	}
 	defer f.Close()
 	const tail = 4096
@@ -302,36 +337,35 @@ func handoffFileValid(path string) bool {
 	}
 	buf := make([]byte, fi.Size()-off)
 	if _, err := f.ReadAt(buf, off); err != nil && !errors.Is(err, io.EOF) {
-		return false
+		return handoffUnreadable
 	}
 	lines := strings.Split(strings.TrimRight(string(buf), " \t\r\n"), "\n")
-	return strings.TrimSpace(lines[len(lines)-1]) == handoffMarker
+	if strings.TrimSpace(lines[len(lines)-1]) == mark {
+		return handoffPresent
+	}
+	return handoffNone
 }
 
-type handoffState int
-
-const (
-	handoffNone       handoffState = iota // looked, and the newest file is absent or not valid
-	handoffPresent                        // the newest file is a valid authored handoff
-	handoffUnreadable                     // could not look
-)
-
-// handoffDate matches the tail of a seat handoff name, <agent-instance>-<date>.md.
+// handoffDate matches the tail of an <agent-instance>-<date>.md handoff name.
 var handoffDate = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})\.md$`)
 
-// findHandoff looks in dir for files named <predecessor>-<YYYY-MM-DD>.md and
-// judges the newest by name date, then by mtime. The newest decides: an older
-// valid file does not rescue a newer partial one. It lists names and stats and
-// reads only the newest file's tail. A directory that cannot be listed, or an
-// unknown predecessor, is unreadable: the dossier never says it may back
-// acceptance when it could not look.
-func findHandoff(dir, pred string) (handoffState, string) {
+// findHandoff decides where the handoff is. A declared path decides alone. With
+// none declared it falls back to listing dir for <predecessor>-<YYYY-MM-DD>.md
+// and judging the newest by name date, then mtime; the newest decides. A
+// location that cannot be listed, or an unknown predecessor on the fallback, is
+// unreadable: the dossier never says it may back acceptance when it could not
+// look.
+func findHandoff(h handoffSpec) (handoffState, string, bool) {
+	if h.Path != "" {
+		return handoffFile(h.Path, h.Mark), h.Path, false
+	}
+	dir, pred := h.Dir, h.Pred
 	if dir == "" || pred == "" {
-		return handoffUnreadable, ""
+		return handoffUnreadable, "", true
 	}
 	ents, err := os.ReadDir(dir)
 	if err != nil {
-		return handoffUnreadable, ""
+		return handoffUnreadable, "", true
 	}
 	type cand struct {
 		path, date string
@@ -349,7 +383,7 @@ func findHandoff(dir, pred string) (handoffState, string) {
 		}
 		fi, err := os.Lstat(filepath.Join(dir, e.Name()))
 		if err != nil {
-			return handoffUnreadable, ""
+			return handoffUnreadable, "", true
 		}
 		c := cand{filepath.Join(dir, e.Name()), m[1], fi.ModTime()}
 		if newest == nil || c.date > newest.date || (c.date == newest.date && c.mod.After(newest.mod)) {
@@ -357,27 +391,26 @@ func findHandoff(dir, pred string) (handoffState, string) {
 		}
 	}
 	if newest == nil {
-		return handoffNone, ""
+		return handoffNone, "", true
 	}
-	if handoffFileValid(newest.path) {
-		return handoffPresent, newest.path
-	}
-	return handoffNone, newest.path
+	return handoffFile(newest.path, h.Mark), newest.path, true
 }
 
 // acceptanceLine is the t6p-1 switch (operator ruling): a reconstructed dossier
 // may back successor acceptance only when no valid predecessor-authored handoff
 // exists, and it is never the predecessor's handoff marker. A valid authored
-// handoff takes precedence, and a location that could not be read never reads
-// as "may back". This is the one place that decides.
-func acceptanceLine(dir, pred string) string {
-	switch st, p := findHandoff(dir, pred); st {
+// handoff takes precedence, and a location or file that could not be read never
+// reads as "may back". This is the one place that decides. The second result
+// says the fallback search was used.
+func acceptanceLine(h handoffSpec) (string, bool) {
+	st, p, fallback := findHandoff(h)
+	switch st {
 	case handoffPresent:
-		return "authored handoff present: " + p + "; this dossier does not back acceptance"
+		return "authored handoff present: " + p + "; this dossier does not back acceptance", fallback
 	case handoffUnreadable:
-		return "handoff location unreadable; this dossier does not back acceptance"
+		return "handoff location unreadable; this dossier does not back acceptance", fallback
 	}
-	return "no valid authored handoff; this dossier may back acceptance"
+	return "no valid authored handoff; this dossier may back acceptance", fallback
 }
 
 func runDossier(ctx context.Context, url string, o dossierOpts, out, errw io.Writer) int {
@@ -393,7 +426,11 @@ func runDossier(ctx context.Context, url string, o dossierOpts, out, errw io.Wri
 	if d.Predecessor == "" {
 		d.Predecessor, d.PredSource = "", "unknown"
 	}
-	d.Acceptance = acceptanceLine(o.HandoffDir, d.Predecessor)
+	var viaFallback bool
+	d.Acceptance, viaFallback = acceptanceLine(handoffSpec{Path: o.HandoffPath, Mark: o.HandoffMark, Dir: o.HandoffDir, Pred: d.Predecessor})
+	if viaFallback {
+		d.Notices = append(d.Notices, "no --handoff-path declared: searched the fallback <state>/handoff/<predecessor>-<date>.md")
+	}
 	if o.State == "" {
 		d.Notices = append(d.Notices, "no state directory: no file written, retention sweep skipped")
 	}

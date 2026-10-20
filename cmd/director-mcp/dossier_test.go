@@ -508,6 +508,9 @@ func TestParseArgsDossier(t *testing.T) {
 	}
 }
 
+// accLine is the acceptance line alone.
+func accLine(h handoffSpec) string { l, _ := acceptanceLine(h); return l }
+
 func putHandoff(t *testing.T, dir, name, body string, mod time.Time) string {
 	t.Helper()
 	_ = os.MkdirAll(dir, 0o700)
@@ -562,7 +565,7 @@ func TestDossierAcceptanceSwitch(t *testing.T) {
 		for _, x := range c.files {
 			putHandoff(t, dir, x.name, x.body, now.Add(-x.age))
 		}
-		if got := acceptanceLine(dir, pred); got != c.want(dir) {
+		if got := accLine(handoffSpec{Dir: dir, Pred: pred}); got != c.want(dir) {
 			t.Errorf("%s: %q", name, got)
 		}
 	}
@@ -571,7 +574,7 @@ func TestDossierAcceptanceSwitch(t *testing.T) {
 	real := putHandoff(t, t.TempDir(), "real.md", hdOK, now)
 	_ = os.MkdirAll(dir, 0o700)
 	_ = os.Symlink(real, filepath.Join(dir, pred+"-2026-10-10.md"))
-	if got := acceptanceLine(dir, pred); got != nonePhr {
+	if got := accLine(handoffSpec{Dir: dir, Pred: pred}); got != nonePhr {
 		t.Errorf("symlink: %q", got)
 	}
 }
@@ -596,11 +599,11 @@ func TestDossierAcceptanceUnreadableFailsClosed(t *testing.T) {
 		if os.Geteuid() == 0 && name == "unreadable directory" {
 			continue // root reads a mode 0 directory
 		}
-		if got := acceptanceLine(dir, pred); got != unreadPhr {
+		if got := accLine(handoffSpec{Dir: dir, Pred: pred}); got != unreadPhr {
 			t.Errorf("%s: %q", name, got)
 		}
 	}
-	if got := acceptanceLine(filepath.Join(root, "locked"), ""); got != unreadPhr {
+	if got := accLine(handoffSpec{Dir: filepath.Join(root, "locked")}); got != unreadPhr {
 		t.Errorf("predecessor unknown: %q", got)
 	}
 }
@@ -691,5 +694,69 @@ func TestDossierRowsDoNotAffectTheHardLoader(t *testing.T) {
 	}
 	if _, in := got[thresholdDossierWindow]; in {
 		t.Errorf("the hard table carries a dossier row")
+	}
+}
+
+// The manifest's path and marker are taken as declared. The old search finds
+// nothing here, so the test is red against a dossier that only searches.
+func TestDossierDeclaredHandoffPathAndMarker(t *testing.T) {
+	root := t.TempDir()
+	declared := putHandoff(t, filepath.Join(root, "builder-old"), "handoff.md", "# h\nwork\nDONE-MARK-9\n", time.Now())
+	empty := filepath.Join(root, "handoff") // the fallback directory: exists, holds nothing for this seat
+	_ = os.MkdirAll(empty, 0o700)
+	if l, fb := acceptanceLine(handoffSpec{Dir: empty, Pred: "builder-old"}); fb != true || l != nonePhr {
+		t.Fatalf("control: the old search should find nothing: %q", l)
+	}
+	want := "authored handoff present: " + declared + "; this dossier does not back acceptance"
+	if l, fb := acceptanceLine(handoffSpec{Path: declared, Mark: "DONE-MARK-9", Dir: empty, Pred: "builder-old"}); l != want || fb {
+		t.Errorf("declared path and marker: %q fallback=%v", l, fb)
+	}
+	// the marker is the manifest's, not the standing one
+	if l, _ := acceptanceLine(handoffSpec{Path: declared, Mark: "HANDOFF-COMPLETE"}); l != nonePhr {
+		t.Errorf("a different marker must not match: %q", l)
+	}
+	partial := putHandoff(t, filepath.Join(root, "p"), "handoff.md", "# h\nwork\n", time.Now())
+	if l, _ := acceptanceLine(handoffSpec{Path: partial, Mark: "DONE-MARK-9"}); l != nonePhr {
+		t.Errorf("partial: %q", l)
+	}
+	if l, _ := acceptanceLine(handoffSpec{Path: filepath.Join(root, "none", "handoff.md")}); l != nonePhr {
+		t.Errorf("absent: %q", l)
+	}
+	// a declared path decides alone: a valid fallback file does not rescue a partial declared one
+	putHandoff(t, empty, "builder-old-2026-10-10.md", hdOK, time.Now())
+	if l, fb := acceptanceLine(handoffSpec{Path: partial, Dir: empty, Pred: "builder-old"}); l != nonePhr || fb {
+		t.Errorf("declared decides alone: %q fallback=%v", l, fb)
+	}
+	// end to end through the flags and the header
+	cli, err := parseArgs([]string{"dossier", "--role", "ops/builder", "--handoff-path", declared, "--handoff-marker", "DONE-MARK-9"})
+	if err != nil || cli.handoffPath != declared || cli.handoffMark != "DONE-MARK-9" {
+		t.Fatalf("flags: %+v %v", cli, err)
+	}
+	if _, err := parseArgs([]string{"dossier", "--role", "ops/builder", "--handoff-marker", "a\nb"}); err == nil {
+		t.Errorf("a multi-line marker was accepted")
+	}
+}
+
+// An unreadable file is unreadable, never absent, whether declared or found.
+func TestDossierUnreadableHandoffFileFailsClosed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode 000 file")
+	}
+	root := t.TempDir()
+	pred := "arcaven-architect-g6-1"
+	declared := putHandoff(t, filepath.Join(root, "s"), "handoff.md", hdOK, time.Now())
+	dir := filepath.Join(root, "handoff")
+	found := putHandoff(t, dir, pred+"-2026-10-10.md", hdOK, time.Now())
+	for _, p := range []string{declared, found} {
+		if err := os.Chmod(p, 0); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Chmod(p, 0o600)
+	}
+	if l, _ := acceptanceLine(handoffSpec{Path: declared}); l != unreadPhr {
+		t.Errorf("declared, mode 000: %q", l)
+	}
+	if l, _ := acceptanceLine(handoffSpec{Dir: dir, Pred: pred}); l != unreadPhr {
+		t.Errorf("newest found, mode 000: %q", l)
 	}
 }
