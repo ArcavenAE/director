@@ -202,23 +202,24 @@ questions crowds them out. Three scripts in `scripts/` give them one.
   with `--handle-menu` answers the "Teach auto mode" menu with `2`, "Not now",
   never Enter. `verify-composer-check.sh` proves it.
 
-The sweep order on the tick, which the checklist's first line points at:
-
-1. Drain the bus inbox: `inbox_summary`, then `wait_for_message` until
-   `remaining` is 0.
-2. Record the drain: `standing-hook beat`.
-3. Read answered Desk cards and refresh the snapshot: `desk-snapshot write`.
-4. Move the rows: `dws refresh --local` (`board-html` runs it on render).
-5. Answer QUERYs and act on MERGE RECOMMENDED, through `merge-guard`.
-
-Once K19 lands, step 4 is followed by `dws board-state` ("state first").
-
 The hook entry, in the session's settings:
 
 ```json
 {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command",
   "command": "<checkout>/skills/director/scripts/standing-hook"}]}]}}
 ```
+
+The sweep order on the tick, which is the drain and the Desk read that the
+hook's three-line checklist asks about:
+
+1. Drain the bus inbox: `inbox_summary`, then `wait_for_message` with `max`
+   above 1 until `remaining` is 0 or the reply is the silence note.
+2. Record the drain: `standing-hook beat`.
+3. Read answered Desk cards and refresh the snapshot: `desk-snapshot write`.
+4. Move the rows: `dws refresh --local` (`board-html` runs it on render).
+5. Answer QUERYs and act on MERGE RECOMMENDED, through `merge-guard`.
+
+Once K19 lands, step 4 is followed by `dws board-state` ("state first").
 
 ## Merging: the guard runs before every merge
 
