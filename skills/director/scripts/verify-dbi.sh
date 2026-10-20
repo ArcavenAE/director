@@ -157,14 +157,16 @@ checkout r6
 mkdir -p "$root/orc/run/x/_kos/ideas" "$root/orc/r6-wt-a/_kos/ideas"
 cp -R "$root/orc/r6/.git" "$root/orc/r6-wt-a/.git"; echo "$(idea W)" >"$root/orc/r6-wt-a/_kos/ideas/w.md"
 cp -R "$root/orc/r6/.git" "$root/orc/run/x/.git"; echo "$(idea R)" >"$root/orc/run/x/_kos/ideas/r.md"
+git init -q "$root/orc"
 cat >>"$DIRECTOR_STATE/idea-roots.conf" <<C
-$root/orc/*/*/_kos/ideas/*.md
+$root/orc/run/*/_kos/ideas/*.md
+$root/orc/*-wt-*/_kos/ideas/*.md
 C
 run >"$root/j" 2>"$root/e"
 r4="$(q "sorted(r['path'] for r in d['rows'] if r['path'].startswith('r4/'))" <"$root/j")"
 [[ "$r4" == "['r4/_kos/ideas/live.md']" ]] && ok "4: a graveyard status and a parked path are not listed" || bad "4" "$r4"
 [[ "$(q "any(r['path'].startswith(('run/','r6-wt-a')) for r in d['rows'])" <"$root/j")" == "False" ]] && ok "6: run/ and a worktree directory are never read" || bad "6: never read"
-[[ "$(q "len(d['skipped'])>=2" <"$root/j")" == "True" ]] && ok "6: the skips are logged in the output" || bad "6: skips logged" "$(q "d['skipped']" <"$root/j")"
+[[ "$(q "len(d['skipped'])>=2 and any('run' in x['path'] for x in d['skipped']) and any('-wt-' in x['path'] for x in d['skipped'])" <"$root/j")" == "True" ]] && ok "6: a root that names run/ or a worktree directory is still excluded, and the skips are logged" || bad "6: skips logged" "$(q "d['skipped']" <"$root/j")"
 cfg
 
 # --- 7b: read by ref, from the default branch -----------------------------------------------------
@@ -256,7 +258,7 @@ mkdir -p "$root/gitfail"; REALGIT="$(command -v git)"
 cat >"$root/gitfail/git" <<S
 #!/usr/bin/env bash
 a=("\$@"); i=0; [[ "\${a[0]}" == "-C" ]] && i=2
-if [[ -n "\${FAKE_GIT_FAIL:-}" && "\${a[\$i]}" == "\$FAKE_GIT_FAIL" ]]; then echo "fatal: fake failure of \$FAKE_GIT_FAIL" >&2; exit 128; fi
+if [[ -n "\${FAKE_GIT_FAIL:-}" && "\${a[\$i]}" == "\$FAKE_GIT_FAIL" && ( -z "\${FAKE_GIT_FAIL_ARG:-}" || "\$*" == *"\$FAKE_GIT_FAIL_ARG" ) ]]; then echo "fatal: fake failure of \$FAKE_GIT_FAIL" >&2; exit 128; fi
 exec "$REALGIT" "\$@"
 S
 chmod +x "$root/gitfail/git"
@@ -268,6 +270,15 @@ for sub in ls-tree show log; do
   [[ "$(q "any(r['path'].startswith('g1/') for r in d['rows'])" <"$root/j")" == "False" ]] && ok "git $sub failing: the idea is not listed as no pointer" || bad "git $sub failing: not listed" "$(q "d['rows']" <"$root/j")"
   [[ "$(q "d['unverified']['kinds'].get('git read',0)>=1 and 'git read' in d['unread']" <"$root/j")" == "True" ]] && ok "git $sub failing: counted unverified, kind git read, and named in unread" || bad "git $sub failing: unverified" "$(q "[d['unverified'],d['unread']]" <"$root/j")"
 done
+# review 5580296034: one failed read makes every idea of that repo unverified
+newrepo gb
+fx commit "$root/remotes/gb.git" $((NOW-30*DAY)) "_kos/ideas/a.md=$(idea A 'Superseded by b.md.')" "_kos/ideas/b.md=$(idea B)" "_kos/ideas/c.md=$(idea C)"
+checkout gb
+printf '%s\n' "$root/orc/*/_kos/ideas/*.md" >"$DIRECTOR_STATE/idea-roots.conf"
+PATH="$root/gitfail:$PATH" FAKE_GIT_FAIL=show FAKE_GIT_FAIL_ARG=b.md run >"$root/j" 2>/dev/null
+[[ "$(q "any(r['path'].startswith('gb/') for r in d['rows'])" <"$root/j")" == "False" ]] && ok "show failing for b.md only: no idea of that repo is listed (a is not no pointer)" || bad "gb: listed" "$(q "d['rows']" <"$root/j")"
+[[ "$(q "d['unverified']['kinds'].get('git read',0)>=3" <"$root/j")" == "True" ]] && ok "show failing for b.md only: all three ideas of the repo are counted unverified, git read" || bad "gb: unverified" "$(q "d['unverified']" <"$root/j")"
+cfg
 grep -q 'GIT_NO_LAZY_FETCH' "$here/dbi" && ok "git reads set GIT_NO_LAZY_FETCH" || bad "git reads set GIT_NO_LAZY_FETCH"
 
 # --- review item 3: exclusion by realpath, and only below the glob's fixed prefix --------------------------
