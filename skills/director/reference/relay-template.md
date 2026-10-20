@@ -14,7 +14,8 @@ From:       <who the receiver should think this comes from: director, or the
              human named, and only if the human said it in this conversation>
 Authority:  <the ruling or instruction this rests on, quoted, with who gave it
              and when. "None, this is a question" is a valid entry.>
-Ask:        <one line: what the receiver should do or decide>
+Ask:        <one line: the result to reach and why, and what the receiver may
+             not decide>
 Context:    <the facts the receiver needs that it cannot get from the message
              alone, each with its source>
 Lands in:   <where this text ends up (a pane, a file, a public thread) and who
@@ -23,6 +24,9 @@ Lands in:   <where this text ends up (a pane, a file, a public thread) and who
 Reply by:   <a date or an event, or "no reply needed">
 Log:        <the relay-log entry: `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-log append --to <to> --text-file ...`>
 ```
+
+A change to an order already sent goes as a REQUEST with `in_reply_to` set to
+that order, says which order it changes, and sends only what changed.
 
 ## The three questions behind it
 
