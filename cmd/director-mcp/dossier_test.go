@@ -147,7 +147,7 @@ func TestDossierT7AckFloorUntouched(t *testing.T) {
 	url := startScratchServer(t)
 	_, js := provisionAudit(t, ctx, url)
 	s, _ := js.Stream(ctx, "AGENT_INBOX")
-	if _, err := s.CreateConsumer(ctx, jetstream.ConsumerConfig{Durable: "mcp_builder-old_01ABC", AckPolicy: jetstream.AckExplicitPolicy, FilterSubject: "agent.ops.builder-old.*.inbox"}); err != nil {
+	if _, err := s.CreateConsumer(ctx, jetstream.ConsumerConfig{Durable: "mcp_builder-old_01ABC", AckPolicy: jetstream.AckExplicitPolicy, FilterSubject: "agent.ops.*.builder-old.inbox"}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
@@ -186,8 +186,12 @@ func hashTree(t *testing.T, root, skip string) string {
 			return filepath.SkipDir
 		}
 		fi, _ := os.Lstat(p)
+		if fi == nil || fi.IsDir() { // a directory's size and mtime move with its entries
+			fmt.Fprintf(h, "%s dir\n", p)
+			return nil
+		}
 		b := []byte{}
-		if fi != nil && fi.Mode().IsRegular() {
+		if fi.Mode().IsRegular() {
 			b, _ = os.ReadFile(p)
 		}
 		fmt.Fprintf(h, "%s %v %d %x\n", p, fi.Mode(), fi.Size(), sha256.Sum256(b))
