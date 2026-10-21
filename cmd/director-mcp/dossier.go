@@ -83,8 +83,8 @@ func parseDossierArgs(rest []string) (cliArgs, error) {
 			return cliArgs{}, fmt.Errorf("dossier: unknown argument %q (usage: %s)", a, dossierUsage)
 		}
 	}
-	if out.handoffMark != "" && (len(out.handoffMark) > 200 || strings.ContainsAny(out.handoffMark, "\r\n\x00")) {
-		return cliArgs{}, fmt.Errorf("dossier: --handoff-marker must be one line of at most 200 bytes (usage: %s)", dossierUsage)
+	if out.handoffMark != "" && (len(out.handoffMark) > 200 || strings.ContainsAny(out.handoffMark, "\r\n\x00") || strings.TrimSpace(out.handoffMark) != out.handoffMark) {
+		return cliArgs{}, fmt.Errorf("dossier: --handoff-marker must be one line of at most 200 bytes with no surrounding whitespace, since the handoff's last line is compared trimmed (usage: %s)", dossierUsage)
 	}
 	parts := strings.Split(out.role, "/")
 	if len(parts) != 2 || !dossierToken.MatchString(parts[0]) || !dossierToken.MatchString(parts[1]) {
@@ -316,6 +316,14 @@ const (
 // O_NONBLOCK|O_NOFOLLOW and the opened file must be the one that was stat'd
 // (os.SameFile), so a swap in that window cannot turn a read into a hang or a
 // follow. Only the tail is read.
+// handoffAfterLstat runs between the stat and the open, and handoffReadAt reads the tail.
+// Both exist only so a test can swap a file in that window and fail a read; production
+// leaves them as they are.
+var (
+	handoffAfterLstat = func(string) {}
+	handoffReadAt     = func(f *os.File, b []byte, off int64) (int, error) { return f.ReadAt(b, off) }
+)
+
 func handoffFile(path, mark string) handoffState {
 	if mark == "" {
 		mark = handoffMarker
@@ -327,6 +335,7 @@ func handoffFile(path, mark string) handoffState {
 	if err != nil || !fi.Mode().IsRegular() {
 		return handoffUnreadable
 	}
+	handoffAfterLstat(path)
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return handoffUnreadable
@@ -342,7 +351,7 @@ func handoffFile(path, mark string) handoffState {
 		off = 0
 	}
 	buf := make([]byte, fi2.Size()-off)
-	if _, err := f.ReadAt(buf, off); err != nil && !errors.Is(err, io.EOF) {
+	if _, err := handoffReadAt(f, buf, off); err != nil && !errors.Is(err, io.EOF) {
 		return handoffUnreadable
 	}
 	lines := strings.Split(strings.TrimRight(string(buf), " \t\r\n"), "\n")

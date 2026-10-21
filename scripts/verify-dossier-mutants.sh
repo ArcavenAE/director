@@ -71,5 +71,28 @@ mutate "reads an open failure as absent" 'TestDossierUnreadableHandoffFileFailsC
 mutate "ignores the declared handoff path" 'TestDossierDeclaredHandoffPathAndMarker' dossier.go \
   '	if h.Path != "" {' '	if false {'
 
+mutate "accepts a marker with surrounding whitespace" 'TestDossierMarkerFlagRefusals' dossier.go \
+  ' || strings.TrimSpace(out.handoffMark) != out.handoffMark' ''
+mutate "accepts a CR or NUL inside the marker" 'TestDossierMarkerFlagRefusals' dossier.go \
+  'strings.ContainsAny(out.handoffMark, "\r\n\x00")' 'strings.ContainsAny(out.handoffMark, "\n")'
+mutate "reads a handoff swapped after the stat (os.SameFile)" 'TestDossierHandoffSwappedBetweenStatAndOpen' dossier.go \
+  '!fi2.Mode().IsRegular() || !os.SameFile(fi, fi2)' '!fi2.Mode().IsRegular() || false'
+mutate "reads a failed tail read as a read (ReadAt)" 'TestDossierHandoffTailReadFailure' dossier.go \
+  '; err != nil && !errors.Is(err, io.EOF) {
+		return handoffUnreadable' '; err != nil && false {
+		return handoffUnreadable'
+mutate "reads an EOF that carries the data as a failure (ReadAt)" 'TestDossierHandoffTailReadFailure' dossier.go \
+  '; err != nil && !errors.Is(err, io.EOF) {
+		return handoffUnreadable' '; err != nil {
+		return handoffUnreadable'
+mutate "reads an unlistable fallback directory as no handoff (ReadDir)" 'TestDossierFallbackListFailure' dossier.go \
+  '	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return handoffUnreadable, "", true
+	}' '	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return handoffNone, "", false
+	}'
+
 echo "killed $killed, survived $survived"
 test "$survived" -eq 0
