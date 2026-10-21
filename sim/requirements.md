@@ -2748,8 +2748,7 @@ item is promoted on two or more recorded instances, or on an operator ruling.
 - **Rejected for the register (routed elsewhere):**
   - A reviewer ran find over the real `~/.marvel` to build a sandbox control
     (O-2079): reviewer and run-conditions practice for any seat, already in the
-    orchestrator's `relay-run-conditions.md`; the gap it found is
-    finding-aae-orc-pgqi.
+    orchestrator's `relay-run-conditions.md`.
   - Whether one role may hold a seat per cluster or one fleet-wide (O
     2026-10-14aa, second half): a casting question for the role library, not director.
 - **Director build tickets these map to:** R-218 to K5 and K13 (the Desk read
