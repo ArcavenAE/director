@@ -394,6 +394,9 @@ case_lock_min() {
     out="$(run FREEBUSY_LOCK_STALE_MIN="$bad" FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
     grep -q 'GAP lock-stale' <<<"$out" && ok "16 [$bad]: a bad FREEBUSY_LOCK_STALE_MIN prints a GAP" || bad "16 [$bad] gap" "$out"
     grep -q 'not run: sweep in progress' <<<"$out" && ok "16 [$bad]: and the default holds a young lock" || bad "16 [$bad] young" "$out"
+    age_lock "$state/freebusy/.lock" 1
+    out="$(run FREEBUSY_LOCK_STALE_MIN="$bad" FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
+    grep -q 'not run: sweep in progress' <<<"$out" && ok "16 [$bad]: the default of 2 minutes holds a 1 minute old lock" || bad "16 [$bad] one minute" "$out"
     age_lock "$state/freebusy/.lock" 10
     out="$(run FREEBUSY_LOCK_STALE_MIN="$bad" FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
     grep -q 'clusters: 3 of 3 read' <<<"$out" && ok "16 [$bad]: and the default takes an old lock over" || bad "16 [$bad] old" "$out"
