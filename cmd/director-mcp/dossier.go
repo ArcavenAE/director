@@ -83,8 +83,8 @@ func parseDossierArgs(rest []string) (cliArgs, error) {
 			return cliArgs{}, fmt.Errorf("dossier: unknown argument %q (usage: %s)", a, dossierUsage)
 		}
 	}
-	if out.handoffMark != "" && (len(out.handoffMark) > 200 || strings.ContainsAny(out.handoffMark, "\r\n\x00")) {
-		return cliArgs{}, fmt.Errorf("dossier: --handoff-marker must be one line of at most 200 bytes (usage: %s)", dossierUsage)
+	if out.handoffMark != "" && (len(out.handoffMark) > 200 || strings.ContainsAny(out.handoffMark, "\r\n\x00") || strings.TrimSpace(out.handoffMark) != out.handoffMark) {
+		return cliArgs{}, fmt.Errorf("dossier: --handoff-marker must be one line of at most 200 bytes with no surrounding whitespace, since the handoff's last line is compared trimmed (usage: %s)", dossierUsage)
 	}
 	parts := strings.Split(out.role, "/")
 	if len(parts) != 2 || !dossierToken.MatchString(parts[0]) || !dossierToken.MatchString(parts[1]) {
