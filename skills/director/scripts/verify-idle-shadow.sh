@@ -110,6 +110,8 @@ out() { cat "$root/out"; }
 has() { /usr/bin/grep -q -F -- "$1" "$root/out"; }
 count_line() { /usr/bin/grep '^idle-shadow: ready' "$root/out" || true; }
 st="$root/state/idle-shadow"
+# GNU stat first: on Linux `stat -f %Lp` is a filesystem report that succeeds and prints something else, so a BSD-first chain never reaches -c
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 
 # --- the vendored M1 vectors, pinned by sha ---------------------------------
 vec="$here/fixtures/marry-vectors.6e305d4e.json"
@@ -288,10 +290,10 @@ outside="$(printf '%s\n' "$code" | awk '/^marry_step\(\)/{f=1} f&&/^}/{f=0; next
 # --- state files, modes, checkout refusal -------------------------------------
 reset
 runis /bin/bash
-[[ "$(stat -f %Lp "$st" 2>/dev/null || stat -c %a "$st")" == 700 ]] && ok "S1 the directory is mode 700" || bad "S1 dir mode"
+[[ "$(mode_of "$st")" == 700 ]] && ok "S1 the directory is mode 700" || bad "S1 dir mode"
 m_ok=1
 for f in unmatched.jsonl would-pair.jsonl flow.jsonl; do
-  [[ "$(stat -f %Lp "$st/$f" 2>/dev/null || stat -c %a "$st/$f")" == 600 ]] || m_ok=0
+  [[ "$(mode_of "$st/$f")" == 600 ]] || m_ok=0
 done
 [[ "$m_ok" == 1 ]] && ok "S2 each state file is mode 600" || bad "S2 file modes"
 [[ "$(find "$st" -mindepth 1 | wc -l | tr -d ' ')" == 3 ]] && ok "S3 nothing else is left in the directory" || bad "S3 leftovers" "$(find "$st")"
