@@ -68,6 +68,12 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`) a
    `idea-roots.conf`): do not run `standing-hook scan-beat`, since the hook would then report a scan that
    never ran as "0h ago", and print `Stalled ideas: not run (<its stderr line>)`, never an empty block. A scan
    that did not run is not "none".
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/introspect --since today`. It is a script, not a seat: it reads the
+   runtime's own record (classifier denials, bus errors, components merged but not installed, disk, the stalled-streams
+   page, undrained asks) and prints a header and at most 7 lines, each a fact with one id and the owner of the fix
+   by role. Show its output as it is under `Introspect:`; a source it cannot see prints a `GAP` line, which you show
+   too and never read as zero. It exits 0 on every reading, and nothing in it needs an answer. Its bands are
+   provisional (the header says until when), and `$DIRECTOR_STATE/introspector/records.jsonl` is history only.
 4. Present, in this shape and no other:
 
 ```
@@ -85,6 +91,7 @@ Stalled ideas (N)  [research or design, no live forward pointer, quiet <threshol
 Stalled ideas: none  [a scan that ran and found no rows, in place of the block above]
 Unverified ideas: K  [bd: 4; remote unreachable: 2]
 Drafts: <draft-sweep lines, GAP lines included, or "none">
+Introspect: <introspect's header and its lines as printed, GAP lines included>
 Uncaptured: <one line each, or "none">
 ```
 
@@ -344,6 +351,11 @@ the captures and moves what has hardened into `sim/requirements.md`.
    on a channel of its own, since a second channel is where messages go unread
    (R-118). An episode with neither a correction nor an escalation needs no such
    section, and the step is never a gate on a handoff or a shift.
+   Run `${DIRECTOR_HOME:-$HOME/.director}/bin/introspect --since last-harvest --window week`
+   and cite its counts in this section, and nowhere else: a count is never an R-entry, a rule, a hook, a skill
+   trigger or a Desk card, and a pattern that seems to need one goes to the operator as a plain sentence in the report.
+   After that run, write `last_harvest=<the run's time, ISO>` into the introspect config (`$DIRECTOR_STATE/introspector/introspect.conf`);
+   with it unset, `--since last-harvest` counts from 7 days back and prints a GAP.
 
 Do not renumber existing requirements. New ones take the next R number.
 
