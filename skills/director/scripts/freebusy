@@ -8,7 +8,8 @@
 #
 # Reads:
 #   each cluster in the fixed list, over ssh (BatchMode, connect and call timeouts):
-#     marvel get sessions   state, last activity, ACTIVE%, RATE (limited = quota),
+#     marvel get sessions   last activity, ACTIVE%, STATE (limited = account at its rate
+#                           limit), HEALTH (a "(parked: ..." suffix = parked by the harness),
 #                           and LAST-TURN where the cluster's marvel has the column
 #     marvel get teams      a role at REPLICAS 0 is parked
 #   the asks rollup: director-mcp asks --json, on this host
@@ -21,7 +22,8 @@
 # It sends nothing on the bus, injects nothing, writes no bd record and calls no gh.
 #
 # States: free, busy, waiting, unknown. A seat is busy when its ACTIVE% is above 0,
-# free when it is 0, waiting when its role is parked or its account is rate limited,
+# free when it is 0, waiting when its role is parked (REPLICAS 0), the harness parked it,
+# or its account is limited,
 # and unknown when the reading is missing or its cluster was not read. A lane is busy
 # when it has open asks, whatever its panes read; with no asks reading a lane that
 # would be free or waiting reads unknown.
@@ -39,6 +41,7 @@
 # Environment: DIRECTOR_STATE (default $HOME/.director/state), FREEBUSY_CALL_TIMEOUT
 # (seconds for each remote read and for the asks read, default 20),
 # FREEBUSY_ASKS_MAX_AGE (seconds an asks ledger may be old, default 900),
+# FREEBUSY_LOCK_STALE_MIN (minutes before a lock with no usable pid is taken over, default 2),
 # FREEBUSY_DIRECTOR_MCP (default director-mcp on PATH, else
 # ${DIRECTOR_HOME:-$HOME/.director}/bin/director-mcp). FREEBUSY_TEST_CLOCK=1 with
 # FREEBUSY_NOW (epoch seconds) fixes the clock for tests.
@@ -99,7 +102,15 @@ take_lock() {
 }
 if ! take_lock; then
   holder="$(cat "$lock/pid" 2>/dev/null || true)"
-  if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
+  stale=0
+  if [[ "$holder" =~ ^[0-9]+$ ]]; then
+    if ! kill -0 "$holder" 2>/dev/null; then stale=1; fi
+  elif [[ -n "$(find "$lock" -maxdepth 0 -mmin "+${FREEBUSY_LOCK_STALE_MIN:-2}" 2>/dev/null || true)" ]]; then
+    # no usable pid: a run that died between mkdir and writing its pid. A lock this
+    # young may still be a run that has not written it yet.
+    stale=1
+  fi
+  if [[ "$stale" == 1 ]]; then
     rm -rf "$lock"
     if ! take_lock; then
       echo "freebusy: not run: sweep in progress"
@@ -116,14 +127,11 @@ gaps="$tmp/gaps"
 : >"$gaps"
 gap() { echo "- GAP $1" >>"$gaps"; }
 
-# Stop a job and everything it started.
+# Stop a job and everything it started. Each job is started under set -m, so it leads
+# its own process group and one signal to the group reaches ssh and whatever it spawned.
 kill_tree() {
-  local c kids
-  kids="$(pgrep -P "$1" 2>/dev/null || true)"
-  kill "$1" 2>/dev/null || true
-  for c in $kids; do
-    kill_tree "$c"
-  done
+  kill -TERM -- "-$1" 2>/dev/null || true
+  kill -TERM "$1" 2>/dev/null || true
 }
 
 # Wait for the jobs in $@ until the call timeout; stop any still running. Prints
@@ -170,18 +178,27 @@ else
   gap "clusters: no cluster list at $conf"
 fi
 
-cols="workspace,team,role,name,state,health,last-active,active,rate"
-remote="{ marvel get sessions --columns '$cols,last-turn' 2>/dev/null || marvel get sessions --columns '$cols'; } && echo @@teams && marvel get teams"
+if [[ ${#names[@]} -eq 0 && ! -s "$gaps" ]]; then gap "clusters: $conf names no cluster"; fi
+
+# STATE and HEALTH go last because marvel adds words to them (limited in place of running,
+# "failed (tag)", "succeeded (exit 0)", and HEALTH's "(stalled)", "(logged-out)" and
+# "(parked: reason)"), which would shift every later cell. LAST-TURN is asked for first and
+# the read falls back to the plain columns where the cluster's marvel lacks it; the first
+# line of the answer says which form came back.
+cols="workspace,team,role,name,last-active,active"
+remote="if out=\$(marvel get sessions --columns '$cols,last-turn,state,health' 2>/dev/null); then echo '@@cols turn'; else echo '@@cols plain'; out=\$(marvel get sessions --columns '$cols,state,health') || exit 1; fi; printf '%s\\n' \"\$out\"; echo @@teams; marvel get teams"
 pids=()
 i=0
 while [[ $i -lt ${#names[@]} ]]; do
   n="${names[$i]}"
+  set -m
   (
     set +e
     ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -- "${targets[$i]}" "$remote" >"$tmp/$n.out" 2>"$tmp/$n.err"
     echo $? >"$tmp/$n.rc"
   ) &
   pids+=("$!")
+  set +m
   i=$((i + 1))
 done
 if [[ ${#pids[@]} -gt 0 ]]; then wait_jobs "${pids[@]}"; fi
@@ -197,22 +214,31 @@ while [[ $i -lt ${#names[@]} ]]; do
   if [[ -f "$tmp/$n.rc" && "$(cat "$tmp/$n.rc")" == 0 ]] && grep -q '^@@teams$' "$tmp/$n.out"; then good=1; fi
   if [[ "$good" == 1 ]]; then
     read_ok=$((read_ok + 1))
-    # sessions section: skip the header, one seat per row of 9 or more fields
-    sed '/^@@teams$/,$d' "$tmp/$n.out" | awk -v c="$n" 'NR > 1 && NF >= 9 {
-      ws=$1; team=$2; role=$3; name=$4; st=$5; la=$7; ac=$8; rate=$9; lt=""
-      for (k = 10; k <= NF; k++) lt = lt (k > 10 ? " " : "") $k
-      a = ac; gsub(/[*%]/, "", a)
-      reason = ""
-      if (rate == "limited") { s = "waiting"; reason = "rate limited" }
-      else if (st != "running") { s = "unknown"; reason = "state " st }
-      else if (a == "" || a == "-" || a !~ /^[0-9.]+$/) { s = "unknown"; reason = "no activity reading" }
-      else if (a + 0 > 0) { s = "busy"; reason = "active" }
-      else { s = "free"; reason = "idle" }
-      if (la == "-") la = ""
-      if (ac == "-") ac = ""
-      if (lt == "-") lt = ""
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", c, ws, team, role, name, s, reason, la, ac, lt
-    }' >"$tmp/$n.seats"
+    # sessions section: the @@cols line, the header, then one seat per row
+    sed '/^@@teams$/,$d' "$tmp/$n.out" | awk -v c="$n" 'NR == 1 { turn = ($2 == "turn"); next }
+      NR == 2 { next }
+      {
+        p = turn ? 7 : 6
+        if (NF < p + 2) next
+        ws=$1; team=$2; role=$3; name=$4; la=$5; ac=$6; lt = turn ? $7 : ""
+        i = p + 1; st = $i; i++
+        if ($i ~ /^\(/) { while (i <= NF && $i !~ /\)$/) i++; i++ }
+        rest = ""
+        for (k = i + 1; k <= NF; k++) rest = rest (k > i + 1 ? " " : "") $k
+        a = ac; gsub(/[*%]/, "", a)
+        reason = ""
+        if (st == "limited") { s = "waiting"; reason = "limited" }
+        else if (st != "running") { s = "unknown"; reason = "state " st }
+        else if (index(rest, "(parked:") > 0) { s = "waiting"; reason = "parked" }
+        else if (a == "" || a == "-" || a !~ /^[0-9.]+$/) { s = "unknown"; reason = "no activity reading" }
+        else if (a + 0 > 0) { s = "busy"; reason = "active" }
+        else { s = "free"; reason = "idle" }
+        if (s != "waiting" && index(rest, "(stalled)") > 0 && reason != "") reason = reason ", stalled"
+        if (la == "-") la = ""
+        if (ac == "-") ac = ""
+        if (lt == "-") lt = ""
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", c, ws, team, role, name, s, reason, la, ac, lt
+      }' >"$tmp/$n.seats"
     # teams section: a role at REPLICAS 0 is parked, and has no session row
     sed '1,/^@@teams$/d' "$tmp/$n.out" | awk -v c="$n" 'NR > 1 && NF >= 4 && $4 == "0" {
       printf "%s\t%s\t%s\t%s\t%s/%s/%s\twaiting\tparked\t\t\t\n", c, $1, $2, $3, $1, $2, $3
@@ -249,12 +275,14 @@ fi
 if [[ ! -x "$mcp" ]]; then
   gap "asks: director-mcp not found at $mcp"
 else
+  set -m
   (
     set +e
     "$mcp" asks --json >"$tmp/asks.out" 2>"$tmp/asks.err"
     echo $? >"$tmp/asks.rc"
   ) &
   apid=$!
+  set +m
   wait_jobs "$apid"
   if [[ ! -f "$tmp/asks.rc" ]]; then
     gap "asks: no answer within ${call_timeout}s"

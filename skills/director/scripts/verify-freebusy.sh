@@ -54,7 +54,10 @@ echo "$*" >>"$FB_FIX/marvel.log"
 h="$FB_HOST"
 if [[ "$1 $2" == "get sessions" ]]; then
   if [[ "$*" == *last-turn* && -e "$FB_FIX/$h.noturn" ]]; then echo 'Error: unknown column "last-turn"' >&2; exit 1; fi
-  if [[ "$*" == *last-turn* && -e "$FB_FIX/$h.sessions.turn" ]]; then cat "$FB_FIX/$h.sessions.turn"; exit 0; fi
+  if [[ "$*" == *last-turn* ]]; then
+    if [[ -e "$FB_FIX/$h.sessions.turn" ]]; then cat "$FB_FIX/$h.sessions.turn"; exit 0; fi
+    echo 'Error: unknown column "last-turn"' >&2; exit 1
+  fi
   cat "$FB_FIX/$h.sessions"; exit 0
 fi
 if [[ "$1 $2" == "get teams" ]]; then
@@ -313,6 +316,7 @@ case_flow_and_turn() {
   { echo 'WORKSPACE  TEAM  ROLE  AGENT NAME  LAST-ACTIVE  ACTIVE%  LAST-TURN  STATE  HEALTH'; echo 'wsa crew builder crew-builder-2 4m 0% 7m running healthy'; } >"$FIX/alpha.sessions.turn"
   run "${base[@]}" >/dev/null
   [[ "$(jqf -r 'select(.name=="crew-builder-2")|.last_turn' "$state/freebusy/seats.jsonl")" == 7m ]] && ok "11 LAST-TURN is carried where installed" || bad "11 turn carried"
+  [[ "$(seat seats crew-builder-2)" == free ]] && ok "11 and the state after the LAST-TURN cell is still read as state" || bad "11 state after turn" "$(seat seats crew-builder-2)"
   touch "$FIX/alpha.noturn"
   out="$(run "${base[@]}")"
   grep -q 'clusters: 3 of 3 read' <<<"$out" && ok "11 a marvel without the column still reads" || bad "11 fallback" "$out"
