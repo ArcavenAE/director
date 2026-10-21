@@ -30,7 +30,7 @@ root="$(mktemp -d "${INTROSPECT_TMP:-/tmp}/ins.XXXXXX")" || { echo "FAIL scratch
 [[ -n "$root" && -d "$root" ]] || { echo "FAIL scratch root: no directory"; exit 1; }
 root="$(cd "$root" && pwd -P)"
 modeof() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
-trap 'rm -rf "$root"' EXIT
+trap 'chmod -R u+rwx "$root" 2>/dev/null; rm -rf "$root"' EXIT
 mkdir -p "$root/home" "$root/t" "$root/bin" "$root/proj/-work-aae-orc" "$root/proj/-work-client-x" "$root/state"
 PYDIR="$(dirname "$(command -v python3)")"
 BASEPATH="/usr/bin:/bin:$PYDIR"
@@ -602,6 +602,53 @@ assert d["counts"]["transcripts_unreadable"] == 1 and "GAP transcripts 1 unreada
 PY
 fi
 chmod 700 "$root/proj/-work-aae-orc/pd1/subagents"; rm -rf "$root/proj/-work-aae-orc/pd1" "$root/proj/-work-aae-orc/pd1.jsonl"
+
+# a symlinked directory under projects_dir: followed only when its real path stays inside projects_dir and a
+# project_include project; any other link is a gap and is never read; a link loop ends; each transcript counts once
+P="$root/proj/-work-aae-orc"
+run --since today --config "$conf" --no-append --json >"$root/j0" 2>/dev/null
+mkdir -p "$P/real"; mk "$P/real/lk1.jsonl" --agent builder --ok 5
+ln -s real "$P/lnk"
+run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
+python3 - "$root/j0" "$root/j1" <<'PY' && ok "a link that stays inside projects_dir and an included project is followed: its 5 results count once, no GAP" || bad "inside link"
+import json, sys
+a = json.load(open(sys.argv[1]))["counts"]; b = json.load(open(sys.argv[2]))["counts"]
+assert b["results"] == a["results"] + 5 and b["transcripts_unreadable"] == 0, (a["results"], b["results"], b["transcripts_unreadable"])
+PY
+rm -f "$P/lnk"
+mkdir -p "$root/linked"; mk "$root/linked/out1.jsonl" --agent builder --ok 7 --den 1
+ln -s "$root/linked" "$P/out"
+run --since today --config "$conf" --no-append --json >"$root/j2" 2>/dev/null
+python3 - "$root/j1" "$root/j2" <<'PY' && ok "a link pointing outside projects_dir is a gap and is never read: no extra result, GAP transcripts 1 unreadable" || bad "outside link"
+import json, sys
+a = json.load(open(sys.argv[1]))["counts"]; d = json.load(open(sys.argv[2])); b = d["counts"]
+assert b["results"] == a["results"] and b["denials"] == a["denials"], (a["results"], b["results"])
+assert b["transcripts_unreadable"] == 1 and "GAP transcripts 1 unreadable" in d["header"], d["header"]
+PY
+rm -f "$P/out"
+mkdir -p "$root/proj/-work-client-x/q"; mk "$root/proj/-work-client-x/q/c1.jsonl" --agent builder --ok 4
+ln -s "$root/proj/-work-client-x/q" "$P/client"
+run --since today --config "$conf" --no-append --json >"$root/j2" 2>/dev/null
+python3 - "$root/j1" "$root/j2" <<'PY' && ok "a link into a project that is inside projects_dir but not an included one is a gap and is never read" || bad "client link"
+import json, sys
+a = json.load(open(sys.argv[1]))["counts"]; b = json.load(open(sys.argv[2]))["counts"]
+assert b["results"] == a["results"] and b["transcripts_unreadable"] == 1, (a["results"], b["results"], b["transcripts_unreadable"])
+PY
+rm -f "$P/client"; rm -rf "$root/proj/-work-client-x/q"
+ln -s "$P" "$P/real/loop"
+runt() { env -i HOME="$root/home" PATH="$FIXPATH" LANG=en_US.UTF-8 TMPDIR="$root/t" DIRECTOR_STATE="$state" INTROSPECT_NOW="$NOW" perl -e 'alarm 30; exec @ARGV or die "exec: $!"' python3 -I "$S" "$@"; }
+ln -s real "$P/lnk"
+runt --since today --config "$conf" --no-append --json >"$root/j3" 2>/dev/null; rc=$?
+python3 - "$root/j1" "$root/j3" <<'PY' && [[ $rc -eq 0 ]] && ok "a link loop ends (exit 0), counts each transcript once and is no GAP" || bad "symlink loop" "rc=$rc"
+import json, sys
+a = json.load(open(sys.argv[1]))["counts"]; b = json.load(open(sys.argv[2]))["counts"]
+assert b["results"] == a["results"] and b["scanned"] == a["scanned"] and b["transcripts_unreadable"] == 0, (a["results"], b["results"], a["scanned"], b["scanned"], b["transcripts_unreadable"])
+PY
+rm -f "$P/lnk" "$P/real/loop"; rm -rf "$P/real"
+ln -s "$root/does-not-exist" "$P/dangling.jsonl"
+run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["counts"]["transcripts_unreadable"]==1 and "GAP transcripts 1 unreadable" in d["header"], d["header"]' "$root/j1" && ok "a transcript path that cannot be statted (a dangling link) is a gap, not a silent skip" || bad "stat gap"
+rm -f "$P/dangling.jsonl"; rm -rf "$root/linked"
 
 # ================================================================ properties of the script itself
 [[ "$(grep -c -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")" == 0 ]] && ok "P1 the script names no Desk, bus send, inject or gh call (the name send_message is read from transcripts, never run)" || bad "P1" "$(grep -n -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")"

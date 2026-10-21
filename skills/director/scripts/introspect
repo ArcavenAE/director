@@ -428,11 +428,48 @@ def scan_transcripts(cfg, since, t_now):
     def cannot_list(err):  # a directory that cannot be listed hides transcripts: a gap, never a silent drop
         main["files_unreadable"] += 1
 
-    for d in sorted(glob.glob(os.path.join(pdir, "*"))):
-        if not os.path.isdir(d) or not any(inc in os.path.basename(d) for inc in cfg["project_include"]):
-            continue
+    realp = os.path.realpath(pdir)
+    seen = set()
+
+    def included(real):
+        """A real path inside projects_dir whose project directory is one of project_include."""
+        if not real.startswith(realp + os.sep):
+            return False
+        project = real[len(realp) + 1:].split(os.sep)[0]
+        return any(inc in project for inc in cfg["project_include"]) and not forbidden(real)
+
+    def mark(path):
+        try:
+            st = os.stat(path)
+        except OSError:
+            return False
+        key = (st.st_dev, st.st_ino)
+        if key in seen:
+            return False
+        seen.add(key)
+        return True
+
+    def collect(d):
+        if not mark(d):
+            return
         for root, dirs, fnames in os.walk(d, onerror=cannot_list):
-            dirs[:] = sorted(x for x in dirs if not x.startswith(".") and not forbidden(os.path.join(root, x)))
+            keep = []
+            for x in sorted(dirs):
+                full = os.path.join(root, x)
+                if x.startswith(".") or forbidden(full):
+                    continue
+                if os.path.islink(full):
+                    # a link is followed only when it stays inside projects_dir and an included project;
+                    # any other link is a gap and is never read
+                    real = os.path.realpath(full)
+                    if os.path.isdir(real) and included(real):
+                        collect(real)
+                    else:
+                        main["files_unreadable"] += 1
+                    continue
+                if mark(full):
+                    keep.append(x)
+            dirs[:] = keep
             for fn in sorted(fnames):
                 p = os.path.join(root, fn)
                 if fn.startswith(".") or not fn.endswith(".jsonl") or forbidden(p):
@@ -442,6 +479,11 @@ def scan_transcripts(cfg, since, t_now):
                         files.append(p)
                 except OSError:
                     main["files_unreadable"] += 1
+
+    for d in sorted(glob.glob(os.path.join(pdir, "*"))):
+        if not os.path.isdir(d) or not any(inc in os.path.basename(d) for inc in cfg["project_include"]):
+            continue
+        collect(d)
     names = {}
     for p in files:
         if "/subagents/" not in p:
