@@ -5,7 +5,7 @@
 # gh and ssh forbidden stubs, and runs the script under `env -i` with no MARVEL_SOCKET. No
 # real bd, marvel or gh is reached, and nothing is written outside the scratch root.
 #
-# The marry step is the one part not built: it waits on a marvel verb (marvel#989), so the
+# The marry step is the one part not built: it waits on a marvel verb (marvel#992), so the
 # would-pair vector expects the GAP line, and these tests hold the surrounding reads and
 # outputs so that step can be swapped in without touching them.
 #
@@ -89,6 +89,19 @@ reset() { # the default scene: the five worked shapes, no class on any, three se
   } | jq -s '.' >"$FIX/items.json"
   cp "$FIX/items.json" "$FIX/items.all.json"
   echo '[]' >"$FIX/client.json"
+  cat >"$FIX/convention.md" <<'MD'
+## Labels
+
+### Axes
+
+| Axis | Label format | Examples |
+|------|--------------|----------|
+| **Orchestrator scope** | orchestrator name, lowercase | `aae-orc` (NOT `orc`) |
+| **Component** | flat, lowercase | `marvel`, `director`, `compa`, `ThreeX` |
+| **Scope modifier** | `scope:<qualifier>` | `scope:cross-cutting` |
+| **Origin** | `source:<kind>` | `source:session`, `source:finding` |
+| **Lifecycle** | single word | `inbox`, `kos-bridge`, `fleet-gap` |
+MD
   {
     seat alpha crew builder b1 free
     seat alpha crew builder b2 busy
@@ -104,7 +117,7 @@ runis() { # bash, then env assignments
   rc=0
   ( cd "$root/work" && env -i HOME="$root/home" PATH="$root/bin:$PATH" LANG=C TMPDIR="$root" \
       DIRECTOR_STATE="$root/state" IS_FIX="$FIX" IDLE_SHADOW_TEST_CLOCK=1 IDLE_SHADOW_NOW="$NOW" \
-      IDLE_SHADOW_CALL_TIMEOUT=3 "$@" "$b" "$IS" ) >"$root/out" 2>"$root/err" || rc=$?
+      IDLE_SHADOW_CALL_TIMEOUT=3 IDLE_SHADOW_LABEL_CONVENTION="$FIX/convention.md" "$@" "$b" "$IS" ) >"$root/out" 2>"$root/err" || rc=$?
 }
 out() { cat "$root/out"; }
 has() { /usr/bin/grep -q -F -- "$1" "$root/out"; }
@@ -151,7 +164,7 @@ for B in $BASHES; do
   [[ ! -s "$st/would-pair.jsonl" && -f "$st/would-pair.jsonl" ]] && ok "1 would-pair.jsonl exists and holds no row" || bad "1 would-pair file"
   has "no item carries a class label" && ok "1 the expected first reading is said plainly" || bad "1 plain note"
   ! has "ERROR" && ! has "FAIL" && ok "1 the empty result is not framed as an error" || bad "1 framed as error"
-  has "- GAP marry: no marvel marry verb (marvel#989)" && ok "1 the marry step prints its GAP once" || bad "1 marry GAP" "$(out)"
+  has "- GAP marry: no marvel marry verb (marvel#992)" && ok "1 the marry step prints its GAP once" || bad "1 marry GAP" "$(out)"
   [[ "$(/usr/bin/grep -c '^- GAP marry' "$root/out")" == 1 ]] && ok "1 exactly once" || bad "1 marry GAP count"
   [[ "$cl" == *"pane veto"* ]] && ok "1 the count line carries the strict-free caveat" || bad "1 caveat" "$cl"
   [[ "$cl" == *"seats: 1 free, 1 busy, 1 waiting, 1 unknown"* ]] && ok "1 seat states are freebusy's, never coerced" || bad "1 seats" "$cl"
@@ -163,7 +176,7 @@ for B in $BASHES; do
   cl="$(count_line)"
   [[ "$rc" == 0 && "$cl" == *"eligible 1"* ]] && ok "2 an item with a class and a component is eligible" || bad "2 eligible" "$cl"
   [[ "$cl" == *"unmatched 1 (no class 1, no component 1,"* ]] && ok "2 the other item is the only unmatched one" || bad "2 unmatched" "$cl"
-  has "- GAP marry: no marvel marry verb (marvel#989)" && [[ "$cl" == *"would-pair 0"* && ! -s "$st/would-pair.jsonl" ]] \
+  has "- GAP marry: no marvel marry verb (marvel#992)" && [[ "$cl" == *"would-pair 0"* && ! -s "$st/would-pair.jsonl" ]] \
     && ok "2 until marry exists the would-pair vector holds the GAP and no row" || bad "2 would-pair" "$(out)"
   [[ ! -e "$FIX/forbidden.log" ]] && ok "2 nothing was sent, injected or written" || bad "2 forbidden" "$(cat "$FIX/forbidden.log")"
   ! has "e-1" && ok "2 an eligible item is not on the unmatched list" || bad "2 eligible listed" "$(out)"
@@ -187,6 +200,50 @@ for B in $BASHES; do
   done | set_items
   runis "$B"
   [[ "$(count_line)" == *"eligible 6"* ]] && ok "3 each of the six class ids is accepted" || bad "3 six ids" "$(count_line)"
+
+  # ---- 3b the component set is named, not "any label without a colon"
+  reset
+  {
+    item k-inbox '["class:pr-review","aae-orc","inbox"]'
+    item k-gap '["class:pr-review","aae-orc","fleet-gap"]'
+    item k-unknown '["class:pr-review","aae-orc","not-a-listed-thing"]'
+    item k-comp '["class:pr-review","aae-orc","compa"]'
+    item k-upper '["class:pr-review","aae-orc","ThreeX"]'
+    item k-lower '["class:pr-review","aae-orc","threex"]'
+    item k-orc '["class:pr-review","aae-orc"]'
+    item k-scope '["class:pr-review","aae-orc","scope:cross-cutting"]'
+  } | set_items
+  runis "$B"
+  cl="$(count_line)"
+  [[ "$cl" == *"eligible 2"* ]] && ok "3b only the two items with a named component are eligible" || bad "3b eligible" "$cl"
+  for id in k-inbox k-gap k-unknown k-lower k-orc k-scope; do
+    [[ "$(jq -r --arg id "$id" 'select(.id == $id) | .missing | join(",")' "$st/unmatched.jsonl")" == component ]] \
+      && ok "3b $id reads no component" || bad "3b $id" "$(cat "$st/unmatched.jsonl")"
+  done
+  [[ -z "$(jq -r 'select(.id == "k-comp" or .id == "k-upper")' "$st/unmatched.jsonl")" ]] && ok "3b a listed component, in its own case, is a component" || bad "3b listed"
+
+  # ---- 3c no readable convention: a GAP, never "any label"
+  reset
+  { item g-1 '["class:pr-review","marvel"]'; item g-2 '["marvel"]'; } | set_items
+  runis "$B" IDLE_SHADOW_LABEL_CONVENTION=
+  cl="$(count_line)"
+  [[ "$rc" == 0 ]] && has "- GAP components: " && [[ "$cl" == *"eligible GAP"* && "$cl" == *"no component GAP"* ]] \
+    && ok "3c no convention source gives a GAP, and eligible and no-component read GAP" || bad "3c unset" "$(out)"
+  [[ "$cl" == *"no class 1"* ]] && ok "3c the class reading still stands without the set" || bad "3c class" "$cl"
+  runis "$B" IDLE_SHADOW_LABEL_CONVENTION="$root/does-not-exist.md"
+  [[ "$rc" == 0 ]] && has "- GAP components: " && [[ "$(count_line)" == *"eligible GAP"* ]] && ok "3c a missing file is a GAP" || bad "3c missing" "$(out)"
+  printf 'no table here\n' >"$FIX/empty-conv.md"
+  runis "$B" IDLE_SHADOW_LABEL_CONVENTION="$FIX/empty-conv.md"
+  [[ "$rc" == 0 ]] && has "- GAP components: " && [[ "$(count_line)" == *"eligible GAP"* ]] && ok "3c a file with no Component row is a GAP" || bad "3c norow" "$(out)"
+  # the default source: the convention file in the checkout the run starts in
+  mkdir -p "$root/repo2/.claude/skills/task-workflow"
+  ( cd "$root/repo2" && git init -q . ) >/dev/null 2>&1 || mkdir -p "$root/repo2/.git"
+  cp "$FIX/convention.md" "$root/repo2/.claude/skills/task-workflow/SKILL.md"
+  rc=0
+  ( cd "$root/repo2" && env -i HOME="$root/home" PATH="$root/bin:$PATH" LANG=C TMPDIR="$root" DIRECTOR_STATE="$root/state" IS_FIX="$FIX" \
+      IDLE_SHADOW_TEST_CLOCK=1 IDLE_SHADOW_NOW="$NOW" IDLE_SHADOW_CALL_TIMEOUT=3 "$B" "$IS" ) >"$root/out" 2>"$root/err" || rc=$?
+  [[ "$rc" == 0 && "$(count_line)" == *"eligible 1"* ]] && ! has "- GAP components" && ok "3c with no variable set the run reads the convention file of the checkout it starts in" || bad "3c default" "$(out)"
+  rm -rf "$root/repo2"
 
   # ---- 4 client items are a count only
   reset
