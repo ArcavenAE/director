@@ -134,7 +134,7 @@ conf3() { printf '%s\n' '# clusters' 'alpha alpha' 'beta beta' 'gamma gamma' >"$
 new_state() { rm -rf "$state"; mkdir -p "$state"; }
 jqf() { jq "$@" 2>/dev/null || true; }
 count() { grep -c -- "$1" <<<"$2" || true; }
-mode_of() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 seat() { jq -r --arg n "$2" 'select(.name==$n) | .state' "$state/freebusy/$1.jsonl" 2>/dev/null || true; }
 
 # --- cases ------------------------------------------------------------------
