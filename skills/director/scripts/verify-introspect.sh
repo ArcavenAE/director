@@ -675,6 +675,13 @@ rm -f "$P/clientlink.jsonl"
 ln -s "$root/linked" "$root/proj/-work-aae-orc-ext"
 gapcase "a top-level project entry that links outside projects_dir is a gap and is never read"
 rm -f "$root/proj/-work-aae-orc-ext"
+# K11/K12: the containment rule runs before the directory test, so a dangling top-level link and a link to a file are gaps too
+ln -s "$root/does-not-exist" "$root/proj/-work-aae-orc-ext"
+gapcase "a dangling top-level project link is a gap, not a silent skip (K11)"
+rm -f "$root/proj/-work-aae-orc-ext"
+ln -s "$root/linked/out1.jsonl" "$root/proj/-work-aae-orc-ext"
+gapcase "a top-level project link to a file is a gap, not a silent skip (K12)"
+rm -f "$root/proj/-work-aae-orc-ext"
 mk "$P/real.jsonl" --agent builder --ok 5
 ln -s real.jsonl "$P/alias.jsonl"
 run --since today --config "$conf" --no-append --json >"$root/j2" 2>/dev/null

@@ -491,14 +491,17 @@ def scan_transcripts(cfg, since, t_now):
                     files.append(p)
 
     for d in sorted(glob.glob(os.path.join(pdir, "*"))):
-        if not os.path.isdir(d) or not any(inc in os.path.basename(d) for inc in cfg["project_include"]):
+        if not any(inc in os.path.basename(d) for inc in cfg["project_include"]):
             continue
         if os.path.islink(d):
+            # the containment rule runs before the directory test: a dangling link or a link to a file is a gap too
             real = os.path.realpath(d)
-            if not included(real):
+            if not (os.path.isdir(real) and included(real)):
                 main["files_unreadable"] += 1
                 continue
             d = real
+        elif not os.path.isdir(d):
+            continue
         collect(d)
     names = {}
     for p in files:
