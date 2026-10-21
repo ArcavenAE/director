@@ -254,7 +254,7 @@ case_no_writes() {
   fixtures; new_state; conf3
   run FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp" >/dev/null
   [[ ! -e "$FIX/forbidden.log" ]] && ok "7  no bd, gh or ssh call was made" || bad "7  forbidden call" "$(cat "$FIX/forbidden.log")"
-  if grep -qvE '^(config list|get (sessions|teams) --cluster (alpha|beta|gamma) )' "$FIX/marvel.log"; then bad "7  marvel used for more than config list and get --cluster" "$(cat "$FIX/marvel.log")"; else ok "7  marvel was only asked config list and get --cluster NAME"; fi
+  if grep -qvE '^(config list$|get (sessions|teams) --cluster (alpha|beta|gamma)( |$))' "$FIX/marvel.log"; then bad "7  marvel used for more than config list and get --cluster" "$(cat "$FIX/marvel.log")"; else ok "7  marvel was only asked config list and get --cluster NAME"; fi
   [[ "$(grep -c '^get ' "$FIX/marvel.log")" == "$(grep -c '^get .*--cluster ' "$FIX/marvel.log")" ]] && ok "7  every get names its cluster" || bad "7  a get without --cluster"
   grep -q -- '--socket' "$FIX/marvel.log" && bad "7  a call carried --socket" || ok "7  no call carries --socket"
   [[ "$(sort -u "$FIX/marvel.env")" == "MARVEL_SOCKET=unset MARVEL_HOME=unset" ]] && ok "7  marvel saw no MARVEL_SOCKET or MARVEL_HOME that the script set" || bad "7  marvel env" "$(sort -u "$FIX/marvel.env")"

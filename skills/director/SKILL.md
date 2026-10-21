@@ -69,11 +69,14 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    never ran as "0h ago", and print `Stalled ideas: not run (<its stderr line>)`, never an empty block. A scan
    that did not run is not "none".
    Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/freebusy` (read only: no bus send, no inject, no bd write, no gh call).
-   It reads each cluster named in `$DIRECTOR_STATE/freebusy-clusters.conf` over ssh, and the asks rollup, and writes
+   It reads each cluster that `marvel config list` names (less any name in `$DIRECTOR_STATE/freebusy-clusters.exclude`,
+   one per line, for an alias) with `marvel get ... --cluster <name>`, and the asks rollup, and writes
    `$DIRECTOR_STATE/freebusy/` (seats, lanes and a flow line). Print its `- GAP` lines and its one count line
    (`freebusy: clusters: N of M read; ...`) in the sweep reply under Drafts, outside the fence above, as the Away line
-   is: they are not appended to `board.md`, and the fence is unchanged. With no cluster list it prints `GAP clusters`;
-   show that line, never skip the step silently. A cluster it could not read shows its seats as unknown, never as 0.
+   is: they are not appended to `board.md`, and the fence is unchanged. If `marvel config list` fails or names no cluster it prints `GAP clusters`;
+   show that line, never skip the step silently. NOTE lines (an excluded cluster, an exclude name marvel does not
+   know, the retired `freebusy-clusters.conf`) are shown too. It never sets `MARVEL_SOCKET` or `MARVEL_HOME`; to read
+   another home, set `MARVEL_HOME` where you run the sweep. A cluster it could not read shows its seats as unknown, never as 0.
    `not run: sweep in progress` means another run holds it; show that line too. It exits 0 whether it finds nothing
    or a lot, so read its lines, never its exit code.
    Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/introspect --since today`. It is a script, not a seat: it reads the

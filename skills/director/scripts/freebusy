@@ -7,7 +7,10 @@
 # what it could not read, so an empty cell is never mistaken for an idle seat.
 #
 # Reads:
-#   each cluster in the fixed list, over ssh (BatchMode, connect and call timeouts):
+#   the cluster list: marvel config list, the NAME column only (a "*" marks the current
+#     cluster and is not a name); an optional $DIRECTOR_STATE/freebusy-clusters.exclude
+#     skips names, one per line, "#" comments allowed (an alias of another cluster, say)
+#   each cluster, with the local marvel client and --cluster NAME, bounded by the call timeout:
 #     marvel get sessions   last activity, ACTIVE%, STATE (limited = account at its rate
 #                           limit), HEALTH (a "(parked: ..." suffix = parked by the harness),
 #                           and LAST-TURN where the cluster's marvel has the column
@@ -35,11 +38,13 @@
 #
 # A diagnostic, not a gate: it exits 0 whether it finds nothing or a lot.
 #
-# Cluster list: FREEBUSY_CONFIG, default $DIRECTOR_STATE/freebusy-clusters.conf, one
-# "name ssh-target" per line, blank lines and # comments ignored. It is not checked in.
+# The old $DIRECTOR_STATE/freebusy-clusters.conf is no longer read; if it exists a NOTE says so.
+# marvel resolves its own home, socket and cluster config. This script never sets
+# MARVEL_SOCKET, MARVEL_HOME or --socket; to read a different home, set MARVEL_HOME in the
+# caller's environment.
 #
 # Environment: DIRECTOR_STATE (default $HOME/.director/state), FREEBUSY_CALL_TIMEOUT
-# (seconds for each remote read and for the asks read, default 20),
+# (seconds for the cluster list, for each cluster read and for the asks read, default 20),
 # FREEBUSY_ASKS_MAX_AGE (seconds an asks ledger may be old, default 900),
 # FREEBUSY_LOCK_STALE_MIN (a positive integer: minutes before a lock with no usable pid is taken over, default 2),
 # FREEBUSY_DIRECTOR_MCP (default director-mcp on PATH, else
@@ -52,7 +57,8 @@ umask 077
 
 state="${DIRECTOR_STATE:-$HOME/.director/state}"
 dir="$state/freebusy"
-conf="${FREEBUSY_CONFIG:-$state/freebusy-clusters.conf}"
+legacy_conf="$state/freebusy-clusters.conf"
+exclude_file="$state/freebusy-clusters.exclude"
 call_timeout="${FREEBUSY_CALL_TIMEOUT:-20}"
 max_age="${FREEBUSY_ASKS_MAX_AGE:-900}"
 
@@ -141,6 +147,15 @@ tmp="$(mktemp -d "$dir/.run.XXXXXX")"
 gaps="$tmp/gaps"
 : >"$gaps"
 gap() { echo "- GAP $1" >>"$gaps"; }
+notes="$tmp/notes"
+: >"$notes"
+note() { echo "- NOTE $1" >>"$notes"; }
+# the first line of a stderr file, control characters dropped; marvel appends a usage block to some errors
+first_line() {
+  local l
+  l="$(head -n 1 "$1" 2>/dev/null | LC_ALL=C tr -d '\000-\037' || true)"
+  echo "${l:-no output}"
+}
 
 # Stop a job and everything it started. Each job is started under set -m, so it leads
 # its own process group and one signal to the group reaches ssh and whatever it spawned.
@@ -173,27 +188,74 @@ wait_jobs() {
 }
 
 # --- clusters ---------------------------------------------------------------
-names=()
-targets=()
-if [[ -r "$conf" ]]; then
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%%#*}"
-    name="" target="" extra=""
-    read -r name target extra <<<"$line" || true
-    if [[ -n "$name" ]]; then
-      if [[ -n "$target" && -z "$extra" && "$name" =~ ^[A-Za-z0-9._-]+$ && "$target" =~ ^[A-Za-z0-9._@:-]+$ ]]; then
-        names+=("$name")
-        targets+=("$target")
-      else
-        gap "clusters: unusable line in $conf"
-      fi
-    fi
-  done <"$conf"
+if [[ -e "$legacy_conf" ]]; then note "clusters: freebusy-clusters.conf is no longer read"; fi
+
+set -m
+(
+  set +e
+  marvel config list </dev/null >"$tmp/cfg.out" 2>"$tmp/cfg.err"
+  echo $? >"$tmp/cfg.rc"
+) &
+cpid=$!
+set +m
+wait_jobs "$cpid"
+
+cfgnames=()
+cfg_ok=0
+if [[ ! -f "$tmp/cfg.rc" ]]; then
+  gap "clusters: marvel config list failed (no answer within ${call_timeout}s)"
+elif [[ "$(cat "$tmp/cfg.rc")" != 0 ]]; then
+  gap "clusters: marvel config list failed ($(first_line "$tmp/cfg.err"))"
 else
-  gap "clusters: no cluster list at $conf"
+  cfg_ok=1
+  # the NAME column only: field 1, or field 2 after a "*" marker; the header is skipped
+  while IFS= read -r nm; do
+    if [[ "$nm" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      cfgnames+=("$nm")
+    else
+      gap "clusters: an unusable cluster name in marvel config list"
+    fi
+  done < <(awk '$1 == "NAME" { next } { n = $1; if (n == "*") n = $2; else if (substr(n, 1, 1) == "*") n = substr(n, 2); if (n != "") print n }' "$tmp/cfg.out")
+  if [[ ${#cfgnames[@]} -eq 0 && ! -s "$gaps" ]]; then gap "clusters: marvel config list names no cluster"; fi
 fi
 
-if [[ ${#names[@]} -eq 0 && ! -s "$gaps" ]]; then gap "clusters: $conf names no cluster"; fi
+excluded=()
+if [[ "$cfg_ok" == 1 && -e "$exclude_file" ]]; then
+  if [[ -r "$exclude_file" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line%%#*}"
+      xn=""
+      read -r xn _ <<<"$line" || true
+      if [[ -n "$xn" ]]; then
+        found=0
+        for nm in ${cfgnames[@]+"${cfgnames[@]}"}; do
+          if [[ "$nm" == "$xn" ]]; then found=1; fi
+        done
+        if [[ "$found" == 1 ]]; then
+          excluded+=("$xn")
+        else
+          note "exclude: $xn is not a configured cluster"
+        fi
+      fi
+    done <"$exclude_file"
+  else
+    gap "clusters: $exclude_file is not readable"
+  fi
+fi
+
+names=()
+for nm in ${cfgnames[@]+"${cfgnames[@]}"}; do
+  skip=0
+  for xn in ${excluded[@]+"${excluded[@]}"}; do
+    if [[ "$nm" == "$xn" ]]; then skip=1; fi
+  done
+  if [[ "$skip" == 1 ]]; then
+    note "cluster $nm: excluded"
+  else
+    names+=("$nm")
+  fi
+done
+if [[ ${#names[@]} -eq 0 && ${#cfgnames[@]} -gt 0 ]]; then gap "clusters: every configured cluster is excluded"; fi
 
 # STATE and HEALTH go last because marvel adds words to them (limited in place of running,
 # "failed (tag)", "succeeded (exit 0)", and HEALTH's "(stalled)", "(logged-out)" and
@@ -201,15 +263,15 @@ if [[ ${#names[@]} -eq 0 && ! -s "$gaps" ]]; then gap "clusters: $conf names no 
 # the read falls back to the plain columns where the cluster's marvel lacks it; the first
 # line of the answer says which form came back.
 cols="workspace,team,role,name,last-active,active"
-remote="if out=\$(marvel get sessions --columns '$cols,last-turn,state,health' 2>/dev/null); then echo '@@cols turn'; else echo '@@cols plain'; out=\$(marvel get sessions --columns '$cols,state,health') || exit 1; fi; printf '%s\\n' \"\$out\"; echo @@teams; marvel get teams"
 pids=()
 i=0
 while [[ $i -lt ${#names[@]} ]]; do
   n="${names[$i]}"
+  remote="if out=\$(marvel get sessions --cluster '$n' --columns '$cols,last-turn,state,health' 2>/dev/null); then echo '@@cols turn'; else echo '@@cols plain'; out=\$(marvel get sessions --cluster '$n' --columns '$cols,state,health') || exit 1; fi; printf '%s\\n' \"\$out\"; echo @@teams; marvel get teams --cluster '$n'"
   set -m
   (
     set +e
-    ssh -n -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -- "${targets[$i]}" "$remote" >"$tmp/$n.out" 2>"$tmp/$n.err"
+    sh -c "$remote" </dev/null >"$tmp/$n.out" 2>"$tmp/$n.err"
     echo $? >"$tmp/$n.rc"
   ) &
   pids+=("$!")
@@ -262,9 +324,9 @@ while [[ $i -lt ${#names[@]} ]]; do
       state: .[5], reason: .[6], last_active: (if .[7] == "" then null else .[7] end),
       active: (if .[8] == "" then null else .[8] end), last_turn: (if .[9] == "" then null else .[9] end)}' "$tmp/$n.seats" >>"$seats_new"
   else
-    why="$(head -c 200 "$tmp/$n.err" 2>/dev/null | tr '\n' ' ' || true)"
+    why="$(first_line "$tmp/$n.err")"
     if [[ ! -f "$tmp/$n.rc" ]]; then why="no answer within ${call_timeout}s"; fi
-    gap "cluster $n: not read (${why:-no output})"
+    gap "cluster $n: not read ($why)"
     carried=0
     if [[ -f "$dir/seats.jsonl" ]]; then
       jq -c --arg c "$n" --arg at "$at" 'select(.cluster == $c) | .at = $at | .state = "unknown" | .reason = "cluster not read"
@@ -355,6 +417,7 @@ jq -n -c --arg at "$at" --argjson read "$read_ok" --argjson total "$total" --arg
 chmod 600 "$dir/flow.jsonl"
 
 cat "$gaps"
+cat "$notes"
 line="freebusy: clusters: $read_ok of $total read; seats: $seat_counts; lanes: $lane_counts; asks: $asks_note"
 if [[ -n "$unlisted" ]]; then line="$line; not listed: $unlisted"; fi
 echo "$line"
