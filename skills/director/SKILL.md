@@ -47,7 +47,7 @@ when the notes have accumulated. Say which mode you are in, once, at the start.
 
 ## Mode: sweep
 
-The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `freebusy`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
+The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `freebusy`, `idle-shadow`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
 
 1. Run `${DIRECTOR_HOME:-$HOME/.director}/bin/dsi`. It writes `$DIRECTOR_STATE/sessions.json` (props) and
    `roster.md` (scenery). Defaults to `~/.director/state`, 4-day window.
@@ -79,6 +79,14 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    another home, set `MARVEL_HOME` where you run the sweep. A cluster it could not read shows its seats as unknown, never as 0.
    `not run: sweep in progress` means another run holds it; show that line too. It exits 0 whether it finds nothing
    or a lot, so read its lines, never its exit code.
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/idle-shadow` (read only: it sends nothing, injects nothing, writes no bd
+   record and calls no gh). It reads the ready items with `bd ready` and the seat states freebusy just wrote, and writes
+   `$DIRECTOR_STATE/idle-shadow/` (the unmatched items, the would-pair rows and a flow line). Print its `- GAP` and `- NOTE`
+   lines, its `- unmatched ...` lines and its one count line (`idle-shadow: ready N ...`) in the sweep reply under Drafts, outside the fence above,
+   as the freebusy line is: they are not appended to `board.md`. Items labelled `scope:client` appear only as a count.
+   Until items carry `class:` labels the expected reading is `would-pair 0` and every item unmatched as "no class"; that is a
+   reading, not an error. The `- GAP marry: ...` line says the pairing step waits on a marvel verb; show it. It exits 0 whether it finds
+   nothing or a lot, so read its lines, never its exit code.
    Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/introspect --since today`. It is a script, not a seat: it reads the
    runtime's own record (classifier denials, bus errors, components merged but not installed, disk, the stalled-streams
    page, undrained asks) and prints a header and at most 7 lines, each a fact with one id and the owner of the fix

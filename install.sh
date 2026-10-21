@@ -82,6 +82,8 @@ install_one "$SRC/skills/director/scripts/draft-sweep" "$DIRECTOR_HOME/bin/draft
 install_one "$SRC/skills/director/scripts/dbi" "$DIRECTOR_HOME/bin/dbi"
 # freebusy, the read-only free/busy table (idle-scheduler B3): the sweep runs it from the bin home after dbi.
 install_one "$SRC/skills/director/scripts/freebusy" "$DIRECTOR_HOME/bin/freebusy"
+# idle-shadow, the idle scheduler's shadow run (M2, read side): the sweep runs it from the bin home after freebusy.
+install_one "$SRC/skills/director/scripts/idle-shadow" "$DIRECTOR_HOME/bin/idle-shadow"
 # dash-writer, the operations dashboard's writer step (ghxv2): the sweep's tick runs it from the bin home.
 install_one "$SRC/skills/director/scripts/dash-writer" "$DIRECTOR_HOME/bin/dash-writer"
 # dws is installed above; dash-writer reads it from beside itself.

@@ -84,7 +84,7 @@ reset() { # the default scene: the five worked shapes, no class on any, three se
     item i-1 '["aae-orc","marvel","source:session"]' 1
     item i-2 '["aae-orc"]' 2
     item i-3 '["aae-orc","source:finding"]' 2
-    item i-4 '["aae-orc","marvel","actor:operator","host:kinu"]' 1
+    item i-4 '["aae-orc","marvel","actor:operator","host:alpha"]' 1
     item i-5 '[]' 3
   } | jq -s '.' >"$FIX/items.json"
   cp "$FIX/items.json" "$FIX/items.all.json"
@@ -239,7 +239,13 @@ for B in $BASHES; do
     && ok "6 an old seats file is a GAP and every seat reads unknown" || bad "6 old seats" "$(out)"
 
   # ---- 7 bd failures are GAPs and the run still ends 0
-  reset; : >"$FIX/bd.fail"; touch "$FIX/bd.fail"
+  reset
+  runis "$B"
+  [[ -f "$st/unmatched.jsonl" ]] || bad "7 setup: a good run left no unmatched list"
+  touch "$FIX/bd.fail"
+  runis "$B"
+  [[ ! -e "$st/unmatched.jsonl" ]] && ok "7 a failed item read leaves no old unmatched list to be mistaken for this run's" || bad "7 stale unmatched list"
+  reset; touch "$FIX/bd.fail"
   runis "$B"
   [[ "$rc" == 0 ]] && has "- GAP items: bd ready failed (Error: dolt server unreachable)" && [[ "$(count_line)" == *"ready GAP"* ]] \
     && ok "7 bd down gives one GAP with its first stderr line, and ready is GAP, never 0" || bad "7 bd down" "$(out)"
@@ -275,9 +281,9 @@ n_bd="$(printf '%s\n' "$code" | /usr/bin/grep -c -E '(^|[^a-zA-Z_])bd ' || true)
   && ok "P2 every bd invocation in the script is a ready read" || bad "P2 bd verbs" "$n_bd"
 [[ "$(printf '%s\n' "$code" | /usr/bin/grep -c -E '^marry_step\(\)' || true)" == 1 ]] \
   && ok "P3 the marry step is one function" || bad "P3 marry function"
-# nothing outside marry_step builds a would-pair row
-outside="$(printf '%s\n' "$code" | awk '/^marry_step\(\)/{f=1} f&&/^}/{f=0; next} !f' | /usr/bin/grep -c 'would-pair.jsonl' || true)"
-[[ "$outside" -le 2 ]] && ok "P4 the would-pair file is only created empty outside the marry step" || bad "P4 would-pair writes" "$outside"
+# nothing outside marry_step produces a would-pair row: no append, no jq, no echo to the file
+outside="$(printf '%s\n' "$code" | awk '/^marry_step\(\)/{f=1} f&&/^}/{f=0; next} !f' | /usr/bin/grep 'would-pair.jsonl' | /usr/bin/grep -c -E '>>|jq|echo|printf' || true)"
+[[ "$outside" == 0 ]] && ok "P4 no row is produced outside the marry step" || bad "P4 would-pair writes" "$outside"
 
 # --- state files, modes, checkout refusal -------------------------------------
 reset
@@ -294,8 +300,9 @@ runis /bin/bash
 jq -e '.ready == 5 and .client == 0 and .would_pair == 0 and .unmatched.no_class == 5' "$st/flow.jsonl" >/dev/null && ok "S5 the flow line carries the counts" || bad "S5 flow fields" "$(cat "$st/flow.jsonl")"
 h1="$(shasum -a 256 "$root/state/freebusy/seats.jsonl")"; runis /bin/bash; h2="$(shasum -a 256 "$root/state/freebusy/seats.jsonl")"
 [[ "$h1" == "$h2" ]] && ok "S6 freebusy's seats file is read, never changed" || bad "S6 seats changed"
-find "$root" -newer "$root/bin/bd" -type f ! -path "$root/state/*" ! -path "$root/fix/*" ! -path "$root/out" ! -path "$root/err" ! -path "$root/home/*" 2>/dev/null | /usr/bin/grep -q . \
-  && bad "S7 a file was written outside the state directory" || ok "S7 nothing is written outside the state directory"
+snap() { find "$root" \( -type f -o -type d \) ! -path "$root/state" ! -path "$root/state/*" ! -path "$root/fix" ! -path "$root/fix/*" ! -path "$root/out" ! -path "$root/err" | LC_ALL=C sort | shasum -a 256; }
+s1="$(snap)"; runis /bin/bash; s2="$(snap)"
+[[ "$s1" == "$s2" ]] && ok "S7 nothing is written outside the state directory" || bad "S7 a file was written outside the state directory"
 
 reset; mkdir -p "$root/repo/.git"; mv "$root/state" "$root/repo/state"; mkdir -p "$root/state"
 sed_state="$root/repo/state"
