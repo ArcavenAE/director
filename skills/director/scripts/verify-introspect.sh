@@ -685,7 +685,8 @@ rm -f "$root/proj/-work-aae-orc-ext"
 # a link whose real path is inside projects_dir and an included project passes the containment test, so only the
 # directory test turns a link to something that is not a directory there into a gap. The walk does not stand in for it:
 # collect() calls mark() before os.walk, and mark() returns False without a count for a target it cannot stat or has
-# already counted, so dropping isdir(real) at that line makes the three fixtures below print no GAP
+# already counted, so dropping isdir(real) at that line makes the dangling-link and already-counted fixtures below
+# print no GAP (the plain file link still prints one: the walk's error path reaches it)
 : >"$P/inside-target.txt"
 ln -s "$P/inside-target.txt" "$root/proj/-work-aae-orc-ext"
 gapcase "a top-level project link to a file inside projects_dir and an included project is a gap (the directory test)"
