@@ -683,13 +683,24 @@ ln -s "$root/linked/out1.jsonl" "$root/proj/-work-aae-orc-ext"
 gapcase "a top-level project link to a file is a gap, not a silent skip (K12)"
 rm -f "$root/proj/-work-aae-orc-ext"
 # a link whose real path is inside projects_dir and an included project passes the containment test, so only the
-# directory test or the walk's own listing error turns a link to a plain file there into a gap. Both count it once
-# (the walk's onerror adds to the same counter), so dropping isdir(real) at that line gives the same output; this
-# fixture holds the result, not that one test
+# directory test turns a link to something that is not a directory there into a gap. The walk does not stand in for it:
+# collect() calls mark() before os.walk, and mark() returns False without a count for a target it cannot stat or has
+# already counted, so dropping isdir(real) at that line makes the three fixtures below print no GAP
 : >"$P/inside-target.txt"
 ln -s "$P/inside-target.txt" "$root/proj/-work-aae-orc-ext"
 gapcase "a top-level project link to a file inside projects_dir and an included project is a gap (the directory test)"
 rm -f "$root/proj/-work-aae-orc-ext" "$P/inside-target.txt"
+ln -s "$P/does-not-exist" "$root/proj/-work-aae-orc-ext"
+gapcase "a dangling top-level project link whose target would sit inside an included project is a gap, not a silent skip"
+rm -f "$root/proj/-work-aae-orc-ext"
+# a link to a transcript the walk of the real project has already counted: mark() answers False for it, so only the
+# directory test can report the link
+mk "$P/real.jsonl" --agent builder --ok 5
+run --since today --config "$conf" --no-append --json >"$root/j0" 2>/dev/null
+ln -s "$P/real.jsonl" "$root/proj/-work-aae-orc-ext"
+gapcase "a top-level project link to a transcript that is already counted is a gap, and the transcript is counted once"
+rm -f "$root/proj/-work-aae-orc-ext" "$P/real.jsonl"
+run --since today --config "$conf" --no-append --json >"$root/j0" 2>/dev/null
 mk "$P/real.jsonl" --agent builder --ok 5
 ln -s real.jsonl "$P/alias.jsonl"
 run --since today --config "$conf" --no-append --json >"$root/j2" 2>/dev/null
