@@ -91,6 +91,14 @@ func main() {
 		cancel()
 		os.Exit(code)
 	}
+	// dossier reads the bus and the state directory and writes only its own
+	// files under dossier/; it needs no identity of its own.
+	if cli.mode == "dossier" {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		code := runDossierCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, os.Stdout, os.Stderr)
+		cancel()
+		os.Exit(code)
+	}
 	if cli.mode == "ask-reader" {
 		ctx, stop := askReaderContext()
 		code := runAskReaderCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, env("DIRECTOR_GLOBAL_DOMAIN", "global"), os.Stderr)

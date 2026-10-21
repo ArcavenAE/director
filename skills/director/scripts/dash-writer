@@ -1,0 +1,577 @@
+#!/usr/bin/env python3
+"""dash-writer - shape the operations dashboard's documents for the Desk's second tab.
+
+ghxv2, sim/design/ops-dashboard.md sections 3 and 4 (the field list approved by the operator
+2026-10-20, with dash_meta.checks added). One added step in director's sweep, in a session: a
+script cannot write artifact data (finding-director-glst), so this script reads the sources and
+prints the batch, and the session applies it with one ArtifactData batch of at most 50 writes.
+
+  dash-writer run [--force]   print {"writes": [...], ...}; nothing is written but the output
+  dash-writer ack --at T [--deleted D,D]   the batch was applied: record the run (the 30-minute floor, the run
+                               count); T and D are the run's own `ack` field, so the clock at ack time never matters
+  dash-writer --help
+
+Sources, read only: `dws show --json` (the ledger folded by dws's own fold, so the page cannot fold
+differently), `marvel --cluster C get sessions --columns team,role,name,state,health,last-active`
+once for each cluster named under `clusters:` in $HOME/.marvel/config.yaml (command: $DASH_MARVEL, default
+marvel), and $DIRECTOR_STATE/desk-snapshot.json. The config is read by yq (the mikefarah build) with
+`.clusters | keys`: this script gets the KEY NAMES under `clusters:` and nothing else, no value is read into a
+variable or emitted, and yq's own messages are dropped. A config that is missing, does not parse, has no
+`clusters:` mapping, or a machine with no yq refuses the sessions panel, never an empty one. The Desk's
+area labels are the `areas` list the snapshot records; no snapshot, or no list, labels nothing.
+Two local files the operator keeps, one entry per line, because no canonical source holds them:
+  dash-area-map.tsv    <workstream slug><TAB><area label>; a ledger row carries no area, so this maps
+                       the slug to a Desk area; a row with no entry (or an unlisted area) is `unlabelled`
+  dash-withhold.txt    private names, whole words, any case. Absent: no filter. Present but unreadable, not
+                       UTF-8, not a plain file, or wider than 0600: the waiting, in-flight and sessions panels
+                       are refused (no rows, no counts), since a title, an id and a session name can all carry one
+
+It writes exactly the fields of section 3 and nothing else:
+  dash_panels/<panel>  panel, as_of, writer, rows, counts, refusal
+  dash_daily/<panel>-<day>  panel, day, counts   (kept 14 days: the batch deletes every recorded day 14 or more
+                       days back, and the day exactly 14 back; a batch is 9 writes plus 4 per day deleted, at most 50)
+  dash_meta/writer     last_run, runs, reader, checks
+A row holds only id, stage, age_h, area, title (ledger rows) or id, stage, health, last_active,
+cluster (session rows). Never a token, key, socket path, settings value, message body, note text,
+`next`, `repos`, or a person's name. Every failure is counted in the panel's `refusal` by field and
+reason, never by value; a placeholder is a fixed word, so nothing from a failed value reaches a document.
+
+A panel over 256 KiB is not written cut short: its rows are dropped and its refusal says so.
+Exit 0 on every reading; exit 2 for a usage error. DWS_NOW overrides the clock only with DWS_TEST_CLOCK=1.
+"""
+import datetime
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+
+HOME = os.path.expanduser("~")
+STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
+HERE = os.path.dirname(os.path.realpath(__file__))
+STAGES = ["idea", "defined", "designed", "building", "in review", "merged", "released", "deployed", "accepted", "parked"]
+FLIGHT = ("defined", "designed", "building", "in review")
+DOC_CAP = 256 * 1024
+MAX_WRITES = 50
+FLOOR_MIN = 30
+KEEP_DAYS = 14
+TITLE_MAX = 120
+COLUMNS = "team,role,name,state,health,last-active"
+HEADER = ["TEAM", "ROLE", "AGENT NAME", "STATE", "HEALTH", "LAST-ACTIVE"]
+PANELS = ("waiting", "where-work-sits", "in-flight", "sessions")
+READER = "dws show --json; marvel get sessions"
+
+ID_RE = re.compile(r"[a-z0-9.-]{1,80}")
+STATE_RE = re.compile(r"(pending|running|limited|succeeded|failed|crashloop-backoff|crashed)(?: \((.*)\))?", re.S)
+HEALTH_RE = re.compile(r"(alive|healthy|unhealthy|unknown)( \(stalled\))?(?: (\(logged-out\)|\(parked(?:: .*)?\)))?", re.S)
+AGE_WORD = r"(?:[0-9]{1,4}[smhd]|[0-9]{1,3}h[0-9]{1,2}m)"
+ACTIVE_RE = re.compile(r"(?:[-\u2013\u2014]|" + AGE_WORD + r"|stale(?: " + AGE_WORD + r")?)\*?")
+PATH_RE = re.compile(r"(~/|/Users/|/home/|/private/|/tmp/|/var/|(?:^|\s)/[^\s/]*/)")
+TOKEN_RE = re.compile(r"(ghp_|gho_|ghs_|github_pat_|xox|sk-|AKIA|[A-Za-z0-9+/]{24,})")
+TOKEN_PREFIX = ("ghp_", "gho_", "ghs_", "github_pat_", "xox", "sk-", "AKIA")
+CLUSTER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+class Usage(Exception):
+    pass
+
+
+def now():
+    fixed = os.environ.get("DWS_NOW") if os.environ.get("DWS_TEST_CLOCK") == "1" else None
+    t = fixed or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return t, datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+
+
+def parse_ts(s):
+    try:
+        return datetime.datetime.strptime(str(s), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+
+
+def read_list(name):
+    path = os.path.join(STATE, name)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")], path
+    except (OSError, UnicodeDecodeError):
+        return None, path
+
+
+def load_withhold():
+    """(names, why): why is None, "mode" or "unreadable". An absent file is no list ([], None). A file that is
+    present but unreadable, not a regular file, not UTF-8, or wider than 0600 is a refusal, never no list."""
+    path = os.path.join(STATE, "dash-withhold.txt")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)  # a FIFO must not hang the open
+    except FileNotFoundError:
+        return [], None
+    except OSError:
+        return None, "unreadable"
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None, "unreadable"
+        if st.st_mode & 0o077:
+            return None, "mode"
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            text = f.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None, "unreadable"
+    finally:
+        os.close(fd)
+    return [l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")], None
+
+
+def cluster_names():
+    """The key names under `clusters:` in the marvel config, or None when they cannot be read.
+
+    A real YAML parser (yq, the mikefarah build) reads the file and prints only the keys; this script never
+    sees a value, and nothing yq prints to stderr is kept. A missing yq, a file that does not parse, or
+    anything but a mapping of keys is None: the sessions panel is refused and nothing from the file is shown.
+    """
+    path = os.path.join(HOME, ".marvel", "config.yaml")
+    if not os.path.isfile(path):
+        return None
+    try:
+        v = subprocess.run(["yq", "--version"], capture_output=True, timeout=20, stdin=subprocess.DEVNULL)
+        if v.returncode != 0 or not re.fullmatch(r"yq \(https://github.com/mikefarah/yq/?\) version v4\.[0-9.]+\s*", v.stdout.decode("utf-8", "replace")):
+            return None  # not the mikefarah v4 build: its output is not trusted
+        p = subprocess.run(["yq", "-o=json", "-I=0", ".clusters | keys", path], capture_output=True, timeout=20,
+                           stdin=subprocess.DEVNULL)
+        if p.returncode != 0:
+            return None
+        names = json.loads(p.stdout.decode("utf-8"))
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    if not isinstance(names, list) or not names or not all(isinstance(n, str) and CLUSTER_RE.fullmatch(n) for n in names):
+        return None  # anything that is not a plain cluster name: no value can pass as a key
+    return names
+
+
+def snapshot_areas():
+    """The area labels the Desk snapshot records, or [] when it has none."""
+    try:
+        with open(os.path.join(STATE, "desk-snapshot.json"), encoding="utf-8") as f:
+            a = json.load(f).get("areas")
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [x for x in a if isinstance(x, str) and x and x.isprintable()] if isinstance(a, list) else []
+
+
+class Refusals:
+    def __init__(self):
+        self.c = {}
+
+    def add(self, field, reason):
+        k = f"{field}:{reason}"
+        self.c[k] = self.c.get(k, 0) + 1
+
+
+def free_text_reason(value, withhold):
+    """Why a free-text value (id, title, last_active) is refused, or None. The reason is a fixed word."""
+    if not isinstance(value, str) or not value or not all(c.isprintable() for c in value):
+        return "control"
+    if PATH_RE.search(value):
+        return "path"
+    if "://" in value or "@" in value:
+        return "url"
+    if TOKEN_RE.search(value) or value.startswith(TOKEN_PREFIX):
+        return "token"
+    for name in withhold:
+        if re.search(r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])", value, re.I):
+            return "withheld-name"
+    return None
+
+
+# ----------------------------------------------------------------------------------- sources
+def ledger():
+    exe = os.path.join(HERE, "dws")
+    try:
+        p = subprocess.run([sys.executable, exe, "show", "--json"], capture_output=True, timeout=60, stdin=subprocess.DEVNULL, env=os.environ.copy())
+        if p.returncode != 0:
+            return None, "dws show failed"
+        return json.loads(p.stdout.decode("utf-8")), None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None, "dws show could not be read"
+
+
+def parse_table(text):
+    """(rows of six cells, refusal reasons). Refuses the whole table on a header mismatch and a row alone
+    when it cannot be cut cleanly; never draws a shifted value."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if not lines:
+        return None, ["header"]
+    head = lines[0].rstrip("\n")
+    offs, pos = [], 0
+    for i, lab in enumerate(HEADER):
+        if not head.startswith(lab, pos):
+            return None, ["header"]
+        offs.append(pos)
+        pos += len(lab)
+        if i < len(HEADER) - 1:
+            spaces = len(head[pos:]) - len(head[pos:].lstrip(" "))
+            if spaces < 2:
+                return None, ["header"]
+            pos += spaces
+    if head[pos:].strip():
+        return None, ["header"]
+    rows, bad = [], []
+    for ln in lines[1:]:
+        if not ln.strip():
+            break
+        if any(ord(c) < 32 or ord(c) == 127 for c in ln):
+            bad.append("row")
+            continue
+        if len(ln) <= offs[-1]:
+            bad.append("row")
+            continue
+        cells, ok = [], True
+        for i, o in enumerate(offs):
+            if ln[o] == " ":
+                ok = False
+                break
+            if i > 0 and ln[o - 2:o] != "  ":
+                ok = False
+                break
+            end = offs[i + 1] if i + 1 < len(offs) else len(ln)
+            cells.append(ln[o:end].rstrip())
+        if not ok or any(not c for c in cells):
+            bad.append("row")
+            continue
+        rows.append(cells)
+    return rows, bad
+
+
+def sessions_for(cluster, refusal):
+    marvel = os.environ.get("DASH_MARVEL", "marvel")
+    try:
+        p = subprocess.run([marvel, "--cluster", cluster, "get", "sessions", "--columns", COLUMNS], capture_output=True,
+                           timeout=60, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode != 0:
+        return None
+    return p.stdout.decode("utf-8", "replace")
+
+
+def clean_state(cell):
+    m = STATE_RE.fullmatch(cell)
+    if not m:
+        return None
+    base, suffix = m.group(1), m.group(2)
+    if suffix is None:
+        return base
+    if base == "failed":
+        return "failed (terminal)"
+    if base in ("succeeded", "crashed") and re.fullmatch(r"exit [0-9]{1,3}", suffix):
+        return f"{base} ({suffix})"
+    return None
+
+
+def clean_health(cell):
+    if re.search(r"\(parked.*\(stalled\)", cell, re.S) or "\n" in cell:
+        return None
+    m = HEALTH_RE.fullmatch(cell)
+    if not m:
+        return None
+    base, stalled, tail = m.group(1), m.group(2) or "", m.group(3) or ""
+    if tail.startswith("(parked"):
+        tail = " (parked)"
+    elif tail:
+        tail = " " + tail
+    return base + stalled + tail
+
+
+# ----------------------------------------------------------------------------------- panels
+def hours_since(ts_s, t_now):
+    t = parse_ts(ts_s)
+    if t is None:
+        return None
+    return max(0.0, round((t_now - t).total_seconds() / 3600.0, 1))
+
+
+def ledger_row(r, t_now, areas, area_map, withhold, refusal, with_title=True):
+    slug = r.get("slug", "")
+    stage = r.get("stage")
+    if not isinstance(slug, str) or not ID_RE.fullmatch(slug):
+        refusal.add("id", "charset")
+        return None
+    why = free_text_reason(slug, withhold)
+    if why:
+        refusal.add("id", why)
+        return None
+    if stage not in STAGES:
+        refusal.add("stage", "unknown")
+        return None
+    row = {"id": slug, "stage": stage}
+    age = hours_since(r.get("last_moved"), t_now)
+    if age is None:
+        refusal.add("age_h", "not-a-number")
+        row["age_h"] = ""
+    else:
+        row["age_h"] = age
+    label = area_map.get(slug)
+    if label is not None and label in areas:
+        row["area"] = label
+    else:
+        refusal.add("area", "unlabelled")
+        row["area"] = "unlabelled"
+    if with_title:
+        title = r.get("title", "")
+        if not isinstance(title, str) or len(title) > TITLE_MAX:
+            row["title"] = "(title withheld: length)"
+            refusal.add("title", "length")
+        else:
+            why = free_text_reason(title, withhold)
+            if why:
+                row["title"] = f"(title withheld: {why})"
+                refusal.add("title", why)
+            else:
+                row["title"] = title
+    return row
+
+
+def session_rows(clusters, withhold, refusal, t_text):
+    rows, counts, not_reached = [], {}, []
+    for cluster in clusters:
+        if not CLUSTER_RE.fullmatch(cluster):
+            refusal.add("cluster", "charset")
+            continue
+        text = sessions_for(cluster, refusal)
+        if text is None:
+            not_reached.append(f"{cluster}: not reached at {t_text}")
+            continue
+        cells, bad = parse_table(text)
+        if cells is None:
+            refusal.add("table", "header")
+            continue
+        for _ in bad:
+            refusal.add("row", "unreadable")
+        n = 0
+        for team, role, name, state, health, active in cells:
+            why = None if ID_RE.fullmatch(name) else "charset"
+            why = why or free_text_reason(name, withhold)
+            if why:
+                refusal.add("id", why)
+                continue
+            st = clean_state(state)
+            if st is None:
+                refusal.add("stage", "grammar")
+                continue
+            hl = clean_health(health)
+            if hl is None:
+                refusal.add("health", "grammar")
+                hl = "unreadable"
+            la = active
+            if len(la) > 40 or not ACTIVE_RE.fullmatch(la) or free_text_reason(la, withhold):
+                refusal.add("last_active", "unreadable")
+                la = "unreadable"
+            rows.append({"id": name, "stage": st, "health": hl, "last_active": la, "cluster": cluster})
+            n += 1
+        counts[cluster] = n
+    return rows, counts, not_reached
+
+
+def build(t_text, t_now):
+    withhold, wwhy = load_withhold()
+    areas = snapshot_areas()
+    area_map = {}
+    amap, _ = read_list("dash-area-map.tsv")
+    for line in amap or []:
+        if "\t" in line:
+            k, v = line.split("\t", 1)
+            area_map[k.strip()] = v.strip()
+    clusters = cluster_names()
+    data, why = ledger()
+    panels = {p: {"rows": [], "counts": {}, "refusal": Refusals()} for p in PANELS}
+    ledger_rows = data.get("rows", []) if data else []
+    wl = withhold or []
+
+    def lrow(r, refusal):
+        return ledger_row(r, t_now, areas, area_map, wl, refusal)
+
+    if data is None:
+        for p in ("waiting", "where-work-sits", "in-flight"):
+            panels[p]["refusal"].add("ledger", "unread")
+    else:
+        ref = panels["waiting"]["refusal"]
+        for r in ledger_rows:
+            blocked = r.get("blocked")
+            if isinstance(blocked, str) and blocked.strip().lower() == "operator" and r.get("stage") != "parked":
+                row = lrow(r, ref)
+                if row:
+                    panels["waiting"]["rows"].append(row)
+        panels["waiting"]["rows"].sort(key=lambda x: -(x["age_h"] if isinstance(x["age_h"], (int, float)) else 0))
+        panels["waiting"]["counts"] = {"blocked_on_operator": len(panels["waiting"]["rows"])}
+        by = {}
+        ideas_opened = []
+        for r in ledger_rows:
+            st = r.get("stage")
+            if st in STAGES:
+                by[st] = by.get(st, 0) + 1
+            if st == "idea" and isinstance(r.get("opened"), str):
+                ideas_opened.append(r["opened"][:10])
+        c = {st: by.get(st, 0) for st in STAGES}
+        c["ideas_oldest_opened"] = min(ideas_opened) if ideas_opened else ""
+        panels["where-work-sits"]["counts"] = c
+        fl = []
+        for r in ledger_rows:
+            if r.get("stage") in FLIGHT:
+                row = lrow(r, panels["in-flight"]["refusal"])
+                if row:
+                    fl.append(row)
+        fl.sort(key=lambda x: (-(x["age_h"] if isinstance(x["age_h"], (int, float)) else 0), x["id"]))
+        panels["in-flight"]["rows"] = fl
+        panels["in-flight"]["counts"] = {"in_flight": len(fl)}
+    sref = panels["sessions"]["refusal"]
+    if wwhy:
+        pass  # every panel the withhold list filters is refused below, so marvel is not asked
+    elif not clusters:
+        sref.add("clusters", "unread")
+        panels["sessions"]["counts"] = {"not_reached": []}
+    else:
+        rows, counts, nr = session_rows(clusters, wl, sref, t_text)
+        panels["sessions"]["rows"] = rows
+        panels["sessions"]["counts"] = dict(counts, not_reached=nr)
+    if wwhy:
+        # the list cannot be trusted: no title, id or session name goes out from any panel it filters
+        for name in ("waiting", "in-flight", "sessions"):
+            panels[name] = {"rows": [], "counts": {}, "refusal": Refusals()}
+            panels[name]["refusal"].add("withhold-file", wwhy)
+    return panels, data
+
+
+def checks_of(data, t_now):
+    out = []
+    last = (data or {}).get("last_refresh") if data else None
+    at = parse_ts(last["at"]) if isinstance(last, dict) else None
+    if at is None:
+        out.append({"name": "refresh-ran-today", "holds": False, "observed": "never"})
+    else:
+        age = (t_now - at).total_seconds()
+        out.append({"name": "refresh-ran-today", "holds": 0 <= age <= 86400, "observed": last["at"]})
+    snap = os.path.join(STATE, "desk-snapshot.json")
+    state_word = "missing"
+    if os.path.isfile(snap):
+        try:
+            json.load(open(snap, encoding="utf-8"))
+            state_word = "exists"
+        except (OSError, ValueError):
+            state_word = "unreadable"
+    out.append({"name": "desk-snapshot-exists", "holds": state_word == "exists", "observed": state_word})
+    n = 0
+    for r in (data or {}).get("rows", []) if data else []:
+        st = r.get("stage")
+        if st in STAGES and STAGES.index(st) > 0 and not r.get("links"):
+            n += 1
+    out.append({"name": "rows-past-idea-linked", "holds": data is not None and n == 0, "observed": f"{n} rows past idea with no link" if data is not None else "ledger unread"})
+    return out
+
+
+def state_path():
+    return os.path.join(STATE, "dash-writer.json")
+
+
+def read_state():
+    try:
+        d = json.load(open(state_path(), encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def expired_days(st, t_now):
+    """The days whose daily docs are to be deleted in this batch: every recorded day 14 or more days back, and
+    the day exactly 14 back (the only one a state with no record can name), oldest first. The batch is 9 writes
+    and 4 per expired day, so at most (MAX_WRITES - 9) // 4 days go in one batch and the rest wait."""
+    cutoff = (t_now - datetime.timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")
+    days = {d for d in st.get("days", []) if isinstance(d, str) and re.fullmatch(r"\d{4}-\d\d-\d\d", d) and d <= cutoff}
+    days.add(cutoff)
+    return sorted(days)[:(MAX_WRITES - 9) // 4]
+
+
+def size_of(doc):
+    return len(json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def cmd_run(force):
+    t_text, t_now = now()
+    st = read_state()
+    last = parse_ts(st.get("last_run"))
+    if last and not force and 0 <= (t_now - last).total_seconds() < FLOOR_MIN * 60:
+        print(json.dumps({"skipped": f"last run {st['last_run']}, under the {FLOOR_MIN}-minute floor", "writes": []}))
+        return
+    panels, data = build(t_text, t_now)
+    today = t_now.strftime("%Y-%m-%d")
+    expired = expired_days(st, t_now)
+    writes = []
+    for name in PANELS:
+        p = panels[name]
+        doc = {"panel": name, "as_of": t_text, "writer": "director", "rows": p["rows"], "counts": p["counts"], "refusal": dict(sorted(p["refusal"].c.items()))}
+        if size_of(doc) > DOC_CAP:
+            doc["rows"] = []
+            doc["refusal"] = dict(doc["refusal"], **{"panel:over-256KiB": 1})
+        writes.append({"action": "set", "collection": "dash_panels", "doc_id": name, "data": doc})
+    for name in PANELS:
+        writes.append({"action": "set", "collection": "dash_daily", "doc_id": f"{name}-{today}",
+                       "data": {"panel": name, "day": today, "counts": panels[name]["counts"]}})
+    for day in expired:
+        for name in PANELS:
+            writes.append({"action": "delete", "collection": "dash_daily", "doc_id": f"{name}-{day}"})
+    meta = {"last_run": t_text, "runs": int(st.get("runs", 0)) + 1, "reader": READER, "checks": checks_of(data, t_now)}
+    writes.append({"action": "set", "collection": "dash_meta", "doc_id": "writer", "data": meta})
+    print(json.dumps({"writes": writes, "ack": {"at": t_text, "deleted": expired}}, ensure_ascii=False, indent=1))
+
+
+def cmd_ack(at, deleted):
+    """Record the run `at` named and the days it deleted; this process's own clock is never read."""
+    day_re = r"\d{4}-\d\d-\d\d"
+    try:
+        t_now = datetime.datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        print("dash-writer: --at is the run's time, as printed in its ack field", file=sys.stderr)
+        sys.exit(2)
+    st = read_state()
+    try:
+        for d in deleted:
+            datetime.datetime.strptime(d, "%Y-%m-%d")  # a real calendar day, not just a date-shaped string
+    except ValueError:
+        print("dash-writer: --deleted is a comma list of days, as printed in the run's ack field", file=sys.stderr)
+        sys.exit(2)
+    if not set(deleted) <= set(expired_days(st, t_now)):
+        print("dash-writer: --deleted names a day the run did not report as expired", file=sys.stderr)
+        sys.exit(2)
+    days = sorted({d for d in st.get("days", []) if isinstance(d, str) and re.fullmatch(day_re, d)} - set(deleted)
+                  | {t_now.strftime("%Y-%m-%d")})
+    st = {"last_run": at, "runs": int(st.get("runs", 0)) + 1, "days": days}
+    os.makedirs(STATE, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".dash-writer.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(st, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, state_path())
+    print(f"recorded run {st['runs']} at {at}")
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("--help", "-h"):
+        print(__doc__)
+        return
+    if a[0] == "run" and set(a[1:]) <= {"--force"}:
+        cmd_run("--force" in a)
+    elif a[0] == "ack" and len(a) in (3, 5) and a[1] == "--at" and (len(a) == 3 or a[3] == "--deleted"):
+        cmd_ack(a[2], [d for d in (a[4].split(",") if len(a) == 5 else []) if d])
+    else:
+        print("usage: dash-writer run [--force] | ack --at <run time> [--deleted <days>] | --help", file=sys.stderr)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

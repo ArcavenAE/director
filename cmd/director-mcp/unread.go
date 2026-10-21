@@ -90,19 +90,27 @@ func versionLine() string {
 // cliArgs is what the command line asked for. Anything not listed here is
 // refused, rather than ignored and a live shim started (director#75).
 type cliArgs struct {
-	mode      string // serve, preflight, version, unread, ask-reader, asks
-	json      bool
-	all       bool          // unread: one row per durable, dead ones included (M1)
-	global    bool          // unread: the hub streams instead of AGENT_INBOX (M3)
-	byRole    bool          // unread: one line per team and role (M5)
-	olderThan time.Duration // unread: mark rows older than this; 0 is unset (M4)
-	once      bool          // ask-reader: run one pass and exit
-	interval  time.Duration // ask-reader: the pass interval; 0 means the 30s default
-	file      string        // ask-reader: the JSON file it rewrites after each pass
-	help      bool          // asks: print the help text
+	mode        string // serve, preflight, version, unread, ask-reader, asks
+	json        bool
+	all         bool          // unread: one row per durable, dead ones included (M1)
+	global      bool          // unread: the hub streams instead of AGENT_INBOX (M3)
+	byRole      bool          // unread: one line per team and role (M5)
+	olderThan   time.Duration // unread: mark rows older than this; 0 is unset (M4)
+	once        bool          // ask-reader: run one pass and exit
+	interval    time.Duration // ask-reader: the pass interval; 0 means the 30s default
+	file        string        // ask-reader: the JSON file it rewrites after each pass
+	help        bool          // asks: print the help text
+	role        string        // dossier: TEAM/ROLE
+	pred        string        // dossier: the predecessor's agent id
+	predState   string        // dossier: the predecessor's state directory
+	pointers    []string      // dossier: files the role keeps
+	handoffPath string        // dossier: the handoff file the manifest declares
+	handoffMark string        // dossier: the terminal marker the manifest declares
 }
 
 const askReaderUsage = "director-mcp ask-reader [--once] [--file <path>] [--interval <duration up to 30s>]"
+
+const dossierUsage = "director-mcp dossier --role TEAM/ROLE [--predecessor AGENT-INSTANCE] [--predecessor-state DIR] [--handoff-path PATH] [--handoff-marker TEXT] [--pointer PATH]... [--json]"
 
 const unreadUsage = "director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <duration>]"
 
@@ -165,6 +173,8 @@ func parseArgs(args []string) (cliArgs, error) {
 			}
 		}
 		return out, nil
+	case args[0] == "dossier":
+		return parseDossierArgs(args[1:])
 	case args[0] == "unread":
 		out := cliArgs{mode: "unread"}
 		rest := args[1:]
@@ -199,7 +209,7 @@ func parseArgs(args []string) (cliArgs, error) {
 		}
 		return out, nil
 	}
-	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage)
+	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage, dossierUsage)
 }
 
 type unreadPresence struct {

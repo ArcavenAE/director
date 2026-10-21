@@ -250,11 +250,17 @@ hook's three-line checklist asks about:
    This gives `desk-snapshot.json`.
 4. Move the rows: `dws refresh --local` (`board-html` runs it on render). This
    gives the moved rows.
-5. If `$DIRECTOR_STATE/digest.md` is older than 12 hours, run `dws digest`. This
+5. Write the operations dashboard, at most every 30 minutes: run
+   `${DIRECTOR_HOME:-$HOME/.director}/bin/dash-writer run`, apply the `writes` it prints as one `ArtifactData`
+   batch (a script cannot write artifact data), then run `dash-writer ack --at <ack.at> --deleted <ack.deleted, comma separated>` with the `ack` field the run printed. When it prints `skipped`, there is
+   nothing to apply. It reads the ledger, `marvel get sessions` and the Desk snapshot and writes nothing of
+   its own; only the fields of `sim/design/ops-dashboard.md` section 3 reach the documents. This gives the
+   `dash_*` documents.
+6. If `$DIRECTOR_STATE/digest.md` is older than 12 hours, run `dws digest`. This
    gives the digest the operator reads twice a day, by event and not by timer:
    a session runs it on its own tick, and nothing runs on silence. The digest is
    read-only output, so it is not an action fired on a clock.
-6. Answer QUERYs and act on MERGE RECOMMENDED, through `merge-guard`. This gives
+7. Answer QUERYs and act on MERGE RECOMMENDED, through `merge-guard`. This gives
    the replies and merges.
 
 When a step stops producing anything the next step uses, propose cutting or

@@ -9,7 +9,7 @@ file, which `dws` reads to decide whether `--blocked operator` names an open
 card:
 
   $DIRECTOR_STATE/desk-snapshot.json
-      {"read_at": T, "cards": N, "open": [ids, sorted], "by_status": {...},
+      {"read_at": T, "cards": N, "open": [ids, sorted], "by_status": {...}, "areas": [distinct card areas],
        "ids": {id: status, ...}, ["answered": [ids, sorted],] "source_sha256": H}
 
   desk-snapshot write --cards FILE --reported N [--limit 1000]
@@ -55,6 +55,21 @@ def status_of(card):
     if s is None and isinstance(card.get("data"), dict):
         s = card["data"].get("status")
     return s
+
+
+def areas_of(raw):
+    """Sorted distinct printable `area` strings on the cards (top level or under data); anything else adds none."""
+    cards = raw.values() if isinstance(raw, dict) else raw
+    found = set()
+    for c in cards:
+        if not isinstance(c, dict):
+            continue
+        a = c.get("area")
+        if a is None and isinstance(c.get("data"), dict):
+            a = c["data"].get("area")
+        if isinstance(a, str) and a.strip() and a.isprintable():
+            found.add(a.strip())
+    return sorted(found)
 
 
 def parse_cards(raw):
@@ -145,6 +160,7 @@ def cmd_write(a):
     snap = {"read_at": now(), "cards": len(cards),
             "open": sorted(c for c, st in cards.items() if st == "open"),
             "by_status": by_status, "ids": dict(sorted(cards.items())),
+            "areas": areas_of(raw),
             "source_sha256": hashlib.sha256(data).hexdigest()}
     if answered is not None:
         snap["answered"] = answered

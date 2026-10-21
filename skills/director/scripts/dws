@@ -375,11 +375,11 @@ def allowed(actor, event):
         raise Refused(f"actor {actor!r} may append nothing; writers are {sorted(ACTORS)} (section 6)")
     if actor == "refresh":
         ev = event["event"]
-        if ev == "observe":
+        if ev in ("observe", "refresh-run"):
             return
         if ev == "stage" and (event.get("from"), event.get("to")) in REFRESH_MOVES:
             return
-        raise Refused("refresh may append observe events and the two factual stage moves only "
+        raise Refused("refresh may append observe events, its run record and the two factual stage moves only "
                       "(building to in review, in review to merged); director makes every other move")
 
 
@@ -410,14 +410,22 @@ def write(actor, event, check):
     rerender()
 
 
-def write_many(actor, plan):
+def write_many(actor, plan, run_record=None):
     """Fold, then let plan(rows) return the events to append, all under one
-    lock, so the stage each move is checked against is the current one."""
+    lock, so the stage each move is checked against is the current one.
+    run_record, when given, is called with the events and returns the run's
+    own record, appended last under the same lock (the ops dashboard's check
+    that the refresh ran). It is not among the events returned, so a run that
+    changed nothing still prints and re-renders nothing."""
     with Locked():
         rows, _ = fold()
         events = [stamp(actor, e) for e in plan(rows)]
         for e in events:
             append(e)
+        # A fill launched by the board renderer (DWS_NO_RERENDER=1) is not a refresh run by director: it
+        # would move the ledger file's mtime on every render and so hide the page's "ledger Nm" age.
+        if run_record is not None and not os.environ.get("DWS_NO_RERENDER"):
+            append(stamp(actor, run_record(events)))
     if events:
         rerender()
     return events
@@ -724,7 +732,8 @@ def cmd_refresh(a):
                 events.append({"event": "observe", "ws": slug, "hints": hints, "checked_at": now()})
         return events
 
-    events = write_many("refresh", plan)
+    events = write_many("refresh", plan, lambda evs: {"event": "refresh-run", "at": now(), "rows": len(slugs),
+                                                      "links": len(observed), "warnings": len(warnings)})
     for e in events:
         if e["event"] == "stage":
             print(f"{e['ws']}: {e['from']} -> {e['to']} ({e['fact']})")
@@ -934,7 +943,8 @@ def cmd_refresh_local(a):
                 events.extend(desk_events(row, snap, t_now, gaps))
         return events
 
-    events = write_many("refresh", plan)
+    events = write_many("refresh", plan, lambda evs: {"event": "refresh-run", "at": t_now, "rows": len(slugs),
+                                                      "links": 0, "warnings": len(gaps), "local": True})
     for e in events:
         if e.get("moved_at"):
             print(f"{e['ws']}: moved {e['moved_at']} ({e['src']})")
@@ -1000,12 +1010,34 @@ def cmd_unlinked(a):
     print("  ask ledger: not read (W5 is not built)")
 
 
+def last_refresh(path=LEDGER):
+    """The newest refresh-run event (the run record refresh appends last, local or not), or None.
+    The fold ignores these events for every row; only this read and `show --json` use them."""
+    best = None
+    try:
+        f = open(path, "rb")
+    except FileNotFoundError:
+        return None
+    with f:
+        for line in f:
+            if b"refresh-run" not in line:
+                continue
+            try:
+                e = json.loads(line.decode("utf-8"))
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("event") == "refresh-run" and isinstance(e.get("at"), str):
+                if best is None or e["at"] >= best["at"]:
+                    best = {k: e[k] for k in ("at", "rows", "links", "warnings", "local") if k in e}
+    return best
+
+
 def cmd_show(a):
     total = {}
     rows, torn = fold(tally=total)
     ordered = sorted_rows(rows)
     if a.json:
-        json.dump({"ledger": LEDGER, "torn": torn, "tags": total, "rows": ordered}, sys.stdout, indent=2, ensure_ascii=False)
+        json.dump({"ledger": LEDGER, "torn": torn, "tags": total, "last_refresh": last_refresh(), "rows": ordered}, sys.stdout, indent=2, ensure_ascii=False)
         print()
     else:
         cols = ("stage", "workstream", "owner", "last moved", "blocked on", "next action", "links")
