@@ -81,7 +81,7 @@ chmod +x "$root/bin/"*
 
 # --- fixtures ---------------------------------------------------------------
 NOW=1792541100
-HDR='WORKSPACE  TEAM  ROLE  AGENT NAME  STATE  HEALTH  LAST-ACTIVE  ACTIVE%  RATE'
+HDR='WORKSPACE  TEAM  ROLE  AGENT NAME  LAST-ACTIVE  ACTIVE%  STATE  HEALTH'
 sess() { # sess FILE LINES...
   local f="$FIX/$1"; shift
   { echo "$HDR"; printf '%s\n' "$@"; } >"$f"
@@ -93,22 +93,22 @@ teams() { # teams FILE LINES...
 fixtures() {
   rm -f "$FIX"/*.teamsfail "$FIX"/*.down "$FIX"/*.slow "$FIX"/*.noturn "$FIX"/*.turn "$FIX"/asks.old "$FIX"/*.log "$FIX/slow.pids"
   sess alpha.sessions \
-    'wsa crew builder crew-builder-1 running healthy 6s* 100%* -' \
-    'wsa crew builder crew-builder-2 running healthy 4m 0% -' \
-    'wsa crew architect crew-architect-1 running healthy 9m 0% -'
+    'wsa crew builder crew-builder-1 6s* 100%* running healthy' \
+    'wsa crew builder crew-builder-2 4m 0% running healthy' \
+    'wsa crew architect crew-architect-1 9m 0% running healthy'
   teams alpha.teams \
     'wsa crew builder 2 agent' \
     'wsa crew architect 1 agent'
   sess beta.sessions \
-    'wsb desk builder desk-builder-1 running healthy 3s 60% limited' \
-    'wsb desk reviewer desk-reviewer-1 running healthy 20m 0% -'
+    'wsb desk builder desk-builder-1 3s 60% limited healthy' \
+    'wsb desk reviewer desk-reviewer-1 20m 0% running healthy'
   teams beta.teams \
     'wsb desk builder 1 agent' \
     'wsb desk reviewer 1 agent' \
     'wsb desk spare 0 agent'
   sess gamma.sessions \
-    'wsc ops supervisor ops-supervisor-1 running healthy 1m 12% -' \
-    'wsc ops envoy ops-envoy-1 running healthy - - -'
+    'wsc ops supervisor ops-supervisor-1 1m 12% running healthy' \
+    'wsc ops envoy ops-envoy-1 - - running healthy'
   teams gamma.teams \
     'wsc ops supervisor 1 agent' \
     'wsc ops envoy 1 agent'
@@ -272,7 +272,7 @@ case_concurrent() {
   [[ "$(cat "$root/rc")" == 0 ]] && ok "8  and exits 0" || bad "8  rc" "$(cat "$root/rc")"
   wait "$p" || true
   grep -q 'clusters: 3 of 3 read' "$root/first.out" && ok "8  the first run finished normally" || bad "8  first run" "$(cat "$root/first.out")"
-  [[ "$(wc -l <"$state/freebusy/flow.jsonl" | tr -d ' ')" == 1 ]] && ok "8  the refused run wrote no flow line" || bad "8  flow lines"
+  [[ "$(wc -l <"$state/freebusy/flow.jsonl" 2>/dev/null | tr -d ' ')" == 1 ]] && ok "8  the refused run wrote no flow line" || bad "8  flow lines"
   rm -f "$FIX/alpha.slow"
   out="$(run FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
   grep -q 'clusters: 3 of 3 read' <<<"$out" && ok "8  the lock is released after a run" || bad "8  lock released" "$out"
@@ -303,14 +303,14 @@ case_flow_and_turn() {
   fixtures; new_state; conf3
   local base=(FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")
   run "${base[@]}" >/dev/null
-  local first; first="$(head -1 "$state/freebusy/flow.jsonl")"
+  local first; first="$(head -1 "$state/freebusy/flow.jsonl" 2>/dev/null || true)"
   run "${base[@]}" >/dev/null
-  [[ "$(wc -l <"$state/freebusy/flow.jsonl" | tr -d ' ')" == 2 ]] && ok "10 flow.jsonl gains one line per run" || bad "10 flow count"
-  [[ "$(head -1 "$state/freebusy/flow.jsonl")" == "$first" ]] && ok "10 earlier flow lines are never rewritten" || bad "10 flow rewritten"
+  [[ "$(wc -l <"$state/freebusy/flow.jsonl" 2>/dev/null | tr -d ' ')" == 2 ]] && ok "10 flow.jsonl gains one line per run" || bad "10 flow count"
+  [[ "$(head -1 "$state/freebusy/flow.jsonl" 2>/dev/null || true)" == "$first" ]] && ok "10 earlier flow lines are never rewritten" || bad "10 flow rewritten"
   jq -e '.at and (.clusters_read|type=="number") and .seats' <<<"$first" >/dev/null && ok "10 the flow line carries time, clusters read and seat counts" || bad "10 flow fields" "$first"
   # LAST-TURN: where installed it is carried; where it is not, the read falls back
   [[ "$(jqf -r 'select(.name=="crew-builder-2")|.last_turn' "$state/freebusy/seats.jsonl")" == null ]] && ok "11 no LAST-TURN column: last_turn is null, not 0" || bad "11 null turn"
-  { echo "$HDR  LAST-TURN"; echo 'wsa crew builder crew-builder-2 running healthy 4m 0% - 7m'; } >"$FIX/alpha.sessions.turn"
+  { echo 'WORKSPACE  TEAM  ROLE  AGENT NAME  LAST-ACTIVE  ACTIVE%  LAST-TURN  STATE  HEALTH'; echo 'wsa crew builder crew-builder-2 4m 0% 7m running healthy'; } >"$FIX/alpha.sessions.turn"
   run "${base[@]}" >/dev/null
   [[ "$(jqf -r 'select(.name=="crew-builder-2")|.last_turn' "$state/freebusy/seats.jsonl")" == 7m ]] && ok "11 LAST-TURN is carried where installed" || bad "11 turn carried"
   touch "$FIX/alpha.noturn"
@@ -329,12 +329,59 @@ case_conf() {
   grep -q 'clusters: 1 of 1 read' <<<"$out" && ok "12 a trailing comment line does not end the run" || bad "12 trailing comment" "$out"
 }
 
+case_formats() {
+  fixtures; new_state; conf3
+  # marvel's own cell forms: HEALTH suffixes and STATE suffixes add words to a row
+  printf '%s\n' \
+    'wsa crew qa crew-qa-1 2m 0% running healthy (stalled)' \
+    'wsa crew qa crew-qa-2 5m 0% running healthy (parked: waiting for a person)' \
+    'wsa crew qa crew-qa-3 1m 30% running unhealthy (logged-out)' \
+    'wsa crew qa crew-qa-4 - - failed (crash) unhealthy' \
+    'wsa crew job crew-job-1 - - succeeded (exit 0) healthy' >>"$FIX/alpha.sessions"
+  run FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp" >/dev/null
+  [[ "$(seat seats desk-builder-1)" == waiting ]] && ok "13 limited is read from STATE" || bad "13 limited" "$(seat seats desk-builder-1)"
+  [[ "$(seat seats crew-qa-1)" == free ]] && ok "13 a (stalled) suffix does not hide the reading" || bad "13 stalled" "$(seat seats crew-qa-1)"
+  [[ "$(jqf -r 'select(.name=="crew-qa-1")|.last_active' "$state/freebusy/seats.jsonl")" == 2m ]] && ok "13 last_active holds the cell, not the suffix" || bad "13 stalled last_active"
+  [[ "$(seat seats crew-qa-2)" == waiting ]] && ok "13 a (parked: reason) seat reads waiting" || bad "13 parked" "$(seat seats crew-qa-2)"
+  [[ "$(jqf -r 'select(.name=="crew-qa-2")|.last_active' "$state/freebusy/seats.jsonl")" == 5m ]] && ok "13 and last_active is still the cell" || bad "13 parked last_active"
+  [[ "$(seat seats crew-qa-3)" == busy ]] && ok "13 a (logged-out) suffix does not shift the fields" || bad "13 logged-out" "$(seat seats crew-qa-3)"
+  [[ "$(seat seats crew-qa-4)" == unknown ]] && ok "13 a failed (tag) STATE reads unknown" || bad "13 failed" "$(seat seats crew-qa-4)"
+  [[ "$(seat seats crew-job-1)" == unknown ]] && ok "13 a succeeded (exit n) STATE reads unknown" || bad "13 succeeded" "$(seat seats crew-job-1)"
+  [[ -z "$(jqf -r 'select((.last_active // "") | startswith("("))|.name' "$state/freebusy/seats.jsonl")" ]] && ok "13 no seat stores a suffix word as last_active" || bad "13 suffix stored"
+  grep -q 'state,health' "$FIX/ssh.log" && ok "13 the read ends its columns with state,health" || bad "13 columns" "$(head -1 "$FIX/ssh.log")"
+  grep -q "rate" "$FIX/ssh.log" && bad "13 the read asks for the RATE column" || ok "13 the read does not use the RATE column"
+}
+
+case_lock_age() {
+  local v
+  for v in nopid emptypid junkpid; do
+    fixtures; new_state; conf3
+    mkdir -p "$state/freebusy"; chmod 700 "$state/freebusy"; mkdir "$state/freebusy/.lock"
+    case "$v" in
+      emptypid) : >"$state/freebusy/.lock/pid" ;;
+      junkpid) echo abc >"$state/freebusy/.lock/pid" ;;
+    esac
+    out="$(run FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
+    grep -q 'not run: sweep in progress' <<<"$out" && ok "14 $v: a young lock reads as a run in progress" || bad "14 $v young" "$out"
+    touch -t 202001010000 "$state/freebusy/.lock"
+    out="$(run FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
+    grep -q 'clusters: 3 of 3 read' <<<"$out" && ok "14 $v: an old lock is taken over" || bad "14 $v old" "$out"
+  done
+}
+
+case_empty_list() {
+  fixtures; new_state
+  printf '%s\n' '# no clusters yet' '' >"$root/empty.conf"
+  out="$(run FREEBUSY_CONFIG="$root/empty.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
+  grep -q 'GAP clusters' <<<"$out" && ok "15 an empty cluster list prints GAP clusters" || bad "15 empty list" "$out"
+}
+
 for FB_BASH in $BASHES; do
   export FB_BASH
   echo "== $FB_BASH =="
   if ! "$FB_BASH" -n "$FB"; then bad "0  bash -n ($FB_BASH)"; else ok "0  bash -n passes ($FB_BASH)"; fi
   case_all_read; case_parked; case_cluster_down; case_asks; case_modes
-  case_no_writes; case_concurrent; case_hung_ssh; case_flow_and_turn; case_conf
+  case_no_writes; case_concurrent; case_hung_ssh; case_flow_and_turn; case_conf; case_formats; case_lock_age; case_empty_list
 done
 
 echo "$pass passed, $fail failed"
