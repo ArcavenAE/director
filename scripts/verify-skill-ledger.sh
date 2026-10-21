@@ -69,7 +69,7 @@ for c in open stage refresh show; do
 done
 
 # The form the skill states is the form the page renders (W3, same fixture).
-root="$(mktemp -d)"
+root="$(mktemp -d "${TMPDIR:-/tmp}/vsl.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 export DIRECTOR_STATE="$root/state" DWS_TEST_CLOCK=1
 mkdir -p "$DIRECTOR_STATE"

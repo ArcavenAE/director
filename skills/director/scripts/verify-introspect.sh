@@ -682,6 +682,12 @@ rm -f "$root/proj/-work-aae-orc-ext"
 ln -s "$root/linked/out1.jsonl" "$root/proj/-work-aae-orc-ext"
 gapcase "a top-level project link to a file is a gap, not a silent skip (K12)"
 rm -f "$root/proj/-work-aae-orc-ext"
+# the directory test is its own guard: a link whose real path is inside projects_dir and an included project passes
+# the containment test, so only isdir(real) turns a link to a plain file there into a gap
+: >"$P/inside-target.txt"
+ln -s "$P/inside-target.txt" "$root/proj/-work-aae-orc-ext"
+gapcase "a top-level project link to a file inside projects_dir and an included project is a gap (the directory test)"
+rm -f "$root/proj/-work-aae-orc-ext" "$P/inside-target.txt"
 mk "$P/real.jsonl" --agent builder --ok 5
 ln -s real.jsonl "$P/alias.jsonl"
 run --since today --config "$conf" --no-append --json >"$root/j2" 2>/dev/null
