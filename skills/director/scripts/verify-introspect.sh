@@ -682,6 +682,14 @@ rm -f "$root/proj/-work-aae-orc-ext"
 ln -s "$root/linked/out1.jsonl" "$root/proj/-work-aae-orc-ext"
 gapcase "a top-level project link to a file is a gap, not a silent skip (K12)"
 rm -f "$root/proj/-work-aae-orc-ext"
+# a link whose real path is inside projects_dir and an included project passes the containment test, so only the
+# directory test or the walk's own listing error turns a link to a plain file there into a gap. Both count it once
+# (the walk's onerror adds to the same counter), so dropping isdir(real) at that line gives the same output; this
+# fixture holds the result, not that one test
+: >"$P/inside-target.txt"
+ln -s "$P/inside-target.txt" "$root/proj/-work-aae-orc-ext"
+gapcase "a top-level project link to a file inside projects_dir and an included project is a gap (the directory test)"
+rm -f "$root/proj/-work-aae-orc-ext" "$P/inside-target.txt"
 mk "$P/real.jsonl" --agent builder --ok 5
 ln -s real.jsonl "$P/alias.jsonl"
 run --since today --config "$conf" --no-append --json >"$root/j2" 2>/dev/null

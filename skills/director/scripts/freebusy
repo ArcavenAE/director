@@ -41,7 +41,7 @@
 # Environment: DIRECTOR_STATE (default $HOME/.director/state), FREEBUSY_CALL_TIMEOUT
 # (seconds for each remote read and for the asks read, default 20),
 # FREEBUSY_ASKS_MAX_AGE (seconds an asks ledger may be old, default 900),
-# FREEBUSY_LOCK_STALE_MIN (minutes before a lock with no usable pid is taken over, default 2),
+# FREEBUSY_LOCK_STALE_MIN (a positive integer: minutes before a lock with no usable pid is taken over, default 2),
 # FREEBUSY_DIRECTOR_MCP (default director-mcp on PATH, else
 # ${DIRECTOR_HOME:-$HOME/.director}/bin/director-mcp). FREEBUSY_TEST_CLOCK=1 with
 # FREEBUSY_NOW (epoch seconds) fixes the clock for tests.
@@ -55,6 +55,18 @@ dir="$state/freebusy"
 conf="${FREEBUSY_CONFIG:-$state/freebusy-clusters.conf}"
 call_timeout="${FREEBUSY_CALL_TIMEOUT:-20}"
 max_age="${FREEBUSY_ASKS_MAX_AGE:-900}"
+
+# FREEBUSY_LOCK_STALE_MIN must be a positive integer. Anything else (abc, 1.5, -5, 0, empty)
+# would make find error and silently turn the takeover off, or take over a young lock, so it
+# prints a GAP and the default of 2 holds.
+stale_min=2
+if [[ -n "${FREEBUSY_LOCK_STALE_MIN+x}" ]]; then
+  if [[ "$FREEBUSY_LOCK_STALE_MIN" =~ ^[1-9][0-9]*$ ]]; then
+    stale_min="$FREEBUSY_LOCK_STALE_MIN"
+  else
+    echo "- GAP lock-stale: FREEBUSY_LOCK_STALE_MIN '${FREEBUSY_LOCK_STALE_MIN:0:20}' is not a positive integer; using 2"
+  fi
+fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "freebusy: not run: jq not found"
@@ -84,6 +96,9 @@ mkdir -p "$dir"
 chmod 700 "$dir"
 
 # One run at a time. mkdir is the lock; a lock whose process is gone is taken over.
+# The takeover (rm -rf, then mkdir) is not atomic: two runs that both judge the same lock
+# stale can both take it over and run at once. That is accepted, since both are read-only and
+# a duplicate run only reads the clusters twice and replaces the same files by rename.
 lock="$dir/.lock"
 have_lock=0
 tmp=""
@@ -105,7 +120,7 @@ if ! take_lock; then
   stale=0
   if [[ "$holder" =~ ^[0-9]+$ ]]; then
     if ! kill -0 "$holder" 2>/dev/null; then stale=1; fi
-  elif [[ -n "$(find "$lock" -maxdepth 0 -mmin "+${FREEBUSY_LOCK_STALE_MIN:-2}" 2>/dev/null || true)" ]]; then
+  elif [[ -n "$(find "$lock" -maxdepth 0 -mmin "+$stale_min" 2>/dev/null || true)" ]]; then
     # no usable pid: a run that died between mkdir and writing its pid. A lock this
     # young may still be a run that has not written it yet.
     stale=1
@@ -194,7 +209,7 @@ while [[ $i -lt ${#names[@]} ]]; do
   set -m
   (
     set +e
-    ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -- "${targets[$i]}" "$remote" >"$tmp/$n.out" 2>"$tmp/$n.err"
+    ssh -n -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -- "${targets[$i]}" "$remote" >"$tmp/$n.out" 2>"$tmp/$n.err"
     echo $? >"$tmp/$n.rc"
   ) &
   pids+=("$!")

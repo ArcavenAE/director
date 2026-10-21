@@ -250,6 +250,7 @@ case_no_writes() {
   [[ "$(sort -u "$FIX/mcp.log")" == "asks --json" ]] && ok "7  director-mcp was only asked for asks --json" || bad "7  mcp" "$(cat "$FIX/mcp.log")"
   [[ -s "$FIX/ssh.log" ]] && ok "7  the stub ssh, not a real one, was called" || bad "7  ssh stub unused"
   if grep -qE 'BatchMode=yes' "$FIX/ssh.log" && grep -qE 'ConnectTimeout=' "$FIX/ssh.log"; then ok "7  every ssh call carries BatchMode and a connect timeout"; else bad "7  ssh options" "$(head -2 "$FIX/ssh.log")"; fi
+  [[ "$(grep -cvE '(^| )-n( |$)' "$FIX/ssh.log")" == 0 ]] && ok "7  every ssh call carries -n, so a job under set -m never reads the terminal" || bad "7  a call without -n" "$(grep -vE '(^| )-n( |$)' "$FIX/ssh.log" | head -1)"
   [[ "$(grep -cvE 'BatchMode=yes' "$FIX/ssh.log")" == 0 ]] && ok "7  none without BatchMode" || bad "7  a call without BatchMode"
   # the script text: no bus send, inject, bd write or gh call (comments excluded)
   local code hits
@@ -380,12 +381,41 @@ case_empty_list() {
   grep -q 'GAP clusters' <<<"$out" && ok "15 an empty cluster list prints GAP clusters" || bad "15 empty list" "$out"
 }
 
+age_lock() { # age_lock DIR MINUTES: set a lock's mtime that far back (the lock is recreated if a run took it over)
+  mkdir -p "$1"; chmod 700 "$(dirname "$1")"
+  python3 -c 'import os, sys, time; t = time.time() - float(sys.argv[2]) * 60; os.utime(sys.argv[1], (t, t))' "$1" "$2"
+}
+
+case_lock_min() {
+  local bad
+  for bad in abc 1.5 -5 0 ""; do
+    fixtures; new_state; conf3
+    mkdir -p "$state/freebusy"; chmod 700 "$state/freebusy"; mkdir "$state/freebusy/.lock"
+    out="$(run FREEBUSY_LOCK_STALE_MIN="$bad" FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
+    grep -q 'GAP lock-stale' <<<"$out" && ok "16 [$bad]: a bad FREEBUSY_LOCK_STALE_MIN prints a GAP" || bad "16 [$bad] gap" "$out"
+    grep -q 'not run: sweep in progress' <<<"$out" && ok "16 [$bad]: and the default holds a young lock" || bad "16 [$bad] young" "$out"
+    age_lock "$state/freebusy/.lock" 1
+    out="$(run FREEBUSY_LOCK_STALE_MIN="$bad" FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
+    grep -q 'not run: sweep in progress' <<<"$out" && ok "16 [$bad]: the default of 2 minutes holds a 1 minute old lock" || bad "16 [$bad] one minute" "$out"
+    age_lock "$state/freebusy/.lock" 10
+    out="$(run FREEBUSY_LOCK_STALE_MIN="$bad" FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
+    grep -q 'clusters: 3 of 3 read' <<<"$out" && ok "16 [$bad]: and the default takes an old lock over" || bad "16 [$bad] old" "$out"
+  done
+  # a good value is used and prints no GAP
+  fixtures; new_state; conf3
+  mkdir -p "$state/freebusy"; chmod 700 "$state/freebusy"; mkdir "$state/freebusy/.lock"; age_lock "$state/freebusy/.lock" 5
+  out="$(run FREEBUSY_LOCK_STALE_MIN=10 FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
+  { grep -q 'not run: sweep in progress' <<<"$out" && ! grep -q 'GAP lock-stale' <<<"$out"; } && ok "16 10 minutes: a 5 minute old lock is still held, no GAP" || bad "16 10 minutes" "$out"
+  out="$(run FREEBUSY_LOCK_STALE_MIN=1 FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
+  { grep -q 'clusters: 3 of 3 read' <<<"$out" && ! grep -q 'GAP lock-stale' <<<"$out"; } && ok "16 1 minute: a 5 minute old lock is taken over, no GAP" || bad "16 1 minute" "$out"
+}
+
 for FB_BASH in $BASHES; do
   export FB_BASH
   echo "== $FB_BASH =="
   if ! "$FB_BASH" -n "$FB"; then bad "0  bash -n ($FB_BASH)"; else ok "0  bash -n passes ($FB_BASH)"; fi
   case_all_read; case_parked; case_cluster_down; case_asks; case_modes
-  case_no_writes; case_concurrent; case_hung_ssh; case_flow_and_turn; case_conf; case_formats; case_lock_age; case_empty_list
+  case_no_writes; case_concurrent; case_hung_ssh; case_flow_and_turn; case_conf; case_formats; case_lock_age; case_empty_list; case_lock_min
 done
 
 echo "$pass passed, $fail failed"
