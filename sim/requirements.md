@@ -2621,6 +2621,140 @@ reporting beat is not part of this entry; that lives in the supervisor role.
 narrowed from a fixed beat with a readiness tightening. Cross-refs R-107,
 R-113, finding-188.*
 
+**R-218 (OBSERVED) · a Desk card enters by one ingest path from the seat's
+standard card form, and an answer leaves by one relay path.** On 2026-10-15
+director turned 50 operator answers into 56 Desk writes and 3 supervisor
+dispatches by hand: answers were joined to cards in python, notes quoted
+verbatim, and doc versions copied from a listing because the saved files carry
+none, about 10 turns. On 2026-10-19 nine cards went from a seat's markdown or
+bus text to Desk JSON through ad hoc python that splits on bold headings, about
+2 to 4 turns per batch, and one parser was written twice. Director takes a
+card in the seat's standard form (question, problem, terms, options with cost,
+recommendation, valid until, predictability) through one ingest, and relays
+each answer, with its note verbatim and the card's version, through one path.
+*Earned by: O-2082 (2026-10-15, Desk answers relayed by hand); O-2090
+(2026-10-19, Desk cards built from seat markdown by hand).*
+*Source: OBSERVED. Cross-refs R-202, R-203, finding-director-glst.*
+
+**R-219 (OBSERVED) · a card write refuses an empty context and an option shorter
+than a sentence, and a vote tally is never a card.** The operator called
+vsdd-c11-410 "a serious failure ... insufficient context, what is the problem?
+why? what are our options?". A sweep then found 24 open cards with empty context
+and bare options, 15 of them a close set director had written by transcribing a
+tally line. The Desk schema has no check, so nothing stopped them. A card
+write checks that the problem and each option are present as sentences, and
+refuses otherwise; a party's tally goes to the owning seat to be written as
+cards, not onto the Desk as they stand.
+*Earned by: O-2085 (2026-10-15, FAILURE, operator-visible).*
+*Source: OBSERVED. Sharpens R-175 and R-126 with a write-time check.*
+
+**R-220 (OBSERVED) · capture note ids are allocated by the tool, never by
+reading the file's tail.** O-2083 to O-2086 are each used twice in
+`observations.md`, because each writer read the last id and added one. The
+2026-10-14 harvest cites O-2078 for a decision-page delay of about 24 hours, and
+the entry the file now holds as O-2078 is a different one, dated 2026-10-15. A
+harvest has to cite by number, date and title to stay unambiguous. Director (or
+the capture store of R-163) mints the id at write time, the way `kos id`
+does for findings.
+*Earned by: O-2087 (2026-10-19, ids hand-allocated); the four duplicated ids;
+the O-2078 citation in the 2026-10-14 harvest diff.*
+*Source: OBSERVED. Cross-refs R-163, R-192.*
+
+### Harvest diff (2026-10-19)
+
+Covers `observations.md` entries not cited by any earlier harvest: O 2026-10-14w
+to 2026-10-14ac and O-2078 to O-2093 (O-2083 to O-2086 by number, date and
+title, since each id is used twice). `friction.md` has nothing after FR-2027,
+which the register cites; `shortcuts.md` is unchanged since 2026-10-05.
+`relay-log.md` past the 2026-10-14 harvest was not read. Team inputs (item 5
+of 01M59M7Y6G) other than team arcaven's had not reached this pass and get a
+second pass. Same bar: an
+item is promoted on two or more recorded instances, or on an operator ruling.
+
+- **Promoted (3):** R-218 (one ingest and one relay path for Desk cards), R-219
+  (a card write refuses empty context; a tally is never a card), R-220 (note
+  ids are minted, not read from the tail).
+- **Unchanged, new instances:**
+  - R-150, R-184 and R-191: the classifier refused director's inject of the
+    operator's go for a ticket-tracker backfill twice as [Auto-Mode Bypass], the second time quoting the
+    operator's own words, and refused the relay-log append; the operator's
+    `!` lines arrived as text (O-2088). A close and reopen of an issue in a private repo was
+    refused as [External System Writes], the seventh refusal across seats that
+    day (O-2084, 2026-10-15, COULD NOT DO IT). Not retried, which is correct.
+    The research-supervisor's study (01M594SWQJ) measured 57 refusals in 45,720
+    calls on kinu, 26 of them blocking asked-for work. The classifier half is a
+    settings decision on the operator's Desk card `auto-mode-allow-or-retire`;
+    the director half is R-150's checkable relay form.
+  - R-212, R-211 and R-141: corporate came back on the roster by 08:23Z and the
+    held five-loop ask was delivered about 6 hours after it was given, found by
+    a status turn, not a watch; mokuzai dropped from global presence 03:28Z to
+    04:01Z and director learned it from a seat's INFORM (O-2089). On
+    2026-10-19 mokuzai entered Maintenance Sleep three times (12:37Z to 12:53Z,
+    about 15:24Z to 15:42Z, 17:22Z to 17:27Z, from pmset); each dropped its
+    global presence and timed out kinu sends, and each was found by a seat's
+    INFORM, not a watch (reviewer-supervisor 01M5A4831X, 01M5AD9HDN,
+    01M5AKQPDP).
+  - R-202: the operator ruled feedback and decisions belong on the Desk, not
+    chat, and 24 cards were written from five party reports (O-2080, RULED); a
+    card named in seat traffic for days was not on the Desk until a seat asked
+    (O-2091).
+  - R-203: the operator's list carried "post the reworked cards, or edit?" and
+    "kill pid 1588" (the operator's own watch loop); operator, verbatim: "1 post
+    them. why is this even a question?" and "7 you've lost your mind. leave it
+    alone" (O-2092, RULED).
+  - R-197: the workstream ledger has not moved since about 10-07, so each
+    status this session was assembled from board.md, the Desk and memory and
+    dropped and re-added items across turns (O-2093); director had stopped
+    maintaining it by 10-14 (O 2026-10-14w). A ruling arrived on a card after
+    its pull requests had merged, and only director's pre-relay check caught it
+    (O 2026-10-14x); the merge-clears-block rule applies to a card's linked PR
+    as it does to a ledger row.
+  - R-163: three days of standing mode produced 50+ relay-log entries and no
+    observation (O-2087). finding-director-a53a (standing duties have no cue)
+    names the mechanism.
+  - R-115 and R-195: asked "who is not busy?", director answered from presence
+    flags and CPU; operator: "that is a terrible way to determine who is busy,
+    check work queue". No machine-readable queue exists; 4 of 6 supervisors
+    answered a QUERY within 3 minutes (O-2084, 2026-10-16).
+  - R-194 and R-195: the research-supervisor sat on the harness "Teach auto
+    mode" menu from about 18:5xZ; doorbells landed above it and its cue fired 7
+    times before a capture found it at about 21:40Z (O-2083, 2026-10-15, COULD
+    NOT DO IT until hand-cleared).
+  - R-151 and R-194: a doorbell to a shifted seat's old instance failed
+    "resource not found" and a tail pipe hid the error (O-2086, FRICTION).
+  - R-186 and R-188: a status line asked whether a contributor's merges were
+    "yours" where the card asked whether they were sanctioned, and the operator
+    answered the literal line
+    (O-2083, 2026-10-15, FAKED IT / wording).
+  - R-201 and R-186: director relayed "a formal review ... approve or request
+    for changes" over the standing 10-09 COMMENT-only ruling; the product seat
+    refused on CANNOT-wins (O 2026-10-14z, with the correction relayed at
+    17:0xZ).
+  - R-182: one role live on two clusters (g17 on kinu, g15 on corporate) read
+    as one seat with a drifting name, and g15 was rung with g17's message (O
+    2026-10-14aa).
+  - R-117, R-124 and R-168: corporate's supervisor left mail unread about 40
+    hours until rung, the wake cue was on for 3 of 48 seats (O 2026-10-14ab);
+    the product supervisor sat idle about 2 hours with builder mail unread (O
+    2026-10-14ac); director itself did not drain for about 2.5 hours under
+    operator load, 55 messages deep (O 2026-10-14y).
+  - R-121: a builder closed six beads and marvel#842 under a grant its
+    supervisor had already narrowed in its inbox (O-2078).
+  - R-180: merge-guard stopped on a stack base with no permitted path
+    (O-2081, 2026-10-15). director#311 (merged 2026-10-15) added
+    PROCEED-KEEP-BRANCH; its ticket aae-orc-1x6mm is still open.
+- **Kept as an observation (one instance):** a published artifact (a client
+  project's orchestrator map) had no owner for updates (O 2026-10-14w, first half).
+- **Rejected for the register (routed elsewhere):**
+  - A reviewer ran find over the real `~/.marvel` to build a sandbox control
+    (O-2079): reviewer and run-conditions practice for any seat, already in the
+    orchestrator's `relay-run-conditions.md`.
+  - Whether one role may hold a seat per cluster or one fleet-wide (O
+    2026-10-14aa, second half): a casting question for the role library, not director.
+- **Director build tickets these map to:** R-218 to K5 and K13 (the Desk read
+  and write paths, finding-director-glst); R-197 instances to K11 (reconcile);
+  R-180 to aae-orc-1x6mm (built). R-219 and R-220 match no existing K ticket.
+
 ### Harvest diff (2026-10-09)
 
 Covers O-2046 through O-2070 and the 2026-10-09 entry, and friction after the
