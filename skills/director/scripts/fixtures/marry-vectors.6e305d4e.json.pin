@@ -1,0 +1,8 @@
+Source: contracts/readiness/marry-vectors.json in the marvel repository, at commit 6e305d4e
+(the pin in the idle-scheduler design for the shared marry function, aae-orc-oprad; marvel#989).
+sha256 7e492f56c8e08baf78a9068ac1f79f324a3787e1ee6aab11072e1baabad7bfe1, 96579 bytes.
+
+Why a copy: director's tests must run without a marvel checkout, and the file is the contract both sides
+hold to. verify-idle-shadow.sh checks this copy against the sha above. When marvel moves the contract,
+replace the copy and this pin together, then recheck the vectors against the merged file.
+Do not edit the copy by hand.

@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+# Prove idle-shadow (idle-scheduler M2, read side): the shadow run that follows freebusy in
+# the sweep. Each case builds a scratch home and a scratch DIRECTOR_STATE, puts a stub bd
+# first on PATH (it answers `ready` only, and logs every call), makes marvel, director-mcp,
+# gh and ssh forbidden stubs, and runs the script under `env -i` with no MARVEL_SOCKET. No
+# real bd, marvel or gh is reached, and nothing is written outside the scratch root.
+#
+# The marry step is the one part not built: it waits on a marvel verb (marvel#989), so the
+# would-pair vector expects the GAP line, and these tests hold the surrounding reads and
+# outputs so that step can be swapped in without touching them.
+#
+# Usage: skills/director/scripts/verify-idle-shadow.sh   Exit nonzero on any miss.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IS="${IS:-$here/idle-shadow}"
+BASHES="${BASHES:-/bin/bash bash}"
+pass=0; fail=0
+ok()  { echo "PASS $1"; pass=$((pass+1)); }
+bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
+
+root="$(mktemp -d "${TMPDIR:-/tmp}/is.XXXXXX")"
+root="$(cd "$root" && pwd -P)"
+cleanup() { rm -rf "$root"; }
+trap cleanup EXIT
+
+mkdir -p "$root/bin" "$root/fix" "$root/home" "$root/work"
+FIX="$root/fix"
+
+# --- stubs ------------------------------------------------------------------
+cat >"$root/bin/bd" <<'S'
+#!/usr/bin/env bash
+echo "$*" >>"$IS_FIX/bd.log"
+if [[ "${1:-}" != ready ]]; then echo "bd $*" >>"$IS_FIX/forbidden.log"; exit 1; fi
+if [[ -e "$IS_FIX/bd.fail" ]]; then echo "Error: dolt server unreachable" >&2; echo "second stderr line" >&2; exit 1; fi
+if [[ -e "$IS_FIX/bd.slow" ]]; then echo "$$" >>"$IS_FIX/slow.pids"; sleep "$(cat "$IS_FIX/bd.slow")"; fi
+json=0; excl=0; lab=0; prev=""
+for a in "$@"; do
+  if [[ "$a" == --json ]]; then json=1; fi
+  if [[ "$prev" == --exclude-label && "$a" == scope:client ]]; then excl=1; fi
+  if [[ "$prev" == --label && "$a" == scope:client ]]; then lab=1; fi
+  prev="$a"
+done
+[[ "$json" == 1 ]] || { echo "stub bd: no --json in: $*" >&2; exit 2; }
+if [[ -e "$IS_FIX/bd.nojson" ]]; then echo "this is not json"; exit 0; fi
+if [[ "$lab" == 1 ]]; then
+  if [[ -e "$IS_FIX/bd.clientfail" ]]; then echo "Error: client read failed" >&2; exit 1; fi
+  cat "$IS_FIX/client.json"; exit 0
+fi
+if [[ "$excl" == 1 && ! -e "$IS_FIX/bd.ignoreexclude" ]]; then cat "$IS_FIX/items.json"; exit 0; fi
+# a bd that ignores --exclude-label: its answer carries the client items too
+cat "$IS_FIX/items.all.json"
+S
+for t in marvel director-mcp gh ssh; do
+  cat >"$root/bin/$t" <<'S'
+#!/usr/bin/env bash
+echo "$(basename "$0") $*" >>"$IS_FIX/forbidden.log"
+exit 1
+S
+done
+chmod +x "$root/bin/"*
+
+# --- fixtures ---------------------------------------------------------------
+CLIENT_ID="zz-clientid-7"
+CLIENT_TITLE="CLIENTTITLE-secret-text"
+NOW="$(jq -nr '"2026-10-21T08:05:00Z" | fromdateiso8601')"
+SEATS_AT="2026-10-21T08:04:00Z"
+
+item() { # id labels-json priority created
+  jq -n -c --arg id "$1" --argjson l "$2" --argjson p "${3:-2}" --arg c "${4:-2026-10-01T00:00:00Z}" \
+    '{id: $id, title: ("title of " + $id), description: "body", labels: $l, priority: $p, created_at: $c, status: "open", issue_type: "task"}'
+}
+seat() { # cluster team role name state
+  jq -n -c --arg at "$SEATS_AT" --arg c "$1" --arg t "$2" --arg r "$3" --arg n "$4" --arg s "$5" \
+    '{at: $at, cluster: $c, workspace: "wsa", team: $t, role: $r, name: $n, state: $s, reason: "", last_active: null, active: null, last_turn: null}'
+}
+client_item() {
+  jq -n -c --arg id "$CLIENT_ID" --arg t "$CLIENT_TITLE" '{id: $id, title: $t, description: $t, labels: ["scope:client", "marvel"], priority: 1, created_at: "2026-10-02T00:00:00Z", status: "open"}'
+}
+
+reset() { # the default scene: the five worked shapes, no class on any, three seats
+  rm -rf "$root/state" "$FIX"; mkdir -p "$FIX" "$root/state/freebusy"
+  {
+    item i-1 '["aae-orc","marvel","source:session"]' 1
+    item i-2 '["aae-orc"]' 2
+    item i-3 '["aae-orc","source:finding"]' 2
+    item i-4 '["aae-orc","marvel","actor:operator","host:kinu"]' 1
+    item i-5 '[]' 3
+  } | jq -s '.' >"$FIX/items.json"
+  cp "$FIX/items.json" "$FIX/items.all.json"
+  echo '[]' >"$FIX/client.json"
+  {
+    seat alpha crew builder b1 free
+    seat alpha crew builder b2 busy
+    seat alpha crew reviewer r1 waiting
+    seat beta desk builder d1 unknown
+  } >"$root/state/freebusy/seats.jsonl"
+}
+set_items() { jq -s '.' >"$FIX/items.json"; cp "$FIX/items.json" "$FIX/items.all.json"; }
+
+rc=0
+runis() { # bash, then env assignments
+  local b="$1"; shift
+  rc=0
+  ( cd "$root/work" && env -i HOME="$root/home" PATH="$root/bin:$PATH" LANG=C TMPDIR="$root" \
+      DIRECTOR_STATE="$root/state" IS_FIX="$FIX" IDLE_SHADOW_TEST_CLOCK=1 IDLE_SHADOW_NOW="$NOW" \
+      IDLE_SHADOW_CALL_TIMEOUT=3 "$@" "$b" "$IS" ) >"$root/out" 2>"$root/err" || rc=$?
+}
+out() { cat "$root/out"; }
+has() { /usr/bin/grep -q -F -- "$1" "$root/out"; }
+count_line() { /usr/bin/grep '^idle-shadow: ready' "$root/out" || true; }
+st="$root/state/idle-shadow"
+
+# --- the vendored M1 vectors, pinned by sha ---------------------------------
+vec="$here/fixtures/marry-vectors.6e305d4e.json"
+want_sha="7e492f56c8e08baf78a9068ac1f79f324a3787e1ee6aab11072e1baabad7bfe1"
+if [[ -f "$vec" ]]; then
+  got_sha="$(shasum -a 256 "$vec" | cut -d' ' -f1)"
+  [[ "$got_sha" == "$want_sha" ]] && ok "V1 the vendored marry vectors match the pinned sha" || bad "V1 vector sha" "$got_sha"
+  [[ "$(jq -r '.rows | length' "$vec")" == 10 && "$(jq -r '.rows | index("client isolation") != null and index("strict free") != null' "$vec")" == true ]] \
+    && ok "V2 the vectors name the ten properties, strict free and client isolation among them" || bad "V2 vector rows"
+else
+  bad "V1 the vendored marry vectors are missing ($vec)"
+fi
+[[ -f "$here/fixtures/marry-vectors.6e305d4e.json.pin" ]] \
+  && /usr/bin/grep -q "6e305d4e" "$here/fixtures/marry-vectors.6e305d4e.json.pin" && /usr/bin/grep -q "$want_sha" "$here/fixtures/marry-vectors.6e305d4e.json.pin" \
+  && ok "V3 the pin file records the marvel commit and the sha" || bad "V3 pin file"
+
+for B in $BASHES; do
+  echo "== $B"
+  "$B" -n "$IS" 2>/dev/null && ok "0 bash -n passes ($B)" || bad "0 bash -n ($B)"
+
+  # ---- 1 the five worked shapes: 0 pairs, 5 unmatched, each with its missing field
+  reset
+  runis "$B"
+  [[ "$rc" == 0 ]] && ok "1 exits 0" || bad "1 exit $rc"
+  cl="$(count_line)"
+  [[ "$cl" == *"ready 5"* ]] && ok "1 the count line says 5 ready" || bad "1 ready" "$cl"
+  [[ "$cl" == *"eligible 0"* ]] && ok "1 eligible 0" || bad "1 eligible" "$cl"
+  [[ "$cl" == *"unmatched 5 (no class 5, no component 3, operator-only 1, no eligible seat GAP)"* ]] && ok "1 unmatched 5, by kind, with no eligible seat named as unread" || bad "1 unmatched kinds" "$cl"
+  [[ "$cl" == *"would-pair 0"* ]] && ok "1 would-pair 0" || bad "1 would-pair" "$cl"
+  [[ "$(wc -l <"$st/unmatched.jsonl" | tr -d ' ')" == 5 ]] && ok "1 five unmatched rows" || bad "1 unmatched rows" "$(cat "$st/unmatched.jsonl" 2>&1)"
+  [[ "$(jq -r 'select(.id == "i-2") | .missing | join(",")' "$st/unmatched.jsonl")" == "class,component" ]] && ok "1 i-2 misses class and component" || bad "1 i-2 missing"
+  [[ "$(jq -r 'select(.id == "i-1") | .missing | join(",")' "$st/unmatched.jsonl")" == "class" ]] && ok "1 i-1 (a component, no class) misses class only" || bad "1 i-1 missing"
+  [[ "$(jq -r 'select(.id == "i-4") | .operator' "$st/unmatched.jsonl")" == true ]] && ok "1 i-4 (actor:operator) is marked operator-only" || bad "1 i-4 operator"
+  has "- unmatched no class (5): i-1 i-2 i-3 i-4 i-5" && ok "1 the list groups no class" || bad "1 no class group" "$(out)"
+  has "- unmatched no component (3): i-2 i-3 i-5" && ok "1 the list groups no component" || bad "1 no component group" "$(out)"
+  has "- unmatched operator-only (1): i-4" && ok "1 the list groups operator-only" || bad "1 operator group" "$(out)"
+  [[ ! -s "$st/would-pair.jsonl" && -f "$st/would-pair.jsonl" ]] && ok "1 would-pair.jsonl exists and holds no row" || bad "1 would-pair file"
+  has "no item carries a class label" && ok "1 the expected first reading is said plainly" || bad "1 plain note"
+  ! has "ERROR" && ! has "FAIL" && ok "1 the empty result is not framed as an error" || bad "1 framed as error"
+  has "- GAP marry: no marvel marry verb (marvel#989)" && ok "1 the marry step prints its GAP once" || bad "1 marry GAP" "$(out)"
+  [[ "$(/usr/bin/grep -c '^- GAP marry' "$root/out")" == 1 ]] && ok "1 exactly once" || bad "1 marry GAP count"
+  [[ "$cl" == *"pane veto"* ]] && ok "1 the count line carries the strict-free caveat" || bad "1 caveat" "$cl"
+  [[ "$cl" == *"seats: 1 free, 1 busy, 1 waiting, 1 unknown"* ]] && ok "1 seat states are freebusy's, never coerced" || bad "1 seats" "$cl"
+
+  # ---- 2 an item with a class and a component and a free seat: one candidate, no send
+  reset
+  { item e-1 '["class:story-implementation","marvel","aae-orc"]' 1; item i-2 '["aae-orc"]' 2; } | set_items
+  runis "$B"
+  cl="$(count_line)"
+  [[ "$rc" == 0 && "$cl" == *"eligible 1"* ]] && ok "2 an item with a class and a component is eligible" || bad "2 eligible" "$cl"
+  [[ "$cl" == *"unmatched 1 (no class 1, no component 1,"* ]] && ok "2 the other item is the only unmatched one" || bad "2 unmatched" "$cl"
+  has "- GAP marry: no marvel marry verb (marvel#989)" && [[ "$cl" == *"would-pair 0"* && ! -s "$st/would-pair.jsonl" ]] \
+    && ok "2 until marry exists the would-pair vector holds the GAP and no row" || bad "2 would-pair" "$(out)"
+  [[ ! -e "$FIX/forbidden.log" ]] && ok "2 nothing was sent, injected or written" || bad "2 forbidden" "$(cat "$FIX/forbidden.log")"
+  ! has "e-1" && ok "2 an eligible item is not on the unmatched list" || bad "2 eligible listed" "$(out)"
+
+  # ---- 3 class label rules
+  reset
+  {
+    item c-ok '["class:design-brief","marvel"]'
+    item c-bogus '["class:not-a-class","marvel"]'
+    item c-two '["class:design-brief","class:pr-review","marvel"]'
+    item c-none '["marvel"]'
+    item c-orc '["class:research-local","aae-orc"]'
+  } | set_items
+  runis "$B"
+  [[ "$(jq -r 'select(.id == "c-ok")' "$st/unmatched.jsonl")" == "" ]] && ok "3 one class from the six, with a component, is not unmatched" || bad "3 c-ok"
+  [[ "$(jq -r 'select(.id == "c-bogus") | .missing | join(",")' "$st/unmatched.jsonl")" == class ]] && ok "3 a class outside the six is no class" || bad "3 c-bogus"
+  [[ "$(jq -r 'select(.id == "c-two") | .missing | join(",")' "$st/unmatched.jsonl")" == class ]] && ok "3 two class labels are no class, never a pick" || bad "3 c-two"
+  [[ "$(jq -r 'select(.id == "c-orc") | .missing | join(",")' "$st/unmatched.jsonl")" == component ]] && ok "3 aae-orc alone is not a component" || bad "3 c-orc"
+  for c in story-implementation design-brief human-decision pr-review research-local gate-definition; do
+    item "k-$c" "[\"class:$c\",\"marvel\"]"
+  done | set_items
+  runis "$B"
+  [[ "$(count_line)" == *"eligible 6"* ]] && ok "3 each of the six class ids is accepted" || bad "3 six ids" "$(count_line)"
+
+  # ---- 4 client items are a count only
+  reset
+  { cat "$FIX/items.json" | jq -c '.[]'; client_item; } | jq -s '.' >"$FIX/items.all.json"
+  { client_item; client_item; } | jq -s '.' >"$FIX/client.json"
+  runis "$B"
+  cl="$(count_line)"
+  [[ "$cl" == *"ready 7 (client 2, counted only)"* ]] && ok "4 client items are counted: 5 plus 2 ready" || bad "4 client count" "$cl"
+  leak=0
+  for f in "$root/out" "$root/err"; do
+    if /usr/bin/grep -q -F -e "$CLIENT_ID" -e "$CLIENT_TITLE" -e "zz-client" "$f"; then leak=1; fi
+  done
+  if /usr/bin/grep -r -q -F -e "$CLIENT_ID" -e "$CLIENT_TITLE" "$root/state"; then leak=1; fi
+  [[ "$leak" == 0 ]] && ok "4 no part of a client id or title reaches the output or any file" || bad "4 client leak"
+  /usr/bin/grep -q -F -- "--exclude-label scope:client" "$FIX/bd.log" 2>/dev/null && ok "4 the item read excludes the client label at bd" || bad "4 exclude flag" "$(cat "$FIX/bd.log")"
+  touch "$FIX/bd.ignoreexclude"
+  { cat "$FIX/items.json" | jq -c '.[]'; client_item; } | jq -s '.' >"$FIX/items.all.json"
+  runis "$B"
+  leak=0
+  if /usr/bin/grep -q -F -e "$CLIENT_ID" -e "$CLIENT_TITLE" "$root/out"; then leak=1; fi
+  if /usr/bin/grep -r -q -F -e "$CLIENT_ID" -e "$CLIENT_TITLE" "$root/state"; then leak=1; fi
+  [[ "$leak" == 0 && "$(count_line)" == *"ready 7 (client 2, counted only)"* ]] \
+    && ok "4 a bd that ignores the exclude flag still leaks no client item, and none is counted twice" || bad "4 ignored exclude" "$(count_line)"
+  rm -f "$FIX/bd.ignoreexclude" "$FIX/bd.log"
+  : >"$FIX/bd.clientfail"; touch "$FIX/bd.clientfail"
+  runis "$B"
+  [[ "$rc" == 0 && "$(count_line)" == *"client GAP"* ]] && has "- GAP client: " && ok "4 a client count that cannot be read is a GAP, not 0" || bad "4 client GAP" "$(out)"
+
+  # ---- 5 a seat that is not free never counts as free
+  reset
+  { seat alpha crew builder b1 unknown; seat alpha crew builder b2 waiting; seat alpha crew builder b3 busy; } >"$root/state/freebusy/seats.jsonl"
+  { item e-1 '["class:story-implementation","marvel"]'; } | set_items
+  runis "$B"
+  cl="$(count_line)"
+  [[ "$cl" == *"seats: 0 free, 1 busy, 1 waiting, 1 unknown"* ]] && ok "5 unknown and waiting are never coerced to free" || bad "5 strict free" "$cl"
+  [[ ! -s "$st/would-pair.jsonl" ]] && ok "5 a seat that reads unknown never appears in a would-pair row" || bad "5 would-pair row" "$(cat "$st/would-pair.jsonl")"
+
+  # ---- 6 seat reads that fail are GAPs
+  reset; rm -f "$root/state/freebusy/seats.jsonl"
+  runis "$B"
+  [[ "$rc" == 0 ]] && has "- GAP seats: " && [[ "$(count_line)" == *"seats: GAP"* ]] && ok "6 no seats file is a GAP, exit 0" || bad "6 no seats" "$(out)"
+  reset; : >"$root/state/freebusy/seats.jsonl"
+  runis "$B"
+  [[ "$rc" == 0 ]] && has "- GAP seats: " && ok "6 an empty seats file is a GAP" || bad "6 empty seats" "$(out)"
+  reset; echo "not json" >"$root/state/freebusy/seats.jsonl"
+  runis "$B"
+  [[ "$rc" == 0 ]] && has "- GAP seats: " && ok "6 an unparseable seats file is a GAP" || bad "6 junk seats" "$(out)"
+  reset
+  NOW_OLD="$(jq -nr '"2026-10-21T10:00:00Z" | fromdateiso8601')"
+  runis "$B" IDLE_SHADOW_NOW="$NOW_OLD"
+  [[ "$rc" == 0 ]] && has "- GAP seats: freebusy seats are" && [[ "$(count_line)" == *"seats: 0 free, 0 busy, 0 waiting, 4 unknown"* ]] \
+    && ok "6 an old seats file is a GAP and every seat reads unknown" || bad "6 old seats" "$(out)"
+
+  # ---- 7 bd failures are GAPs and the run still ends 0
+  reset; : >"$FIX/bd.fail"; touch "$FIX/bd.fail"
+  runis "$B"
+  [[ "$rc" == 0 ]] && has "- GAP items: bd ready failed (Error: dolt server unreachable)" && [[ "$(count_line)" == *"ready GAP"* ]] \
+    && ok "7 bd down gives one GAP with its first stderr line, and ready is GAP, never 0" || bad "7 bd down" "$(out)"
+  ! has "second stderr line" && ok "7 only the first stderr line is shown" || bad "7 stderr"
+  reset; touch "$FIX/bd.nojson"
+  runis "$B"
+  [[ "$rc" == 0 ]] && has "- GAP items: " && ok "7 bd that answers with no JSON is a GAP" || bad "7 nojson" "$(out)"
+  reset; echo 30 >"$FIX/bd.slow"
+  s0=$SECONDS
+  runis "$B"
+  el=$((SECONDS - s0))
+  [[ "$rc" == 0 && "$el" -lt 20 ]] && has "- GAP items: bd ready failed (no answer within 3s)" && ok "7 a hung bd is stopped at the bound, took ${el}s" || bad "7 hung bd" "${el}s $(out)"
+  alive=0
+  if [[ -f "$FIX/slow.pids" ]]; then
+    while read -r p; do if kill -0 "$p" 2>/dev/null; then alive=1; fi; done <"$FIX/slow.pids"
+  fi
+  [[ "$alive" == 0 ]] && ok "7 the hung call's process is gone" || bad "7 survivor"
+
+  # ---- 8 no send path: stubs and grep
+  reset
+  runis "$B"
+  [[ ! -e "$FIX/forbidden.log" ]] && ok "8 no bd write, marvel, director-mcp, gh or ssh call was made" || bad "8 forbidden" "$(cat "$FIX/forbidden.log")"
+  [[ -z "$(/usr/bin/grep -v '^ready ' "$FIX/bd.log" 2>/dev/null || true)" ]] && ok "8 every bd call was a ready read" || bad "8 bd calls" "$(cat "$FIX/bd.log")"
+  /usr/bin/grep -q -F -- "--json" "$FIX/bd.log" 2>/dev/null && ok "8 bd was asked for JSON" || bad "8 json"
+done
+
+# --- the script's own text: no send, inject, bd write or gh call -------------
+code="$(/usr/bin/grep -v '^[[:space:]]*#' "$IS" 2>/dev/null || true)"
+hits="$(printf '%s\n' "$code" | /usr/bin/grep -n -E 'director-mcp|marvel inject|marvel send|broadcast|(^|[^a-z_-])gh (api|pr|issue)|bd (create|update|close|claim|remember|dep|label|comment|note|set)|NATS|nats |ssh |curl' || true)"
+[[ -z "$hits" ]] && ok "P1 the script names no send, inject, bd write, gh call, ssh or bus" || bad "P1 send path" "$hits"
+n_bd="$(printf '%s\n' "$code" | /usr/bin/grep -c -E '(^|[^a-zA-Z_])bd ' || true)"
+[[ "$(printf '%s\n' "$code" | /usr/bin/grep -E '(^|[^a-zA-Z_])\$?\{?bd\}? ' | /usr/bin/grep -v -E 'ready' | /usr/bin/grep -c . || true)" == 0 ]] \
+  && ok "P2 every bd invocation in the script is a ready read" || bad "P2 bd verbs" "$n_bd"
+[[ "$(printf '%s\n' "$code" | /usr/bin/grep -c -E '^marry_step\(\)' || true)" == 1 ]] \
+  && ok "P3 the marry step is one function" || bad "P3 marry function"
+# nothing outside marry_step builds a would-pair row
+outside="$(printf '%s\n' "$code" | awk '/^marry_step\(\)/{f=1} f&&/^}/{f=0; next} !f' | /usr/bin/grep -c 'would-pair.jsonl' || true)"
+[[ "$outside" -le 2 ]] && ok "P4 the would-pair file is only created empty outside the marry step" || bad "P4 would-pair writes" "$outside"
+
+# --- state files, modes, checkout refusal -------------------------------------
+reset
+runis /bin/bash
+[[ "$(stat -f %Lp "$st" 2>/dev/null || stat -c %a "$st")" == 700 ]] && ok "S1 the directory is mode 700" || bad "S1 dir mode"
+m_ok=1
+for f in unmatched.jsonl would-pair.jsonl flow.jsonl; do
+  [[ "$(stat -f %Lp "$st/$f" 2>/dev/null || stat -c %a "$st/$f")" == 600 ]] || m_ok=0
+done
+[[ "$m_ok" == 1 ]] && ok "S2 each state file is mode 600" || bad "S2 file modes"
+[[ "$(find "$st" -mindepth 1 | wc -l | tr -d ' ')" == 3 ]] && ok "S3 nothing else is left in the directory" || bad "S3 leftovers" "$(find "$st")"
+runis /bin/bash
+[[ "$(wc -l <"$st/flow.jsonl" | tr -d ' ')" == 2 ]] && ok "S4 flow.jsonl gains one line per run" || bad "S4 flow"
+jq -e '.ready == 5 and .client == 0 and .would_pair == 0 and .unmatched.no_class == 5' "$st/flow.jsonl" >/dev/null && ok "S5 the flow line carries the counts" || bad "S5 flow fields" "$(cat "$st/flow.jsonl")"
+h1="$(shasum -a 256 "$root/state/freebusy/seats.jsonl")"; runis /bin/bash; h2="$(shasum -a 256 "$root/state/freebusy/seats.jsonl")"
+[[ "$h1" == "$h2" ]] && ok "S6 freebusy's seats file is read, never changed" || bad "S6 seats changed"
+find "$root" -newer "$root/bin/bd" -type f ! -path "$root/state/*" ! -path "$root/fix/*" ! -path "$root/out" ! -path "$root/err" ! -path "$root/home/*" 2>/dev/null | /usr/bin/grep -q . \
+  && bad "S7 a file was written outside the state directory" || ok "S7 nothing is written outside the state directory"
+
+reset; mkdir -p "$root/repo/.git"; mv "$root/state" "$root/repo/state"; mkdir -p "$root/state"
+sed_state="$root/repo/state"
+rc=0
+( cd "$root/work" && env -i HOME="$root/home" PATH="$root/bin:$PATH" LANG=C TMPDIR="$root" DIRECTOR_STATE="$sed_state" IS_FIX="$FIX" /bin/bash "$IS" ) >"$root/out" 2>"$root/err" || rc=$?
+[[ "$rc" == 0 ]] && has "not run: " && [[ ! -d "$sed_state/idle-shadow" ]] && ok "S8 a state directory inside a checkout is refused and nothing is written" || bad "S8 checkout" "$(out)"
+rm -rf "$root/repo"
+
+# --- a long group is capped on the screen and whole in the file ---------------
+reset
+for n in $(seq 1 25); do item "m-$(printf %02d "$n")" '["marvel"]'; done | set_items
+runis /bin/bash
+has "- unmatched no class (25): m-01 m-02 m-03 m-04 m-05 m-06 m-07 m-08 m-09 m-10 and 15 more" && ok "L1 the screen lists ten ids and counts the rest" || bad "L1 cap" "$(out)"
+[[ "$(wc -l <"$st/unmatched.jsonl" | tr -d ' ')" == 25 ]] && ok "L2 the file holds all 25" || bad "L2 file"
+
+# --- the first-line helper: ids come from labels only, titles never printed --------
+reset
+runis /bin/bash
+! has "title of" && ok "T1 no item title is printed" || bad "T1 title printed"
+! /usr/bin/grep -r -q "title of" "$root/state" && ok "T2 no item title is written" || bad "T2 title written"
+
+echo "$pass passed, $fail failed"
+[[ "$fail" == 0 ]]
