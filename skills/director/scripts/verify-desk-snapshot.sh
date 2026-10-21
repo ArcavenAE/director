@@ -89,6 +89,11 @@ assert s["open"] == ["card-1", "card-5"], s
 assert s["read_at"] == "2026-10-15T12:00:00Z", s
 assert s["cards"] == 5 and s["by_status"] == {"open": 2, "relayed": 1, "closed": 1, "split": 1}, s
 P
+printf '[{"id": "a1", "status": "open", "area": "Ops"}, {"doc_id": "a2", "data": {"status": "open", "area": "Research"}}, {"id": "a3", "status": "open", "area": "Ops"}, {"id": "a4", "status": "open"}, {"id": "a5", "status": "open", "area": 7}, {"id": "a6", "status": "open", "area": "bad\\u0007one"}]' >"$root/areas.json"
+"$SNAP" write --cards "$root/areas.json" --reported 6 >/dev/null 2>&1 \
+  && python3 -c "import json;s=json.load(open('$SNAPFILE'));assert s['areas']==['Ops','Research'],s" \
+  && ok "desk-snapshot records the distinct printable area strings, sorted, from area or data.area; a card with none, a non-string or a control character adds nothing" \
+  || bad "desk-snapshot records areas"
 printf '[{"id": "x1", "status": "open"}, {"doc_id": "x2", "data": {"status": "closed"}}]' >"$root/list.json"
 "$SNAP" write --cards "$root/list.json" --reported 2 >/dev/null 2>&1 \
   && python3 -c "import json;s=json.load(open('$SNAPFILE'));assert s['open']==['x1'],s" \

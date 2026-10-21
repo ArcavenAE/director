@@ -73,7 +73,8 @@ PYG
 # netrun CMD...: run CMD with the guard on, so any network use lands in $NETLOG.
 netrun() { NETLOG="$NETLOG" SPAWNLOG="$root/spawnlog" PYTHONPATH="$root/netguard${PYTHONPATH:+:$PYTHONPATH}" "$@"; }
 
-lines() { if [[ -f "$LEDGER" ]]; then wc -l <"$LEDGER" | tr -d ' '; else echo 0; fi; }
+# The run record refresh appends last (refresh-run) is not an event the fill decides; both counters leave it out.
+lines() { if [[ -f "$LEDGER" ]]; then { grep -v '"event":"refresh-run"' "$LEDGER" || true; } | wc -l | tr -d ' '; else echo 0; fi; }
 field() { "$DWS" show --json | python3 -c 'import json,sys;rows={r["slug"]:r for r in json.load(sys.stdin)["rows"]};print(rows[sys.argv[1]][sys.argv[2]])' "$1" "$2"; }
 open_at() { local at="$1"; shift; DWS_NOW="$at" "$DWS" open "$@" >/dev/null; }
 
@@ -129,8 +130,8 @@ entry() {
     echo "**Outcome:** pending"; } >>"$RELAY_LOG"
 }
 refresh_local() { DWS_NOW="${NOW:-2026-10-19T12:00:00Z}" "$DWS" refresh --local "$@"; }
-events() { python3 -c 'import json,sys;print(sum(1 for l in open(sys.argv[1]) if l.strip()))' "$LEDGER"; }
-last_event() { tail -n 1 "$LEDGER"; }
+events() { python3 -c 'import json,sys;print(sum(1 for l in open(sys.argv[1]) if l.strip() and json.loads(l).get("event") != "refresh-run"))' "$LEDGER"; }
+last_event() { { grep -v '"event":"refresh-run"' "$LEDGER" || true; } | tail -n 1; }
 
 # --- test 1, the positive control: one entry appended with --ws moves its row ---------
 fresh_state
@@ -140,16 +141,17 @@ stamp1="$(sed -n 's/^## R-1 (\([^)]*\)).*/\1/p' "$RELAY_LOG")"
 NOW=2099-01-01T00:00:00Z refresh_local >"$root/out" 2>&1 || bad "test 1: refresh --local runs" "$(cat "$root/out")"
 python3 - "$LEDGER" "$stamp1" <<'P' && ok "test 1: refresh --local moves last moved to the entry stamp, as refresh, tag mirror, with src recorded" || bad "test 1: the positive control" "$(last_event)"
 import json, sys
-ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()][-1]
+ev = [e for e in (json.loads(l) for l in open(sys.argv[1]) if l.strip()) if e["event"] != "refresh-run"][-1]
 assert ev["event"] == "observe" and ev["ws"] == "f1" and ev["actor"] == "refresh" and ev["tag"] == "mirror", ev
 assert ev["src"] == "relay:R-1@" + sys.argv[2] and ev["moved_at"] == sys.argv[2], ev
 P
 [[ "$(field f1 last_moved)" == "$stamp1" ]] && ok "test 1: the row's last moved is the entry stamp" || bad "test 1: last moved" "$(field f1 last_moved)"
 
 # --- test 2: replay idempotence -------------------------------------------------------
-before="$(wc -c <"$LEDGER" | tr -d ' ')"
+nrun() { { grep -v '"event":"refresh-run"' "$LEDGER" || true; } | wc -c | tr -d ' '; }
+before="$(nrun)"
 NOW=2099-01-01T00:00:00Z refresh_local >/dev/null 2>&1
-[[ "$(wc -c <"$LEDGER" | tr -d ' ')" == "$before" ]] && ok "test 2: a second refresh --local over the same log appends zero bytes" || bad "test 2: replay appends nothing"
+[[ "$(nrun)" == "$before" ]] && ok "test 2: a second refresh --local over the same log appends zero bytes (its run record aside)" || bad "test 2: replay appends nothing"
 n="$(lines)"
 RELAY_LOG="$RELAY_LOG" "$RL" append --to agent://t/x --ws f1 --text "another send" >/dev/null
 NOW=2099-01-01T00:00:00Z refresh_local >/dev/null 2>&1
@@ -219,6 +221,7 @@ NOW=2099-01-01T00:00:00Z refresh_local >/dev/null 2>&1
 python3 - "$LEDGER" <<'P' && ok "test 7: the fill appends observe events only (no stage, park, open, set or link)" || bad "test 7: the fill appended a judging event"
 import json, sys
 ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+ev = [e for e in ev if e["event"] != "refresh-run"]
 bad = [e["event"] for e in ev if e["actor"] == "refresh" and e["event"] != "observe"]
 assert not bad, bad
 assert all(e["actor"] == "refresh" and e["tag"] == "mirror" for e in ev if "src" in e), ev
@@ -274,7 +277,7 @@ DWS_NOW=2026-10-19T10:00:00Z "$SNAP" write --cards "$root/cards.json" --reported
 refresh_local >/dev/null 2>&1
 python3 - "$LEDGER" <<'P' && ok "the Desk reader records one observe for an open linked card, with its src and read time" || bad "the Desk observe" "$(last_event)"
 import json, sys
-ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()][-1]
+ev = [e for e in (json.loads(l) for l in open(sys.argv[1]) if l.strip()) if e["event"] != "refresh-run"][-1]
 assert ev["event"] == "observe" and ev["link"] == "ask:c1" and ev["actor"] == "refresh" and ev["tag"] == "mirror", ev
 assert ev["src"] == "desk:c1@2026-10-19T10:00:00Z" and ev["seen"]["state"] == "open", ev
 P
