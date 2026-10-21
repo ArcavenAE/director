@@ -57,7 +57,10 @@ if [[ "$1 $2" == "get sessions" ]]; then
   if [[ "$*" == *last-turn* && -e "$FB_FIX/$h.sessions.turn" ]]; then cat "$FB_FIX/$h.sessions.turn"; exit 0; fi
   cat "$FB_FIX/$h.sessions"; exit 0
 fi
-if [[ "$1 $2" == "get teams" ]]; then cat "$FB_FIX/$h.teams"; exit 0; fi
+if [[ "$1 $2" == "get teams" ]]; then
+  if [[ -e "$FB_FIX/$h.teamsfail" ]]; then echo 'Error: daemon busy' >&2; exit 1; fi
+  cat "$FB_FIX/$h.teams"; exit 0
+fi
 echo "stub marvel: unexpected $*" >&2; exit 2
 S
 cat >"$root/bin/director-mcp" <<'S'
@@ -77,7 +80,7 @@ done
 chmod +x "$root/bin/"*
 
 # --- fixtures ---------------------------------------------------------------
-NOW=1792000000
+NOW=1792541100
 HDR='WORKSPACE  TEAM  ROLE  AGENT NAME  STATE  HEALTH  LAST-ACTIVE  ACTIVE%  RATE'
 sess() { # sess FILE LINES...
   local f="$FIX/$1"; shift
@@ -88,29 +91,29 @@ teams() { # teams FILE LINES...
   { echo 'WORKSPACE  TEAM  ROLE  REPLICAS  RUNTIME'; printf '%s\n' "$@"; } >"$f"
 }
 fixtures() {
-  rm -f "$FIX"/*.down "$FIX"/*.slow "$FIX"/*.noturn "$FIX"/*.turn "$FIX"/asks.old "$FIX"/*.log "$FIX/slow.pids"
+  rm -f "$FIX"/*.teamsfail "$FIX"/*.down "$FIX"/*.slow "$FIX"/*.noturn "$FIX"/*.turn "$FIX"/asks.old "$FIX"/*.log "$FIX/slow.pids"
   sess alpha.sessions \
-    'aae arcaven builder arcaven-builder-g30-0 running healthy 6s* 100%* -' \
-    'aae arcaven builder arcaven-builder-g5-0 running healthy 4m 0% -' \
-    'aae arcaven architect arcaven-architect-g6-0 running healthy 9m 0% -'
+    'wsa crew builder crew-builder-1 running healthy 6s* 100%* -' \
+    'wsa crew builder crew-builder-2 running healthy 4m 0% -' \
+    'wsa crew architect crew-architect-1 running healthy 9m 0% -'
   teams alpha.teams \
-    'aae arcaven builder 2 claude' \
-    'aae arcaven architect 1 claude'
+    'wsa crew builder 2 agent' \
+    'wsa crew architect 1 agent'
   sess beta.sessions \
-    'dtu vantage builder vantage-builder-g2-0 running healthy 3s 60% limited' \
-    'dtu vantage reviewer vantage-reviewer-g1-0 running healthy 20m 0% -'
+    'wsb desk builder desk-builder-1 running healthy 3s 60% limited' \
+    'wsb desk reviewer desk-reviewer-1 running healthy 20m 0% -'
   teams beta.teams \
-    'dtu vantage builder 1 claude' \
-    'dtu vantage reviewer 1 claude' \
-    'dtu vantage spare 0 claude'
+    'wsb desk builder 1 agent' \
+    'wsb desk reviewer 1 agent' \
+    'wsb desk spare 0 agent'
   sess gamma.sessions \
-    'infra e98 supervisor e98-supervisor-g3-0 running healthy 1m 12% -' \
-    'infra e98 envoy e98-envoy-g1-0 running healthy - - -'
+    'wsc ops supervisor ops-supervisor-1 running healthy 1m 12% -' \
+    'wsc ops envoy ops-envoy-1 running healthy - - -'
   teams gamma.teams \
-    'infra e98 supervisor 1 claude' \
-    'infra e98 envoy 1 claude'
+    'wsc ops supervisor 1 agent' \
+    'wsc ops envoy 1 agent'
   printf '%s\n' \
-    "{\"generated_at\":\"2026-10-21T00:00:00Z\",\"partial\":false,\"rollup_by_owner\":[{\"key\":\"arcaven/architect\",\"open\":0,\"unacked\":0,\"blocked\":0,\"oldest_open_seconds\":0}],\"rollup_by_asker\":[],\"gaps\":{\"streams_not_read\":[],\"reader_down\":[]}}" \
+    "{\"generated_at\":\"2026-10-21T00:00:00Z\",\"partial\":false,\"rollup_by_owner\":[{\"key\":\"crew/architect\",\"open\":0,\"unacked\":0,\"blocked\":0,\"oldest_open_seconds\":0}],\"rollup_by_asker\":[],\"gaps\":{\"streams_not_read\":[],\"reader_down\":[]}}" \
     >"$FIX/asks.json"
 }
 
@@ -140,10 +143,10 @@ case_all_read() {
   out="$(run FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
   [[ "$(cat "$root/rc")" == 0 ]] && ok "1  exits 0" || bad "1  exits 0" "$(cat "$root/rc")"
   grep -q 'clusters: 3 of 3 read' <<<"$out" && ok "1  count line says 3 of 3 read" || bad "1  count line" "$out"
-  [[ "$(seat seats arcaven-builder-g30-0)" == busy ]] && ok "1  active seat reads busy" || bad "1  active seat" "$(seat seats arcaven-builder-g30-0)"
-  [[ "$(seat seats arcaven-builder-g5-0)" == free ]] && ok "1  idle seat reads free" || bad "1  idle seat" "$(seat seats arcaven-builder-g5-0)"
-  [[ "$(seat seats e98-envoy-g1-0)" == unknown ]] && ok "1  seat with no activity reading is unknown, not free" || bad "1  unknown seat" "$(seat seats e98-envoy-g1-0)"
-  [[ "$(seat seats vantage-builder-g2-0)" == waiting ]] && ok "1  rate-limited seat reads waiting" || bad "1  limited seat" "$(seat seats vantage-builder-g2-0)"
+  [[ "$(seat seats crew-builder-1)" == busy ]] && ok "1  active seat reads busy" || bad "1  active seat" "$(seat seats crew-builder-1)"
+  [[ "$(seat seats crew-builder-2)" == free ]] && ok "1  idle seat reads free" || bad "1  idle seat" "$(seat seats crew-builder-2)"
+  [[ "$(seat seats ops-envoy-1)" == unknown ]] && ok "1  seat with no activity reading is unknown, not free" || bad "1  unknown seat" "$(seat seats ops-envoy-1)"
+  [[ "$(seat seats desk-builder-1)" == waiting ]] && ok "1  rate-limited seat reads waiting" || bad "1  limited seat" "$(seat seats desk-builder-1)"
 }
 
 case_parked() {
@@ -163,9 +166,15 @@ case_cluster_down() {
   out="$(run FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
   grep -q 'clusters: 2 of 3 read' <<<"$out" && ok "2  one cluster down prints 2 of 3 read" || bad "2  count" "$out"
   grep -q 'GAP cluster gamma' <<<"$out" && ok "2  the unread cluster is named" || bad "2  gap named" "$out"
-  [[ "$(seat seats e98-supervisor-g3-0)" == unknown ]] && ok "2  its seats read unknown" || bad "2  seat unknown" "$(seat seats e98-supervisor-g3-0)"
-  [[ "$(seat seats arcaven-builder-g5-0)" == free ]] && ok "2  readable clusters unchanged" || bad "2  alpha seat" "$(seat seats arcaven-builder-g5-0)"
-  [[ "$(jqf -r 'select(.lane=="e98/supervisor") | .state' "$state/freebusy/lanes.jsonl")" == unknown ]] \
+  [[ "$(seat seats ops-supervisor-1)" == unknown ]] && ok "2  its seats read unknown" || bad "2  seat unknown" "$(seat seats ops-supervisor-1)"
+  [[ "$(seat seats crew-builder-2)" == free ]] && ok "2  readable clusters unchanged" || bad "2  alpha seat" "$(seat seats crew-builder-2)"
+  # a cluster whose teams read fails after its sessions read is not read
+  rm -f "$FIX/gamma.down"; touch "$FIX/gamma.teamsfail"
+  out="$(run FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")"
+  grep -q 'clusters: 2 of 3 read' <<<"$out" && ok "2  a failed teams read leaves the cluster unread" || bad "2  teams fail" "$out"
+  rm -f "$FIX/gamma.teamsfail"; touch "$FIX/gamma.down"
+  run FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp" >/dev/null
+  [[ "$(jqf -r 'select(.lane=="ops/supervisor") | .state' "$state/freebusy/lanes.jsonl")" == unknown ]] \
     && ok "2  its lane reads unknown" || bad "2  lane unknown"
   # first run with a cluster down and no history: no row and no zero count for it
   new_state
@@ -179,19 +188,20 @@ case_asks() {
   fixtures; new_state; conf3
   local base=(FREEBUSY_CONFIG="$root/clusters.conf" FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")
   # queued asks, idle panes
-  printf '%s\n' "{\"generated_at\":\"2026-10-21T00:00:00Z\",\"partial\":false,\"rollup_by_owner\":[{\"key\":\"arcaven/architect\",\"open\":2,\"unacked\":1,\"blocked\":0,\"oldest_open_seconds\":300}],\"rollup_by_asker\":[],\"gaps\":{}}" >"$FIX/asks.json"
+  printf '%s\n' "{\"generated_at\":\"2026-10-21T00:00:00Z\",\"partial\":false,\"rollup_by_owner\":[{\"key\":\"crew/architect\",\"open\":2,\"unacked\":1,\"blocked\":0,\"oldest_open_seconds\":300}],\"rollup_by_asker\":[],\"gaps\":{}}" >"$FIX/asks.json"
   out="$(run "${base[@]}")"
-  [[ "$(seat seats arcaven-architect-g6-0)" == free ]] && ok "5  the architect pane reads free" || bad "5  pane" "$(seat seats arcaven-architect-g6-0)"
-  [[ "$(jqf -r 'select(.lane=="arcaven/architect") | .state' "$state/freebusy/lanes.jsonl")" == busy ]] \
+  [[ "$(seat seats crew-architect-1)" == free ]] && ok "5  the architect pane reads free" || bad "5  pane" "$(seat seats crew-architect-1)"
+  [[ "$(jqf -r 'select(.lane=="crew/architect") | .state' "$state/freebusy/lanes.jsonl")" == busy ]] \
     && ok "5  a lane with queued asks reads busy while its panes read idle" || bad "5  lane busy" "$(cat "$state/freebusy/lanes.jsonl")"
   ! grep -q 'GAP asks' <<<"$out" && ok "4  good asks read prints no GAP asks" || bad "4  clean" "$out"
   # a director-mcp too old to know the asks subcommand
   touch "$FIX/asks.old"
   out="$(run "${base[@]}")"
   grep -q 'GAP asks' <<<"$out" && ok "4  stale director-mcp prints GAP asks" || bad "4  stale" "$out"
-  [[ "$(jqf -r 'select(.lane=="arcaven/architect") | .asks_open' "$state/freebusy/lanes.jsonl")" == GAP ]] \
+  grep -q 'director-mcp exited 2' <<<"$out" && ok "4  and names its exit status" || bad "4  exit named" "$out"
+  [[ "$(jqf -r 'select(.lane=="crew/architect") | .asks_open' "$state/freebusy/lanes.jsonl")" == GAP ]] \
     && ok "4  the lane's ask cells read GAP, not 0" || bad "4  asks cell" "$(cat "$state/freebusy/lanes.jsonl")"
-  [[ "$(jqf -r 'select(.lane=="arcaven/architect") | .state' "$state/freebusy/lanes.jsonl")" == unknown ]] \
+  [[ "$(jqf -r 'select(.lane=="crew/architect") | .state' "$state/freebusy/lanes.jsonl")" == unknown ]] \
     && ok "4  an idle lane with no ask reading is unknown, not free" || bad "4  lane unknown"
   rm -f "$FIX/asks.old"
   # a missing binary
@@ -299,10 +309,10 @@ case_flow_and_turn() {
   [[ "$(head -1 "$state/freebusy/flow.jsonl")" == "$first" ]] && ok "10 earlier flow lines are never rewritten" || bad "10 flow rewritten"
   jq -e '.at and (.clusters_read|type=="number") and .seats' <<<"$first" >/dev/null && ok "10 the flow line carries time, clusters read and seat counts" || bad "10 flow fields" "$first"
   # LAST-TURN: where installed it is carried; where it is not, the read falls back
-  [[ "$(jqf -r 'select(.name=="arcaven-builder-g5-0")|.last_turn' "$state/freebusy/seats.jsonl")" == null ]] && ok "11 no LAST-TURN column: last_turn is null, not 0" || bad "11 null turn"
-  { echo "$HDR  LAST-TURN"; echo 'aae arcaven builder arcaven-builder-g5-0 running healthy 4m 0% - 7m'; } >"$FIX/alpha.sessions.turn"
+  [[ "$(jqf -r 'select(.name=="crew-builder-2")|.last_turn' "$state/freebusy/seats.jsonl")" == null ]] && ok "11 no LAST-TURN column: last_turn is null, not 0" || bad "11 null turn"
+  { echo "$HDR  LAST-TURN"; echo 'wsa crew builder crew-builder-2 running healthy 4m 0% - 7m'; } >"$FIX/alpha.sessions.turn"
   run "${base[@]}" >/dev/null
-  [[ "$(jqf -r 'select(.name=="arcaven-builder-g5-0")|.last_turn' "$state/freebusy/seats.jsonl")" == 7m ]] && ok "11 LAST-TURN is carried where installed" || bad "11 turn carried"
+  [[ "$(jqf -r 'select(.name=="crew-builder-2")|.last_turn' "$state/freebusy/seats.jsonl")" == 7m ]] && ok "11 LAST-TURN is carried where installed" || bad "11 turn carried"
   touch "$FIX/alpha.noturn"
   out="$(run "${base[@]}")"
   grep -q 'clusters: 3 of 3 read' <<<"$out" && ok "11 a marvel without the column still reads" || bad "11 fallback" "$out"

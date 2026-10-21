@@ -1,0 +1,318 @@
+#!/usr/bin/env bash
+# freebusy: the fleet's free/busy table, read-only (idle-scheduler B3). It runs in
+# sweep step 3 after dbi and prints one count line for the sweep reply.
+#
+# Why: who is free, busy or waiting across the clusters has been assembled by hand
+# each time it was asked. This reads it from the same sources every time and says
+# what it could not read, so an empty cell is never mistaken for an idle seat.
+#
+# Reads:
+#   each cluster in the fixed list, over ssh (BatchMode, connect and call timeouts):
+#     marvel get sessions   state, last activity, ACTIVE%, RATE (limited = quota),
+#                           and LAST-TURN where the cluster's marvel has the column
+#     marvel get teams      a role at REPLICAS 0 is parked
+#   the asks rollup: director-mcp asks --json, on this host
+#
+# Writes, under $DIRECTOR_STATE/freebusy/ (directory mode 700, files mode 600, and
+# the state directory must be outside any checkout):
+#   seats.jsonl   one row per seat, replaced on each run
+#   lanes.jsonl   one row per lane (team/role), replaced on each run
+#   flow.jsonl    one line per run, append-only
+# It sends nothing on the bus, injects nothing, writes no bd record and calls no gh.
+#
+# States: free, busy, waiting, unknown. A seat is busy when its ACTIVE% is above 0,
+# free when it is 0, waiting when its role is parked or its account is rate limited,
+# and unknown when the reading is missing or its cluster was not read. A lane is busy
+# when it has open asks, whatever its panes read; with no asks reading a lane that
+# would be free or waiting reads unknown.
+#
+# Every input it cannot read prints a "- GAP ..." line and shows as GAP or unknown in
+# the files, never as 0. A cluster that was not read keeps its last known seats, now
+# unknown; with no history it is named under "not listed". A second run while one is
+# in progress prints "not run: sweep in progress" and changes nothing.
+#
+# A diagnostic, not a gate: it exits 0 whether it finds nothing or a lot.
+#
+# Cluster list: FREEBUSY_CONFIG, default $DIRECTOR_STATE/freebusy-clusters.conf, one
+# "name ssh-target" per line, blank lines and # comments ignored. It is not checked in.
+#
+# Environment: DIRECTOR_STATE (default $HOME/.director/state), FREEBUSY_CALL_TIMEOUT
+# (seconds for each remote read and for the asks read, default 20),
+# FREEBUSY_ASKS_MAX_AGE (seconds an asks ledger may be old, default 900),
+# FREEBUSY_DIRECTOR_MCP (default director-mcp on PATH, else
+# ${DIRECTOR_HOME:-$HOME/.director}/bin/director-mcp). FREEBUSY_TEST_CLOCK=1 with
+# FREEBUSY_NOW (epoch seconds) fixes the clock for tests.
+#
+# Usage: skills/director/scripts/freebusy
+set -euo pipefail
+umask 077
+
+state="${DIRECTOR_STATE:-$HOME/.director/state}"
+dir="$state/freebusy"
+conf="${FREEBUSY_CONFIG:-$state/freebusy-clusters.conf}"
+call_timeout="${FREEBUSY_CALL_TIMEOUT:-20}"
+max_age="${FREEBUSY_ASKS_MAX_AGE:-900}"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "freebusy: not run: jq not found"
+  exit 0
+fi
+
+now=$(date +%s)
+if [[ "${FREEBUSY_TEST_CLOCK:-}" == 1 && -n "${FREEBUSY_NOW:-}" ]]; then now="$FREEBUSY_NOW"; fi
+at=$(jq -nr --argjson t "$now" '$t | todate')
+
+# The state directory must sit outside any checkout: walk up from its nearest
+# existing ancestor looking for a .git entry.
+probe="$state"
+while [[ ! -d "$probe" && "$probe" != "/" ]]; do probe="$(dirname "$probe")"; done
+probe="$(cd "$probe" && pwd -P)"
+while true; do
+  if [[ -e "$probe/.git" ]]; then
+    echo "freebusy: not run: $state is inside a checkout; state must stay outside any repository"
+    exit 0
+  fi
+  if [[ "$probe" == "/" ]]; then break; fi
+  probe="$(dirname "$probe")"
+done
+
+mkdir -p "$state"
+mkdir -p "$dir"
+chmod 700 "$dir"
+
+# One run at a time. mkdir is the lock; a lock whose process is gone is taken over.
+lock="$dir/.lock"
+have_lock=0
+tmp=""
+cleanup() {
+  if [[ -n "$tmp" ]]; then rm -rf "$tmp"; fi
+  if [[ "$have_lock" == 1 ]]; then rm -rf "$lock"; fi
+}
+trap cleanup EXIT
+take_lock() {
+  if mkdir "$lock" 2>/dev/null; then
+    echo $$ >"$lock/pid"
+    have_lock=1
+    return 0
+  fi
+  return 1
+}
+if ! take_lock; then
+  holder="$(cat "$lock/pid" 2>/dev/null || true)"
+  if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
+    rm -rf "$lock"
+    if ! take_lock; then
+      echo "freebusy: not run: sweep in progress"
+      exit 0
+    fi
+  else
+    echo "freebusy: not run: sweep in progress"
+    exit 0
+  fi
+fi
+
+tmp="$(mktemp -d "$dir/.run.XXXXXX")"
+gaps="$tmp/gaps"
+: >"$gaps"
+gap() { echo "- GAP $1" >>"$gaps"; }
+
+# Stop a job and everything it started.
+kill_tree() {
+  local c kids
+  kids="$(pgrep -P "$1" 2>/dev/null || true)"
+  kill "$1" 2>/dev/null || true
+  for c in $kids; do
+    kill_tree "$c"
+  done
+}
+
+# Wait for the jobs in $@ until the call timeout; stop any still running. Prints
+# nothing; a stopped job has no .rc file.
+wait_jobs() {
+  local start=$SECONDS pid alive
+  while true; do
+    alive=0
+    for pid in "$@"; do
+      if kill -0 "$pid" 2>/dev/null; then alive=1; fi
+    done
+    if [[ "$alive" == 0 ]]; then break; fi
+    if [[ $((SECONDS - start)) -ge "$call_timeout" ]]; then
+      for pid in "$@"; do
+        if kill -0 "$pid" 2>/dev/null; then kill_tree "$pid"; fi
+      done
+      break
+    fi
+    sleep 0.2
+  done
+  for pid in "$@"; do
+    wait "$pid" 2>/dev/null || true
+  done
+}
+
+# --- clusters ---------------------------------------------------------------
+names=()
+targets=()
+if [[ -r "$conf" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    name="" target="" extra=""
+    read -r name target extra <<<"$line" || true
+    if [[ -n "$name" ]]; then
+      if [[ -n "$target" && -z "$extra" && "$name" =~ ^[A-Za-z0-9._-]+$ && "$target" =~ ^[A-Za-z0-9._@:-]+$ ]]; then
+        names+=("$name")
+        targets+=("$target")
+      else
+        gap "clusters: unusable line in $conf"
+      fi
+    fi
+  done <"$conf"
+else
+  gap "clusters: no cluster list at $conf"
+fi
+
+cols="workspace,team,role,name,state,health,last-active,active,rate"
+remote="{ marvel get sessions --columns '$cols,last-turn' 2>/dev/null || marvel get sessions --columns '$cols'; } && echo @@teams && marvel get teams"
+pids=()
+i=0
+while [[ $i -lt ${#names[@]} ]]; do
+  n="${names[$i]}"
+  (
+    set +e
+    ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -- "${targets[$i]}" "$remote" >"$tmp/$n.out" 2>"$tmp/$n.err"
+    echo $? >"$tmp/$n.rc"
+  ) &
+  pids+=("$!")
+  i=$((i + 1))
+done
+if [[ ${#pids[@]} -gt 0 ]]; then wait_jobs "${pids[@]}"; fi
+
+seats_new="$tmp/seats.new"
+: >"$seats_new"
+read_ok=0
+unlisted=""
+i=0
+while [[ $i -lt ${#names[@]} ]]; do
+  n="${names[$i]}"
+  good=0
+  if [[ -f "$tmp/$n.rc" && "$(cat "$tmp/$n.rc")" == 0 ]] && grep -q '^@@teams$' "$tmp/$n.out"; then good=1; fi
+  if [[ "$good" == 1 ]]; then
+    read_ok=$((read_ok + 1))
+    # sessions section: skip the header, one seat per row of 9 or more fields
+    sed '/^@@teams$/,$d' "$tmp/$n.out" | awk -v c="$n" 'NR > 1 && NF >= 9 {
+      ws=$1; team=$2; role=$3; name=$4; st=$5; la=$7; ac=$8; rate=$9; lt=""
+      for (k = 10; k <= NF; k++) lt = lt (k > 10 ? " " : "") $k
+      a = ac; gsub(/[*%]/, "", a)
+      reason = ""
+      if (rate == "limited") { s = "waiting"; reason = "rate limited" }
+      else if (st != "running") { s = "unknown"; reason = "state " st }
+      else if (a == "" || a == "-" || a !~ /^[0-9.]+$/) { s = "unknown"; reason = "no activity reading" }
+      else if (a + 0 > 0) { s = "busy"; reason = "active" }
+      else { s = "free"; reason = "idle" }
+      if (la == "-") la = ""
+      if (ac == "-") ac = ""
+      if (lt == "-") lt = ""
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", c, ws, team, role, name, s, reason, la, ac, lt
+    }' >"$tmp/$n.seats"
+    # teams section: a role at REPLICAS 0 is parked, and has no session row
+    sed '1,/^@@teams$/d' "$tmp/$n.out" | awk -v c="$n" 'NR > 1 && NF >= 4 && $4 == "0" {
+      printf "%s\t%s\t%s\t%s\t%s/%s/%s\twaiting\tparked\t\t\t\n", c, $1, $2, $3, $1, $2, $3
+    }' >>"$tmp/$n.seats"
+    jq -R -c --arg at "$at" 'split("\t") | {at: $at, cluster: .[0], workspace: .[1], team: .[2], role: .[3], name: .[4],
+      state: .[5], reason: .[6], last_active: (if .[7] == "" then null else .[7] end),
+      active: (if .[8] == "" then null else .[8] end), last_turn: (if .[9] == "" then null else .[9] end)}' "$tmp/$n.seats" >>"$seats_new"
+  else
+    why="$(head -c 200 "$tmp/$n.err" 2>/dev/null | tr '\n' ' ' || true)"
+    if [[ ! -f "$tmp/$n.rc" ]]; then why="no answer within ${call_timeout}s"; fi
+    gap "cluster $n: not read (${why:-no output})"
+    carried=0
+    if [[ -f "$dir/seats.jsonl" ]]; then
+      jq -c --arg c "$n" --arg at "$at" 'select(.cluster == $c) | .at = $at | .state = "unknown" | .reason = "cluster not read"
+        | .last_active = null | .active = null | .last_turn = null' "$dir/seats.jsonl" >"$tmp/$n.carry" 2>/dev/null || true
+      if [[ -s "$tmp/$n.carry" ]]; then
+        cat "$tmp/$n.carry" >>"$seats_new"
+        carried=1
+      fi
+    fi
+    if [[ "$carried" == 0 ]]; then unlisted="${unlisted:+$unlisted,}$n"; fi
+  fi
+  i=$((i + 1))
+done
+
+# --- asks rollup ------------------------------------------------------------
+asks_json=null
+mcp="${FREEBUSY_DIRECTOR_MCP:-}"
+if [[ -z "$mcp" ]]; then
+  if command -v director-mcp >/dev/null 2>&1; then mcp="$(command -v director-mcp)"
+  else mcp="${DIRECTOR_HOME:-$HOME/.director}/bin/director-mcp"
+  fi
+fi
+if [[ ! -x "$mcp" ]]; then
+  gap "asks: director-mcp not found at $mcp"
+else
+  (
+    set +e
+    "$mcp" asks --json >"$tmp/asks.out" 2>"$tmp/asks.err"
+    echo $? >"$tmp/asks.rc"
+  ) &
+  apid=$!
+  wait_jobs "$apid"
+  if [[ ! -f "$tmp/asks.rc" ]]; then
+    gap "asks: no answer within ${call_timeout}s"
+  elif [[ "$(cat "$tmp/asks.rc")" != 0 ]]; then
+    gap "asks: director-mcp exited $(cat "$tmp/asks.rc"), likely too old for the asks command ($(head -c 120 "$tmp/asks.err" | tr '\n' ' '))"
+  elif ! jq -e '(.rollup_by_owner | type) == "array"' "$tmp/asks.out" >/dev/null 2>&1; then
+    gap "asks: output is not an asks ledger"
+  elif [[ "$(jq -r '.partial' "$tmp/asks.out")" != false ]]; then
+    gap "asks: the ledger is partial"
+  else
+    age="$(jq -r --argjson now "$now" 'try ($now - (.generated_at | fromdateiso8601)) catch "bad"' "$tmp/asks.out")"
+    if [[ "$age" == bad ]]; then
+      gap "asks: the ledger has no readable generated_at"
+    elif [[ "$age" -gt "$max_age" ]]; then
+      gap "asks: the ledger is ${age}s old (limit ${max_age}s), the ask reader may be down"
+    else
+      asks_json="$(jq -c '.rollup_by_owner' "$tmp/asks.out")"
+    fi
+  fi
+fi
+
+# --- lanes ------------------------------------------------------------------
+lanes_new="$tmp/lanes.new"
+jq -s -c --arg at "$at" --argjson asks "$asks_json" '
+  def lane_state($s; $a):
+    if ($a != null and $a.open > 0) or $s.busy > 0 then "busy"
+    elif $s.unknown > 0 then "unknown"
+    elif $a == null then "unknown"
+    elif $s.free > 0 then "free"
+    else "waiting" end;
+  group_by(.team + "/" + .role)[] |
+    . as $rows |
+    ($rows[0].team + "/" + $rows[0].role) as $lane |
+    {free: ([$rows[] | select(.state == "free")] | length), busy: ([$rows[] | select(.state == "busy")] | length),
+     waiting: ([$rows[] | select(.state == "waiting")] | length), unknown: ([$rows[] | select(.state == "unknown")] | length)} as $s |
+    (if $asks == null then null else ([$asks[] | select(.key == $lane)] | first // {open: 0, unacked: 0, oldest_open_seconds: 0}) end) as $a |
+    {at: $at, lane: $lane, state: lane_state($s; $a), seats: $s,
+     asks_open: (if $a == null then "GAP" else $a.open end),
+     asks_unacked: (if $a == null then "GAP" else $a.unacked end),
+     asks_oldest_s: (if $a == null then "GAP" else $a.oldest_open_seconds end)}' "$seats_new" >"$lanes_new"
+
+# --- write and report -------------------------------------------------------
+seat_counts="$(jq -s -r '[.[].state] | "\(map(select(. == "free")) | length) free, \(map(select(. == "busy")) | length) busy, \(map(select(. == "waiting")) | length) waiting, \(map(select(. == "unknown")) | length) unknown"' "$seats_new")"
+lane_counts="$(jq -s -r '[.[].state] | "\(map(select(. == "free")) | length) free, \(map(select(. == "busy")) | length) busy, \(map(select(. == "waiting")) | length) waiting, \(map(select(. == "unknown")) | length) unknown"' "$lanes_new")"
+total=${#names[@]}
+if [[ -n "$asks_json" && "$asks_json" != null ]]; then asks_note="read"; else asks_note="GAP"; fi
+
+mv "$seats_new" "$dir/seats.jsonl"
+mv "$lanes_new" "$dir/lanes.jsonl"
+chmod 600 "$dir/seats.jsonl" "$dir/lanes.jsonl"
+jq -n -c --arg at "$at" --argjson read "$read_ok" --argjson total "$total" --arg unlisted "$unlisted" --arg asks "$asks_note" \
+  --arg seats "$seat_counts" --arg lanes "$lane_counts" \
+  '{at: $at, clusters_read: $read, clusters_total: $total, clusters_not_listed: ($unlisted | split(",") | map(select(. != ""))),
+    asks: $asks, seats: $seats, lanes: $lanes}' >>"$dir/flow.jsonl"
+chmod 600 "$dir/flow.jsonl"
+
+cat "$gaps"
+line="freebusy: clusters: $read_ok of $total read; seats: $seat_counts; lanes: $lane_counts; asks: $asks_note"
+if [[ -n "$unlisted" ]]; then line="$line; not listed: $unlisted"; fi
+echo "$line"
+exit 0
