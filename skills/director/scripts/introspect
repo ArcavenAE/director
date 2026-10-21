@@ -474,15 +474,31 @@ def scan_transcripts(cfg, since, t_now):
                 p = os.path.join(root, fn)
                 if fn.startswith(".") or not fn.endswith(".jsonl") or forbidden(p):
                     continue
+                if os.path.islink(p):
+                    # the same rule as a directory link: followed only inside projects_dir and an included project
+                    real = os.path.realpath(p)
+                    if not (os.path.isfile(real) and included(real)):
+                        main["files_unreadable"] += 1
+                        continue
                 try:
-                    if os.stat(p).st_mtime >= cutoff:
-                        files.append(p)
+                    mtime = os.stat(p).st_mtime
                 except OSError:
                     main["files_unreadable"] += 1
+                    continue
+                if not mark(p):  # reachable twice (a link to a file already walked): counted once
+                    continue
+                if mtime >= cutoff:
+                    files.append(p)
 
     for d in sorted(glob.glob(os.path.join(pdir, "*"))):
         if not os.path.isdir(d) or not any(inc in os.path.basename(d) for inc in cfg["project_include"]):
             continue
+        if os.path.islink(d):
+            real = os.path.realpath(d)
+            if not included(real):
+                main["files_unreadable"] += 1
+                continue
+            d = real
         collect(d)
     names = {}
     for p in files:

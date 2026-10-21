@@ -650,6 +650,41 @@ run --since today --config "$conf" --no-append --json >"$root/j1" 2>/dev/null
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["counts"]["transcripts_unreadable"]==1 and "GAP transcripts 1 unreadable" in d["header"], d["header"]' "$root/j1" && ok "a transcript path that cannot be statted (a dangling link) is a gap, not a silent skip" || bad "stat gap"
 rm -f "$P/dangling.jsonl"; rm -rf "$root/linked"
 
+# the same containment for every entry: a file link and a top-level project link follow the rule a directory link does,
+# and a transcript reachable twice is counted once
+P="$root/proj/-work-aae-orc"
+run --since today --config "$conf" --no-append --json >"$root/j0" 2>/dev/null
+mkdir -p "$root/linked" "$root/proj/-work-client-x"
+mk "$root/linked/out1.jsonl" --agent builder --ok 5
+mk "$root/proj/-work-client-x/c1.jsonl" --agent builder --ok 4
+gapcase() { # name, expected message
+  run --since today --config "$conf" --no-append --json >"$root/j2" 2>/dev/null
+  python3 - "$root/j0" "$root/j2" <<'PY' && ok "$1" || bad "$1"
+import json, sys
+a = json.load(open(sys.argv[1]))["counts"]; d = json.load(open(sys.argv[2])); b = d["counts"]
+assert b["results"] == a["results"] and b["denials"] == a["denials"], (a["results"], b["results"])
+assert b["transcripts_unreadable"] == 1 and "GAP transcripts 1 unreadable" in d["header"], d["header"]
+PY
+}
+ln -s "$root/linked/out1.jsonl" "$P/outlink.jsonl"
+gapcase "a transcript file link that points outside projects_dir is a gap and is never read"
+rm -f "$P/outlink.jsonl"
+ln -s "$root/proj/-work-client-x/c1.jsonl" "$P/clientlink.jsonl"
+gapcase "a transcript file link into a project that is not an included one (client scope) is a gap and is never read"
+rm -f "$P/clientlink.jsonl"
+ln -s "$root/linked" "$root/proj/-work-aae-orc-ext"
+gapcase "a top-level project entry that links outside projects_dir is a gap and is never read"
+rm -f "$root/proj/-work-aae-orc-ext"
+mk "$P/real.jsonl" --agent builder --ok 5
+ln -s real.jsonl "$P/alias.jsonl"
+run --since today --config "$conf" --no-append --json >"$root/j2" 2>/dev/null
+python3 - "$root/j0" "$root/j2" <<'PY' && ok "a file link to a transcript that is also walked directly is counted once, with no GAP" || bad "file link counted twice"
+import json, sys
+a = json.load(open(sys.argv[1]))["counts"]; b = json.load(open(sys.argv[2]))["counts"]
+assert b["results"] == a["results"] + 5 and b["transcripts_unreadable"] == 0, (a["results"], b["results"], b["transcripts_unreadable"])
+PY
+rm -f "$P/alias.jsonl" "$P/real.jsonl"; rm -rf "$root/linked" "$root/proj/-work-client-x"
+
 # ================================================================ properties of the script itself
 [[ "$(grep -c -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")" == 0 ]] && ok "P1 the script names no Desk, bus send, inject or gh call (the name send_message is read from transcripts, never run)" || bad "P1" "$(grep -n -E 'ArtifactData|broadcast|marvel inject|gh (api|pr|issue)|sh\(\[[^]]*send' "$S")"
 python3 - "$S" <<'PY' && ok "the script is Python 3 standard library only" || bad "stdlib only"
