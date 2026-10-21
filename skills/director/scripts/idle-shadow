@@ -26,14 +26,21 @@
 # An item is read for three things, and nothing is inferred from its title, type or
 # component name:
 #   class       exactly one label class:<id>, <id> one of the six in the filing view
-#   component   a label with no colon other than aae-orc (the orchestrator, not a component)
+#   component   a label named in the Component row of the bd label convention (the table with
+#               the Orchestrator, Component, Scope, Origin and Lifecycle axes); aae-orc is the
+#               Orchestrator axis and inbox, kos-bridge and fleet-gap are Lifecycle, so none of
+#               them is a component. The names are read from that file at run time, never copied
+#               here, since some are repositories that are not named in a public text. The file is
+#               $IDLE_SHADOW_LABEL_CONVENTION, else .claude/skills/task-workflow/SKILL.md in the
+#               checkout the run starts in. If it cannot be read there is a GAP and the component
+#               reading is GAP: no label is ever taken as a component by its shape.
 #   operator    the label actor:operator, which leaves the matcher
 # An item with no class or no component is unmatched ("no class", "no component"); an
 # operator item is unmatched as "operator-only". An item with all of class and component and
 # not operator is eligible: it can go to the marry step. "No eligible seat" needs the marry
 # step's scope and ordering, so it prints GAP until that step exists.
 #
-# The marry step waits on a ruling: the shared routing function (marvel#989) has no verb
+# The marry step waits on a ruling: the shared routing function (marvel#992) has no verb
 # director can call, and a second copy is forbidden by the design. marry_step is the one
 # place it belongs; today it prints a GAP line and produces no pair.
 #
@@ -45,7 +52,7 @@
 # gate: it exits 0 whatever it finds.
 #
 # Environment: DIRECTOR_STATE (default $HOME/.director/state), IDLE_SHADOW_BD (default bd on
-# PATH), IDLE_SHADOW_CALL_TIMEOUT (seconds for each bd read, default 30),
+# PATH), IDLE_SHADOW_LABEL_CONVENTION (the label convention file, see above), IDLE_SHADOW_CALL_TIMEOUT (seconds for each bd read, default 30),
 # IDLE_SHADOW_SEATS_MAX_AGE (seconds a seats file may be old, default 900),
 # IDLE_SHADOW_LIST_MAX (ids shown per group, default 10). IDLE_SHADOW_TEST_CLOCK=1 with
 # IDLE_SHADOW_NOW (epoch seconds) fixes the clock for tests.
@@ -180,19 +187,41 @@ else
   gap "client: the scope:client count could not be read ($why)"
 fi
 
+# --- the component set, from the label convention ------------------------------------
+# One copy only: the convention lives in the orchestrator's task-workflow skill. The Component
+# row's last cell names the components in backticks.
+conv="${IDLE_SHADOW_LABEL_CONVENTION:-}"
+if [[ -z "$conv" ]]; then
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$top" && -f "$top/.claude/skills/task-workflow/SKILL.md" ]]; then conv="$top/.claude/skills/task-workflow/SKILL.md"; fi
+fi
+comps_json=null
+if [[ -z "$conv" ]]; then
+  gap "components: no label convention file (set IDLE_SHADOW_LABEL_CONVENTION to the task-workflow skill file, or run from its checkout)"
+elif [[ ! -r "$conv" || ! -f "$conv" ]]; then
+  gap "components: $conv is not readable"
+else
+  cj="$(awk -F'|' '$2 ~ /\*\*Component\*\*/ { print $4 }' "$conv" | grep -o '`[^`]*`' | tr -d '`' | jq -R -s -c 'split("\n") | map(select(test("^[A-Za-z0-9][A-Za-z0-9._-]*$")))' 2>/dev/null || true)"
+  if [[ -n "$cj" && "$(jq -r 'length' <<<"$cj" 2>/dev/null || echo 0)" -gt 0 ]]; then
+    comps_json="$cj"
+  else
+    gap "components: no Component row with names in $conv"
+  fi
+fi
+
 # --- the eligibility join: item side only ---------------------------------------
 total="GAP"; eligible="GAP"; unmatched_n="GAP"; n_class="GAP"; n_comp="GAP"; n_oper="GAP"
 : >"$tmp/unmatched.jsonl"
 if [[ "$items_ok" == 1 ]]; then
-  jq -c --arg at "$at" '
+  jq -c --arg at "$at" --argjson comps "$comps_json" '
     ["story-implementation","design-brief","human-decision","pr-review","research-local","gate-definition"] as $six
     | .[]
     | . as $i
     | ([ $i.labels[] | select(startswith("class:")) ]) as $cl
     | (($cl | length) == 1 and ($six | index($cl[0][6:]) != null)) as $has_class
-    | ([ $i.labels[] | select((contains(":") | not) and . != "aae-orc") ] | length > 0) as $has_comp
+    | (if $comps == null then null else ([ $i.labels[] | select(. as $l | $comps | any(. == $l)) ] | length > 0) end) as $has_comp
     | (($i.labels | index("actor:operator")) != null) as $oper
-    | ([ (if $has_class then empty else "class" end), (if $has_comp then empty else "component" end) ]) as $missing
+    | ([ (if $has_class then empty else "class" end), (if $has_comp == false then "component" else empty end) ]) as $missing
     | select(($missing | length) > 0 or $oper)
     | {at: $at, id: $i.id, missing: $missing, operator: $oper}' "$tmp/items.json" >"$tmp/unmatched.jsonl"
   total="$(jq -r 'length' "$tmp/items.json")"
@@ -201,6 +230,10 @@ if [[ "$items_ok" == 1 ]]; then
   n_comp="$(jq -s -r '[.[] | select(.missing | index("component"))] | length' "$tmp/unmatched.jsonl")"
   n_oper="$(jq -s -r '[.[] | select(.operator)] | length' "$tmp/unmatched.jsonl")"
   eligible=$((total - unmatched_n))
+  if [[ "$comps_json" == null ]]; then
+    # without the component set an item with a class is neither eligible nor unmatched for want of a component
+    unmatched_n="GAP"; n_comp="GAP"; eligible="GAP"
+  fi
 fi
 
 # --- the seats, as freebusy wrote them -------------------------------------------
@@ -224,12 +257,12 @@ else
 fi
 
 # --- the marry step: the one place pairing belongs ---------------------------------
-# The shared routing function is in marvel (marvel#989) and has no verb director can call.
+# The shared routing function is in marvel (marvel#992) and has no verb director can call.
 # Until a ruling names the call, this prints a GAP and produces no pair. Pairing, ordering and
 # scope logic do not belong anywhere else in this script.
 marry_step() {
   : >"$tmp/would-pair.jsonl"
-  gap "marry: no marvel marry verb (marvel#989)"
+  gap "marry: no marvel marry verb (marvel#992)"
 }
 marry_step
 would_pair="$(wc -l <"$tmp/would-pair.jsonl" | tr -d ' ')"
@@ -267,6 +300,7 @@ if [[ "$items_ok" == 1 ]]; then
     echo "- NOTE no item carries a class label, so no pair is possible; this is the expected reading until filers add one"
   fi
   for kind in class component operator; do
+    if [[ "$kind" == component && "$comps_json" == null ]]; then continue; fi
     case "$kind" in
       class) label="no class" ;;
       component) label="no component" ;;

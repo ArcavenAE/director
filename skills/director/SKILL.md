@@ -84,6 +84,9 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    `$DIRECTOR_STATE/idle-shadow/` (the unmatched items, the would-pair rows and a flow line). Print its `- GAP` and `- NOTE`
    lines, its `- unmatched ...` lines and its one count line (`idle-shadow: ready N ...`) in the sweep reply under Drafts, outside the fence above,
    as the freebusy line is: they are not appended to `board.md`. Items labelled `scope:client` appear only as a count.
+   A component is a label the bd label convention names under Component (read at run time from the task-workflow skill file, found in the
+   checkout the sweep starts in or at `IDLE_SHADOW_LABEL_CONVENTION`); if that file cannot be read it prints `- GAP components` and the component
+   reading is GAP, never a guess from the label's shape.
    Until items carry `class:` labels the expected reading is `would-pair 0` and every item unmatched as "no class"; that is a
    reading, not an error. The `- GAP marry: ...` line says the pairing step waits on a marvel verb; show it. It exits 0 whether it finds
    nothing or a lot, so read its lines, never its exit code.
