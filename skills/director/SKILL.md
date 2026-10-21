@@ -47,7 +47,7 @@ when the notes have accumulated. Say which mode you are in, once, at the start.
 
 ## Mode: sweep
 
-The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
+The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `freebusy`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
 
 1. Run `${DIRECTOR_HOME:-$HOME/.director}/bin/dsi`. It writes `$DIRECTOR_STATE/sessions.json` (props) and
    `roster.md` (scenery). Defaults to `~/.director/state`, 4-day window.
@@ -68,6 +68,14 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`) a
    `idea-roots.conf`): do not run `standing-hook scan-beat`, since the hook would then report a scan that
    never ran as "0h ago", and print `Stalled ideas: not run (<its stderr line>)`, never an empty block. A scan
    that did not run is not "none".
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/freebusy` (read only: no bus send, no inject, no bd write, no gh call).
+   It reads each cluster named in `$DIRECTOR_STATE/freebusy-clusters.conf` over ssh, and the asks rollup, and writes
+   `$DIRECTOR_STATE/freebusy/` (seats, lanes and a flow line). Print its `- GAP` lines and its one count line
+   (`freebusy: clusters: N of M read; ...`) in the sweep reply under Drafts, outside the fence above, as the Away line
+   is: they are not appended to `board.md`, and the fence is unchanged. With no cluster list it prints `GAP clusters`;
+   show that line, never skip the step silently. A cluster it could not read shows its seats as unknown, never as 0.
+   `not run: sweep in progress` means another run holds it; show that line too. It exits 0 whether it finds nothing
+   or a lot, so read its lines, never its exit code.
    Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/introspect --since today`. It is a script, not a seat: it reads the
    runtime's own record (classifier denials, bus errors, components merged but not installed, disk, the stalled-streams
    page, undrained asks) and prints a header and at most 7 lines, each a fact with one id and the owner of the fix

@@ -80,6 +80,8 @@ install_one "$SRC/skills/director/scripts/card-ingest" "$DIRECTOR_HOME/bin/card-
 install_one "$SRC/skills/director/scripts/draft-sweep" "$DIRECTOR_HOME/bin/draft-sweep"
 # dbi, the stalled big ideas scan (ld16k): the sweep's Stalled ideas block runs it from the bin home.
 install_one "$SRC/skills/director/scripts/dbi" "$DIRECTOR_HOME/bin/dbi"
+# freebusy, the read-only free/busy table (idle-scheduler B3): the sweep runs it from the bin home after dbi.
+install_one "$SRC/skills/director/scripts/freebusy" "$DIRECTOR_HOME/bin/freebusy"
 # dash-writer, the operations dashboard's writer step (ghxv2): the sweep's tick runs it from the bin home.
 install_one "$SRC/skills/director/scripts/dash-writer" "$DIRECTOR_HOME/bin/dash-writer"
 # dws is installed above; dash-writer reads it from beside itself.
