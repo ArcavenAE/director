@@ -13,7 +13,7 @@ prints the batch, and the session applies it with one ArtifactData batch of at m
 
 Sources, read only: `dws show --json` (the ledger folded by dws's own fold, so the page cannot fold
 differently), `marvel --cluster C get sessions --columns team,role,name,state,health,last-active`
-once for each cluster `marvel config list` names (command: $DASH_MARVEL, default marvel), and
+once for each cluster `marvel config list` names (command: $DASH_MARVEL, default marvel, waited for DASH_MARVEL_TIMEOUT seconds, 1 to 60, default 20), and
 $DIRECTOR_STATE/desk-snapshot.json. The list is read as freebusy reads it: the NAME column only, so this script
 gets the cluster names and nothing else, no other column is kept or emitted, and the command's own messages are
 dropped. marvel holds `clusters:` as a list, so no key of the config file is read. A list that cannot be read,
@@ -126,6 +126,15 @@ def load_withhold():
     return [l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")], None
 
 
+def config_timeout():
+    """Seconds to wait for `marvel config list`: DASH_MARVEL_TIMEOUT when it is a number from 1 to 60, else 20."""
+    try:
+        v = float(os.environ.get("DASH_MARVEL_TIMEOUT", "20"))
+    except ValueError:
+        return 20.0
+    return v if 1 <= v <= 60 else 20.0
+
+
 def cluster_names():
     """(names, reason): the cluster names `marvel config list` prints, or (None, why) when they cannot be read.
 
@@ -138,7 +147,7 @@ def cluster_names():
     """
     marvel = os.environ.get("DASH_MARVEL", "marvel")
     try:
-        p = subprocess.run([marvel, "config", "list"], capture_output=True, timeout=20, stdin=subprocess.DEVNULL)
+        p = subprocess.run([marvel, "config", "list"], capture_output=True, timeout=config_timeout(), stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return None, "timeout"
     except OSError:

@@ -40,14 +40,22 @@ ackrun() { # ack with the arguments the last run printed, as SKILL.md says
   at="${args%% *}"; del="${args#* }"
   run ack --at "$at" ${del:+--deleted "$del"}
 }
-run() { env -i HOME="$root/home" PATH="$root/bin:/usr/bin:/bin:$PYDIR" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" \
-        DWS_TEST_CLOCK=1 DWS_NOW="${NOW_OVERRIDE:-$NOW}" DASH_MARVEL="$root/bin/marvel" TABLES="$root/tables" python3 -I "$W" "$@"; }
+# One PATH and one marvel path, used by run() and by the stub-first assertion below, so the assertion
+# cannot check a copy that drifts from what a run uses.
+STUB="$root/bin/marvel"
+RUN_PATH="$root/bin:/usr/bin:/bin:$PYDIR"
+RUN_DASH_MARVEL="$STUB"
+stub_first() { [[ "$(PATH="$1" command -v marvel)" == "$STUB" ]]; } # does `marvel` resolve to the stub on this PATH?
+run() { env -i HOME="$root/home" PATH="$RUN_PATH" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" \
+        DWS_TEST_CLOCK=1 DWS_NOW="${NOW_OVERRIDE:-$NOW}" DASH_MARVEL="$RUN_DASH_MARVEL" DASH_MARVEL_TIMEOUT="${MARVEL_TIMEOUT:-20}" \
+        TABLES="$root/tables" python3 -I "$W" "$@"; }
 
 cat >"$root/bin/marvel" <<'SH'
 #!/bin/sh
 # fixture marvel: `marvel config list` prints $TABLES/config-list, or fails when there is none;
 # `marvel --cluster C get sessions --columns ...` prints $TABLES/C, or fails when there is none
 if [ "$1" = config ] && [ "$2" = list ]; then
+  [ -f "$TABLES/config-sleep" ] && exec sleep "$(cat "$TABLES/config-sleep")"
   [ -f "$TABLES/config-list" ] || { echo "no config" >&2; exit 1; }
   cat "$TABLES/config-list"; exit "$(cat "$TABLES/config-rc" 2>/dev/null || echo 0)"
 fi
@@ -56,8 +64,12 @@ f="$TABLES/$2"
 cat "$f"
 SH
 chmod +x "$root/bin/marvel"
-# The real marvel must never run here: the stub is first on the PATH every run uses, and resolves first.
-[[ "$(PATH="$root/bin:/usr/bin:/bin:$PYDIR" command -v marvel)" == "$root/bin/marvel" ]] || { echo "FAIL the stub marvel is not first on PATH"; exit 1; }
+# The real marvel must never run here: the PATH every run uses resolves marvel to the stub, and DASH_MARVEL
+# names the stub. The assertion is checked against a decoy so it cannot pass by looking at the wrong thing.
+mkdir -p "$root/decoy"; printf '#!/bin/sh\necho decoy\n' >"$root/decoy/marvel"; chmod +x "$root/decoy/marvel"
+if stub_first "$root/decoy:$RUN_PATH"; then echo "FAIL the stub-first check cannot see a decoy marvel ahead of the stub"; exit 1; fi
+stub_first "$RUN_PATH" || { echo "FAIL the stub marvel is not first on the PATH a run uses"; exit 1; }
+{ [[ "$RUN_DASH_MARVEL" == "$STUB" ]] && grep -q 'fixture marvel' "$RUN_DASH_MARVEL"; } || { echo "FAIL DASH_MARVEL is not the stub"; exit 1; }
 
 # a sessions table the way marvel's tabwriter lays it out: padding 2, cells aligned to the header
 mktable() { python3 - "$@" <<'PY'
@@ -333,11 +345,18 @@ d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]
 assert p["rows"]==[] and p["refusal"].get("clusters:failed")==1 and len(p["refusal"])==1, p' && ok "a config list that prints names and exits nonzero is refused, reason failed" || bad "nonzero exit with names"
 rm -f "$root/tables/config-rc"
 # a marvel that cannot be run at all
-env -i HOME="$root/home" PATH="/usr/bin:/bin:$PYDIR" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" DWS_TEST_CLOCK=1 DWS_NOW="${NOW_OVERRIDE:-$NOW}" \
+env -i HOME="$root/home" PATH="${RUN_PATH#"$root/bin:"}" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" DWS_TEST_CLOCK=1 DWS_NOW="${NOW_OVERRIDE:-$NOW}" \
   DASH_MARVEL="$root/bin/no-such-marvel" python3 -I "$W" run >"$root/out.json" 2>"$root/err"
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
 assert p["rows"]==[] and p["refusal"].get("clusters:unavailable")==1 and len(p["refusal"])==1, p' && ok "a marvel that cannot be run refuses the sessions panel, reason unavailable" || bad "marvel unavailable"
+# a marvel that does not answer within DASH_MARVEL_TIMEOUT: refused with reason timeout, after about a second
+setclusters alpha; printf '5\n' >"$root/tables/config-sleep"; t0=$SECONDS; MARVEL_TIMEOUT=1 runout run; t1=$SECONDS
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
+assert p["rows"]==[] and p["refusal"].get("clusters:timeout")==1 and len(p["refusal"])==1, p'
+[[ $? -eq 0 && $((t1-t0)) -lt 5 ]] && ok "a config list that does not answer in time refuses the sessions panel, reason timeout" || bad "marvel timeout" "took $((t1-t0))s"
+rm -f "$root/tables/config-sleep"
 setclusters alpha
 
 # the area reader: the Desk snapshot's areas

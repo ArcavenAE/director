@@ -174,7 +174,7 @@ done < <(
   { grep -oE '\$\{DIRECTOR_HOME:-\$HOME/\.director\}/bin/[A-Za-z0-9_-]+' "$skill" | sed -E 's#.*/bin/##'
     for f in "$here"/skills/director/scripts/*; do
       n="$(basename "$f")"
-      case "$n" in verify-*|fixtures) continue ;; esac
+      case "$n" in (verify-*|fixtures) continue ;; esac
       grep -qw -- "$n" "$skill" && echo "$n"
     done
   } | sort -u)
