@@ -1,0 +1,417 @@
+#!/usr/bin/env bash
+# idle-shadow: the idle scheduler's shadow run, read side (M2). It runs in the sweep right
+# after freebusy and prints a count line and the unmatched list. It sends nothing.
+#
+# Why: no one can say today which ready items could go to which idle seat, because the item
+# side says almost nothing about the kind of seat it needs. This reads the ready items and
+# freebusy's seat states the same way every run and lists the items no seat could take, by
+# the field that is missing. That list is a staffing and labelling signal, and the first
+# reading is expected to be "no item carries a class label, nothing can pair".
+#
+# Reads (read only):
+#   bd ready --exclude-label scope:client --json -n 0   the ready items; only id, priority,
+#       created_at and labels are kept, so a title or text is never held or printed
+#   bd ready --label scope:client --json -n 0           piped straight into a counter; no
+#       client id, title or text is held, written or printed, only the number
+#   $DIRECTOR_STATE/freebusy/seats.jsonl                freebusy's seat states (free, busy,
+#       waiting, unknown), as freebusy wrote them
+#
+# Writes, under $DIRECTOR_STATE/idle-shadow/ (directory mode 700, files mode 600; the state
+# directory must be outside any checkout):
+#   unmatched.jsonl   one row per unmatched item, replaced on each run
+#   would-pair.jsonl  one row per would-pair, replaced on each run (empty until marry exists)
+#   flow.jsonl        one line per run, append-only
+# It sends nothing on the bus, injects nothing, writes no bd record and calls no gh.
+#
+# An item is read for three things, and nothing is inferred from its title, type or
+# component name:
+#   class       exactly one label class:<id>, <id> one of the six in the filing view
+#   component   a label named in the Component row of the bd label convention (the table with
+#               the Orchestrator, Component, Scope, Origin and Lifecycle axes); aae-orc is the
+#               Orchestrator axis and inbox, kos-bridge and fleet-gap are Lifecycle, so none of
+#               them is a component. The names are read from that file at run time, never copied
+#               here, since some are repositories that are not named in a public text. The file is
+#               $IDLE_SHADOW_LABEL_CONVENTION, else .claude/skills/task-workflow/SKILL.md in the
+#               checkout the run starts in. If it cannot be read there is a GAP and the component
+#               reading is GAP: no label is ever taken as a component by its shape.
+#   operator    the label actor:operator, which leaves the matcher
+# An item with no class or no component is unmatched ("no class", "no component"); an
+# operator item is unmatched as "operator-only". An item with all of class and component and
+# not operator is eligible: it can go to the marry step. "No eligible seat" needs the marry
+# step's scope and ordering, so it prints GAP until that step exists.
+#
+# The marry step is marvel's: `marvel marry --input FILE` (marvel#992, read-only, no daemon, no
+# send). The design forbids a second copy of the pairing, ordering and scope logic, so
+# marry_step is the one place it is called and nothing here pairs by itself. It sends marvel the
+# eligible items (a class and a component, not operator), freebusy's seats with their states
+# mapped (free stays free; busy is working; waiting is parked; anything else, and every seat when
+# the seats file is old, is unknown), the run clock, lease cap 1 and 30 minutes, and
+# work_class_source "label". Seat classes, scopes and duty cells, and the duties each class needs,
+# have no source in director yet (the register scope cell, R11b, is not shipped): they are read
+# from an optional file, $IDLE_SHADOW_SEAT_ELIGIBILITY or $DIRECTOR_STATE/idle-shadow/
+# seat-eligibility.json, shaped
+#   {"duties_by_class": {"<class>": ["<duty>"]}, "seats": [{"address": "agent://team/name",
+#    "classes": [...], "scopes": [...], "cells": {...}}]}
+# and joined to freebusy's rows by address. Absent or malformed is a GAP and none of it is used:
+# seats then carry no classes, so an eligible item reads "no eligible seat". The sender cluster
+# is $IDLE_SHADOW_SENDER_CLUSTER; unset, no seat is placed and a pair prints "unplaced: no sender
+# ruled". marry is not run when the items, the component set or the seats were not read. A marvel
+# without the verb, a failed or hung call, or an answer that is not JSON is one GAP; the run exits 0.
+#
+# Strict free: only a seat freebusy calls free counts as free. unknown, waiting and a GAP
+# are never coerced. Freebusy's free covers only the inputs it reads (no pane veto, no
+# per-seat unread, no durable consumer or wake path), and the count line says so.
+#
+# Every input it cannot read prints a "- GAP ..." line, never a 0. A diagnostic, not a
+# gate: it exits 0 whatever it finds.
+#
+# Environment: DIRECTOR_STATE (default $HOME/.director/state), IDLE_SHADOW_BD (default bd on
+# PATH), IDLE_SHADOW_LABEL_CONVENTION (the label convention file, see above), IDLE_SHADOW_CALL_TIMEOUT (seconds for each bd read, default 30),
+# IDLE_SHADOW_SEATS_MAX_AGE (seconds a seats file may be old, default 900),
+# IDLE_SHADOW_LIST_MAX (ids shown per group, default 10), IDLE_SHADOW_MARVEL (the marvel
+# binary, default marvel on PATH), IDLE_SHADOW_SEAT_ELIGIBILITY and IDLE_SHADOW_SENDER_CLUSTER
+# (see the marry step). IDLE_SHADOW_TEST_CLOCK=1 with
+# IDLE_SHADOW_NOW (epoch seconds) fixes the clock for tests.
+#
+# Usage: skills/director/scripts/idle-shadow
+set -euo pipefail
+umask 077
+
+state="${DIRECTOR_STATE:-$HOME/.director/state}"
+dir="$state/idle-shadow"
+seats_file="$state/freebusy/seats.jsonl"
+bd="${IDLE_SHADOW_BD:-bd}"
+call_timeout="${IDLE_SHADOW_CALL_TIMEOUT:-30}"
+max_age="${IDLE_SHADOW_SEATS_MAX_AGE:-900}"
+list_max="${IDLE_SHADOW_LIST_MAX:-10}"
+marvel_bin="${IDLE_SHADOW_MARVEL:-marvel}"
+elig_file="${IDLE_SHADOW_SEAT_ELIGIBILITY:-$dir/seat-eligibility.json}"
+sender_cluster="${IDLE_SHADOW_SENDER_CLUSTER:-}"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "idle-shadow: not run: jq not found"
+  exit 0
+fi
+
+now=$(date +%s)
+if [[ "${IDLE_SHADOW_TEST_CLOCK:-}" == 1 && -n "${IDLE_SHADOW_NOW:-}" ]]; then now="$IDLE_SHADOW_NOW"; fi
+at=$(jq -nr --argjson t "$now" '$t | todate')
+
+# The state directory must sit outside any checkout: walk up from its nearest existing
+# ancestor looking for a .git entry.
+probe="$state"
+while [[ ! -d "$probe" && "$probe" != "/" ]]; do probe="$(dirname "$probe")"; done
+probe="$(cd "$probe" && pwd -P)"
+while true; do
+  if [[ -e "$probe/.git" ]]; then
+    echo "idle-shadow: not run: $state is inside a checkout; state must stay outside any repository"
+    exit 0
+  fi
+  if [[ "$probe" == "/" ]]; then break; fi
+  probe="$(dirname "$probe")"
+done
+
+mkdir -p "$dir"
+chmod 700 "$dir"
+tmp="$(mktemp -d "$dir/.run.XXXXXX")"
+cleanup() { rm -rf "$tmp"; }
+trap cleanup EXIT
+
+gaps="$tmp/gaps"; : >"$gaps"
+gap() { echo "- GAP $1" >>"$gaps"; }
+notes="$tmp/notes"; : >"$notes"
+note() { echo "- NOTE $1" >>"$notes"; }
+# the first line of a stderr file, control characters dropped
+first_line() {
+  local l
+  l="$(head -n 1 "$1" 2>/dev/null | LC_ALL=C tr -d '\000-\037' | cut -c 1-200 || true)"
+  echo "${l:-no output}"
+}
+
+# Stop a job and everything it started: each job leads its own process group (set -m).
+kill_tree() {
+  kill -TERM -- "-$1" 2>/dev/null || true
+  kill -TERM "$1" 2>/dev/null || true
+}
+wait_jobs() {
+  local start=$SECONDS pid alive
+  while true; do
+    alive=0
+    for pid in "$@"; do
+      if kill -0 "$pid" 2>/dev/null; then alive=1; fi
+    done
+    if [[ "$alive" == 0 ]]; then break; fi
+    if [[ $((SECONDS - start)) -ge "$call_timeout" ]]; then
+      for pid in "$@"; do
+        if kill -0 "$pid" 2>/dev/null; then kill_tree "$pid"; fi
+      done
+      break
+    fi
+    sleep 0.2
+  done
+  for pid in "$@"; do
+    wait "$pid" 2>/dev/null || true
+  done
+}
+
+# --- the ready items and the client count -------------------------------------
+# Two reads, started together. The item read keeps four fields of each item and drops any
+# item that carries scope:client even if bd ignored the exclude flag. The client read goes
+# straight into a counter, so a client record never reaches a variable or a file.
+set -m
+(
+  set +e
+  set -o pipefail
+  "$bd" ready --exclude-label scope:client --json -n 0 2>"$tmp/items.err" </dev/null \
+    | jq -c 'if type != "array" then error("not an array") else
+        [ .[] | select((.id | type) == "string")
+              | select(((.labels // []) | index("scope:client")) | not)
+              | {id: .id, priority: (.priority // null), created_at: (.created_at // null),
+                 labels: ((.labels // []) | map(select(type == "string")))} ] end' \
+      >"$tmp/items.json" 2>/dev/null
+  echo $? >"$tmp/items.rc"
+) &
+ipid=$!
+set +m
+set -m
+(
+  set +e
+  set -o pipefail
+  "$bd" ready --label scope:client --json -n 0 2>"$tmp/client.err" </dev/null \
+    | jq -e 'if type != "array" then error("not an array") else length end' >"$tmp/client.n" 2>/dev/null
+  echo $? >"$tmp/client.rc"
+) &
+cpid=$!
+set +m
+wait_jobs "$ipid" "$cpid"
+
+items_ok=0
+if [[ -f "$tmp/items.rc" && "$(cat "$tmp/items.rc")" == 0 ]]; then
+  items_ok=1
+else
+  if [[ ! -f "$tmp/items.rc" ]]; then why="no answer within ${call_timeout}s"
+  elif [[ -s "$tmp/items.err" ]]; then why="$(first_line "$tmp/items.err")"
+  else why="the answer was not a JSON array"
+  fi
+  gap "items: bd ready failed ($why)"
+fi
+client_n="GAP"
+if [[ -f "$tmp/client.rc" && "$(cat "$tmp/client.rc")" == 0 && "$(cat "$tmp/client.n" 2>/dev/null)" =~ ^[0-9]+$ ]]; then
+  client_n="$(cat "$tmp/client.n")"
+else
+  if [[ ! -f "$tmp/client.rc" ]]; then why="no answer within ${call_timeout}s"
+  elif [[ -s "$tmp/client.err" ]]; then why="$(first_line "$tmp/client.err")"
+  else why="the answer was not a JSON array"
+  fi
+  gap "client: the scope:client count could not be read ($why)"
+fi
+
+# --- the component set, from the label convention ------------------------------------
+# One copy only: the convention lives in the orchestrator's task-workflow skill. The Component
+# row's last cell names the components in backticks.
+conv="${IDLE_SHADOW_LABEL_CONVENTION:-}"
+if [[ -z "$conv" ]]; then
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$top" && -f "$top/.claude/skills/task-workflow/SKILL.md" ]]; then conv="$top/.claude/skills/task-workflow/SKILL.md"; fi
+fi
+comps_json=null
+if [[ -z "$conv" ]]; then
+  gap "components: no label convention file (set IDLE_SHADOW_LABEL_CONVENTION to the task-workflow skill file, or run from its checkout)"
+elif [[ ! -r "$conv" || ! -f "$conv" ]]; then
+  gap "components: $conv is not readable"
+else
+  cj="$(awk -F'|' '$2 ~ /\*\*Component\*\*/ { print $4 }' "$conv" | grep -o '`[^`]*`' | tr -d '`' | jq -R -s -c 'split("\n") | map(select(test("^[A-Za-z0-9][A-Za-z0-9._-]*$")))' 2>/dev/null || true)"
+  if [[ -n "$cj" && "$(jq -r 'length' <<<"$cj" 2>/dev/null || echo 0)" -gt 0 ]]; then
+    comps_json="$cj"
+  else
+    gap "components: no Component row with names in $conv"
+  fi
+fi
+
+# --- the eligibility join: item side only ---------------------------------------
+total="GAP"; eligible="GAP"; unmatched_n="GAP"; n_class="GAP"; n_comp="GAP"; n_oper="GAP"
+: >"$tmp/unmatched.jsonl"
+if [[ "$items_ok" == 1 ]]; then
+  jq -c --arg at "$at" --argjson comps "$comps_json" '
+    ["story-implementation","design-brief","human-decision","pr-review","research-local","gate-definition"] as $six
+    | .[]
+    | . as $i
+    | ([ $i.labels[] | select(startswith("class:")) ]) as $cl
+    | (($cl | length) == 1 and ($six | index($cl[0][6:]) != null)) as $has_class
+    | (if $comps == null then null else ([ $i.labels[] | select(. as $l | $comps | any(. == $l)) ] | length > 0) end) as $has_comp
+    | (($i.labels | index("actor:operator")) != null) as $oper
+    | ([ (if $has_class then empty else "class" end), (if $has_comp == false then "component" else empty end) ]) as $missing
+    | select(($missing | length) > 0 or $oper)
+    | {at: $at, id: $i.id, missing: $missing, operator: $oper}' "$tmp/items.json" >"$tmp/unmatched.jsonl"
+  total="$(jq -r 'length' "$tmp/items.json")"
+  unmatched_n="$(jq -s -r 'length' "$tmp/unmatched.jsonl")"
+  n_class="$(jq -s -r '[.[] | select(.missing | index("class"))] | length' "$tmp/unmatched.jsonl")"
+  n_comp="$(jq -s -r '[.[] | select(.missing | index("component"))] | length' "$tmp/unmatched.jsonl")"
+  n_oper="$(jq -s -r '[.[] | select(.operator)] | length' "$tmp/unmatched.jsonl")"
+  eligible=$((total - unmatched_n))
+  if [[ "$comps_json" == null ]]; then
+    # without the component set an item with a class is neither eligible nor unmatched for want of a component
+    unmatched_n="GAP"; n_comp="GAP"; eligible="GAP"
+  fi
+fi
+
+# --- the seats, as freebusy wrote them -------------------------------------------
+seat_counts="GAP"; seats_ok=0; stale=0
+if [[ ! -f "$seats_file" ]]; then
+  gap "seats: $seats_file not found; freebusy has not written it"
+elif ! jq -s -e 'length > 0 and all(.[]; type == "object" and (.state | type) == "string" and (.at | type) == "string")' "$seats_file" >/dev/null 2>&1; then
+  gap "seats: $seats_file is empty or not readable"
+else
+  newest="$(jq -s -r 'map(.at) | max' "$seats_file")"
+  newest_s="$(jq -nr --arg t "$newest" '$t | fromdateiso8601' 2>/dev/null || echo 0)"
+  age=$((now - newest_s))
+  seats_ok=1
+  if [[ "$age" -gt "$max_age" ]]; then
+    stale=1
+    gap "seats: freebusy seats are $((age / 60)) minutes old (limit $((max_age / 60))); every seat reads unknown"
+  fi
+  seat_counts="$(jq -s -r --argjson stale "$stale" '
+    (if $stale == 1 then map(.state = "unknown") else . end) | map(.state) as $s
+    | "\($s | map(select(. == "free")) | length) free, \($s | map(select(. == "busy")) | length) busy, \($s | map(select(. == "waiting")) | length) waiting, \($s | map(select(. != "free" and . != "busy" and . != "waiting")) | length) unknown"' "$seats_file")"
+fi
+
+# --- the marry step: the one place pairing belongs ---------------------------------
+# It calls marvel's verb and writes what comes back. Pairing, ordering and scope logic do not
+# belong anywhere else in this script.
+n_seat="GAP"
+: >"$tmp/pair-lines"; : >"$tmp/unplaced-lines"
+marry_step() {
+  : >"$tmp/would-pair.jsonl"
+  if [[ "$items_ok" != 1 ]]; then gap "marry: not run, the items were not read"; return 0; fi
+  if [[ "$comps_json" == null ]]; then gap "marry: not run, the component set was not read"; return 0; fi
+  if [[ "$seats_ok" != 1 ]]; then gap "marry: not run, the seats were not read"; return 0; fi
+  # the items marvel is given: a class from the six, a named component, not the operator's
+  jq -c --argjson comps "$comps_json" --slurpfile el "$tmp/elig.json" '
+    ["story-implementation","design-brief","human-decision","pr-review","research-local","gate-definition"] as $six
+    | ($el[0].duties_by_class // {}) as $duties
+    | [ .[]
+        | . as $i
+        | ([ $i.labels[] | select(startswith("class:")) ]) as $cl
+        | select(($cl | length) == 1 and ($six | index($cl[0][6:]) != null))
+        | ([ $i.labels[] | select(. as $l | $comps | any(. == $l)) ]) as $cm
+        | select(($cm | length) > 0 and (($i.labels | index("actor:operator")) == null))
+        | ($cl[0][6:]) as $class
+        | {id: $i.id, priority: ($i.priority // 4), classes: {label: $class}, component: $cm[0],
+           duties: ($duties[$class] // []), status: "open"}
+          + (if $i.created_at then {ready_at: $i.created_at} else {} end) ]' "$tmp/items.json" >"$tmp/marry.items" 2>/dev/null || { gap "marry: not run, the items could not be prepared"; return 0; }
+  if [[ "$(jq -r 'length' "$tmp/marry.items")" == 0 ]]; then n_seat=0; return 0; fi
+  if [[ "$elig_ok" != 1 ]]; then
+    gap "seat-eligibility: $elig_why; seats go to marry with no classes, scopes or duty cells"
+  fi
+  jq -n -c --arg run "idle-shadow-$now" --arg at "$at" --arg sender "$sender_cluster" --argjson stale "$stale" \
+    --slurpfile items "$tmp/marry.items" --slurpfile st "$seats_file" --slurpfile el "$tmp/elig.json" '
+    ($el[0].seats // []) as $es
+    | { run_id: $run, now: $at, items: $items[0],
+        seats: [ $st[]
+          | (if $stale == 1 then .state = "unknown" else . end)
+          | ("agent://\(.team)/\(.name)") as $addr
+          | ([ $es[] | select(.address == $addr) ][0] // {}) as $e
+          | {address: $addr, team: .team, cluster: .cluster,
+             availability: (if .state == "free" then "free" elif .state == "busy" then "working" elif .state == "waiting" then "parked" else "unknown" end)}
+            + ($e | with_entries(select(.key == "classes" or .key == "scopes" or .key == "cells"))) ],
+        stop: {}, placement: {sender_cluster: $sender}, rulings: {work_class_source: "label"},
+        lease_cap: 1, lease_minutes: 30 }' >"$tmp/marry.in" 2>/dev/null || { gap "marry: not run, the seats could not be prepared"; return 0; }
+  set -m
+  (
+    set +e
+    "$marvel_bin" marry --input "$tmp/marry.in" >"$tmp/marry.out" 2>"$tmp/marry.err" </dev/null
+    echo $? >"$tmp/marry.rc"
+  ) &
+  mpid=$!
+  set +m
+  wait_jobs "$mpid"
+  if [[ ! -f "$tmp/marry.rc" ]]; then gap "marry: marvel marry failed (no answer within ${call_timeout}s)"; return 0; fi
+  mrc="$(cat "$tmp/marry.rc")"
+  if [[ "$mrc" == 127 ]]; then gap "marry: marvel was not found ($marvel_bin)"; return 0; fi
+  if [[ "$mrc" != 0 ]]; then
+    if /usr/bin/grep -q -i 'unknown command' "$tmp/marry.err" 2>/dev/null; then
+      gap "marry: this marvel has no marry verb (marvel#992 is merged; update marvel on this host)"
+    else
+      gap "marry: marvel marry failed ($(first_line "$tmp/marry.err"))"
+    fi
+    return 0
+  fi
+  if ! jq -e 'type == "object"' "$tmp/marry.out" >/dev/null 2>&1; then gap "marry: marvel marry answered with something that is not a JSON object"; return 0; fi
+  # a pair is written only when its seat is a single agent:// address: no role, broadcast, global or wildcard
+  if [[ "$(jq -r '[ (.pairs // [])[] | select((.seat | type) != "string" or (.seat | test("^agent://[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$") | not)) ] | length' "$tmp/marry.out" 2>/dev/null || echo 1)" != 0 ]]; then
+    gap "marry: marvel returned a pair whose seat is not an agent:// address; no pair was written"
+    return 0
+  fi
+  jq -c --arg at "$at" '(.pairs // [])[] | {at: $at, item: .item, seat: .seat, lease: .lease}' "$tmp/marry.out" >"$tmp/would-pair.jsonl" 2>/dev/null || true
+  jq -r '(.pairs // [])[] | "- would-pair \(.item) \(.seat) (lease \(.lease); shadow, nothing is sent)"' "$tmp/marry.out" >"$tmp/pair-lines" 2>/dev/null || true
+  jq -r --argjson max "$list_max" '(.unplaced // []) as $u | $u[:$max][] | "- unplaced: \(.reason): \(.item) \(.seat)"
+    , (if ($u | length) > $max then "- unplaced: and \(($u | length) - $max) more" else empty end)' "$tmp/marry.out" >"$tmp/unplaced-lines" 2>/dev/null || true
+  jq -c --arg at "$at" '(.unmatched // [])[] | select(.kind == "no-eligible-seat") | {at: $at, id: .item, missing: ["seat"], operator: false}' "$tmp/marry.out" >>"$tmp/unmatched.jsonl" 2>/dev/null || true
+  n_seat="$(jq -r '[ (.unmatched // [])[] | select(.kind == "no-eligible-seat") ] | length' "$tmp/marry.out" 2>/dev/null || echo GAP)"
+}
+# the eligibility file, read once; a malformed one is a GAP and none of it is used
+elig_ok=0; elig_why=""
+echo '{}' >"$tmp/elig.json"
+if [[ ! -f "$elig_file" ]]; then
+  elig_why="$elig_file not found (the register scope cell, R11b, has no reader here)"
+elif jq -e 'type == "object" and (.seats | type) == "array" and all(.seats[]; type == "object" and (.address | type) == "string")
+            and ((.duties_by_class // {}) | type == "object" and all(.[]; type == "array" and all(.[]; type == "string")))' "$elig_file" >/dev/null 2>&1; then
+  jq -c '{duties_by_class: (.duties_by_class // {}), seats: .seats}' "$elig_file" >"$tmp/elig.json"
+  elig_ok=1
+else
+  elig_why="$elig_file is not a valid eligibility file"
+fi
+marry_step
+would_pair="$(wc -l <"$tmp/would-pair.jsonl" | tr -d ' ')"
+if [[ "$n_seat" =~ ^[0-9]+$ && "$unmatched_n" =~ ^[0-9]+$ ]]; then unmatched_n=$((unmatched_n + n_seat)); fi
+
+# --- write the state files -----------------------------------------------------------
+if [[ "$items_ok" == 1 ]]; then
+  mv "$tmp/unmatched.jsonl" "$dir/unmatched.jsonl"
+  chmod 600 "$dir/unmatched.jsonl"
+else
+  # a reading that failed leaves no old list to be mistaken for this run's
+  rm -f "$dir/unmatched.jsonl"
+fi
+mv "$tmp/would-pair.jsonl" "$dir/would-pair.jsonl"
+chmod 600 "$dir/would-pair.jsonl"
+
+ready="GAP"
+if [[ "$items_ok" == 1 ]]; then
+  if [[ "$client_n" =~ ^[0-9]+$ ]]; then ready=$((total + client_n)); else ready="$total"; fi
+fi
+ngaps="$(wc -l <"$gaps" | tr -d ' ')"
+jq -n -c --arg at "$at" --arg ready "$ready" --arg client "$client_n" --arg elig "$eligible" --arg un "$unmatched_n" \
+  --arg nc "$n_class" --arg nm "$n_comp" --arg no "$n_oper" --arg ns "$n_seat" --arg seats "$seat_counts" \
+  --argjson wp "$would_pair" --argjson gaps "$ngaps" '
+  def num: if test("^[0-9]+$") then tonumber else null end;
+  {at: $at, ready: ($ready | num), client: ($client | num), eligible: ($elig | num),
+   unmatched: {total: ($un | num), no_class: ($nc | num), no_component: ($nm | num), operator_only: ($no | num), no_eligible_seat: ($ns | num)},
+   seats: $seats, would_pair: $wp, gaps: $gaps}' >>"$dir/flow.jsonl"
+chmod 600 "$dir/flow.jsonl"
+
+# --- print ------------------------------------------------------------------------------
+cat "$gaps"
+cat "$notes"
+cat "$tmp/pair-lines" "$tmp/unplaced-lines"
+if [[ "$items_ok" == 1 ]]; then
+  if [[ "$total" -gt 0 && "$n_class" == "$total" ]]; then
+    echo "- NOTE no item carries a class label, so no pair is possible; this is the expected reading until filers add one"
+  fi
+  for kind in class component operator seat; do
+    if [[ "$kind" == component && "$comps_json" == null ]]; then continue; fi
+    case "$kind" in
+      class) label="no class" ;;
+      component) label="no component" ;;
+      operator) label="operator-only" ;;
+      seat) label="no eligible seat" ;;
+    esac
+    jq -s -r --arg k "$kind" --arg label "$label" --argjson max "$list_max" '
+      [ .[] | select(if $k == "operator" then .operator else (.missing | index($k)) end) | .id ] | sort as $ids
+      | select(($ids | length) > 0)
+      | "- unmatched \($label) (\($ids | length)): \($ids[:$max] | join(" "))" + (if ($ids | length) > $max then " and \(($ids | length) - $max) more" else "" end)' "$dir/unmatched.jsonl"
+  done
+fi
+line="idle-shadow: ready $ready (client $client_n, counted only); eligible $eligible; unmatched $unmatched_n (no class $n_class, no component $n_comp, operator-only $n_oper, no eligible seat $n_seat); seats: $seat_counts; would-pair $would_pair; leases sent 0 (shadow run, nothing is sent); free is freebusy's reading only: no pane veto, no per-seat unread, no durable consumer or wake path"
+echo "$line"
+exit 0
