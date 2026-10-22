@@ -1,0 +1,313 @@
+<!doctype html>
+<!-- Director Decision Desk page source. director publishes it as an Artifact with
+     capabilities {"db":{"rules":[{"path":"decisions","write":"owner"}]},"user":{}}.
+     Card text (context, recommendation, options, ruling) is drawn through the Markdown-subset
+     renderer between the md:start and md:end markers; everything else is escaped text.
+     Proved by skills/director/scripts/verify-desk-page.sh. -->
+<html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Director Decision Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#f3f5f4; --panel:#ffffff; --ink:#1b2422; --muted:#5b6b67; --line:#d8e0dd;
+  --accent:#b8641a; --accent-ink:#ffffff; --accent-soft:#fbeedd;
+  --rec:#2f7d5b; --rec-soft:#e2f2ea; --warn:#a8670a; --warn-soft:#fdf1d8;
+  --crit:#b03a2e; --crit-soft:#f9e1de; --chip:#e8eeec; --focus:#2f6f8f;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#111514; --panel:#181e1c; --ink:#d5d8d6; --muted:#93a29d; --line:#2a3331;
+    --accent:#e9a46a; --accent-ink:#1a1209; --accent-soft:#3a2a1b;
+    --rec:#8fd3b0; --rec-soft:#1d3329; --warn:#efc678; --warn-soft:#3a2f17;
+    --crit:#f0a39a; --crit-soft:#3d1f1c; --chip:#232b29; --focus:#8cc4de;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#111514; --panel:#181e1c; --ink:#d5d8d6; --muted:#93a29d; --line:#2a3331;
+  --accent:#e9a46a; --accent-ink:#1a1209; --accent-soft:#3a2a1b;
+  --rec:#8fd3b0; --rec-soft:#1d3329; --warn:#efc678; --warn-soft:#3a2f17;
+  --crit:#f0a39a; --crit-soft:#3d1f1c; --chip:#232b29; --focus:#8cc4de;
+}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5}
+.wrap{max-width:860px;margin:0 auto;padding-inline:16px;padding-block:20px 64px}
+header.top{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px;margin-bottom:16px}
+h1{font-size:1.45rem;margin:0;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--muted);font-size:.9rem;margin:2px 0 0}
+.tally{display:flex;gap:8px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
+.tally span{background:var(--chip);border-radius:999px;padding:3px 10px;font-size:.82rem}
+.tally b{font-weight:600}
+.filters{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 18px}
+.filters button{font:inherit;font-size:.82rem;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:999px;padding:4px 12px;cursor:pointer}
+.filters button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.notice{border:1px dashed var(--line);border-radius:10px;padding:14px;color:var(--muted);margin-bottom:16px}
+.list{display:flex;flex-direction:column;gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 16px 14px}
+.card.ready{border-color:var(--rec)}
+.meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px}
+.chip{font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;background:var(--chip);color:var(--muted);border-radius:4px;padding:2px 7px}
+.pill{font-size:.75rem;border-radius:999px;padding:2px 9px;font-variant-numeric:tabular-nums}
+.pill.ok{background:var(--chip);color:var(--muted)}
+.pill.soon{background:var(--warn-soft);color:var(--warn)}
+.pill.past{background:var(--crit-soft);color:var(--crit)}
+.pill.state{background:var(--rec-soft);color:var(--rec)}
+.id{font-family:var(--mono);font-size:.72rem;color:var(--muted);margin-left:auto}
+h2{font-size:1.05rem;margin:2px 0 4px;text-wrap:balance}
+.q{margin:0 0 6px;font-weight:500}
+.ctx{margin:0 0 10px;color:var(--muted);font-size:.9rem;max-width:68ch}
+.md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
+.md p{margin:0 0 .6em}.md ul,.md ol{margin:0 0 .6em;padding-left:1.3em}.md li{margin:0 0 .2em}
+.md strong{font-weight:600;color:var(--ink)}
+.md code{font-family:var(--mono);font-size:.86em;background:var(--chip);border-radius:4px;padding:1px 4px;overflow-wrap:anywhere}
+.ot{min-width:0}.ot .oh{margin-bottom:2px}.ot .md{overflow-wrap:anywhere}
+.recbox{margin:10px 0 0;border-left:3px solid var(--rec);background:var(--rec-soft);border-radius:0 8px 8px 0;padding:8px 10px;font-size:.9rem}
+.recbox .r{display:inline-block;font-size:.7rem;letter-spacing:.04em;text-transform:uppercase;color:var(--rec);margin-bottom:2px}
+.ruling .md{display:inline-block;vertical-align:top}
+fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+legend{position:absolute;left:-9999px}
+.opt{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:9px 11px;cursor:pointer}
+.opt:hover{border-color:var(--muted)}
+.opt.chosen{border-color:var(--accent);background:var(--accent-soft)}
+.opt input{margin-top:4px;accent-color:var(--accent)}
+.opt .k{font-family:var(--mono);font-size:.8rem;color:var(--muted);margin-right:6px}
+.opt .r{display:inline-block;font-size:.7rem;letter-spacing:.04em;text-transform:uppercase;color:var(--rec);background:var(--rec-soft);border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:1px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-top:10px}
+textarea{width:100%;box-sizing:border-box;font:inherit;font-size:.92rem;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-height:2.6em;resize:vertical;margin-top:10px}
+label.ready{display:flex;gap:8px;align-items:center;font-size:.9rem;cursor:pointer}
+label.ready input{accent-color:var(--rec);width:16px;height:16px}
+.saved{font-size:.78rem;color:var(--muted);min-height:1em}
+.src{font-size:.78rem;color:var(--muted);font-family:var(--mono);overflow-wrap:anywhere}
+.ruling{margin-top:8px;font-size:.88rem;background:var(--rec-soft);color:var(--ink);border-radius:8px;padding:8px 10px}
+details.done{margin-top:28px}
+details.done summary{cursor:pointer;color:var(--muted);font-weight:600}
+details.done .list{margin-top:12px}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Director Decision Desk</h1>
+      <p class="sub">Every decision waiting on you, with its options in full. Pick, add a note, tick ready. Director reads the ready ones and relays them.</p>
+    </div>
+    <div class="tally" id="tally" aria-live="polite"></div>
+  </header>
+  <div class="filters" id="filters" role="group" aria-label="Filter by area"></div>
+  <div id="notice" class="notice" hidden></div>
+  <div class="list" id="open"></div>
+  <details class="done" id="doneWrap" hidden>
+    <summary id="doneSum">Relayed and closed</summary>
+    <div class="list" id="done"></div>
+  </details>
+</div>
+
+<script>
+(function(){
+  var state={decisions:[],answers:{},filter:"all",db:null,canWrite:true};
+  var $=function(id){return document.getElementById(id)};
+
+  function daysLeft(exp){
+    if(!exp) return null;
+    var t=Date.parse(exp.length===10?exp+"T00:00:00Z":exp);
+    if(isNaN(t)) return null;
+    return Math.round((t-Date.now())/86400000*10)/10;
+  }
+  function expPill(exp){
+    var d=daysLeft(exp); if(d===null) return "";
+    var cls=d<0?"past":(d<2?"soon":"ok");
+    var txt=d<0?"re-check overdue ("+exp+")":"valid to "+exp;
+    return '<span class="pill '+cls+'">'+esc(txt)+'</span>';
+  }
+  function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+
+  /*md:start*/
+  // A Markdown subset for card text: paragraphs (blank-line split), **bold**, *italic*, `inline code`,
+  // "- " bullets and "N. " numbered lists. Every character of the input is escaped first and the only
+  // tags written are p, ul, ol, li, strong, em and code, so no raw HTML, link or attribute from card
+  // text reaches the page.
+  function mdEsc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")}
+  // Emphasis is skipped past this length (the scan for a closing marker is quadratic on unclosed openers)
+  // and when crossed markers would nest wrongly; the text then shows escaped, as typed.
+  var MD_EMPH_MAX=4000;
+  function mdNested(h){
+    var st=[], re=/<(\/?)(strong|em)>/g, m;
+    while((m=re.exec(h))){ if(!m[1]) st.push(m[2]); else if(st.pop()!==m[2]) return false; }
+    return st.length===0;
+  }
+  function mdEmph(t){
+    var e=mdEsc(t);
+    if(e.length>MD_EMPH_MAX) return e;
+    t=e;
+    t=t.replace(/\*\*(?=[^\s*])([^\n]*?[^\s*])\*\*/g,"<strong>$1</strong>");
+    t=t.replace(/(^|[^*\w])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![*\w])/g,"$1<em>$2</em>");
+    return mdNested(t)?t:e;
+  }
+  function mdInline(raw){
+    var s=String(raw==null?"":raw), out="", last=0, re=/`([^`\n]+)`/g, m;
+    while((m=re.exec(s))){ out+=mdEmph(s.slice(last,m.index))+"<code>"+mdEsc(m[1])+"</code>"; last=re.lastIndex; }
+    return out+mdEmph(s.slice(last));
+  }
+  function mdRender(src){
+    var lines=String(src==null?"":src).replace(/\r\n?/g,"\n").split("\n");
+    var html=[], para=[], kind=null, items=[], start=1;
+    function flushPara(){ if(para.length){ html.push("<p>"+mdInline(para.join("\n"))+"</p>"); para=[]; } }
+    function flushList(){
+      if(!kind) return;
+      html.push("<"+kind+(kind==="ol"&&start!==1?' start="'+start+'"':"")+">"+items.map(function(t){return "<li>"+mdInline(t)+"</li>"}).join("")+"</"+kind+">");
+      kind=null; items=[]; start=1;
+    }
+    lines.forEach(function(line){
+      var b=/^\s*- +(.*)$/.exec(line), n=/^\s*(\d{1,6})\. +(.*)$/.exec(line);
+      if(!line.trim()){ flushPara(); flushList(); return; }
+      if(b||n){
+        var k=b?"ul":"ol";
+        flushPara();
+        if(kind!==k){ flushList(); kind=k; if(n) start=parseInt(n[1],10); }
+        items.push(b?b[1]:n[2]);
+      } else if(kind && /^\s/.test(line)){
+        items[items.length-1]+="\n"+line.trim();
+      } else {
+        flushList(); para.push(line.trim());
+      }
+    });
+    flushPara(); flushList();
+    return html.join("");
+  }
+  /*md:end*/
+
+  function renderFilters(){
+    var areas=["all"];
+    state.decisions.forEach(function(d){ if(d.area && areas.indexOf(d.area)<0) areas.push(d.area) });
+    $("filters").innerHTML=areas.map(function(a){
+      return '<button type="button" data-a="'+esc(a)+'" aria-pressed="'+(state.filter===a)+'">'+esc(a)+'</button>'
+    }).join("");
+  }
+
+  // The recommendation text is shown when it says more than an option's key (older cards held only the key).
+  function recText(d,opts){
+    if(d.rec==null||String(d.rec).trim()==="") return false;
+    return !(opts||[]).some(function(o){return String(o.key)===String(d.rec)});
+  }
+
+  function card(d){
+    var a=state.answers[d.id]||{};
+    var closed=d.status!=="open";
+    var opts=(d.options||[]).map(function(o){
+      var chosen=a.choice===o.key;
+      var inputType=d.kind==="action"?"checkbox":"radio";
+      return '<label class="opt'+(chosen?' chosen':'')+'">'+
+        '<input type="'+inputType+'" name="c-'+esc(d.id)+'" value="'+esc(o.key)+'"'+(chosen?' checked':'')+(closed||!state.canWrite?' disabled':'')+' data-id="'+esc(d.id)+'">'+
+        '<div class="ot"><div class="oh"><span class="k">'+esc(o.key)+'</span>'+(d.rec===o.key?'<span class="r">Recommended</span>':'')+'</div>'+
+        '<div class="md">'+mdRender(o.text)+'</div></div></label>'
+    }).join("");
+    var tail=closed
+      ? (d.ruling?'<div class="ruling"><b>Ruled:</b> <div class="md">'+mdRender(d.ruling)+'</div></div>':'')
+      : '<textarea id="n-'+esc(d.id)+'" data-id="'+esc(d.id)+'" placeholder="Your words, relayed verbatim (optional)"'+(state.canWrite?'':' disabled')+'>'+esc(a.note||"")+'</textarea>'+
+        '<div class="row"><label class="ready"><input type="checkbox" id="r-'+esc(d.id)+'" data-id="'+esc(d.id)+'"'+(a.ready?' checked':'')+(state.canWrite?'':' disabled')+'> Ready for director</label>'+
+        '<span class="saved" id="s-'+esc(d.id)+'"></span></div>';
+    return '<article class="card'+(a.ready&&!closed?' ready':'')+'" id="d-'+esc(d.id)+'">'+
+      '<div class="meta"><span class="chip">'+esc(d.area||"general")+'</span>'+
+        (d.owner?'<span class="chip">'+esc(d.owner)+'</span>':'')+
+        (closed?'<span class="pill state">'+esc(d.status)+'</span>':expPill(d.expiry))+
+        '<span class="id">'+esc(d.id)+'</span></div>'+
+      '<h2>'+esc(d.title)+'</h2>'+
+      '<p class="q">'+esc(d.question)+'</p>'+
+      (d.context?'<div class="ctx md">'+mdRender(d.context)+'</div>':'')+
+      (opts?'<fieldset><legend>'+esc(d.title)+'</legend>'+opts+'</fieldset>':'')+
+      (recText(d,d.options)?'<div class="recbox"><span class="r">Recommendation</span><div class="md">'+mdRender(d.rec)+'</div></div>':'')+
+      tail+
+      (d.source?'<div class="src" style="margin-top:8px">source: '+esc(d.source)+'</div>':'')+
+    '</article>';
+  }
+
+  function render(){
+    renderFilters();
+    var vis=state.decisions.filter(function(d){return state.filter==="all"||d.area===state.filter});
+    var open=vis.filter(function(d){return d.status==="open"});
+    var done=vis.filter(function(d){return d.status!=="open"});
+    open.sort(function(x,y){
+      var dx=daysLeft(x.expiry), dy=daysLeft(y.expiry);
+      dx=dx===null?999:dx; dy=dy===null?999:dy; return dx-dy;
+    });
+    $("open").innerHTML=open.length?open.map(card).join(""):'<div class="notice">Nothing waiting on you in this view.</div>';
+    $("done").innerHTML=done.map(card).join("");
+    $("doneWrap").hidden=!done.length;
+    $("doneSum").textContent="Relayed and closed ("+done.length+")";
+    var all=state.decisions.filter(function(d){return d.status==="open"});
+    var ready=all.filter(function(d){return (state.answers[d.id]||{}).ready}).length;
+    var picked=all.filter(function(d){return (state.answers[d.id]||{}).choice}).length;
+    $("tally").innerHTML='<span><b>'+all.length+'</b> open</span><span><b>'+picked+'</b> picked</span><span><b>'+ready+'</b> ready</span>';
+  }
+
+  var timers={};
+  function save(id){
+    if(!state.db) return;
+    clearTimeout(timers[id]);
+    timers[id]=setTimeout(function(){
+      var a=state.answers[id]||{};
+      var body={choice:a.choice||null,note:a.note||"",ready:!!a.ready,at:new Date().toISOString()};
+      var s=$("s-"+id); if(s) s.textContent="Saving";
+      state.db.doc("answers/"+id).set(body).then(function(){
+        var s2=$("s-"+id); if(s2) s2.textContent="Saved";
+      }).catch(function(e){
+        var s3=$("s-"+id); if(s3) s3.textContent=(e&&e.code==="invalid_argument")?"You can't save here":"Not saved, try again";
+        if(e&&e.code==="invalid_argument"){state.canWrite=false;render();}
+      });
+    },500);
+  }
+
+  document.addEventListener("change",function(ev){
+    var t=ev.target, id=t.getAttribute("data-id"); if(!id) return;
+    var a=state.answers[id]=Object.assign({},state.answers[id]||{});
+    if(t.type==="radio"){a.choice=t.value;}
+    else if(t.id==="r-"+id){a.ready=t.checked;}
+    else if(t.type==="checkbox"){a.choice=t.checked?t.value:null;}
+    render(); save(id);
+  });
+  document.addEventListener("input",function(ev){
+    var t=ev.target, id=t.getAttribute("data-id");
+    if(!id||t.tagName!=="TEXTAREA") return;
+    var a=state.answers[id]=Object.assign({},state.answers[id]||{});
+    a.note=t.value; save(id);
+  });
+  document.addEventListener("focusout",function(ev){
+    if(ev.target.tagName==="TEXTAREA"){ setTimeout(function(){ var a=document.activeElement; if(!a||a.tagName!=="TEXTAREA") render(); },300); }
+  });
+  $("filters").addEventListener("click",function(ev){
+    var b=ev.target.closest("button"); if(!b) return;
+    state.filter=b.getAttribute("data-a"); render();
+  });
+
+  function showNotice(t){var n=$("notice"); n.textContent=t; n.hidden=!t;}
+  showNotice("Loading decisions.");
+  render();
+
+  claude.use("db").then(function(db){
+    if(!db){showNotice("Your saved answers aren't available in this view. Open the page signed in to claude.ai.");return;}
+    state.db=db;
+    claude.use("user").then(function(u){
+      if(u && u.can){ u.can("data.write").then(function(v){ if(v===false){state.canWrite=false;render();} }).catch(function(){}); }
+    });
+    db.collection("decisions").onSnapshot(function(snap){
+      state.decisions=snap.docs.map(function(d){var b=Object.assign({},d.data()); b.id=d.id; return b});
+      showNotice(state.decisions.length?"":"No decisions yet. Director adds them here as they come in.");
+      render();
+    },function(){showNotice("Decisions stopped updating. Reload the page.");});
+    db.collection("answers").onSnapshot(function(snap){
+      var m={}; snap.docs.forEach(function(d){m[d.id]=d.data()});
+      Object.keys(state.answers).forEach(function(k){ if(timers[k]) m[k]=state.answers[k]; });
+      state.answers=m;
+      var active=document.activeElement;
+      if(active&&active.tagName==="TEXTAREA"){ return; }
+      render();
+    },function(){});
+  });
+})();
+</script>
+
+</body></html>
