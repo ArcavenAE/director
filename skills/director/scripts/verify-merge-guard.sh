@@ -29,7 +29,7 @@ mkdir -p "$root/bin"
 # The gh stub. `gh pr view` replays view.<call>.json (or view.json) with exit
 # code view.rc; `gh pr list` replays list.json with list.rc. Stderr text comes
 # from <verb>.err. `gh api` (the check suites at the head) replays suites.json
-# with suites.rc. `gh repo view` (the default branch) replays repo.json with repo.rc. Each call is counted, so a retry is observable.
+# with suites.rc; each call also appends its arguments to <verb>.args. `gh repo view` (the default branch) replays repo.json with repo.rc. Each call is counted, so a retry is observable.
 cat > "$root/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 fx="$GH_FIXTURE"
@@ -42,6 +42,7 @@ case "$1 $2" in
 esac
 n=$(( $(cat "$fx/$verb.calls" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "$fx/$verb.calls"
+echo "$*" >> "$fx/$verb.args" # every call's arguments, so a test can say what was asked
 [[ -f "$fx/$verb.err" ]] && cat "$fx/$verb.err" >&2
 if [[ -f "$fx/$verb.$n.json" ]]; then cat "$fx/$verb.$n.json"
 elif [[ -f "$fx/$verb.json" ]]; then cat "$fx/$verb.json"; fi
@@ -405,6 +406,17 @@ fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headR
 expect_stop "a view with no baseRefName: STOP" "base branch"
 fixture; view OPEN false CLEAN > "$fx/view.json"
 guard ${FLAGS-} org/repo 7 || true; [[ "$(cat "$fx/repo.calls")" == 1 ]] && ok "the default branch is read once, with the repo named" || bad "repo read count" "$(cat "$fx/repo.calls" 2>/dev/null)"
+# The base check comes before the merge-state retries: a PR on the wrong base that is also UNKNOWN stops on the
+# base at once, with one view read and no re-reads (a guard that retried first would spend the retries, and
+# report the merge state, for a PR it must refuse anyway).
+fixture; BASE=feat/parent view OPEN false UNKNOWN > "$fx/view.json"
+expect_stop "a wrong base with merge state UNKNOWN: STOP naming the base, not the merge state" "base is feat/parent, not the default branch main"
+[[ "$(cat "$fx/view.calls")" == 1 ]] && ok "the base is decided on the first read, with no UNKNOWN re-reads" \
+  || bad "base before the retries" "view.calls=$(cat "$fx/view.calls")"
+# The default branch is asked of the repo the PR is in, by name, never of whatever the working directory is.
+fixture; view OPEN false CLEAN > "$fx/view.json"; guard org/repo 7 || true
+grep -qx 'repo view org/repo --json defaultBranchRef' "$fx/repo.args" && ok "the default branch is asked of the named repo: gh repo view org/repo --json defaultBranchRef" \
+  || bad "repo named on the default-branch read" "$(cat "$fx/repo.args" 2>/dev/null)"
 fixture; rc=0; guard --allow-base >/dev/null 2>&1 || rc=$?; [[ $rc -eq 2 ]] && ok "--allow-base with no value is a usage error" || bad "allow-base no value" "rc=$rc"
 fixture; rc=0; guard --allow-base a --allow-base b org/repo 7 >/dev/null 2>&1 || rc=$?; [[ $rc -eq 2 ]] && ok "--allow-base twice is a usage error" || bad "allow-base twice" "rc=$rc"
 
