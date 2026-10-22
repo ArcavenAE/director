@@ -64,6 +64,7 @@ if [[ -n "${IS_REAL_MARVEL:-}" ]]; then cp "$3" "$IS_FIX/marry.in"; exec "$IS_RE
 cp "$3" "$IS_FIX/marry.in"
 if [[ -e "$IS_FIX/marvel.fail" ]]; then echo "marry input: boom" >&2; echo "second stderr line" >&2; exit 1; fi
 if [[ -e "$IS_FIX/marvel.slow" ]]; then echo "$$" >>"$IS_FIX/slow.pids"; sleep "$(cat "$IS_FIX/marvel.slow")"; fi
+if [[ -e "$IS_FIX/marvel.noterm" ]]; then trap '' TERM; echo "$$" >>"$IS_FIX/slow.pids"; sleep 25; fi
 if [[ -e "$IS_FIX/marry.out" ]]; then cat "$IS_FIX/marry.out"; exit 0; fi
 echo 'Error: unknown command "marry" for "marvel"' >&2
 exit 1
@@ -326,6 +327,19 @@ marry_cases() {
     reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"; canned 'not json'
     runm "$B"
     [[ "$rc" == 0 ]] && has "- GAP marry: marvel marry answered with something that is not a JSON object" && [[ ! -s "$st/would-pair.jsonl" ]] && ok "$tag 9 an answer that is not JSON is a GAP and no pair" || bad "$tag 9 nojson" "$(out)"
+    # a marvel that ignores TERM does not hold the run past the bound plus the grace
+    reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"; touch "$FIX/marvel.noterm"
+    s0=$SECONDS
+    runm "$B" IDLE_SHADOW_KILL_GRACE=1
+    el=$((SECONDS - s0))
+    [[ "$rc" == 0 && "$el" -lt 15 ]] && has "- GAP marry: marvel marry failed (no answer within 3s)" && ok "$tag 10 a marvel that ignores TERM is killed after the grace, took ${el}s" || bad "$tag 10 noterm" "${el}s $(out)"
+    alive=0
+    if [[ -f "$FIX/slow.pids" ]]; then while read -r p; do if kill -0 "$p" 2>/dev/null; then alive=1; kill -KILL "$p" 2>/dev/null || true; fi; done <"$FIX/slow.pids"; fi
+    [[ "$alive" == 0 ]] && ok "$tag 10 the TERM-ignoring process is gone" || bad "$tag 10 survivor"
+    # MARVEL_SOCKET in the caller's environment never reaches the marry call
+    reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"; canned '{"count":{}}'
+    runm "$B" MARVEL_SOCKET=/nowhere/marvel.sock
+    [[ "$(cat "$FIX/marvel.env" 2>/dev/null)" == "MARVEL_SOCKET=unset MARVEL_HOME=unset" ]] && ok "$tag 11 a MARVEL_SOCKET in the environment is cleared for the marry call" || bad "$tag 11 socket" "$(cat "$FIX/marvel.env" 2>&1)"
     # a pair whose seat is not an agent:// address is never written
     reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"
     canned '{"pairs":[{"item":"e-1","seat":"role://crew/builder","lease":"x/e-1"}],"count":{"would_pair":1}}'
@@ -524,6 +538,23 @@ for B in $BASHES; do
   [[ -z "$(/usr/bin/grep -v '^ready ' "$FIX/bd.log" 2>/dev/null || true)" ]] && ok "8 every bd call was a ready read" || bad "8 bd calls" "$(cat "$FIX/bd.log")"
   /usr/bin/grep -q -F -- "--json" "$FIX/bd.log" 2>/dev/null && ok "8 bd was asked for JSON" || bad "8 json"
 
+  # ---- 10 a state directory that cannot be written is one GAP line and exit 0
+  if [[ "$(id -u)" != 0 ]]; then
+    reset
+    mkdir -p "$root/ro-parent"; chmod 555 "$root/ro-parent"
+    runis "$B" DIRECTOR_STATE="$root/ro-parent/state"
+    [[ "$rc" == 0 && "$(wc -l <"$root/out" | tr -d ' ')" == 1 ]] && /usr/bin/grep -q '^- GAP state: ' "$root/out" \
+      && ok "10 a state directory that cannot be created is one GAP line and exit 0" || bad "10 mkdir fails" "rc=$rc $(out)"
+    chmod 755 "$root/ro-parent"; rm -rf "$root/ro-parent"
+    : >"$root/afile"
+    runis "$B" DIRECTOR_STATE="$root/afile"
+    [[ "$rc" == 0 && "$(wc -l <"$root/out" | tr -d ' ')" == 1 ]] && /usr/bin/grep -q '^- GAP state: ' "$root/out" \
+      && ok "10 a state path that is a file is one GAP line and exit 0" || bad "10 state is a file" "rc=$rc $(out)"
+    ! has "idle-shadow: ready" && ok "10 no count line is printed from a run that could not write" || bad "10 count line" "$(out)"
+  else
+    echo "SKIP 10 unwritable state cases: running as root"
+  fi
+
   marry_cases "$B" stub
 done
 
@@ -563,6 +594,11 @@ mcalls="$(printf '%s\n' "$code" | /usr/bin/grep -n -E '"?\$\{?marvel_bin\}?"? ' 
 # nothing outside marry_step produces a would-pair row: no append, no jq, no echo to the file
 outside="$(printf '%s\n' "$code" | awk '/^marry_step\(\)/{f=1} f&&/^}/{f=0; next} !f' | /usr/bin/grep 'would-pair.jsonl' | /usr/bin/grep -c -E '>>|jq|echo|printf' || true)"
 [[ "$outside" == 0 ]] && ok "P4 no row is produced outside the marry step" || bad "P4 would-pair writes" "$outside"
+
+# the header says what the timeout bounds
+/usr/bin/grep -q 'IDLE_SHADOW_CALL_TIMEOUT (seconds for each bd read and for the marry call' "$IS" \
+  && ok "D1 the header says the timeout bounds the marry call as well as each bd read" || bad "D1 timeout doc"
+/usr/bin/grep -q 'IDLE_SHADOW_KILL_GRACE' "$IS" && ok "D2 the header names the kill grace" || bad "D2 kill grace doc"
 
 # --- state files, modes, checkout refusal -------------------------------------
 reset
