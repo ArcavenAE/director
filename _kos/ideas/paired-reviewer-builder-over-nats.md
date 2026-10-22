@@ -9,7 +9,8 @@
 - **Related:** aae-orc-8yag2 (the retrospector as a scheduled headless role);
   director message 01M5JYJK3X (a list of headless candidates, in flight);
   director message 01M5JYKF4Q (a scheduler evaluation); ADR-010 (headless
-  roles use completion semantics); companion marvel idea, link to follow.
+  roles use completion semantics); the companion marvel idea,
+  ArcavenAE/marvel#1033 (`_kos/ideas/seat-modes-headless-standby-standing.md`).
 
 ## The operator's words
 
@@ -34,10 +35,10 @@ marvel idea.
 - **The supervisor relay hop.** Today a review result goes reviewer to
   supervisor to builder, and the fix round goes back the same way. Each hop
   waits on a seat that is doing other work.
-- **The 30-minute stable-head hold.** As the loop runs now, a review waits for
-  the PR head to sit unchanged for 30 minutes before it starts. A paired
-  reviewer would learn of a new head from the builder's own message and could
-  start at once.
+- **The 30-minute stable-head hold.** Under an operator ruling of 2026-10-20
+  (re-review after a 30-minute stable head), a review waits for the PR head to
+  sit unchanged for 30 minutes before it starts. A paired reviewer would
+  learn of a new head from the builder's own message and could start at once.
 
 ## Risks
 
