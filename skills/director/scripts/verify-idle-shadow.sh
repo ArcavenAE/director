@@ -619,6 +619,19 @@ outside="$(printf '%s\n' "$code" | awk '/^marry_step\(\)/{f=1} f&&/^}/{f=0; next
   && ok "D1 the header says the timeout bounds the marry call as well as each bd read" || bad "D1 timeout doc"
 /usr/bin/grep -q '^# IDLE_SHADOW_KILL_GRACE (seconds a call that ignores TERM' "$IS" && ok "D2 the header names the kill grace" || bad "D2 kill grace doc"
 
+# --- marry.json: marvel's answer, kept for the lane ledger --------------------------
+# a marry that answers is kept byte for byte at mode 600; a marry GAP removes the old file
+reset; one_item
+printf '%s\n' '{"pairs":[{"item":"e-1","seat":"agent://crew/b1","lease":"'"$RUN_ID"'/e-1"}],"count":{"ready":1,"eligible":1,"free":1,"would_pair":1}}' >"$FIX/marry.out"
+runis /bin/bash IDLE_SHADOW_SEAT_ELIGIBILITY="$ELIG_FIXTURE" IDLE_SHADOW_SENDER_CLUSTER=alpha
+[[ -f "$st/marry.json" ]] && cmp -s "$FIX/marry.out" "$st/marry.json" && [[ "$(mode_of "$st/marry.json")" == 600 ]] \
+  && ok "J1 a marry that answers is written to marry.json as marvel gave it, mode 600" || bad "J1 marry.json" "$(ls -l "$st" 2>&1)"
+printf '%s\n' '{"pairs":[],"count":{"ready":9}}' >"$st/marry.json"
+touch "$FIX/marvel.fail"
+runis /bin/bash IDLE_SHADOW_SEAT_ELIGIBILITY="$ELIG_FIXTURE" IDLE_SHADOW_SENDER_CLUSTER=alpha
+has "- GAP marry: marvel marry failed" && [[ ! -e "$st/marry.json" ]] \
+  && ok "J2 a marry GAP removes the old marry.json, so no stale run is shown" || bad "J2 stale marry.json" "$(out)"
+
 # --- state files, modes, checkout refusal -------------------------------------
 reset
 runis /bin/bash

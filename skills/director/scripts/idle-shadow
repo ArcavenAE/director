@@ -20,6 +20,8 @@
 # directory must be outside any checkout):
 #   unmatched.jsonl   one row per unmatched item, replaced on each run
 #   would-pair.jsonl  one row per would-pair, replaced on each run (empty until marry exists)
+#   marry.json        marvel's marry answer as it gave it, replaced on each run; removed when
+#                     marry did not answer, so the lane ledger never shows an older run
 #   flow.jsonl        one line per run, append-only
 # It sends nothing on the bus, injects nothing, writes no bd record and calls no gh.
 #
@@ -308,6 +310,7 @@ fi
 # It calls marvel's verb and writes what comes back. Pairing, ordering and scope logic do not
 # belong anywhere else in this script.
 n_seat="GAP"
+marry_ok=0
 : >"$tmp/pair-lines"; : >"$tmp/unplaced-lines"
 marry_step() {
   : >"$tmp/would-pair.jsonl"
@@ -377,6 +380,7 @@ marry_step() {
     , (if ($u | length) > $max then "- unplaced: and \(($u | length) - $max) more" else empty end)' "$tmp/marry.out" >"$tmp/unplaced-lines" 2>/dev/null || true
   jq -c --arg at "$at" '(.unmatched // [])[] | select(.kind == "no-eligible-seat") | {at: $at, id: .item, missing: ["seat"], operator: false}' "$tmp/marry.out" >>"$tmp/unmatched.jsonl" 2>/dev/null || true
   n_seat="$(jq -r '[ (.unmatched // [])[] | select(.kind == "no-eligible-seat") ] | length' "$tmp/marry.out" 2>/dev/null || echo GAP)"
+  marry_ok=1
 }
 # the eligibility file, read once; a malformed one is a GAP and none of it is used
 elig_ok=0; elig_why=""
@@ -404,6 +408,14 @@ else
 fi
 mv "$tmp/would-pair.jsonl" "$dir/would-pair.jsonl"
 chmod 600 "$dir/would-pair.jsonl"
+if [[ "$marry_ok" == 1 ]]; then
+  # mode 600 before the rename, so the file is never seen with a wider mode
+  chmod 600 "$tmp/marry.out"
+  mv "$tmp/marry.out" "$dir/marry.json"
+else
+  # a marry that did not answer leaves no old answer to be mistaken for this run's
+  rm -f "$dir/marry.json"
+fi
 
 ready="GAP"
 if [[ "$items_ok" == 1 ]]; then
