@@ -294,7 +294,7 @@ Once K19 lands, step 4 is followed by `dws board-state` ("state first").
 
 ## Merging: the guard runs before every merge
 
-Before any merge you make or relay, run `${DIRECTOR_HOME:-$HOME/.director}/bin/merge-guard <owner/repo> <n>`
+Before any merge you make or relay, run `${DIRECTOR_HOME:-$HOME/.director}/bin/merge-guard [--allow-base <branch>] <owner/repo> <n>`
 for that PR, and act only on its line:
 
 - `PROCEED ... @<sha>`: merge with `--match-head-commit <sha>`, so a push after
@@ -305,6 +305,11 @@ for that PR, and act only on its line:
   for good. Then confirm each child retargeted to the default branch and
   retarget it by hand if not (stacked-pr-merge-order). Only the plain `PROCEED`
   line says a merge may delete its branch.
+- `STOP base is X, not the default branch Y`: the PR's base is not the repo's
+  default branch, so a merge would land in X and never reach Y (two stacked
+  PRs were merged into their parents that way). Retarget the PR to the default
+  branch. Only for a merge into a parent on purpose, pass
+  `--allow-base <X>` with that exact base name; it waives this check alone.
 - `STOP ...`: stop the merge run there and report the line. Never skip the PR
   and go on to the next. A skip is how a merge order gets inverted (R-152).
 
