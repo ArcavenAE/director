@@ -27,7 +27,7 @@ bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 skp()  { echo "SKIP $1"; }
 [[ -f "$W" ]] || { echo "FAIL dash-writer exists at $W"; echo "0 passed, 1 failed"; exit 1; }
 
-root="$(mktemp -d "${DASH_TMP:-/tmp}/dsh.XXXXXX")" || { echo "FAIL scratch root: mktemp failed"; exit 1; }
+root="$(if [[ -n "${DASH_TMP:-}" ]]; then mktemp -d "$DASH_TMP/dsh.XXXXXX"; else mktemp -d; fi)" || { echo "FAIL scratch root: mktemp failed"; exit 1; }
 [[ -n "$root" && -d "$root" ]] || { echo "FAIL scratch root: no directory"; exit 1; }
 root="$(cd "$root" && pwd -P)"
 trap 'rm -rf "$root"' EXIT
@@ -49,13 +49,15 @@ cat >"$root/bin/marvel" <<'SH'
 # `marvel --cluster C get sessions --columns ...` prints $TABLES/C, or fails when there is none
 if [ "$1" = config ] && [ "$2" = list ]; then
   [ -f "$TABLES/config-list" ] || { echo "no config" >&2; exit 1; }
-  cat "$TABLES/config-list"; exit 0
+  cat "$TABLES/config-list"; exit "$(cat "$TABLES/config-rc" 2>/dev/null || echo 0)"
 fi
 f="$TABLES/$2"
 [ -f "$f" ] || { echo "no route to $2" >&2; exit 1; }
 cat "$f"
 SH
 chmod +x "$root/bin/marvel"
+# The real marvel must never run here: the stub is first on the PATH every run uses, and resolves first.
+[[ "$(PATH="$root/bin:/usr/bin:/bin:$PYDIR" command -v marvel)" == "$root/bin/marvel" ]] || { echo "FAIL the stub marvel is not first on PATH"; exit 1; }
 
 # a sessions table the way marvel's tabwriter lays it out: padding 2, cells aligned to the header
 mktable() { python3 - "$@" <<'PY'
@@ -295,20 +297,20 @@ assert all(r["cluster"] == "good" for r in p["rows"])
 setclusters 'bad/name'; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
-assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "a key that is not a plain cluster name refuses the whole sessions panel" || bad "cluster charset"
+assert p["rows"]==[] and p["refusal"].get("clusters:bad-name")==1 and len(p["refusal"])==1, p' && ok "a name that is not a plain cluster name refuses the whole sessions panel, reason bad-name" || bad "cluster charset"
 rm -f "$root/tables/config-list"; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
-assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "with no cluster list the sessions panel is refused, never written empty as if read" || bad "no cluster list"
+assert p["rows"]==[] and p["refusal"].get("clusters:failed")==1 and len(p["refusal"])==1, p' && ok "when marvel config list fails the sessions panel is refused with reason failed, never written empty as if read" || bad "no cluster list"
 setclusters alpha
 
 # the config reader: key names only
 setclusters alpha beta; runout run
-grep -q 'CANARY' "$root/out.json" "$root/err" && bad "no config value reaches the output" "$(grep -o 'CANARY[A-Z0-9-]*' "$root/out.json" "$root/err" | head -3)" || ok "no value under a cluster key, and no other config value, reaches the output or stderr"
+grep -q 'CANARY' "$root/out.json" "$root/err" && bad "no config value reaches the output" "$(grep -o 'CANARY[A-Z0-9-]*' "$root/out.json" "$root/err" | head -3)" || ok "no column of marvel config list but the name, and no config value, reaches the output or stderr"
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
 assert sorted({r["cluster"] for r in p["rows"]})==["alpha"] and p["counts"]["not_reached"]==["beta: not reached at 2026-10-20T18:00:00Z"], (p["counts"], p["rows"][:1])' \
-  && ok "the clusters are the key names under clusters: in the marvel config, in order, and nothing else in the file is one" || bad "config key names"
+  && ok "the clusters are the NAME column of marvel config list, and nothing else on a line is one" || bad "config key names"
 printf 'NAME  URL\n* alpha  https://CANARY-STAR-1.example.test\nbeta  https://CANARY-STAR-2.example.test\n' >"$root/tables/config-list"; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
@@ -317,12 +319,25 @@ assert sorted({r["cluster"] for r in p["rows"]})==["alpha"] and p["counts"]["not
 printf 'NAME  URL\n' >"$root/tables/config-list"; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
-assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "a config list that names no cluster refuses the sessions panel" || bad "empty config list"
+assert p["rows"]==[] and p["refusal"].get("clusters:empty")==1 and len(p["refusal"])==1, p' && ok "a config list that names no cluster refuses the sessions panel, reason empty" || bad "empty config list"
 printf 'NAME  URL\nalpha  x\nbad/name  CANARY-BAD-4471\n' >"$root/tables/config-list"; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
-assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p'
+assert p["rows"]==[] and p["refusal"].get("clusters:bad-name")==1, p'
 [[ $? -eq 0 ]] && ! grep -q CANARY "$root/out.json" "$root/err" && ok "one unusable name refuses the whole panel and prints nothing from the list" || bad "unusable name in list"
+# names print but the command exits nonzero: the list is not trusted (a reader that ignores the exit code
+# would draw rows from a half-printed answer)
+setclusters alpha; printf '3\n' >"$root/tables/config-rc"; runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
+assert p["rows"]==[] and p["refusal"].get("clusters:failed")==1 and len(p["refusal"])==1, p' && ok "a config list that prints names and exits nonzero is refused, reason failed" || bad "nonzero exit with names"
+rm -f "$root/tables/config-rc"
+# a marvel that cannot be run at all
+env -i HOME="$root/home" PATH="/usr/bin:/bin:$PYDIR" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" DWS_TEST_CLOCK=1 DWS_NOW="${NOW_OVERRIDE:-$NOW}" \
+  DASH_MARVEL="$root/bin/no-such-marvel" python3 -I "$W" run >"$root/out.json" 2>"$root/err"
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
+assert p["rows"]==[] and p["refusal"].get("clusters:unavailable")==1 and len(p["refusal"])==1, p' && ok "a marvel that cannot be run refuses the sessions panel, reason unavailable" || bad "marvel unavailable"
 setclusters alpha
 
 # the area reader: the Desk snapshot's areas

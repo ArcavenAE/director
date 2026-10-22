@@ -17,7 +17,8 @@ once for each cluster `marvel config list` names (command: $DASH_MARVEL, default
 $DIRECTOR_STATE/desk-snapshot.json. The list is read as freebusy reads it: the NAME column only, so this script
 gets the cluster names and nothing else, no other column is kept or emitted, and the command's own messages are
 dropped. marvel holds `clusters:` as a list, so no key of the config file is read. A list that cannot be read,
-names no cluster, or holds an unusable name refuses the sessions panel, never an empty one. The Desk's
+names no cluster, or holds an unusable name refuses the sessions panel, never an empty one, and the refusal
+carries its reason as clusters:unavailable, timeout, failed, empty or bad-name. The Desk's
 area labels are the `areas` list the snapshot records; no snapshot, or no list, labels nothing.
 Two local files the operator keeps, one entry per line, because no canonical source holds them:
   dash-area-map.tsv    <workstream slug><TAB><area label>; a ledger row carries no area, so this maps
@@ -126,21 +127,24 @@ def load_withhold():
 
 
 def cluster_names():
-    """The cluster names `marvel config list` prints, or None when they cannot be read.
+    """(names, reason): the cluster names `marvel config list` prints, or (None, why) when they cannot be read.
 
     Only the NAME column is kept: the first word of each line, or the second after a lone "*" (the marker
     for the current cluster, which is not a name). Every other column is dropped as the line is split, so no
-    value from the config is held, and nothing the command prints to stderr is kept. A command that fails or
-    times out, a list that names no cluster, or any name that is not a plain cluster name is None: the
-    sessions panel is refused and nothing from the config is shown.
+    value from the config is held, and nothing the command prints to stderr is kept. The reason is a fixed
+    word, never a value: unavailable (the command cannot be run), timeout, failed (a nonzero exit, whatever it
+    printed), empty (no name) or bad-name (a name that is not a plain cluster name). Any of them refuses the
+    sessions panel and shows nothing from the config.
     """
     marvel = os.environ.get("DASH_MARVEL", "marvel")
     try:
         p = subprocess.run([marvel, "config", "list"], capture_output=True, timeout=20, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    except subprocess.TimeoutExpired:
+        return None, "timeout"
+    except OSError:
+        return None, "unavailable"
     if p.returncode != 0:
-        return None
+        return None, "failed"
     names = []
     for line in p.stdout.decode("utf-8", "replace").splitlines():
         words = line.split()
@@ -153,9 +157,9 @@ def cluster_names():
             name = name[1:]
         del words
         if not CLUSTER_RE.fullmatch(name):
-            return None  # anything that is not a plain cluster name: no value can pass as one
+            return None, "bad-name"  # anything that is not a plain cluster name: no value can pass as one
         names.append(name)
-    return names or None
+    return (names, None) if names else (None, "empty")
 
 
 def snapshot_areas():
@@ -393,7 +397,7 @@ def build(t_text, t_now):
         if "\t" in line:
             k, v = line.split("\t", 1)
             area_map[k.strip()] = v.strip()
-    clusters = cluster_names()
+    clusters, clusters_why = cluster_names()
     data, why = ledger()
     panels = {p: {"rows": [], "counts": {}, "refusal": Refusals()} for p in PANELS}
     ledger_rows = data.get("rows", []) if data else []
@@ -439,7 +443,7 @@ def build(t_text, t_now):
     if wwhy:
         pass  # every panel the withhold list filters is refused below, so marvel is not asked
     elif not clusters:
-        sref.add("clusters", "unread")
+        sref.add("clusters", clusters_why)
         panels["sessions"]["counts"] = {"not_reached": []}
     else:
         rows, counts, nr = session_rows(clusters, wl, sref, t_text)
