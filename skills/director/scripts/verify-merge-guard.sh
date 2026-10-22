@@ -404,9 +404,9 @@ expect_stop "an empty repo read: STOP" "default branch"
 fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"labels":[]}' > "$fx/view.json"
 expect_stop "a view with no baseRefName: STOP" "base branch"
 fixture; view OPEN false CLEAN > "$fx/view.json"
-grep -q . "$fx/view.json" && guard ${FLAGS-} org/repo 7; [[ "$(cat "$fx/repo.calls")" == 1 ]] && ok "the default branch is read once, with the repo named" || bad "repo read count" "$(cat "$fx/repo.calls" 2>/dev/null)"
-fixture; guard --allow-base >/dev/null 2>&1; rc=$?; [[ $rc -eq 2 ]] && ok "--allow-base with no value is a usage error" || bad "allow-base no value" "rc=$rc"
-fixture; guard --allow-base a --allow-base b org/repo 7 >/dev/null 2>&1; rc=$?; [[ $rc -eq 2 ]] && ok "--allow-base twice is a usage error" || bad "allow-base twice" "rc=$rc"
+guard ${FLAGS-} org/repo 7 || true; [[ "$(cat "$fx/repo.calls")" == 1 ]] && ok "the default branch is read once, with the repo named" || bad "repo read count" "$(cat "$fx/repo.calls" 2>/dev/null)"
+fixture; rc=0; guard --allow-base >/dev/null 2>&1 || rc=$?; [[ $rc -eq 2 ]] && ok "--allow-base with no value is a usage error" || bad "allow-base no value" "rc=$rc"
+fixture; rc=0; guard --allow-base a --allow-base b org/repo 7 >/dev/null 2>&1 || rc=$?; [[ $rc -eq 2 ]] && ok "--allow-base twice is a usage error" || bad "allow-base twice" "rc=$rc"
 
 # --- usage --------------------------------------------------------------------------
 fixture
