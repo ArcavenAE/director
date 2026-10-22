@@ -113,10 +113,17 @@ while true; do
 done
 
 # A diagnostic exits 0 even when it has nowhere to write: one GAP line, nothing else.
-if ! mkdir -p "$dir" 2>/dev/null || ! chmod 700 "$dir" 2>/dev/null || ! tmp="$(mktemp -d "$dir/.run.XXXXXX" 2>/dev/null)"; then
-  echo "- GAP state: $dir cannot be created or written; idle-shadow did not run"
-  exit 0
+# The directory is changed only when this run creates it: chmod follows a symlink, so an existing
+# directory, or a link to one, is never chmodded, and a link is refused outright.
+state_gap() { echo "- GAP state: $1"; exit 0; }
+if [[ -L "$dir" ]]; then state_gap "$dir is a symbolic link; refused, nothing was changed or written"; fi
+made=0
+if [[ ! -d "$dir" ]]; then
+  mkdir -p "$dir" 2>/dev/null || state_gap "$dir cannot be created or written; idle-shadow did not run"
+  made=1
+  chmod 700 "$dir" 2>/dev/null || state_gap "$dir cannot be created or written; idle-shadow did not run"
 fi
+tmp="$(mktemp -d "$dir/.run.XXXXXX" 2>/dev/null)" || state_gap "$dir cannot be created or written; idle-shadow did not run"
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
 
@@ -124,6 +131,10 @@ gaps="$tmp/gaps"; : >"$gaps"
 gap() { echo "- GAP $1" >>"$gaps"; }
 notes="$tmp/notes"; : >"$notes"
 note() { echo "- NOTE $1" >>"$notes"; }
+if [[ "$made" == 0 ]]; then
+  dmode="$(stat -c %a "$dir" 2>/dev/null || stat -f %Lp "$dir" 2>/dev/null || echo unknown)"
+  if [[ "$dmode" != 700 ]]; then note "state: $dir is mode $dmode, not 700; it was not changed"; fi
+fi
 # the first line of a stderr file, control characters dropped
 first_line() {
   local l
