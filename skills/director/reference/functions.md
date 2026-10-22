@@ -306,8 +306,9 @@ in local or private state.
   Honor-only: that nothing else writes them.
 - **Readers:** director, through `presence_notice` on `wait_for_message` and
   `inbox_summary`, the sweep's `Away:` line (SKILL.md, Mode: sweep), and the
-  verifier `scripts/verify-presence-watch.sh`. A shim started with the flag off
-  while held records exist lists them as held, and sends none.
+  verifier `./scripts/verify-presence-watch.sh` (in the director checkout; it is
+  not installed). A shim started with the flag off while held records exist
+  lists them as held, and sends none.
 - **What it is not:** a gate. It reports and releases; it blocks nothing
   (SOUL section 8, ADR-007). A held send goes out only when its recipient has
   returned and its presence row is beating, and only within its sell-by; past
