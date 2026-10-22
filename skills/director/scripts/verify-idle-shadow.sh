@@ -555,6 +555,25 @@ for B in $BASHES; do
     echo "SKIP 10 unwritable state cases: running as root"
   fi
 
+  # ---- 10b the state directory: a symlink is refused, an existing directory keeps its mode, a new one is 700
+  reset; mkdir -p "$root/elsewhere"; chmod 755 "$root/elsewhere"; mkdir -p "$root/state"; ln -s "$root/elsewhere" "$root/state/idle-shadow"
+  runis "$B"
+  [[ "$rc" == 0 && "$(wc -l <"$root/out" | tr -d ' ')" == 1 ]] && /usr/bin/grep -q '^- GAP state: .*symbolic link' "$root/out" \
+    && ok "10b a symlinked state directory is one GAP line and exit 0" || bad "10b symlink" "rc=$rc $(out)"
+  [[ "$(mode_of "$root/elsewhere")" == 755 ]] && ok "10b the symlink's target keeps its mode" || bad "10b target mode" "$(mode_of "$root/elsewhere")"
+  [[ -z "$(ls -A "$root/elsewhere")" ]] && ok "10b nothing is written through the symlink" || bad "10b target written" "$(ls -A "$root/elsewhere")"
+  reset; mkdir -p "$root/state/idle-shadow"; chmod 755 "$root/state/idle-shadow"
+  runis "$B"
+  [[ "$rc" == 0 && "$(mode_of "$st")" == 755 ]] && ok "10b an existing state directory keeps its mode" || bad "10b existing mode" "rc=$rc $(mode_of "$st")"
+  has "- NOTE state: $st is mode 755, not 700; it was not changed" && ok "10b a looser existing directory is named in a NOTE" || bad "10b note" "$(out)"
+  [[ "$(mode_of "$st/flow.jsonl")" == 600 ]] && ok "10b the files in it are still 600" || bad "10b file mode"
+  reset
+  runis "$B"
+  [[ "$(mode_of "$st")" == 700 ]] && ! has "- NOTE state:" && ok "10b a directory this run creates is 700, with no NOTE" || bad "10b new mode" "$(mode_of "$st") $(out)"
+  reset; mkdir -p "$root/state/idle-shadow"; chmod 700 "$root/state/idle-shadow"
+  runis "$B"
+  ! has "- NOTE state:" && ok "10b an existing 700 directory gets no NOTE" || bad "10b spurious note" "$(out)"
+
   marry_cases "$B" stub
 done
 
