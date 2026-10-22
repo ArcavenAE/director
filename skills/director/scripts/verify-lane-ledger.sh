@@ -165,7 +165,8 @@ st2="$root/state2"; rm -rf "$st2"; mkdir -p "$st2/freebusy" "$root/home"
 cp "$fb/seats.jsonl" "$fb/lanes.jsonl" "$fb/marry.json" "$st2/freebusy/"
 cp "$DIRECTOR_STATE/desk-snapshot.json" "$DIRECTOR_STATE/lane-ledger-show.txt" "$st2/"
 before="$(snap)"
-HOME="$root/home" DIRECTOR_STATE="$st2" "$LL" --out "$odir/c1.html" >/dev/null 2>&1
+# Apple's system python3 caches stdlib bytecode under $HOME/Library/Caches; this check is about the script's own writes
+PYTHONDONTWRITEBYTECODE=1 HOME="$root/home" DIRECTOR_STATE="$st2" "$LL" --out "$odir/c1.html" >/dev/null 2>&1
 after="$(snap)"
 if [[ "$before" == "$after" ]]; then ok "a run writes nothing outside its output directory (inputs, state and HOME unchanged)"
 else bad "a run writes nothing outside its output directory" "$(diff <(echo "$before") <(echo "$after") | head -3)"; fi
