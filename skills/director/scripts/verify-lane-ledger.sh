@@ -80,7 +80,7 @@ if cmp -s "$root/a.html" "$root/b.html"; then ok "same inputs, same bytes"; else
 if LC_ALL=C grep -q '[^ -~]' <(tr -d '\n' <"$root/a.html"); then bad "ASCII only"; else ok "ASCII only"; fi
 if grep -qE 'src=|https?://|<form|<button|<script(>| src)' "$root/a.html"; then bad "no external loads, forms or live scripts"
 else ok "no external loads, forms or live scripts"; fi
-mode="$(stat -f '%Lp' "$root/a.html" 2>/dev/null || stat -c '%a' "$root/a.html")"
+mode="$(stat -c '%a' "$root/a.html" 2>/dev/null || stat -f '%Lp' "$root/a.html")"
 if [[ "$mode" == 600 ]]; then ok "page is mode 600"; else bad "page is mode 600" "$mode"; fi
 
 # --- a torn seats file is not used -------------------------------------------
