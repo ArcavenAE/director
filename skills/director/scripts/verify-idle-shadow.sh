@@ -58,6 +58,7 @@ S
 cat >"$root/bin/marvel" <<'S'
 #!/usr/bin/env bash
 echo "$*" >>"$IS_FIX/marvel.log"
+echo "MARVEL_SOCKET=${MARVEL_SOCKET-unset} MARVEL_HOME=${MARVEL_HOME-unset}" >>"$IS_FIX/marvel.env"
 if [[ "${1:-}" != marry || "${2:-}" != --input || -z "${3:-}" || $# -ne 3 ]]; then echo "marvel $*" >>"$IS_FIX/forbidden.log"; exit 1; fi
 if [[ -n "${IS_REAL_MARVEL:-}" ]]; then cp "$3" "$IS_FIX/marry.in"; exec "$IS_REAL_MARVEL" "$@"; fi
 cp "$3" "$IS_FIX/marry.in"
@@ -160,28 +161,31 @@ fi
 
 # --- the marry step: marvel's verb, called once, read-only ---------------------------------
 # $1 is the mode: stub (canned answers, the default) or real (IS_REAL_MARVEL, answers ignored).
-CELL='{"value":"proven","observed_at":"2026-10-21T08:00:00Z","valid_until":"2026-10-21T08:30:00Z","source":"pane:turn"}'
-ELIG_OK="$(jq -n -c --argjson c "$CELL" '{duties_by_class: {"story-implementation": ["first-turn"]},
-  seats: [{address: "agent://crew/b1", classes: ["story-implementation"], scopes: ["marvel"], cells: {"duty.first-turn": $c}}]}')"
+# the fixture eligibility file: one seat that covers component marvel, class story-implementation and duty first-turn
+ELIG_FIXTURE="$here/fixtures/seat-eligibility.one-pair.json"
+ELIG_OK="$(jq -c . "$ELIG_FIXTURE")"
 RUN_ID="idle-shadow-$NOW"
 one_item() { item e-1 '["class:story-implementation","marvel","aae-orc"]' 1 | set_items; }
 canned() { if [[ "$MODE" == stub ]]; then printf '%s\n' "$1" >"$FIX/marry.out"; fi; }
 runm() { # bash, then env assignments; adds the eligibility file and the sender cluster
   local b="$1"; shift
-  if [[ "$MODE" == real ]]; then runis "$b" IDLE_SHADOW_SEAT_ELIGIBILITY="$FIX/elig.json" IDLE_SHADOW_SENDER_CLUSTER=alpha IS_REAL_MARVEL="$REAL" "$@"
-  else runis "$b" IDLE_SHADOW_SEAT_ELIGIBILITY="$FIX/elig.json" IDLE_SHADOW_SENDER_CLUSTER=alpha "$@"; fi
+  if [[ "$MODE" == real ]]; then runis "$b" IDLE_SHADOW_SEAT_ELIGIBILITY="${ELIG_PATH:-$FIX/elig.json}" IDLE_SHADOW_SENDER_CLUSTER=alpha IS_REAL_MARVEL="$REAL" "$@"
+  else runis "$b" IDLE_SHADOW_SEAT_ELIGIBILITY="${ELIG_PATH:-$FIX/elig.json}" IDLE_SHADOW_SENDER_CLUSTER=alpha "$@"; fi
 }
 marry_cases() {
   local B="$1" MODE="$2" cl tag="M[$2]"
 
   # the one-would-pair vector: a class, a component, one free in-scope same-cluster seat
-  reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"
+  reset; one_item
+  ELIG_PATH="$ELIG_FIXTURE"
   canned '{"pairs":[{"item":"e-1","seat":"agent://crew/b1","lease":"'"$RUN_ID"'/e-1"}],"leases":[{"id":"'"$RUN_ID"'/e-1","item":"e-1","seat":"agent://crew/b1","valid_until":"2026-10-21T08:35:00Z","state":"open"}],"count":{"ready":1,"eligible":1,"free":1,"would_pair":1}}'
   runm "$B"
+  ELIG_PATH=""
   cl="$(count_line)"
   [[ "$rc" == 0 ]] && ok "$tag 1 exits 0" || bad "$tag 1 exit $rc" "$(out)"
   [[ "$(wc -l <"$FIX/marvel.log" | tr -d ' ')" == 1 && "$(sed -e 's|--input .*|--input FILE|' "$FIX/marvel.log")" == "marry --input FILE" ]] \
     && ok "$tag 1 marvel was called once, as marry --input FILE, and nothing else" || bad "$tag 1 marvel calls" "$(cat "$FIX/marvel.log" 2>&1)"
+  [[ "$(cat "$FIX/marvel.env")" == "MARVEL_SOCKET=unset MARVEL_HOME=unset" ]] && ok "$tag 1 marvel is run with no MARVEL_SOCKET and no MARVEL_HOME of the script's making" || bad "$tag 1 env" "$(cat "$FIX/marvel.env")"
   [[ "$cl" == *"would-pair 1"* && "$cl" == *"leases sent 0"* ]] && ok "$tag 1 would-pair 1, leases sent 0" || bad "$tag 1 count" "$cl"
   [[ "$(wc -l <"$st/would-pair.jsonl" | tr -d ' ')" == 1 ]] && ok "$tag 1 exactly one would-pair row" || bad "$tag 1 rows" "$(cat "$st/would-pair.jsonl")"
   [[ "$(jq -r '[.item, .seat, .lease] | join(" ")' "$st/would-pair.jsonl")" == "e-1 agent://crew/b1 $RUN_ID/e-1" ]] && ok "$tag 1 the row names the item, the seat and the lease" || bad "$tag 1 row" "$(cat "$st/would-pair.jsonl")"
@@ -321,7 +325,7 @@ marry_cases() {
     [[ "$rc" == 0 ]] && has "- GAP marry: marvel was not found ($root/no-such-marvel)" && ok "$tag 9 a missing marvel is a GAP, exit 0" || bad "$tag 9 missing" "$(out)"
     reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"; canned 'not json'
     runm "$B"
-    [[ "$rc" == 0 ]] && has "- GAP marry: " && [[ ! -s "$st/would-pair.jsonl" ]] && ok "$tag 9 an answer that is not JSON is a GAP and no pair" || bad "$tag 9 nojson" "$(out)"
+    [[ "$rc" == 0 ]] && has "- GAP marry: marvel marry answered with something that is not a JSON object" && [[ ! -s "$st/would-pair.jsonl" ]] && ok "$tag 9 an answer that is not JSON is a GAP and no pair" || bad "$tag 9 nojson" "$(out)"
     # a pair whose seat is not an agent:// address is never written
     reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"
     canned '{"pairs":[{"item":"e-1","seat":"role://crew/builder","lease":"x/e-1"}],"count":{"would_pair":1}}'
@@ -343,7 +347,7 @@ for B in $BASHES; do
   cl="$(count_line)"
   [[ "$cl" == *"ready 5"* ]] && ok "1 the count line says 5 ready" || bad "1 ready" "$cl"
   [[ "$cl" == *"eligible 0"* ]] && ok "1 eligible 0" || bad "1 eligible" "$cl"
-  [[ "$cl" == *"unmatched 5 (no class 5, no component 3, operator-only 1, no eligible seat GAP)"* ]] && ok "1 unmatched 5, by kind, with no eligible seat named as unread" || bad "1 unmatched kinds" "$cl"
+  [[ "$cl" == *"unmatched 5 (no class 5, no component 3, operator-only 1, no eligible seat 0)"* ]] && ok "1 unmatched 5, by kind; with no eligible item no seat is wanted, so no eligible seat is 0" || bad "1 unmatched kinds" "$cl"
   [[ "$cl" == *"would-pair 0"* ]] && ok "1 would-pair 0" || bad "1 would-pair" "$cl"
   [[ "$(wc -l <"$st/unmatched.jsonl" | tr -d ' ')" == 5 ]] && ok "1 five unmatched rows" || bad "1 unmatched rows" "$(cat "$st/unmatched.jsonl" 2>&1)"
   [[ "$(jq -r 'select(.id == "i-2") | .missing | join(",")' "$st/unmatched.jsonl")" == "class,component" ]] && ok "1 i-2 misses class and component" || bad "1 i-2 missing"
@@ -355,8 +359,7 @@ for B in $BASHES; do
   [[ ! -s "$st/would-pair.jsonl" && -f "$st/would-pair.jsonl" ]] && ok "1 would-pair.jsonl exists and holds no row" || bad "1 would-pair file"
   has "no item carries a class label" && ok "1 the expected first reading is said plainly" || bad "1 plain note"
   ! has "ERROR" && ! has "FAIL" && ok "1 the empty result is not framed as an error" || bad "1 framed as error"
-  has "- GAP marry: this marvel has no marry verb (marvel#992 is merged; update marvel on this host)" && ok "1 a marvel without the marry verb prints its GAP once" || bad "1 marry GAP" "$(out)"
-  [[ "$(/usr/bin/grep -c '^- GAP marry' "$root/out")" == 1 ]] && ok "1 exactly once" || bad "1 marry GAP count"
+  ! has "- GAP marry" && [[ ! -e "$FIX/marvel.log" ]] && ok "1 with no eligible item marvel is not called and there is no marry GAP" || bad "1 marry not needed" "$(out)"
   [[ "$cl" == *"pane veto"* ]] && ok "1 the count line carries the strict-free caveat" || bad "1 caveat" "$cl"
   [[ "$cl" == *"seats: 1 free, 1 busy, 1 waiting, 1 unknown"* ]] && ok "1 seat states are freebusy's, never coerced" || bad "1 seats" "$cl"
 
