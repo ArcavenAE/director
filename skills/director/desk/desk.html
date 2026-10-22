@@ -131,11 +131,21 @@ details.done .list{margin-top:12px}
   // tags written are p, ul, ol, li, strong, em and code, so no raw HTML, link or attribute from card
   // text reaches the page.
   function mdEsc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")}
+  // Emphasis is skipped past this length (the scan for a closing marker is quadratic on unclosed openers)
+  // and when crossed markers would nest wrongly; the text then shows escaped, as typed.
+  var MD_EMPH_MAX=4000;
+  function mdNested(h){
+    var st=[], re=/<(\/?)(strong|em)>/g, m;
+    while((m=re.exec(h))){ if(!m[1]) st.push(m[2]); else if(st.pop()!==m[2]) return false; }
+    return st.length===0;
+  }
   function mdEmph(t){
-    t=mdEsc(t);
+    var e=mdEsc(t);
+    if(e.length>MD_EMPH_MAX) return e;
+    t=e;
     t=t.replace(/\*\*(?=[^\s*])([^\n]*?[^\s*])\*\*/g,"<strong>$1</strong>");
     t=t.replace(/(^|[^*\w])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![*\w])/g,"$1<em>$2</em>");
-    return t;
+    return mdNested(t)?t:e;
   }
   function mdInline(raw){
     var s=String(raw==null?"":raw), out="", last=0, re=/`([^`\n]+)`/g, m;

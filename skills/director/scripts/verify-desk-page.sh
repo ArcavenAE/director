@@ -45,7 +45,8 @@ if [[ -z "$runtime" ]]; then bad "a JavaScript runtime is available" "neither no
 
 if [[ "$runtime" == node ]]; then
   { echo 'function print(l){console.log(l)}'; cat "$root/md.js" "$cases"; } >"$root/run.js"
-  node "$root/run.js" >"$root/out" 2>"$root/err"
+  node_rc=0
+  node "$root/run.js" >"$root/out" 2>"$root/err" || node_rc=$?
 elif [[ "$runtime" == jxa ]]; then
   { printf '%s\n' 'var __out=[];function print(l){__out.push(l)}'; cat "$root/md.js" "$cases"; printf '%s\n' '__out.join("\n");'; } >"$root/run.js"
   RUNJS="$root/run.js" perl -e 'alarm shift; exec @ARGV or die "exec $ARGV[0]: $!\n"' 60 \
@@ -65,16 +66,22 @@ m = re.search(r'<pre id="o">(.*?)</pre>', open(sys.argv[1], encoding="utf-8").re
 print(html.unescape(m.group(1)) if m else "FAIL no output from the page")
 PY
 fi
+if [[ "${node_rc:-0}" != 0 ]]; then bad "the cases ran to the end" "node exited $node_rc: $(head -c 300 "$root/err" | tr '\n' ' ')"; fi
 ok "the cases ran under $(basename "$runtime")"
 npass="$(grep -c '^PASS ' "$root/out" || true)"; nfail="$(grep -c '^FAIL ' "$root/out" || true)"
-if [[ "$nfail" == 0 && "$npass" -gt 40 ]]; then ok "the renderer cases pass ($npass checks, none failed)"
-else bad "the renderer cases pass" "$npass passed, $nfail failed: $(grep '^FAIL ' "$root/out" | head -5 | tr '\n' ';')"; fi
+# The cases print their own last line; a run that stopped early (an exception) never prints it.
+last="$(grep -c '^PASS desk-md: [0-9]* passed, 0 failed$' "$root/out" || true)"
+if [[ "$nfail" == 0 && "$npass" -gt 400 && "$last" == 1 ]]; then ok "the renderer cases pass ($npass checks, none failed)"
+else bad "the renderer cases pass" "$npass passed, $nfail failed, summary line seen $last time(s): $(grep '^FAIL ' "$root/out" | head -5 | tr '\n' ';')"; fi
 grep '^FAIL ' "$root/out" | head -20
 
 # --- the card uses the renderer, and the operator's own words stay text -------------------------
 card="$(sed -n '/function card(d)/,/^  function render()/p' "$desk")"
 for f in 'mdRender(d.context)' 'mdRender(o.text)' 'mdRender(d.rec)' 'mdRender(d.ruling)'; do
   grep -qF "$f" <<<"$card" && ok "the card draws $f" || bad "the card draws $f"
+done
+for f in "'<h2>'+esc(d.title)" "'<p class=\"q\">'+esc(d.question)"; do
+  grep -qF "$f" <<<"$card" && ok "the card keeps $f as escaped text" || bad "the card keeps $f as escaped text"
 done
 grep -qF 'esc(a.note' <<<"$card" && ok "the operator's note is still escaped text" || bad "the operator's note is still escaped text"
 ! grep -qE 'mdRender\((a\.|state\.answers|a\.note)' <<<"$card" && ok "answers are not run through the renderer" || bad "answers are not run through the renderer"
