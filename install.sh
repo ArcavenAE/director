@@ -73,6 +73,7 @@ install_one "$SRC/skills/director/scripts/relay-log" "$DIRECTOR_HOME/bin/relay-l
 # what writes the snapshot it checks (K13), so an install without it would refuse
 # every operator-blocked row.
 install_one "$SRC/skills/director/scripts/desk-snapshot" "$DIRECTOR_HOME/bin/desk-snapshot"
+install_one "$SRC/skills/director/scripts/lane-ledger" "$DIRECTOR_HOME/bin/lane-ledger"
 # card-ingest turns a seat's card file into a Desk write and refuses a card missing a part (#320).
 install_one "$SRC/skills/director/scripts/card-ingest" "$DIRECTOR_HOME/bin/card-ingest"
 # The draft sweep (5yupe): a read-only list of fleet drafts nobody has reviewed and
