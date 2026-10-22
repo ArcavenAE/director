@@ -66,7 +66,8 @@
 # gate: it exits 0 whatever it finds.
 #
 # Environment: DIRECTOR_STATE (default $HOME/.director/state), IDLE_SHADOW_BD (default bd on
-# PATH), IDLE_SHADOW_LABEL_CONVENTION (the label convention file, see above), IDLE_SHADOW_CALL_TIMEOUT (seconds for each bd read, default 30),
+# PATH), IDLE_SHADOW_LABEL_CONVENTION (the label convention file, see above), IDLE_SHADOW_CALL_TIMEOUT (seconds for each bd read and for the marry call, default 30),
+# IDLE_SHADOW_KILL_GRACE (seconds a call that ignores TERM gets before KILL, default 2),
 # IDLE_SHADOW_SEATS_MAX_AGE (seconds a seats file may be old, default 900),
 # IDLE_SHADOW_LIST_MAX (ids shown per group, default 10), IDLE_SHADOW_MARVEL (the marvel
 # binary, default marvel on PATH), IDLE_SHADOW_SEAT_ELIGIBILITY and IDLE_SHADOW_SENDER_CLUSTER
@@ -111,9 +112,11 @@ while true; do
   probe="$(dirname "$probe")"
 done
 
-mkdir -p "$dir"
-chmod 700 "$dir"
-tmp="$(mktemp -d "$dir/.run.XXXXXX")"
+# A diagnostic exits 0 even when it has nowhere to write: one GAP line, nothing else.
+if ! mkdir -p "$dir" 2>/dev/null || ! chmod 700 "$dir" 2>/dev/null || ! tmp="$(mktemp -d "$dir/.run.XXXXXX" 2>/dev/null)"; then
+  echo "- GAP state: $dir cannot be created or written; idle-shadow did not run"
+  exit 0
+fi
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
 
@@ -133,8 +136,9 @@ kill_tree() {
   kill -TERM -- "-$1" 2>/dev/null || true
   kill -TERM "$1" 2>/dev/null || true
 }
+kill_grace="${IDLE_SHADOW_KILL_GRACE:-2}"
 wait_jobs() {
-  local start=$SECONDS pid alive
+  local start=$SECONDS pid alive gstart timed=""
   while true; do
     alive=0
     for pid in "$@"; do
@@ -143,7 +147,21 @@ wait_jobs() {
     if [[ "$alive" == 0 ]]; then break; fi
     if [[ $((SECONDS - start)) -ge "$call_timeout" ]]; then
       for pid in "$@"; do
-        if kill -0 "$pid" 2>/dev/null; then kill_tree "$pid"; fi
+        if kill -0 "$pid" 2>/dev/null; then kill_tree "$pid"; timed="$timed $pid"; fi
+      done
+      # a process that ignores TERM gets the grace period, then KILL for the whole group
+      gstart=$SECONDS
+      while true; do
+        alive=0
+        for pid in $timed; do
+          if kill -0 -- "-$pid" 2>/dev/null; then alive=1; fi
+        done
+        if [[ "$alive" == 0 || $((SECONDS - gstart)) -ge "$kill_grace" ]]; then break; fi
+        sleep 0.2
+      done
+      for pid in $timed; do
+        if kill -0 -- "-$pid" 2>/dev/null; then kill -KILL -- "-$pid" 2>/dev/null || true; fi
+        if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi
       done
       break
     fi
@@ -319,7 +337,7 @@ marry_step() {
   set -m
   (
     set +e
-    "$marvel_bin" marry --input "$tmp/marry.in" >"$tmp/marry.out" 2>"$tmp/marry.err" </dev/null
+    env -u MARVEL_SOCKET "$marvel_bin" marry --input "$tmp/marry.in" >"$tmp/marry.out" 2>"$tmp/marry.err" </dev/null
     echo $? >"$tmp/marry.rc"
   ) &
   mpid=$!

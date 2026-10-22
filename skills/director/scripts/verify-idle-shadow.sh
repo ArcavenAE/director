@@ -598,7 +598,7 @@ outside="$(printf '%s\n' "$code" | awk '/^marry_step\(\)/{f=1} f&&/^}/{f=0; next
 # the header says what the timeout bounds
 /usr/bin/grep -q 'IDLE_SHADOW_CALL_TIMEOUT (seconds for each bd read and for the marry call' "$IS" \
   && ok "D1 the header says the timeout bounds the marry call as well as each bd read" || bad "D1 timeout doc"
-/usr/bin/grep -q 'IDLE_SHADOW_KILL_GRACE' "$IS" && ok "D2 the header names the kill grace" || bad "D2 kill grace doc"
+/usr/bin/grep -q '^# IDLE_SHADOW_KILL_GRACE (seconds a call that ignores TERM' "$IS" && ok "D2 the header names the kill grace" || bad "D2 kill grace doc"
 
 # --- state files, modes, checkout refusal -------------------------------------
 reset
