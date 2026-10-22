@@ -20,6 +20,7 @@ root="$(mktemp -d "${TMPDIR:-/tmp}/ll.XXXXXX")"  # macOS mktemp -d alone ignores
 trap 'rm -rf "$root"' EXIT
 export DIRECTOR_STATE="$root/state"
 fb="$DIRECTOR_STATE/freebusy"
+mj="$DIRECTOR_STATE/idle-shadow/marry.json"  # the default --marry, which idle-shadow writes
 out="$root/out/c1.html"
 
 # --- no inputs at all: a page of GAPs, exit 0 --------------------------------
@@ -40,7 +41,7 @@ has "no inputs: desk is a GAP cell" "Desk GAP" "$out"
 has "no inputs: ready work is a GAP" "Ready work: GAP" "$out"
 
 # --- fixture: two clusters, one shown team, one secret team -------------------
-mkdir -p "$fb"
+mkdir -p "$fb" "$(dirname "$mj")"
 cat >"$fb/seats.jsonl" <<'J'
 {"at":"2026-10-22T01:04:00Z","cluster":"kinu","workspace":"aae","team":"arcaven","role":"builder","name":"arcaven-builder-g1-0","state":"free","reason":"idle","last_active":"40m","active":"0","last_turn":null}
 {"at":"2026-10-22T01:04:00Z","cluster":"kinu","workspace":"aae","team":"arcaven","role":"builder","name":"arcaven-builder-g1-1","state":"busy","reason":"active","last_active":"1m","active":"12","last_turn":null}
@@ -55,7 +56,7 @@ J
 cat >"$DIRECTOR_STATE/desk-snapshot.json" <<'J'
 {"read_at":"2026-10-22T00:55:00Z","cards":5,"open":["a","b"],"by_status":{"open":2,"yours":3},"areas":[],"ids":{},"source_sha256":"x"}
 J
-cat >"$fb/marry.json" <<'J'
+cat >"$mj" <<'J'
 {"pairs":[{"item":"aae-orc-zz1","seat":"agent://arcaven/arcaven-builder-g1-0","lease":"L1"}],"unmatched":[{"item":"aae-orc-zz2","kind":"no-class"}],"count":{"ready":3,"eligible":1,"unmatched":1,"no_class":1,"no_component":0,"no_eligible_seat":0,"operator_only":0,"client":1,"free":1,"would_pair":1}}
 J
 printf '# teams the page may name\naae/arcaven\naae/reviewer\n' >"$DIRECTOR_STATE/lane-ledger-show.txt"
@@ -108,20 +109,20 @@ has "unreadable withhold list: GAP line" "dash-withhold.txt unreadable; every na
 rmdir "$DIRECTOR_STATE/dash-withhold.txt"; cp "$root/seats.keep" "$fb/seats.jsonl"
 
 # --- a source that is missing or short prints a GAP cell and a GAP line, never a 0 --
-cp "$fb/marry.json" "$root/marry.keep"; cp "$DIRECTOR_STATE/desk-snapshot.json" "$root/desk.keep"
-printf '{"pairs":[]}\n' >"$fb/marry.json"
+cp "$mj" "$root/marry.keep"; cp "$DIRECTOR_STATE/desk-snapshot.json" "$root/desk.keep"
+printf '{"pairs":[]}\n' >"$mj"
 "$LL" --out "$out" >"$root/log" 2>&1
 has "marry with no count object: ready work is a GAP" "Ready work: GAP" "$out"
 hasnt "marry with no count object: no would-pair 0" "would-pair 0" "$out"
 has "marry with no count object: GAP line" "- GAP marry: marry.json has no count object" "$root/log"
-printf '{"pairs":[],"count":{"ready":3,"eligible":1,"unmatched":1,"no_class":1,"no_component":0,"no_eligible_seat":0,"operator_only":0,"would_pair":1}}\n' >"$fb/marry.json"
+printf '{"pairs":[],"count":{"ready":3,"eligible":1,"unmatched":1,"no_class":1,"no_component":0,"no_eligible_seat":0,"operator_only":0,"would_pair":1}}\n' >"$mj"
 "$LL" --out "$out" >"$root/log" 2>&1
 has "marry count lacking client: that cell is a GAP" "client GAP" "$out"
 has "marry count lacking client: GAP line names it" "- GAP marry: count lacks client" "$root/log"
-printf '{"pairs":[],"count":{}}\n' >"$fb/marry.json"
+printf '{"pairs":[],"count":{}}\n' >"$mj"
 "$LL" --out "$out" >"$root/log" 2>&1
 hasnt "marry with an empty count: no ready 0" "ready 0" "$out"
-cp "$root/marry.keep" "$fb/marry.json"
+cp "$root/marry.keep" "$mj"
 printf '{"read_at":"2026-10-22T00:55:00Z","open":["a"]}\n' >"$DIRECTOR_STATE/desk-snapshot.json"
 "$LL" --out "$out" >"$root/log" 2>&1
 hasnt "desk with no by_status: no yours 0" "yours 0" "$out"
@@ -147,22 +148,22 @@ if [[ "$rc" == 0 ]]; then ok "a GAP stays exit 0 (a diagnostic, not a gate)"; el
 
 # --- closes the surviving mutants ----------------------------------------------
 # a missing or unreadable JSON source is a GAP, never read as {}
-rm -f "$fb/marry.json" "$DIRECTOR_STATE/desk-snapshot.json"
+rm -f "$mj" "$DIRECTOR_STATE/desk-snapshot.json"
 "$LL" --out "$out" >"$root/log" 2>&1
 has "missing desk and marry: both GAP lines" "- GAP desk: desk-snapshot.json not found" "$root/log"
 has "missing desk and marry: marry GAP line" "- GAP marry: marry.json not found" "$root/log"
-mkdir "$fb/marry.json"; printf '[1]\n' >"$DIRECTOR_STATE/desk-snapshot.json"
+mkdir "$mj"; printf '[1]\n' >"$DIRECTOR_STATE/desk-snapshot.json"
 "$LL" --out "$out" >"$root/log" 2>&1
 has "unreadable marry: GAP line" "- GAP marry: marry.json unreadable" "$root/log"
 has "desk that is not an object: GAP line" "- GAP desk: desk-snapshot.json is not an object" "$root/log"
-rmdir "$fb/marry.json"; cp "$root/marry.keep" "$fb/marry.json"; cp "$root/desk.keep" "$DIRECTOR_STATE/desk-snapshot.json"
+rmdir "$mj"; cp "$root/marry.keep" "$mj"; cp "$root/desk.keep" "$DIRECTOR_STATE/desk-snapshot.json"
 
 # nothing is written outside the output path, and the output directory holds only the page
 odir="$root/wout"; rm -rf "$odir"; mkdir -p "$odir"
 snap() { { find "$root" -path "$odir" -prune -o -type d -print; find "$root" -path "$odir" -prune -o -type f -exec cksum {} +; } | LC_ALL=C sort; }
 # a fresh state directory built only from the known inputs, so a stray file from an earlier run cannot hide
-st2="$root/state2"; rm -rf "$st2"; mkdir -p "$st2/freebusy" "$root/home"
-cp "$fb/seats.jsonl" "$fb/lanes.jsonl" "$fb/marry.json" "$st2/freebusy/"
+st2="$root/state2"; rm -rf "$st2"; mkdir -p "$st2/freebusy" "$st2/idle-shadow" "$root/home"
+cp "$fb/seats.jsonl" "$fb/lanes.jsonl" "$st2/freebusy/"; cp "$mj" "$st2/idle-shadow/"
 cp "$DIRECTOR_STATE/desk-snapshot.json" "$DIRECTOR_STATE/lane-ledger-show.txt" "$st2/"
 before="$(snap)"
 # Apple's system python3 caches stdlib bytecode under $HOME/Library/Caches; this check is about the script's own writes

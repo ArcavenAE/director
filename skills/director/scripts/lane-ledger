@@ -14,7 +14,8 @@ Reads, all optional; a missing or unreadable source prints a GAP line and a GAP 
   $DIRECTOR_STATE/desk-snapshot.json     the operator's open Desk cards, from desk-snapshot
   --marry FILE                           a `marvel marry` output (MarryOutput JSON), for the
                                          "ready for the lane" column; default
-                                         $DIRECTOR_STATE/freebusy/marry.json
+                                         $DIRECTOR_STATE/idle-shadow/marry.json, which
+                                         idle-shadow writes on each run where marry answers
 Two local files the operator keeps, never in git, because no canonical source holds them:
   lane-ledger-show.txt   one "<workspace>/<team>" per line ("#" comments allowed): the teams the
                          page may name. Every other team prints as "team withheld", keeping only
@@ -28,7 +29,7 @@ no external loads, no forms or scripts beyond its embedded JSON data, ASCII only
 
 Deterministic: the same inputs give the same bytes. The page's as-of times come from the inputs,
 never from the clock. It sends nothing, injects nothing, writes no bd record and calls no gh or
-marvel command: the caller runs `marvel marry` and passes its output.
+marvel command: it reads the marry output idle-shadow wrote, or the one passed with --marry.
 
 A diagnostic, not a gate: it exits 0 whatever it finds; 2 for a usage error.
 """
@@ -54,7 +55,7 @@ FIX = {
     "unread": "marvel exposes consumer pending per seat (S11)",
     "last_turn": "freebusy reads marvel's LAST-TURN column once it is deployed on the cluster",
     "runtime": "an idle signal for codex, opencode and crush seats; until then their free and busy read ACTIVE% only",
-    "ready": "the M2 shadow run writes a marvel marry output (freebusy/marry.json)",
+    "ready": "idle-shadow writes a marvel marry output (idle-shadow/marry.json) when marry answers",
     "desk": "desk-snapshot writes desk-snapshot.json from a Desk read",
     "client": "a client-item count in the Desk snapshot",
     "host": "the team-to-host map in git, which places bd event writers",
@@ -69,7 +70,7 @@ def usage(code):
 
 def args(argv):
     out = os.path.join(STATE, "flow", "c1.html")
-    marry = os.path.join(STATE, "freebusy", "marry.json")
+    marry = os.path.join(STATE, "idle-shadow", "marry.json")
     i = 0
     while i < len(argv):
         a = argv[i]
