@@ -29,13 +29,14 @@ mkdir -p "$root/bin"
 # The gh stub. `gh pr view` replays view.<call>.json (or view.json) with exit
 # code view.rc; `gh pr list` replays list.json with list.rc. Stderr text comes
 # from <verb>.err. `gh api` (the check suites at the head) replays suites.json
-# with suites.rc. Each call is counted, so a retry is observable.
+# with suites.rc. `gh repo view` (the default branch) replays repo.json with repo.rc. Each call is counted, so a retry is observable.
 cat > "$root/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 fx="$GH_FIXTURE"
 case "$1 $2" in
   "pr view") verb=view ;;
   "pr list") verb=list ;;
+  "repo view") verb=repo ;;
   api\ *) verb=suites ;;
   *) echo "gh stub: unexpected call: $*" >&2; exit 97 ;;
 esac
@@ -60,8 +61,8 @@ GOOD_REVIEW="$(review reviewer APPROVED 2026-09-28T11:00:00Z)"
 view() { # state draft merge-state [rollup-json]; LABELS is the label names, comma separated
   local labels="" l list="${LABELS-}"
   for l in ${list//,/ }; do labels="${labels:+$labels,}{\"name\":\"$l\"}"; done
-  printf '{"state":"%s","isDraft":%s,"mergeStateStatus":"%s","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":%s,"author":{"login":"builder"},"commits":[{"oid":"0000000old","committedDate":"2026-09-27T09:00:00Z"},{"oid":"abc1234def5678","committedDate":"%s"}],"reviews":[%s],"labels":[%s]}\n' \
-    "$1" "$2" "$3" "${4:-[]}" "$HEAD_AT" "${REVIEWS-$GOOD_REVIEW}" "$labels"
+  printf '{"state":"%s","isDraft":%s,"mergeStateStatus":"%s","baseRefName":"%s","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":%s,"author":{"login":"builder"},"commits":[{"oid":"0000000old","committedDate":"2026-09-27T09:00:00Z"},{"oid":"abc1234def5678","committedDate":"%s"}],"reviews":[%s],"labels":[%s]}\n' \
+    "$1" "$2" "$3" "${BASE-main}" "${4:-[]}" "$HEAD_AT" "${REVIEWS-$GOOD_REVIEW}" "$labels"
 }
 SUCCESS_RUN='{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}'
 SKIPPED_RUN='{"__typename":"CheckRun","name":"harden","status":"COMPLETED","conclusion":"SKIPPED"}'
@@ -79,6 +80,7 @@ suites() { # created_at... (none: no suite)
 fixture() {
   n=$((n+1)); fx="$root/fx$n"; mkdir -p "$fx"; echo '[]' > "$fx/list.json"
   suites 2026-09-28T10:00:05Z > "$fx/suites.json"
+  echo '{"defaultBranchRef":{"name":"main"}}' > "$fx/repo.json"
   : > "$fx/rulings.jsonl" # a present, empty rulings file: no exclusions declared
 }
 guard() {
@@ -88,7 +90,7 @@ guard() {
       "$GUARD" "$@" >"$fx/out" 2>&1
 }
 expect_proceed() { # name
-  if guard org/repo 7; then
+  if guard ${FLAGS-} org/repo 7; then
     grep -q "^PROCEED org/repo#7 @abc1234def5678" "$fx/out" && ok "$1" || bad "$1" "$(cat "$fx/out")"
   else
     bad "$1" "stopped: $(cat "$fx/out")"
@@ -99,7 +101,7 @@ expect_proceed() { # name
 # is not PROCEED, so a caller that matches the plain PROCEED line never takes it for
 # permission to delete the branch.
 expect_keep() { # name, child numbers the line must name (e.g. "#9")
-  if guard org/repo 7; then
+  if guard ${FLAGS-} org/repo 7; then
     grep -q "^PROCEED-KEEP-BRANCH org/repo#7 @abc1234def5678" "$fx/out" \
       && grep -q -- "$2" "$fx/out" && grep -q -- "WITHOUT --delete-branch" "$fx/out" \
       && ! grep -q "^PROCEED org/repo" "$fx/out" && ok "$1" || bad "$1" "$(cat "$fx/out")"
@@ -108,7 +110,7 @@ expect_keep() { # name, child numbers the line must name (e.g. "#9")
   fi
 }
 expect_stop() { # name, text the STOP line must carry
-  if guard org/repo 7; then
+  if guard ${FLAGS-} org/repo 7; then
     bad "$1" "proceeded: $(cat "$fx/out")"
   else
     local rc=$?
@@ -151,7 +153,7 @@ fixture; : > "$fx/view.json"
 expect_stop "gh pr view returns nothing: STOP" "nothing"
 fixture; echo "<html>502</html>" > "$fx/view.json"
 expect_stop "gh pr view returns something that is not JSON: STOP" "not JSON"
-fixture; echo '{"state":"OPEN","mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"labels":[]}' > "$fx/view.json"
+fixture; echo '{"state":"OPEN","mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"labels":[]}' > "$fx/view.json"
 expect_stop "a view with no isDraft field: STOP" "isDraft"
 
 # --- terminal and draft states stop (R-157, R-148) --------------------------------
@@ -240,9 +242,9 @@ expect_stop "a check-suite read with no list: STOP" "check_suites"
 fixture; view OPEN false CLEAN > "$fx/view.json"
 echo '{"total_count":101,"check_suites":[{"created_at":"2026-09-28T10:00:05Z"}]}' > "$fx/suites.json"
 expect_stop "a paged check-suite read: STOP" "paged"
-fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[]}' > "$fx/view.json"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[]}' > "$fx/view.json"
 expect_stop "the head commit is not in the view's commit list: STOP" "head commit"
-fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[{"oid":"abc1234def5678","committedDate":"2026-09-28T10:00:00Z"}],"labels":[]}' > "$fx/view.json"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[{"oid":"abc1234def5678","committedDate":"2026-09-28T10:00:00Z"}],"labels":[]}' > "$fx/view.json"
 expect_stop "a view with no reviews field: STOP" "reviews"
 
 # --- operator merge exclusions (R-153) ---------------------------------------------
@@ -329,13 +331,13 @@ fixture; view OPEN false CLEAN > "$fx/view.json"; : > "$fx/rulings.jsonl"
 expect_proceed "an empty rulings file and a PR with neither labels nor exclusions: PROCEED"
 
 # An unreadable label set stops.
-fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[{"oid":"abc1234def5678","committedDate":"2026-09-28T10:00:00Z"}],"reviews":[]}' > "$fx/view.json"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[{"oid":"abc1234def5678","committedDate":"2026-09-28T10:00:00Z"}],"reviews":[]}' > "$fx/view.json"
 expect_stop "a view with no labels field: STOP, cannot tell what the PR carries" "labels"
-fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":null}' > "$fx/view.json"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":null}' > "$fx/view.json"
 expect_stop "labels that are not a list: STOP" "labels"
-fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[{"id":"x"}]}' > "$fx/view.json"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[{"id":"x"}]}' > "$fx/view.json"
 expect_stop "a label with no name: STOP" "label"
-fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[]}' > "$fx/view.json"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[]}' > "$fx/view.json"
 excl org/repo "acu.update" > "$fx/rulings.jsonl"
 expect_stop "labels read as an empty list but the view is otherwise unreadable: STOP, never a pass" "head commit"
 
@@ -377,6 +379,34 @@ fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '{"kind":42}
 expect_stop "a rulings line whose kind is not a string: STOP" "kind"
 fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; echo '{"kind":null,"repo":"org/repo","label":"acu.update"}' > "$fx/rulings.jsonl"
 expect_stop "a rulings line whose kind is null: STOP" "kind"
+
+# --- the base must be the default branch ---------------------------------------------
+# Two stacked PRs were once squash-merged into their parents' branches because their bases were never
+# retargeted. The guard reads the default branch with the repo named, and stops unless the PR's base is it,
+# or the caller names that exact base with --allow-base.
+fixture; BASE=feat/parent view OPEN false CLEAN > "$fx/view.json"
+expect_stop "a PR based on a branch that is not the default: STOP, naming both" "base is feat/parent, not the default branch main"
+fixture; BASE=feat/parent view OPEN false CLEAN > "$fx/view.json"
+expect_stop "the refusal says how to allow it" "--allow-base feat/parent"
+fixture; view OPEN false CLEAN > "$fx/view.json"
+expect_proceed "a PR based on the default branch: PROCEED"
+grep -q "based on main" "$fx/out" && ok "the PROCEED line names the base" || bad "PROCEED names the base" "$(cat "$fx/out")"
+fixture; BASE=feat/parent view OPEN false CLEAN > "$fx/view.json"; FLAGS="--allow-base feat/parent" expect_proceed "--allow-base with the matching name: PROCEED"
+fixture; BASE=feat/parent view OPEN false CLEAN > "$fx/view.json"; FLAGS="--allow-base feat/other" expect_stop "--allow-base with a different name: still STOP" "base is feat/parent, not the default branch main"
+fixture; BASE=feat/parent view OPEN false CLEAN > "$fx/view.json"; FLAGS="--allow-base main" expect_stop "--allow-base naming the default does not allow another base" "base is feat/parent"
+fixture; BASE=feat/parent view OPEN false BLOCKED > "$fx/view.json"; FLAGS="--allow-base feat/parent" expect_stop "an allowed base does not waive the other checks" "BLOCKED"
+fixture; view OPEN false CLEAN > "$fx/view.json"; echo 'no such repo' > "$fx/repo.err"; echo 1 > "$fx/repo.rc"
+expect_stop "the default branch cannot be read: STOP" "default branch"
+fixture; view OPEN false CLEAN > "$fx/view.json"; echo '{"defaultBranchRef":null}' > "$fx/repo.json"
+expect_stop "a repo view with no default branch: STOP" "default branch"
+fixture; view OPEN false CLEAN > "$fx/view.json"; : > "$fx/repo.json"
+expect_stop "an empty repo read: STOP" "default branch"
+fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"labels":[]}' > "$fx/view.json"
+expect_stop "a view with no baseRefName: STOP" "base branch"
+fixture; view OPEN false CLEAN > "$fx/view.json"
+grep -q . "$fx/view.json" && guard ${FLAGS-} org/repo 7; [[ "$(cat "$fx/repo.calls")" == 1 ]] && ok "the default branch is read once, with the repo named" || bad "repo read count" "$(cat "$fx/repo.calls" 2>/dev/null)"
+fixture; guard --allow-base >/dev/null 2>&1; rc=$?; [[ $rc -eq 2 ]] && ok "--allow-base with no value is a usage error" || bad "allow-base no value" "rc=$rc"
+fixture; guard --allow-base a --allow-base b org/repo 7 >/dev/null 2>&1; rc=$?; [[ $rc -eq 2 ]] && ok "--allow-base twice is a usage error" || bad "allow-base twice" "rc=$rc"
 
 # --- usage --------------------------------------------------------------------------
 fixture
