@@ -189,6 +189,11 @@ details.done .list{margin-top:12px}
   }
 
   // The recommendation text is shown when it says more than an option's key (older cards held only the key).
+  // An option is the recommended one when the card says so (card-ingest writes recommended and rec_key),
+  // or, on older cards, when rec holds just that option's key.
+  function isRec(d,o){
+    return o.recommended===true||(d.rec_key!=null&&String(d.rec_key)===String(o.key))||(d.rec!=null&&String(d.rec)===String(o.key));
+  }
   function recText(d,opts){
     if(d.rec==null||String(d.rec).trim()==="") return false;
     return !(opts||[]).some(function(o){return String(o.key)===String(d.rec)});
@@ -202,7 +207,7 @@ details.done .list{margin-top:12px}
       var inputType=d.kind==="action"?"checkbox":"radio";
       return '<label class="opt'+(chosen?' chosen':'')+'">'+
         '<input type="'+inputType+'" name="c-'+esc(d.id)+'" value="'+esc(o.key)+'"'+(chosen?' checked':'')+(closed||!state.canWrite?' disabled':'')+' data-id="'+esc(d.id)+'">'+
-        '<div class="ot"><div class="oh"><span class="k">'+esc(o.key)+'</span>'+(d.rec===o.key?'<span class="r">Recommended</span>':'')+'</div>'+
+        '<div class="ot"><div class="oh"><span class="k">'+esc(o.key)+'</span>'+(isRec(d,o)?'<span class="r">Recommended</span>':'')+'</div>'+
         '<div class="md">'+mdRender(o.text)+'</div></div></label>'
     }).join("");
     var tail=closed

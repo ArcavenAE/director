@@ -77,6 +77,11 @@ grep '^FAIL ' "$root/out" | head -20
 
 # --- the card uses the renderer, and the operator's own words stay text -------------------------
 card="$(sed -n '/function card(d)/,/^  function render()/p' "$desk")"
+grep -qF 'isRec(d,o)?' <<<"$card" && ok "the card tags the recommended option through isRec" || bad "the card tags the recommended option through isRec"
+isrec="$(sed -n '/function isRec(d,o)/,/^  }/p' "$desk")"
+for f in 'o.recommended===true' 'd.rec_key' 'd.rec!=null'; do
+  grep -qF "$f" <<<"$isrec" && ok "isRec reads $f" || bad "isRec reads $f"
+done
 for f in 'mdRender(d.context)' 'mdRender(o.text)' 'mdRender(d.rec)' 'mdRender(d.ruling)'; do
   grep -qF "$f" <<<"$card" && ok "the card draws $f" || bad "the card draws $f"
 done
