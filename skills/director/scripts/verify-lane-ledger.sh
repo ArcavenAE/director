@@ -226,6 +226,11 @@ DIRECTOR_STATE="$st3" "$LL" --out "$root/c3.html" >"$root/log" 2>&1
 hasnt "default marry path: ready work is read from idle-shadow/marry.json, not GAP" "Ready work: GAP" "$root/c3.html"
 has "default marry path: the marry count line" "ready 2, eligible 1, would-pair 1" "$root/c3.html"
 hasnt "default marry path: no marry GAP line" "- GAP marry" "$root/log"
+# Status squares: busy is the warm accent, free is the empty square, waiting is grey (operator ruling 2026-10-22).
+has "squares: busy is the accent fill" ".sq.busy{background:var(--accent)}" "$out"
+has "squares: free is an empty square" ".sq.free{border:1.5px solid var(--ink)}" "$out"
+has "squares: waiting is the grey fill" ".sq.waiting{background:var(--ink2)}" "$out"
+has "squares: unknown stays dashed" ".sq.unknown{border:1.5px dashed var(--ink3)}" "$out"
 
 # --- usage error -------------------------------------------------------------
 rc=0; "$LL" --bogus >/dev/null 2>&1 || rc=$?
