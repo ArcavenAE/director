@@ -13,11 +13,11 @@ prints the batch, and the session applies it with one ArtifactData batch of at m
 
 Sources, read only: `dws show --json` (the ledger folded by dws's own fold, so the page cannot fold
 differently), `marvel --cluster C get sessions --columns team,role,name,state,health,last-active`
-once for each cluster named under `clusters:` in $HOME/.marvel/config.yaml (command: $DASH_MARVEL, default
-marvel), and $DIRECTOR_STATE/desk-snapshot.json. The config is read by yq (the mikefarah build) with
-`.clusters | keys`: this script gets the KEY NAMES under `clusters:` and nothing else, no value is read into a
-variable or emitted, and yq's own messages are dropped. A config that is missing, does not parse, has no
-`clusters:` mapping, or a machine with no yq refuses the sessions panel, never an empty one. The Desk's
+once for each cluster `marvel config list` names (command: $DASH_MARVEL, default marvel), and
+$DIRECTOR_STATE/desk-snapshot.json. The list is read as freebusy reads it: the NAME column only, so this script
+gets the cluster names and nothing else, no other column is kept or emitted, and the command's own messages are
+dropped. marvel holds `clusters:` as a list, so no key of the config file is read. A list that cannot be read,
+names no cluster, or holds an unusable name refuses the sessions panel, never an empty one. The Desk's
 area labels are the `areas` list the snapshot records; no snapshot, or no list, labels nothing.
 Two local files the operator keeps, one entry per line, because no canonical source holds them:
   dash-area-map.tsv    <workstream slug><TAB><area label>; a ledger row carries no area, so this maps
@@ -126,29 +126,36 @@ def load_withhold():
 
 
 def cluster_names():
-    """The key names under `clusters:` in the marvel config, or None when they cannot be read.
+    """The cluster names `marvel config list` prints, or None when they cannot be read.
 
-    A real YAML parser (yq, the mikefarah build) reads the file and prints only the keys; this script never
-    sees a value, and nothing yq prints to stderr is kept. A missing yq, a file that does not parse, or
-    anything but a mapping of keys is None: the sessions panel is refused and nothing from the file is shown.
+    Only the NAME column is kept: the first word of each line, or the second after a lone "*" (the marker
+    for the current cluster, which is not a name). Every other column is dropped as the line is split, so no
+    value from the config is held, and nothing the command prints to stderr is kept. A command that fails or
+    times out, a list that names no cluster, or any name that is not a plain cluster name is None: the
+    sessions panel is refused and nothing from the config is shown.
     """
-    path = os.path.join(HOME, ".marvel", "config.yaml")
-    if not os.path.isfile(path):
-        return None
+    marvel = os.environ.get("DASH_MARVEL", "marvel")
     try:
-        v = subprocess.run(["yq", "--version"], capture_output=True, timeout=20, stdin=subprocess.DEVNULL)
-        if v.returncode != 0 or not re.fullmatch(r"yq \(https://github.com/mikefarah/yq/?\) version v4\.[0-9.]+\s*", v.stdout.decode("utf-8", "replace")):
-            return None  # not the mikefarah v4 build: its output is not trusted
-        p = subprocess.run(["yq", "-o=json", "-I=0", ".clusters | keys", path], capture_output=True, timeout=20,
-                           stdin=subprocess.DEVNULL)
-        if p.returncode != 0:
-            return None
-        names = json.loads(p.stdout.decode("utf-8"))
-    except (OSError, subprocess.TimeoutExpired, ValueError):
+        p = subprocess.run([marvel, "config", "list"], capture_output=True, timeout=20, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
         return None
-    if not isinstance(names, list) or not names or not all(isinstance(n, str) and CLUSTER_RE.fullmatch(n) for n in names):
-        return None  # anything that is not a plain cluster name: no value can pass as a key
-    return names
+    if p.returncode != 0:
+        return None
+    names = []
+    for line in p.stdout.decode("utf-8", "replace").splitlines():
+        words = line.split()
+        if not words or words[0] == "NAME":
+            continue
+        name = words[0]
+        if name == "*":
+            name = words[1] if len(words) > 1 else ""
+        elif name.startswith("*"):
+            name = name[1:]
+        del words
+        if not CLUSTER_RE.fullmatch(name):
+            return None  # anything that is not a plain cluster name: no value can pass as one
+        names.append(name)
+    return names or None
 
 
 def snapshot_areas():

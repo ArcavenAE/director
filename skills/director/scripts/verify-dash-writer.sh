@@ -10,9 +10,9 @@
 #   - a panel over 256 KiB is written with no rows and a refusal;
 #   - the three checks, the 30-minute floor, the 14-day delete, and read-only behaviour.
 # The Desk's own write rule (test 8) and the page (tests 1, 5 to 7) live in the Desk artifact, not here.
-# Clusters come from the `clusters` keys of the marvel config under the scratch HOME (key names only; every
-# value in the fixture carries a canary that must never appear), and Desk areas from the `areas` the Desk
-# snapshot records; neither has a file of its own.
+# Clusters come from `marvel config list`, the NAME column only (the fixture marvel answers it from a table whose
+# other columns and whose config file hold canaries that must never appear; the config file is a LIST, the shape
+# marvel writes), and Desk areas from the `areas` the Desk snapshot records; neither has a file of its own.
 # Every run is under `env -i` with a scratch HOME and DIRECTOR_STATE, a fixture marvel on PATH, no
 # MARVEL_SOCKET. Written for bash 3.2 and bash 5.
 #
@@ -35,19 +35,22 @@ mkdir -p "$root/home" "$root/bin" "$root/tables" "$root/state"
 PYDIR="$(dirname "$(command -v python3)")"
 state="$root/state"
 NOW="2026-10-20T18:00:00Z"
-command -v yq >/dev/null 2>&1 || { echo "FAIL yq (the mikefarah build) is required: dash-writer reads the marvel config with it"; exit 1; }
-YQDIR="$(dirname "$(command -v yq)")"
 ackrun() { # ack with the arguments the last run printed, as SKILL.md says
   args="$(python3 -c 'import json,sys;a=json.load(open(sys.argv[1]))["ack"];print(a["at"],",".join(a["deleted"]))' "$root/out.json")"
   at="${args%% *}"; del="${args#* }"
   run ack --at "$at" ${del:+--deleted "$del"}
 }
-run() { env -i HOME="$root/home" PATH="$root/bin:/usr/bin:/bin:$PYDIR:$YQDIR" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" \
+run() { env -i HOME="$root/home" PATH="$root/bin:/usr/bin:/bin:$PYDIR" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" \
         DWS_TEST_CLOCK=1 DWS_NOW="${NOW_OVERRIDE:-$NOW}" DASH_MARVEL="$root/bin/marvel" TABLES="$root/tables" python3 -I "$W" "$@"; }
 
 cat >"$root/bin/marvel" <<'SH'
 #!/bin/sh
-# fixture marvel: `marvel --cluster C get sessions --columns ...` prints $TABLES/C, or fails when there is none
+# fixture marvel: `marvel config list` prints $TABLES/config-list, or fails when there is none;
+# `marvel --cluster C get sessions --columns ...` prints $TABLES/C, or fails when there is none
+if [ "$1" = config ] && [ "$2" = list ]; then
+  [ -f "$TABLES/config-list" ] || { echo "no config" >&2; exit 1; }
+  cat "$TABLES/config-list"; exit 0
+fi
 f="$TABLES/$2"
 [ -f "$f" ] || { echo "no route to $2" >&2; exit 1; }
 cat "$f"
@@ -143,11 +146,12 @@ echo '{"read_at":"2026-10-20T10:00:00Z","cards":1,"open":["c1"],"by_status":{"op
 printf 'linked-one\tOps\nwaits\tResearch\nidea-a\tNowhere\n' >"$state/dash-area-map.tsv"
 printf 'Bartholomew\n' >"$state/dash-withhold.txt"; chmod 600 "$state/dash-withhold.txt"
 
-setclusters() { # names...: a marvel config whose cluster entries hold values that must never be read
+setclusters() { # names...: marvel's config as a LIST, and the table `marvel config list` prints for it; values carry canaries
   mkdir -p "$root/home/.marvel"
   { echo "# comment"; echo "default_cluster: CANARY-TOP-5520"; echo "token: CANARY-TOKEN-8801"; echo "clusters:"
-    for n in "$@"; do echo "  $n:   # CANARY-KEYLINE-6633"; echo "    url: https://CANARY-URL-4410.example.test"; echo "    credentials:"; echo "      secret: CANARY-SECRET-3392"; echo "    nested:"; echo "      deep: CANARY-DEEP-7714"; done
+    for n in "$@"; do echo "  - name: $n   # CANARY-KEYLINE-6633"; echo "    url: https://CANARY-URL-4410.example.test"; echo "    credentials:"; echo "      secret: CANARY-SECRET-3392"; done
     echo "other:"; echo "  notacluster: CANARY-OTHER-6620"; } >"$root/home/.marvel/config.yaml"
+  { printf 'NAME  URL  AUTH\n'; for n in "$@"; do printf '%s  https://CANARY-URL-4410.example.test  CANARY-AUTH-9915\n' "$n"; done; } >"$root/tables/config-list"
 }
 setclusters alpha
 pyc() { python3 -c "$1" "$root/out.json"; }
@@ -292,7 +296,7 @@ setclusters 'bad/name'; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
 assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "a key that is not a plain cluster name refuses the whole sessions panel" || bad "cluster charset"
-rm -f "$root/home/.marvel/config.yaml"; runout run
+rm -f "$root/tables/config-list"; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
 assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "with no cluster list the sessions panel is refused, never written empty as if read" || bad "no cluster list"
@@ -305,26 +309,20 @@ pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
 assert sorted({r["cluster"] for r in p["rows"]})==["alpha"] and p["counts"]["not_reached"]==["beta: not reached at 2026-10-20T18:00:00Z"], (p["counts"], p["rows"][:1])' \
   && ok "the clusters are the key names under clusters: in the marvel config, in order, and nothing else in the file is one" || bad "config key names"
-printf 'clusters: {alpha: {url: CANARY-FLOW-1}}\n' >"$root/home/.marvel/config.yaml"; runout run
+printf 'NAME  URL\n* alpha  https://CANARY-STAR-1.example.test\nbeta  https://CANARY-STAR-2.example.test\n' >"$root/tables/config-list"; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
-assert sorted({r["cluster"] for r in p["rows"]})==["alpha"], p["rows"][:1]'
-[[ $? -eq 0 ]] && ! grep -q CANARY "$root/out.json" "$root/err" && ok "a flow-style clusters mapping is read by the real parser: its key is used and no value is echoed" || bad "flow-style clusters"
-printf 'clusters:\n  alpha:\n    url: x\n  beta: "first line\n  CANARYLEAK7: rest"\n' >"$root/home/.marvel/config.yaml"; runout run
-! grep -q CANARYLEAK7 "$root/out.json" "$root/err" && grep -q 'beta: not reached' "$root/out.json" && ok "a quoted value that spans lines is not read as a key: only the real keys appear" || bad "quoted continuation" "$(grep -o 'CANARYLEAK7[^"]*' "$root/out.json" | head -1)"
-printf 'clusters:\n  alpha: [unclosed CANARY-BAD-4471\n  beta: {\n' >"$root/home/.marvel/config.yaml"; runout run
+assert sorted({r["cluster"] for r in p["rows"]})==["alpha"] and p["counts"]["not_reached"]==["beta: not reached at 2026-10-20T18:00:00Z"], (p["counts"], p["rows"][:1])'
+[[ $? -eq 0 ]] && ! grep -q CANARY "$root/out.json" "$root/err" && ok "the current-cluster marker is not a name, and no other column reaches the output" || bad "current marker"
+printf 'NAME  URL\n' >"$root/tables/config-list"; runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
+assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "a config list that names no cluster refuses the sessions panel" || bad "empty config list"
+printf 'NAME  URL\nalpha  x\nbad/name  CANARY-BAD-4471\n' >"$root/tables/config-list"; runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
 assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p'
-[[ $? -eq 0 ]] && ! grep -q CANARY "$root/out.json" "$root/err" && ok "a config that does not parse refuses the sessions panel and prints nothing from the file" || bad "invalid yaml"
-printf 'clusters: {}\n  alpha:\n    url: CANARY-FLOW-2\n' >"$root/home/.marvel/config.yaml"; runout run
-pyc 'import json,sys
-d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
-assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "a clusters key with an inline value takes no keys from the lines under it" || bad "inline clusters value"
-printf 'default_cluster: x\n' >"$root/home/.marvel/config.yaml"; runout run
-pyc 'import json,sys
-d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
-assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p' && ok "a config with no clusters key refuses the sessions panel" || bad "no clusters key"
+[[ $? -eq 0 ]] && ! grep -q CANARY "$root/out.json" "$root/err" && ok "one unusable name refuses the whole panel and prints nothing from the list" || bad "unusable name in list"
 setclusters alpha
 
 # the area reader: the Desk snapshot's areas
@@ -501,19 +499,6 @@ run ack --at 2026-10-20T18:00:00Z --deleted 2026-10-06 >/dev/null 2>&1; rc=$?
 rm -f "$state/dash-writer.json"
 run ack >/dev/null 2>&1; [[ $? -eq 2 ]] && ok "an ack with no --at is a usage error" || bad "ack without --at"
 rm -f "$state/dash-writer.json"
-# a yq that is not the mikefarah v4 build is not trusted, whatever it prints
-cat >"$root/bin/yq" <<'SH'
-#!/bin/sh
-if [ "$1" = "--version" ]; then echo "yq 3.4.3"; exit 0; fi
-echo '["CANARYSTUBVALUE","alpha"]'
-SH
-chmod +x "$root/bin/yq"
-runout run
-pyc 'import json,sys
-d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
-assert p["rows"]==[] and p["refusal"].get("clusters:unread")==1, p'
-[[ $? -eq 0 ]] && ! grep -q CANARYSTUBVALUE "$root/out.json" "$root/err" && ok "a yq that is not mikefarah v4 refuses the sessions panel and nothing it printed is shown" || bad "stub yq"
-rm -f "$root/bin/yq"
 # a FIFO at the withhold path is refused like any unreadable file; it must not hang the run
 mv "$state/dash-withhold.txt" "$root/w.keep"; mkfifo "$state/dash-withhold.txt"
 runout run & rp=$!

@@ -22,7 +22,7 @@ run_install() { # $1 = scratch home
 
 targets() { # every target install.sh places, relative to the scratch home
   printf '%s\n' claude/skills/director claude/skills/stansfield claude/commands/director.md \
-    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install director/bin/draft-sweep director/bin/card-ingest director/bin/dbi director/bin/introspect director/bin/dash-writer director/bin/freebusy director/bin/idle-shadow director/bin/lane-ledger
+    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install director/bin/draft-sweep director/bin/card-ingest director/bin/dbi director/bin/introspect director/bin/dash-writer director/bin/freebusy director/bin/idle-shadow director/bin/lane-ledger director/bin/composer-check director/bin/standing-hook
 }
 
 # Positive control: a clean home installs everything and exits 0.
@@ -160,6 +160,24 @@ grep -q 'sends nothing' <(grep -n -A10 'bin/idle-shadow' "$skill") && ok "the sk
 grep -q '^Stalled ideas: none' "$skill" && ok "the shape has a none line for a scan with no rows" || bad "the shape has a none line"
 grep -q 'No cap is ruled' "$skill" && ! grep -q 'at most five lines' "$skill" && ok "the skill applies no cap until one is ruled" || bad "the skill applies no cap until one is ruled"
 grep -q 'under "Standing checklist"' "$skill" && ! grep -q 'as in the Standing checklist' "$skill" && ok "the scan-beat pointer names where it is described" || bad "the scan-beat pointer"
+
+# Every script SKILL.md names (an installed-path call or a bare mention) has an install_one line, so a
+# host that installs from this file is not missing a tool the skill tells the session to run.
+# This is a test of the pairing, not a gate on anything else.
+while read -r name; do
+  if grep -qE "install_one \"\\\$SRC/skills/director/scripts/$name\" \"\\\$DIRECTOR_HOME/bin/$name\"" "$here/install.sh"; then
+    ok "install.sh installs $name, which the skill names"
+  else
+    bad "install.sh installs $name, which the skill names" "no install_one line for skills/director/scripts/$name"
+  fi
+done < <(
+  { grep -oE '\$\{DIRECTOR_HOME:-\$HOME/\.director\}/bin/[A-Za-z0-9_-]+' "$skill" | sed -E 's#.*/bin/##'
+    for f in "$here"/skills/director/scripts/*; do
+      n="$(basename "$f")"
+      case "$n" in verify-*|fixtures) continue ;; esac
+      grep -qw -- "$n" "$skill" && echo "$n"
+    done
+  } | sort -u)
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
