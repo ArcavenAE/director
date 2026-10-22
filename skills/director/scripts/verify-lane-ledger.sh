@@ -217,6 +217,15 @@ mkdir -p "$root/repo/.git"
 if [[ ! -e "$root/repo/c1.html" ]] && grep -q "inside a checkout" "$root/log"; then ok "refuses inside a checkout"
 else bad "refuses inside a checkout"; fi
 
+# --- the default marry output is idle-shadow's ---------------------------------
+# with no --marry, a marry.json only at idle-shadow/marry.json is the one read
+st3="$root/state3"; rm -rf "$st3"; mkdir -p "$st3/idle-shadow"
+printf '%s\n' '{"pairs":[{"item":"it-1","seat":"agent://teama/seat-a","lease":"L1"}],"count":{"ready":2,"eligible":1,"unmatched":1,"no_class":1,"no_component":0,"no_eligible_seat":0,"operator_only":0,"client":0,"free":1,"would_pair":1}}' >"$st3/idle-shadow/marry.json"
+DIRECTOR_STATE="$st3" "$LL" --out "$root/c3.html" >"$root/log" 2>&1
+hasnt "default marry path: ready work is read from idle-shadow/marry.json, not GAP" "Ready work: GAP" "$root/c3.html"
+has "default marry path: the marry count line" "ready 2, eligible 1, would-pair 1" "$root/c3.html"
+hasnt "default marry path: no marry GAP line" "- GAP marry" "$root/log"
+
 # --- usage error -------------------------------------------------------------
 rc=0; "$LL" --bogus >/dev/null 2>&1 || rc=$?
 if [[ "$rc" == 2 ]]; then ok "usage error exits 2"; else bad "usage error exits 2" "rc=$rc"; fi
