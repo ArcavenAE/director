@@ -77,7 +77,7 @@ xss.forEach(function (p, i) {
 var names = ["b", "u", "i", "s", "div", "span", "form", "input", "button", "object", "embed", "math", "details",
   "video", "audio", "source", "base", "meta", "link", "textarea", "select", "option", "table", "td", "h1", "pre",
   "br", "hr", "a", "img", "svg", "script", "style", "iframe", "body", "html", "marquee", "template", "noscript",
-  "P", "STRONG", "Em", "CODE", "UL", "LI", "OL", "u onmouseover=\"alert(1)\"", "isindex", "keygen", "plaintext"];
+  "p", "ul", "ol", "li", "strong", "em", "code", "P", "STRONG", "Em", "CODE", "UL", "LI", "OL", "u onmouseover=\"alert(1)\"", "isindex", "keygen", "plaintext"];
 names.forEach(function (n) {
   var inputs = ["<" + n + " x=\"1\" onclick=\"y\">z</" + n + ">", "<" + n + ">", "</" + n + ">", "<" + n + "/>", "**<" + n + " onload=y>**", "- <" + n + " onload=y>"];
   inputs.forEach(function (inp) {
