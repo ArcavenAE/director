@@ -16,7 +16,7 @@ hasnt() { if grep -qF -- "$2" "$3"; then bad "$1" "found: $2"; else ok "$1"; fi;
 occ() { { grep -o -F -- "$1" "$2" || true; } | wc -l | tr -d ' '; }  # occurrences, not lines
 modeof() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }  # GNU first: GNU stat accepts -f too and prints a report
 
-root="$(mktemp -d)"
+root="$(mktemp -d "${TMPDIR:-/tmp}/ll.XXXXXX")"  # macOS mktemp -d alone ignores TMPDIR
 trap 'rm -rf "$root"' EXIT
 export DIRECTOR_STATE="$root/state"
 fb="$DIRECTOR_STATE/freebusy"
@@ -160,9 +160,12 @@ rmdir "$fb/marry.json"; cp "$root/marry.keep" "$fb/marry.json"; cp "$root/desk.k
 # nothing is written outside the output path, and the output directory holds only the page
 odir="$root/wout"; rm -rf "$odir"; mkdir -p "$odir"
 snap() { { find "$root" -path "$odir" -prune -o -type d -print; find "$root" -path "$odir" -prune -o -type f -exec cksum {} +; } | LC_ALL=C sort; }
-HOME="$root/home" "$LL" --out "$odir/c1.html" >/dev/null 2>&1   # settle anything a first run creates
+# a fresh state directory built only from the known inputs, so a stray file from an earlier run cannot hide
+st2="$root/state2"; rm -rf "$st2"; mkdir -p "$st2/freebusy" "$root/home"
+cp "$fb/seats.jsonl" "$fb/lanes.jsonl" "$fb/marry.json" "$st2/freebusy/"
+cp "$DIRECTOR_STATE/desk-snapshot.json" "$DIRECTOR_STATE/lane-ledger-show.txt" "$st2/"
 before="$(snap)"
-HOME="$root/home" "$LL" --out "$odir/c1.html" >/dev/null 2>&1
+HOME="$root/home" DIRECTOR_STATE="$st2" "$LL" --out "$odir/c1.html" >/dev/null 2>&1
 after="$(snap)"
 if [[ "$before" == "$after" ]]; then ok "a run writes nothing outside its output directory (inputs, state and HOME unchanged)"
 else bad "a run writes nothing outside its output directory" "$(diff <(echo "$before") <(echo "$after") | head -3)"; fi

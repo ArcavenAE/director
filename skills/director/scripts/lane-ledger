@@ -42,6 +42,8 @@ import tempfile
 HOME = os.path.expanduser("~")
 STATE = os.environ.get("DIRECTOR_STATE") or os.path.join(HOME, ".director", "state")
 STATES = ("free", "busy", "waiting", "unknown")
+COUNT_KEYS = ("ready", "eligible", "unmatched", "no_class", "no_component",
+              "no_eligible_seat", "operator_only", "client", "would_pair")
 WITHHELD = "team withheld"
 
 # What would fill each GAP, printed as a numbered footnote wherever the GAP shows.
@@ -192,14 +194,22 @@ def compute(marry_path):
     ready = None
     unmatched = None
     if marry is not None:
-        ready = {}
-        for p in marry.get("pairs") or []:
-            if isinstance(p, dict):
-                ready[s(p.get("seat"))] = ready.get(s(p.get("seat")), 0) + 1
-        c = marry.get("count") if isinstance(marry.get("count"), dict) else {}
-        unmatched = {k: c.get(k, 0) if isinstance(c.get(k, 0), int) else 0
-                     for k in ("ready", "eligible", "unmatched", "no_class", "no_component",
-                               "no_eligible_seat", "operator_only", "client", "would_pair")}
+        if isinstance(marry.get("pairs"), list):
+            ready = {}
+            for p in marry["pairs"]:
+                if isinstance(p, dict):
+                    ready[s(p.get("seat"))] = ready.get(s(p.get("seat")), 0) + 1
+        else:
+            gaps.append("marry: marry.json has no pairs list; ready for the lane is not read")
+        c = marry.get("count")
+        if not isinstance(c, dict):
+            gaps.append("marry: marry.json has no count object")
+        else:
+            unmatched = {k: c[k] if isinstance(c.get(k), int) and not isinstance(c.get(k), bool) else "GAP"
+                         for k in COUNT_KEYS}
+            lacking = [k for k in COUNT_KEYS if unmatched[k] == "GAP"]
+            if lacking:
+                gaps.append("marry: count lacks " + ", ".join(lacking))
 
     lanes = {}
     as_of = set()
@@ -210,16 +220,20 @@ def compute(marry_path):
         if st not in STATES:
             st = "unknown"
         if s(r.get("at")):
-            as_of.add(s(r.get("at")))
+            as_of.add(mask.word(s(r.get("at"))))
         if r.get("last_turn") not in (None, ""):
             last_turn += 1
         shown = mask.team_shown(ws, team)
-        key = (cl, ws, team, role) if shown else (cl, WITHHELD, WITHHELD, role)
-        ln = lanes.setdefault(key, {"cluster": cl, "team": team if shown else WITHHELD, "workspace": ws if shown else "",
-                                    "role": mask.word(role) if shown else role, "masked": not shown,
+        # Withheld means masked, for every field of the lane: a withhold word never prints, in a shown lane or
+        # a withheld one, and a withheld lane prints no seat reason at all.
+        cl_p, role_p = mask.word(cl), mask.word(role)
+        key = (cl_p, ws, team, role_p) if shown else (cl_p, WITHHELD, WITHHELD, role_p)
+        ln = lanes.setdefault(key, {"cluster": cl_p, "team": team if shown else WITHHELD, "workspace": ws if shown else "",
+                                    "role": role_p, "masked": not shown,
                                     "counts": dict.fromkeys(STATES, 0), "seats": [], "asks": [], "ready": 0})
         ln["counts"][st] += 1
-        seat = {"state": st, "reason": s(r.get("reason")), "last_active": s(r.get("last_active")) or None}
+        seat = {"state": st, "reason": mask.word(s(r.get("reason"))) if shown else "",
+                "last_active": mask.word(s(r.get("last_active"))) or None}
         if shown:
             seat["name"] = mask.word(name)
         ln["seats"].append(seat)
@@ -255,13 +269,26 @@ def compute(marry_path):
     op = None
     if desk is not None:
         bs = desk.get("by_status") if isinstance(desk.get("by_status"), dict) else {}
-        op = {"open": len(desk.get("open")) if isinstance(desk.get("open"), list) else "GAP",
-              "yours": bs.get("yours", 0) if isinstance(bs.get("yours", 0), int) else "GAP",
+        yours = bs.get("yours")
+        op = {"open": len(desk["open"]) if isinstance(desk.get("open"), list) else "GAP",
+              "yours": yours if isinstance(yours, int) and not isinstance(yours, bool) else "GAP",
               "read_at": s(desk.get("read_at")) or "GAP"}
+        if op["open"] == "GAP":
+            gaps.append("desk: open list missing")
+        if op["yours"] == "GAP":
+            gaps.append("desk: by_status.yours missing")
+        if op["read_at"] == "GAP":
+            gaps.append("desk: read_at missing")
     clusters = sorted({ln["cluster"] for ln in out})
+    seats_ok = bool(seats)
+    if seats is not None and not seats:
+        gaps.append("seats: seats.jsonl has no rows")
+    n_seats, measured = sum(total.values()), total["free"] + total["busy"] + total["waiting"]
+    if not seats_ok:  # no seat was read: every seat figure is a GAP, never a 0
+        total, n_seats, measured, last_turn = dict.fromkeys(STATES, "GAP"), "GAP", "GAP", "GAP"
     return {"as_of": sorted(as_of), "clusters": clusters, "lanes": out, "total": total,
-            "seats": sum(total.values()), "measured": total["free"] + total["busy"] + total["waiting"],
-            "last_turn": last_turn, "seats_read": seats is not None, "asks_read": asks_read,
+            "seats": n_seats, "measured": measured,
+            "last_turn": last_turn, "seats_read": seats_ok, "asks_read": asks_read,
             "operator": op, "marry": unmatched, "masked_lanes": sum(1 for ln in out if ln["masked"]),
             "gaps": gaps}
 
@@ -355,13 +382,19 @@ def page(m):
              % (e(asof), e(", ".join(m["clusters"])) if m["clusters"] else "none"))
 
     t = m["total"]
-    P.append('<div class="cov"><div><span class="k">seats with a measured state</span>'
-             '<span class="mb"><b style="width:%.1f%%"></b></span><span>%d of %d</span></div>'
-             % (100.0 * m["measured"] / m["seats"] if m["seats"] else 0, m["measured"], m["seats"]))
-    P.append('<div><span class="k">seats by state</span><span>%s</span></div>'
-             % "; ".join("%s %d" % (k, t[k]) for k in STATES))
-    P.append('<div><span class="k">seats with a last turn read</span><span>%d of %d%s</span></div></div>'
-             % (m["last_turn"], m["seats"], fn("last_turn") if m["last_turn"] < m["seats"] else ""))
+    if m["seats_read"]:
+        P.append('<div class="cov"><div><span class="k">seats with a measured state</span>'
+                 '<span class="mb"><b style="width:%.1f%%"></b></span><span>%d of %d</span></div>'
+                 % (100.0 * m["measured"] / m["seats"], m["measured"], m["seats"]))
+        P.append('<div><span class="k">seats by state</span><span>%s</span></div>'
+                 % "; ".join("%s %d" % (k, t[k]) for k in STATES))
+        P.append('<div><span class="k">seats with a last turn read</span><span>%d of %d%s</span></div></div>'
+                 % (m["last_turn"], m["seats"], fn("last_turn") if m["last_turn"] < m["seats"] else ""))
+    else:
+        P.append('<div class="cov"><div><span class="k">seats with a measured state</span><span>GAP%s</span></div>'
+                 % fn("seats"))
+        P.append('<div><span class="k">seats by state</span><span>GAP%s</span></div>' % fn("seats"))
+        P.append('<div><span class="k">seats with a last turn read</span><span>GAP%s</span></div></div>' % fn("seats"))
 
     P.append('<section aria-label="Seat board"><div class="lanes">')
     for ln in m["lanes"]:
@@ -371,7 +404,8 @@ def page(m):
                  % (e(ln["cluster"]), e(ln["team"]), e(ln["role"]), marks))
     P.append("</div>")
     P.append('<p class="leg">%s</p></section>' % "".join(
-        '<span><i class="sq %s"></i>%s%s</span>' % (k, txt, "" if t[k] else " (none now)") for k, txt in LEGEND))
+        '<span><i class="sq %s"></i>%s%s</span>' % (k, txt, "" if (t[k] or not m["seats_read"]) else " (none now)")
+        for k, txt in LEGEND))
 
     P.append("<h2>By lane</h2>")
     P.append('<table class="l"><thead><tr><th>lane</th><th>free</th><th>busy</th><th>waiting</th><th>unknown</th>'
@@ -404,10 +438,11 @@ def page(m):
     if mr is None:
         P.append('<p class="under">Ready work: GAP%s.</p>' % fn("ready"))
     else:
-        P.append('<p class="under">Ready work, from marvel marry (shadow, nothing sent): ready %d, eligible %d, would-pair %d; '
-                 'unmatched %d (no class %d, no component %d, no eligible seat %d, operator-only %d); client %d, counted only.</p>'
-                 % (mr["ready"], mr["eligible"], mr["would_pair"], mr["unmatched"], mr["no_class"], mr["no_component"],
-                    mr["no_eligible_seat"], mr["operator_only"], mr["client"]))
+        g = lambda k: cell(mr[k], "ready")
+        P.append('<p class="under">Ready work, from marvel marry (shadow, nothing sent): ready %s, eligible %s, would-pair %s; '
+                 'unmatched %s (no class %s, no component %s, no eligible seat %s, operator-only %s); client %s, counted only.</p>'
+                 % (g("ready"), g("eligible"), g("would_pair"), g("unmatched"), g("no_class"), g("no_component"),
+                    g("no_eligible_seat"), g("operator_only"), g("client")))
     if m["masked_lanes"]:
         P.append('<p class="under">%d lanes print as "%s", with role, cluster and counts only%s.</p>'
                  % (m["masked_lanes"], WITHHELD, fn("show")))
@@ -459,8 +494,11 @@ def main():
     for g in m["gaps"]:
         print("- GAP %s" % g)
     t = m["total"]
-    print("lane-ledger: %d seats in %d lanes (%s); written %s"
-          % (m["seats"], len(m["lanes"]), ", ".join("%s %d" % (k, t[k]) for k in STATES), out))
+    if m["seats_read"]:
+        print("lane-ledger: %d seats in %d lanes (%s); written %s"
+              % (m["seats"], len(m["lanes"]), ", ".join("%s %d" % (k, t[k]) for k in STATES), out))
+    else:
+        print("lane-ledger: seats GAP (no seat was read); written %s" % out)
     return 0
 
 
