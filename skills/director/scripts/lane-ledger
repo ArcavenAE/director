@@ -314,9 +314,9 @@ h2{font-size:13px;font-weight:normal;letter-spacing:.06em;text-transform:upperca
 .lw{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
 .sm{display:flex;flex-wrap:wrap;gap:3px;max-width:120px}
 .sq{display:inline-block;width:14px;height:14px;box-sizing:border-box;vertical-align:middle}
-.sq.free{background:var(--accent)}
-.sq.busy{background:var(--ink)}
-.sq.waiting{border:1.5px solid var(--ink2)}
+.sq.free{border:1.5px solid var(--ink)}
+.sq.busy{background:var(--accent)}
+.sq.waiting{background:var(--ink2)}
 .sq.unknown{border:1.5px dashed var(--ink3)}
 .leg{font-size:12px;color:var(--ink2);display:flex;flex-wrap:wrap;gap:4px 14px;margin:10px 0 0}
 .leg .sq{margin-right:5px}
