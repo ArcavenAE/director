@@ -145,7 +145,7 @@ if run_install "$sl"; then bad "a symlink at idea-roots.conf stops the install" 
 [[ ! -e "$root/elsewhere.conf" ]] && ok "nothing was written through the dangling symlink" || bad "nothing was written through the dangling symlink"
 grep -q 'idea-roots.conf' "$sl/out" && ok "the refusal names the conf path" || bad "the refusal names the conf path" "$(tail -3 "$sl/out")"
 # The skill's stalled-ideas prose (review round 1 of ld16k).
-grep -q 'do not run `standing-hook scan-beat`' "$skill" && ok "the skill skips scan-beat when dbi did not run" || bad "the skill skips scan-beat when dbi did not run"
+grep -qF 'do not run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat`' "$skill" && ok "the skill skips scan-beat when dbi did not run" || bad "the skill skips scan-beat when dbi did not run"
 # freebusy (idle-scheduler B3): run in sweep step 3 after dbi; a missing cluster list still shows its GAP line;
 # its count line is printed outside the pinned fence, like the Away line, so the printed contract is unchanged.
 fb_at="$(grep -n 'bin/freebusy' "$skill" | head -1 | cut -d: -f1 || true)"; dbi_at="$(grep -n 'bin/dbi --json' "$skill" | head -1 | cut -d: -f1 || true)"
@@ -174,7 +174,7 @@ done < <(
   { grep -oE '\$\{DIRECTOR_HOME:-\$HOME/\.director\}/bin/[A-Za-z0-9_-]+' "$skill" | sed -E 's#.*/bin/##'
     for f in "$here"/skills/director/scripts/*; do
       n="$(basename "$f")"
-      case "$n" in verify-*|fixtures) continue ;; esac
+      case "$n" in (verify-*|fixtures) continue ;; esac
       grep -qw -- "$n" "$skill" && echo "$n"
     done
   } | sort -u)

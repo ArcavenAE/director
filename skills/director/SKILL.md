@@ -62,10 +62,10 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    it prints a GAP line; show that line, never skip the step silently.
    It exits 0 whether it finds nothing or a lot, so read its lines, never its exit code.
    Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/dbi --json` (read only, no fetch; it asks each repo's remote, so
-   allow up to a minute). When it exits 0, record the scan with `standing-hook scan-beat` (described
+   allow up to a minute). When it exits 0, record the scan with `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat` (described
    under "Standing checklist"). Its `rows` are the Stalled ideas block, its `unverified.count` the Unverified line.
    Exit 2 means it could not run (no `stalled_idea_days` in `$DIRECTOR_STATE/thresholds.json`, or no
-   `idea-roots.conf`): do not run `standing-hook scan-beat`, since the hook would then report a scan that
+   `idea-roots.conf`): do not run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat`, since the hook would then report a scan that
    never ran as "0h ago", and print `Stalled ideas: not run (<its stderr line>)`, never an empty block. A scan
    that did not run is not "none".
    Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/freebusy` (read only: no bus send, no inject, no bd write, no gh call).
@@ -245,13 +245,13 @@ questions crowds them out. Three scripts in `scripts/` give them one.
 
 - `standing-hook` is a prompt hook. Wired as a Claude Code `UserPromptSubmit`
   hook, it prints the drain age and the three-line checklist before each
-  answer. After every drain, run `standing-hook beat` to record it. With no
+  answer. After every drain, run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat` to record it. With no
   heartbeat it says the age is unknown; it never invents one. Its last line gives
   the age of the last stalled-ideas scan (`dbi`, run by the sweep, then
-  `standing-hook scan-beat`), read from a file: the hook never runs the scan.
+  `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat`), read from a file: the hook never runs the scan.
   `verify-standing-hook.sh` proves it.
 - `reference/relay-template.md` is the form to fill before a relay.
-- `composer-check` looks at a pane before an inject that ends in Enter. It
+- `${DIRECTOR_HOME:-$HOME/.director}/bin/composer-check` looks at a pane before an inject that ends in Enter. It
   refuses when the composer holds typed text (a dim suggestion is fine), and
   with `--handle-menu` answers the "Teach auto mode" menu with `2`, "Not now",
   never Enter. `verify-composer-check.sh` proves it.
@@ -260,7 +260,7 @@ The hook entry, in the session's settings:
 
 ```json
 {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command",
-  "command": "<checkout>/skills/director/scripts/standing-hook"}]}]}}
+  "command": "${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook"}]}]}}
 ```
 
 The sweep order on the tick, which is the drain and the Desk read that the
@@ -269,7 +269,7 @@ hook's three-line checklist asks about:
 1. Drain the bus inbox: `inbox_summary`, then `wait_for_message` with `max`
    above 1 until `remaining` is 0 or the reply is the silence note. This gives
    the messages to answer.
-2. Record the drain: `standing-hook beat`. This gives `last-drain`.
+2. Record the drain: `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat`. This gives `last-drain`.
 3. Read answered Desk cards and refresh the snapshot: `desk-snapshot write`.
    This gives `desk-snapshot.json`.
 4. Move the rows: `dws refresh --local` (`board-html` runs it on render). This
