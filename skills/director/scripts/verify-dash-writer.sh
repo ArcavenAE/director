@@ -8,7 +8,10 @@
 #   - the sessions table is parsed by fixed offsets from its header and refuses on a moved layout, a row
 #     that cannot be cut cleanly alone, and an unreached cluster as one line;
 #   - a panel over 256 KiB is written with no rows and a refusal;
-#   - the three checks, the 30-minute floor, the 14-day delete, and read-only behaviour.
+#   - the three checks, the 30-minute floor, the 14-day delete, and read-only behaviour;
+#   - the batch is one the session applies unedited: keys are `op`, never `action`; `--versions <file>` pins every
+#     document the map lists with `if_version`; no map, no writes; a delete of a document not in the map is dropped
+#     and `ack.deleted` names only the days the batch deletes; no withhold file refuses the panels it filters.
 # The Desk's own write rule (test 8) and the page (tests 1, 5 to 7) live in the Desk artifact, not here.
 # Clusters come from `marvel config list`, the NAME column only (the fixture marvel answers it from a table whose
 # other columns and whose config file hold canaries that must never appear; the config file is a LIST, the shape
@@ -169,7 +172,21 @@ setclusters() { # names...: marvel's config as a LIST, and the table `marvel con
 }
 setclusters alpha
 pyc() { python3 -c "$1" "$root/out.json"; }
-runout() { run "$@" >"$root/out.json" 2>"$root/err"; }
+# The documents that exist: the four panels and the meta, and every daily doc from 09-20 to 10-19 (not today's, which a
+# run creates), at the versions a `list` would show. A run that is not about the map gets this one.
+mkvers() { python3 - "$root/vers.json" <<'PY'
+import datetime, json, sys
+m = {"dash_panels/" + p: 3 for p in ("waiting", "where-work-sits", "in-flight", "sessions")}
+m["dash_meta/writer"] = 7
+d0 = datetime.date(2026, 9, 20)
+for i in range(30):
+    for p in ("waiting", "where-work-sits", "in-flight", "sessions"):
+        m["dash_daily/%s-%s" % (p, (d0 + datetime.timedelta(days=i)).isoformat())] = 1
+json.dump(m, open(sys.argv[1], "w"))
+PY
+}
+mkvers
+runout() { if [[ "${1:-}" == run && " $* " != *" --versions "* ]]; then run "$@" --versions "$root/vers.json" >"$root/out.json" 2>"$root/err"; else run "$@" >"$root/out.json" 2>"$root/err"; fi; }
 
 # ---------------------------------------------------------------- usage
 run bogus >/dev/null 2>&1; rc=$?; [[ $rc -eq 2 ]] && ok "an unknown subcommand exits 2" || bad "unknown subcommand exits 2" "rc=$rc"
@@ -188,10 +205,10 @@ assert cols == {"dash_panels", "dash_daily", "dash_meta"}, cols
 ids = sorted(x["doc_id"] for x in w if x["collection"] == "dash_panels")
 assert ids == ["in-flight", "sessions", "waiting", "where-work-sits"], ids
 for x in w:
-    if x["action"] == "delete":
-        assert set(x) == {"action", "collection", "doc_id"}, x
+    if x["op"] == "delete":
+        assert set(x) - {"if_version"} == {"op", "collection", "doc_id"}, x
         continue
-    assert x["action"] == "set" and set(x) == {"action", "collection", "doc_id", "data"}, x
+    assert x["op"] == "set" and set(x) - {"if_version"} == {"op", "collection", "doc_id", "data"}, x
     k = set(x["data"])
     if x["collection"] == "dash_panels": assert k == {"panel", "as_of", "writer", "rows", "counts", "refusal"}, k
     if x["collection"] == "dash_daily": assert k == {"panel", "day", "counts"}, k
@@ -346,7 +363,7 @@ assert p["rows"]==[] and p["refusal"].get("clusters:failed")==1 and len(p["refus
 rm -f "$root/tables/config-rc"
 # a marvel that cannot be run at all
 env -i HOME="$root/home" PATH="${RUN_PATH#"$root/bin:"}" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" DWS_TEST_CLOCK=1 DWS_NOW="${NOW_OVERRIDE:-$NOW}" \
-  DASH_MARVEL="$root/bin/no-such-marvel" python3 -I "$W" run >"$root/out.json" 2>"$root/err"
+  DASH_MARVEL="$root/bin/no-such-marvel" python3 -I "$W" run --versions "$root/vers.json" >"$root/out.json" 2>"$root/err"
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="sessions" and x["collection"]=="dash_panels"][0]
 assert p["rows"]==[] and p["refusal"].get("clusters:unavailable")==1 and len(p["refusal"])==1, p' && ok "a marvel that cannot be run refuses the sessions panel, reason unavailable" || bad "marvel unavailable"
@@ -437,9 +454,9 @@ pyc 'import json,sys
 d=json.load(open(sys.argv[1])); w=d["writes"]
 m=[x for x in w if x["collection"]=="dash_meta"][0]["data"]
 assert m["last_run"]=="2026-10-20T18:00:00Z" and m["runs"]==1 and isinstance(m["reader"],str), m
-day=[x for x in w if x["collection"]=="dash_daily" and x["action"]=="set"]
+day=[x for x in w if x["collection"]=="dash_daily" and x["op"]=="set"]
 assert sorted(x["doc_id"] for x in day)==["in-flight-2026-10-20","sessions-2026-10-20","waiting-2026-10-20","where-work-sits-2026-10-20"], [x["doc_id"] for x in day]
-dele=sorted(x["doc_id"] for x in w if x["action"]=="delete")
+dele=sorted(x["doc_id"] for x in w if x["op"]=="delete")
 assert dele==["in-flight-2026-10-06","sessions-2026-10-06","waiting-2026-10-06","where-work-sits-2026-10-06"], dele
 assert all(set(x["data"])=={"panel","day","counts"} for x in day)' && ok "dash_meta carries last_run, runs and reader; daily counts are set for today and the day 14 days back is deleted" || bad "meta and daily"
 before="$(cat "$state/workstreams.jsonl" "$state/desk-snapshot.json" | shasum -a 256)"
@@ -454,7 +471,7 @@ json.dump({"last_run": "2026-10-20T10:00:00Z", "runs": 3, "days": ["2026-10-02",
 PY
 runout run
 pyc 'import json,sys
-d=json.load(open(sys.argv[1])); dele=sorted(x["doc_id"] for x in d["writes"] if x["action"]=="delete")
+d=json.load(open(sys.argv[1])); dele=sorted(x["doc_id"] for x in d["writes"] if x["op"]=="delete")
 want=sorted("%s-2026-10-%s" % (p, dd) for p in ("waiting","where-work-sits","in-flight","sessions") for dd in ("02","04","06"))
 assert dele==want, dele' && ok "daily docs older than 14 days are all deleted (days on record plus the one 14 back), the newer ones kept" || bad "stale daily delete"
 python3 - "$state/dash-writer.json" <<'PY'
@@ -465,7 +482,7 @@ json.dump({"last_run": "2026-10-20T10:00:00Z", "runs": 3, "days": days}, open(sy
 PY
 runout run
 pyc 'import json,sys
-d=json.load(open(sys.argv[1])); w=d["writes"]; dele=sorted(x["doc_id"] for x in w if x["action"]=="delete")
+d=json.load(open(sys.argv[1])); w=d["writes"]; dele=sorted(x["doc_id"] for x in w if x["op"]=="delete")
 assert "refused" not in d and len(w)==49, (len(w), d.get("refused"))
 assert len(dele)==40, dele
 assert not [x for x in dele if x.endswith("-2026-09-30") or x.endswith("-2026-10-06")], "the oldest ten days go first, the rest wait"' && ok "a long backlog is cut to the oldest ten days: 49 writes, never over 50, never refused" || bad "backlog cap"
@@ -475,11 +492,11 @@ rm -f "$state/dash-writer.json"
 runout run
 ackrun >/dev/null 2>&1
 [[ "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["runs"],d["last_run"])' "$state/dash-writer.json")" == "1 2026-10-20T18:00:00Z" ]] && ok "ack records the run and its count" || bad "ack"
-NOW_OVERRIDE="2026-10-20T18:20:00Z" run run >"$root/out.json" 2>/dev/null
+NOW_OVERRIDE="2026-10-20T18:20:00Z" run run --versions "$root/vers.json" >"$root/out.json" 2>/dev/null
 pyc 'import json,sys;d=json.load(open(sys.argv[1]));assert d["writes"]==[] and "30-minute" in d["skipped"], d' && ok "inside the 30-minute floor it writes nothing and says why" || bad "floor"
-NOW_OVERRIDE="2026-10-20T18:20:00Z" run run --force >"$root/out.json" 2>/dev/null
+NOW_OVERRIDE="2026-10-20T18:20:00Z" run run --force --versions "$root/vers.json" >"$root/out.json" 2>/dev/null
 pyc 'import json,sys;d=json.load(open(sys.argv[1]));assert d["writes"]' && ok "--force runs inside the floor" || bad "--force"
-NOW_OVERRIDE="2026-10-20T18:31:00Z" run run >"$root/out.json" 2>/dev/null
+NOW_OVERRIDE="2026-10-20T18:31:00Z" run run --versions "$root/vers.json" >"$root/out.json" 2>/dev/null
 pyc 'import json,sys;d=json.load(open(sys.argv[1]));m=[x["data"] for x in d["writes"] if x["collection"]=="dash_meta"][0];assert m["runs"]==2 and m["last_run"]=="2026-10-20T18:31:00Z", m' && ok "after the floor it runs again and the count moves to 2" || bad "after the floor"
 rm -f "$state/dash-writer.json"
 
@@ -507,9 +524,8 @@ rmdir "$state/dash-withhold.txt"
 printf '\xff\xfe Bartholomew\n' >"$state/dash-withhold.txt"; chmod 600 "$state/dash-withhold.txt"; runout run; rc=$?
 [[ $rc -eq 0 ]] && ! grep -q Traceback "$root/err" && refused3 unreadable && ok "a withhold file that is not UTF-8 refuses the panels it filters, exit 0, no traceback" || bad "withhold not utf-8" "rc=$rc $(head -2 "$root/err")"
 rm -f "$state/dash-withhold.txt"; runout run
-pyc 'import json,sys
-d=json.load(open(sys.argv[1])); p=[x["data"] for x in d["writes"] if x["doc_id"]=="in-flight" and x["collection"]=="dash_panels"][0]
-assert p["rows"] and not [k for k in p["refusal"] if k.startswith("withhold-file")], p["refusal"]' && ok "control: an absent withhold file is no list, not a refusal" || bad "absent withhold file"
+refused3 absent && ok "an absent withhold file refuses waiting, in-flight and sessions, on the same branch as an unreadable one: no list is never no filter" || bad "absent withhold file"
+grep -qi bartholomew "$root/out.json" && bad "no withheld name appears with no list" || ok "no session name, id or title reaches the output with no withhold file"
 mv "$root/w.keep" "$state/dash-withhold.txt"; chmod 600 "$state/dash-withhold.txt"
 # the ack records the run's own time and the days that run deleted, not its own clock
 python3 - "$state/dash-writer.json" <<'PY'
@@ -540,6 +556,74 @@ i=0; while kill -0 $rp 2>/dev/null && [[ $i -lt 40 ]]; do sleep 0.5; i=$((i+1));
 if kill -0 $rp 2>/dev/null; then : <>"$state/dash-withhold.txt"; wait $rp; bad "a FIFO at the withhold path hung the run"
 else wait $rp; refused3 unreadable && ok "a FIFO at the withhold path is refused as unreadable, without hanging" || bad "withhold fifo"; fi
 rm -f "$state/dash-withhold.txt"; mv "$root/w.keep" "$state/dash-withhold.txt"; chmod 600 "$state/dash-withhold.txt"
+
+# ---------------------------------------------------------------- the batch the session applies unedited
+# keys are `op`, never `action`
+runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); w=d["writes"]
+assert w and all(x["op"] in ("set","delete") and "action" not in x for x in w), [sorted(x) for x in w[:2]]' \
+  && ok "every write has an op key, set or delete, and none has an action key" || bad "op not action"
+grep -q '"action"' "$root/out.json" && bad "no action key anywhere in the output" || ok "the word action is not a key anywhere in the batch"
+# no map, no writes
+run run >"$root/out.json" 2>"$root/err"; rc=$?
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); assert d["writes"]==[] and d["needs"]=="versions" and "ack" not in d, d' && [[ $rc -eq 0 ]] \
+  && ok "a run without --versions prints no writes and no ack, exit 0, and says it needs the map" || bad "no map" "rc=$rc"
+printf '{not json' >"$root/vbad.json"; run run --versions "$root/vbad.json" >"$root/out.json" 2>/dev/null
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); assert d["writes"]==[] and d["refused"]=="versions:unreadable", d' && ok "a map that is not JSON prints no writes, reason unreadable" || bad "bad map json"
+printf '{"dash_panels/waiting": "3", "dash_meta/writer": true}' >"$root/vbad.json"; run run --versions "$root/vbad.json" >"$root/out.json" 2>/dev/null
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); assert d["writes"]==[] and d["refused"]=="versions:bad-version", d' && ok "a map with a boolean version prints no writes, reason bad-version" || bad "bad map version"
+run run --versions "$root/missing.json" >"$root/out.json" 2>/dev/null
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); assert d["writes"]==[] and d["refused"]=="versions:unreadable", d' && ok "a map file that does not exist prints no writes" || bad "missing map file"
+run run --versions >/dev/null 2>&1; rc=$?; [[ $rc -eq 2 ]] && ok "--versions with no file is a usage error" || bad "--versions without a file" "rc=$rc"
+# a document in the map is pinned at its version; one not in the map is a create with no if_version
+runout run
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); w=d["writes"]
+pan=[x for x in w if x["collection"]=="dash_panels"]
+assert len(pan)==4 and all(x["if_version"]==3 for x in pan), pan
+meta=[x for x in w if x["collection"]=="dash_meta"][0]; assert meta["if_version"]==7, meta
+dele=[x for x in w if x["op"]=="delete"]; assert dele and all(x["if_version"]==1 for x in dele), dele' \
+  && ok "every document the map lists is pinned: if_version is its listed version on each set and each delete" || bad "pinned set"
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); w=d["writes"]
+new=[x for x in w if x["collection"]=="dash_daily" and x["op"]=="set"]
+assert len(new)==4 and all("if_version" not in x for x in new), new' \
+  && ok "a document the map does not list (today's daily docs) is written with no if_version" || bad "new set unpinned"
+# a delete of a document that is not in the map is dropped, and ack.deleted names only what is deleted
+python3 - "$root/vers.json" "$root/vpart.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1]))
+for k in list(m):
+    if k.startswith("dash_daily/") and k not in ("dash_daily/waiting-2026-10-06", "dash_daily/sessions-2026-10-06"):
+        del m[k]
+json.dump(m, open(sys.argv[2], "w"))
+PY
+run run --versions "$root/vpart.json" >"$root/out.json" 2>/dev/null
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); w=d["writes"]
+dele=sorted(x["doc_id"] for x in w if x["op"]=="delete")
+assert dele==["sessions-2026-10-06","waiting-2026-10-06"], dele
+assert d["ack"]["deleted"]==["2026-10-06"], d["ack"]' && ok "deletes of documents absent from the map are dropped; the two listed are kept" || bad "unlisted delete dropped"
+python3 - "$root/vers.json" "$root/vnone.json" <<'PY'
+import json, sys
+m = {k: v for k, v in json.load(open(sys.argv[1])).items() if not k.startswith("dash_daily/")}
+json.dump(m, open(sys.argv[2], "w"))
+PY
+run run --versions "$root/vnone.json" >"$root/out.json" 2>/dev/null
+pyc 'import json,sys
+d=json.load(open(sys.argv[1])); assert not [x for x in d["writes"] if x["op"]=="delete"] and d["ack"]["deleted"]==[], (d["ack"], len(d["writes"]))' \
+  && ok "with no daily document in the map there is no delete, and ack.deleted is empty, not the expired days" || bad "ack.deleted narrowed"
+echo '{"last_run":"2026-10-20T10:00:00Z","runs":3,"days":["2026-10-04","2026-10-06"]}' >"$state/dash-writer.json"
+run run --versions "$root/vpart.json" >"$root/out.json" 2>/dev/null
+ackrun >/dev/null 2>&1
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["days"]==["2026-10-04","2026-10-20"], d' "$state/dash-writer.json" \
+  && ok "a day with no document in the map stays on record: ack drops only the day the batch deleted" || bad "ack keeps the undeleted day" "$(cat "$state/dash-writer.json")"
+rm -f "$state/dash-writer.json"
 
 python3 - "$state/workstreams.jsonl" <<'PY'
 import json, sys

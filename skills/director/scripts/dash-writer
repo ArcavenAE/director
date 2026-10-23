@@ -6,7 +6,10 @@ ghxv2, sim/design/ops-dashboard.md sections 3 and 4 (the field list approved by 
 script cannot write artifact data (finding-director-glst), so this script reads the sources and
 prints the batch, and the session applies it with one ArtifactData batch of at most 50 writes.
 
-  dash-writer run [--force]   print {"writes": [...], ...}; nothing is written but the output
+  dash-writer run [--force] [--versions FILE]   print {"writes": [...], ...}; nothing is written but the output.
+                               FILE is a JSON object {"collection/doc_id": version} of the dash_panels, dash_daily
+                               and dash_meta documents that exist; the writes carry `op` and, for a document in the
+                               map, `if_version`. Without the map, or with one that cannot be read, no writes print
   dash-writer ack --at T [--deleted D,D]   the batch was applied: record the run (the 30-minute floor, the run
                                count); T and D are the run's own `ack` field, so the clock at ack time never matters
   dash-writer --help
@@ -20,12 +23,13 @@ dropped. marvel holds `clusters:` as a list, so no key of the config file is rea
 names no cluster, or holds an unusable name refuses the sessions panel, never an empty one, and the refusal
 carries its reason as clusters:unavailable, timeout, failed, empty or bad-name. The Desk's
 area labels are the `areas` list the snapshot records; no snapshot, or no list, labels nothing.
-Two local files the operator keeps, one entry per line, because no canonical source holds them:
+Two local files, one entry per line, because no canonical source holds them: the director session keeps
+`dash-withhold.txt` and `dash-area-map.tsv` in its own state, 0600:
   dash-area-map.tsv    <workstream slug><TAB><area label>; a ledger row carries no area, so this maps
                        the slug to a Desk area; a row with no entry (or an unlisted area) is `unlabelled`
-  dash-withhold.txt    private names, whole words, any case. Absent: no filter. Present but unreadable, not
-                       UTF-8, not a plain file, or wider than 0600: the waiting, in-flight and sessions panels
-                       are refused (no rows, no counts), since a title, an id and a session name can all carry one
+  dash-withhold.txt    private names, whole words, any case. Absent, unreadable, not UTF-8, not a plain file, or
+                       wider than 0600: the waiting, in-flight and sessions panels are refused (no rows, no counts),
+                       since a title, an id and a session name can all carry one; no list is never read as no filter
 
 It writes exactly the fields of section 3 and nothing else:
   dash_panels/<panel>  panel, as_of, writer, rows, counts, refusal
@@ -102,13 +106,13 @@ def read_list(name):
 
 
 def load_withhold():
-    """(names, why): why is None, "mode" or "unreadable". An absent file is no list ([], None). A file that is
-    present but unreadable, not a regular file, not UTF-8, or wider than 0600 is a refusal, never no list."""
+    """(names, why): why is None, "absent", "mode" or "unreadable". A file that is absent, unreadable, not a regular
+    file, not UTF-8, or wider than 0600 is a refusal, never no list: it fails closed, on one branch."""
     path = os.path.join(STATE, "dash-withhold.txt")
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)  # a FIFO must not hang the open
     except FileNotFoundError:
-        return [], None
+        return None, "absent"
     except OSError:
         return None, "unreadable"
     try:
@@ -512,23 +516,66 @@ def expired_days(st, t_now):
     cutoff = (t_now - datetime.timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")
     days = {d for d in st.get("days", []) if isinstance(d, str) and re.fullmatch(r"\d{4}-\d\d-\d\d", d) and d <= cutoff}
     days.add(cutoff)
-    return sorted(days)[:(MAX_WRITES - 9) // 4]
+    return sorted(days)
+
+
+def batch_days(st, t_now, versions):
+    """The expired days this batch deletes: oldest first, only days with a document in the map (a delete of a
+    document that is not there has nothing to remove), at most (MAX_WRITES - 9) // 4 of them."""
+    live = [d for d in expired_days(st, t_now)
+            if any(f"dash_daily/{name}-{d}" in versions for name in PANELS)]
+    return live[:(MAX_WRITES - 9) // 4]
+
+
+def load_versions(path):
+    """({"collection/doc_id": version}, None), or (None, why) with a fixed word. A version is an integer or a
+    non-empty string, as the documents show it; anything else refuses the map, so no write carries a guess."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            m = json.load(f)
+    except (OSError, ValueError):
+        return None, "unreadable"
+    if not isinstance(m, dict):
+        return None, "not-an-object"
+    for k, v in m.items():
+        if not isinstance(k, str) or k.count("/") != 1 or not all(k.split("/")):
+            return None, "bad-key"
+        if isinstance(v, bool) or not (isinstance(v, int) or (isinstance(v, str) and v)):
+            return None, "bad-version"
+    return m, None
 
 
 def size_of(doc):
     return len(json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def cmd_run(force):
+def put(op, collection, doc_id, versions, data=None):
+    w = {"op": op, "collection": collection, "doc_id": doc_id}
+    v = versions.get(f"{collection}/{doc_id}")
+    if v is not None:
+        w["if_version"] = v
+    if data is not None:
+        w["data"] = data
+    return w
+
+
+def cmd_run(force, versions_path):
     t_text, t_now = now()
     st = read_state()
     last = parse_ts(st.get("last_run"))
     if last and not force and 0 <= (t_now - last).total_seconds() < FLOOR_MIN * 60:
         print(json.dumps({"skipped": f"last run {st['last_run']}, under the {FLOOR_MIN}-minute floor", "writes": []}))
         return
+    if versions_path is None:
+        print(json.dumps({"writes": [], "needs": "versions", "hint": "list dash_panels, dash_daily and dash_meta, write {collection/doc_id: version} to a file, and run again with --versions FILE"}))
+        return
+    versions, vwhy = load_versions(versions_path)
+    if versions is None:
+        print(json.dumps({"writes": [], "refused": f"versions:{vwhy}"}))
+        return
     panels, data = build(t_text, t_now)
     today = t_now.strftime("%Y-%m-%d")
-    expired = expired_days(st, t_now)
+    expired = batch_days(st, t_now, versions)
     writes = []
     for name in PANELS:
         p = panels[name]
@@ -536,15 +583,16 @@ def cmd_run(force):
         if size_of(doc) > DOC_CAP:
             doc["rows"] = []
             doc["refusal"] = dict(doc["refusal"], **{"panel:over-256KiB": 1})
-        writes.append({"action": "set", "collection": "dash_panels", "doc_id": name, "data": doc})
+        writes.append(put("set", "dash_panels", name, versions, doc))
     for name in PANELS:
-        writes.append({"action": "set", "collection": "dash_daily", "doc_id": f"{name}-{today}",
-                       "data": {"panel": name, "day": today, "counts": panels[name]["counts"]}})
+        writes.append(put("set", "dash_daily", f"{name}-{today}", versions,
+                          {"panel": name, "day": today, "counts": panels[name]["counts"]}))
     for day in expired:
         for name in PANELS:
-            writes.append({"action": "delete", "collection": "dash_daily", "doc_id": f"{name}-{day}"})
+            if f"dash_daily/{name}-{day}" in versions:
+                writes.append(put("delete", "dash_daily", f"{name}-{day}", versions))
     meta = {"last_run": t_text, "runs": int(st.get("runs", 0)) + 1, "reader": READER, "checks": checks_of(data, t_now)}
-    writes.append({"action": "set", "collection": "dash_meta", "doc_id": "writer", "data": meta})
+    writes.append(put("set", "dash_meta", "writer", versions, meta))
     print(json.dumps({"writes": writes, "ack": {"at": t_text, "deleted": expired}}, ensure_ascii=False, indent=1))
 
 
@@ -584,12 +632,21 @@ def main():
     if not a or a[0] in ("--help", "-h"):
         print(__doc__)
         return
-    if a[0] == "run" and set(a[1:]) <= {"--force"}:
-        cmd_run("--force" in a)
+    if a[0] == "run":
+        rest, force, vpath = a[1:], False, None
+        while rest:
+            if rest[0] == "--force" and not force:
+                force, rest = True, rest[1:]
+            elif rest[0] == "--versions" and vpath is None and len(rest) > 1:
+                vpath, rest = rest[1], rest[2:]
+            else:
+                print("usage: dash-writer run [--force] [--versions <file>] | ack --at <run time> [--deleted <days>] | --help", file=sys.stderr)
+                sys.exit(2)
+        cmd_run(force, vpath)
     elif a[0] == "ack" and len(a) in (3, 5) and a[1] == "--at" and (len(a) == 3 or a[3] == "--deleted"):
         cmd_ack(a[2], [d for d in (a[4].split(",") if len(a) == 5 else []) if d])
     else:
-        print("usage: dash-writer run [--force] | ack --at <run time> [--deleted <days>] | --help", file=sys.stderr)
+        print("usage: dash-writer run [--force] [--versions <file>] | ack --at <run time> [--deleted <days>] | --help", file=sys.stderr)
         sys.exit(2)
 
 
