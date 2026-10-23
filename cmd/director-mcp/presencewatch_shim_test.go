@@ -398,6 +398,61 @@ func newWatchStoreUnit(t *testing.T, fx *watchFx, name string) *watchUnit {
 	return w.Unit(name)
 }
 
+// cashp C2: the shim writes the cluster's bound on its presence row and the
+// watch reads it back from the scan.
+func TestPresenceRowCarriesLostAfterFromTheEnvironment(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	fx := newWatchFx(t, ctx, 0, true)
+	own := fx.bus.globalCfg.presenceKey(fx.bus.instance)
+	read := func() map[string]any {
+		e, err := fx.kv.Get(ctx, own)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rec map[string]any
+		if err := json.Unmarshal(e.Value(), &rec); err != nil {
+			t.Fatal(err)
+		}
+		return rec
+	}
+	t.Setenv("DIRECTOR_PRESENCE_LOST_AFTER", "")
+	fx.tick()
+	if _, has := read()["lost_after"]; has {
+		t.Fatal("no stamp, no field: an older or hand-run shim writes none")
+	}
+	t.Setenv("DIRECTOR_PRESENCE_LOST_AFTER", "45m")
+	fx.tick()
+	if got := read()["lost_after"]; got != "45m" {
+		t.Fatalf("lost_after = %v, want 45m", got)
+	}
+}
+
+func TestWatchRaisesLostAtTheClustersOwnBoundFromTheScan(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	fx := newWatchFx(t, ctx, 0, true)
+	row := func() {
+		fx.putKey("presence.c1.supervisor.s1", map[string]any{
+			"cluster": "c1", "role": "supervisor", "agent_id": "sup", "instance": "s1",
+			"state": "working", "ts": fx.clk.wall.Format(time.RFC3339), "lost_after": "1m",
+		})
+	}
+	row()
+	fx.tick()
+	row()
+	fx.tick()
+	if err := fx.kv.Delete(ctx, "presence.c1.supervisor.s1"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ { // 4 minutes, more than the cluster's 1m, less than the 30m row
+		fx.tick()
+	}
+	if count(fx.events(), "lost") != 1 {
+		t.Fatalf("the cluster's lost_after read from its row should raise lost once, got %+v", fx.events())
+	}
+}
+
 // failPutKV is the hub's bucket with writes refused and reads answering: the
 // case where the heartbeat's Put fails and the pass still runs.
 type failPutKV struct{ jetstream.KeyValue }

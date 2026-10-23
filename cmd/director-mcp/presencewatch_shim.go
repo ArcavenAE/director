@@ -56,6 +56,9 @@ const (
 	thresholdPresenceFlapWindow = "presence_flap_window"
 	thresholdPresenceFlapQuiet  = "presence_flap_quiet"
 	thresholdPresenceHoldSellBy = "presence_hold_sell_by"
+	// the cluster-gone alert's bound (cashp design section 5)
+	thresholdPresenceLostAfter    = "presence_lost_after"
+	thresholdPresenceLostAfterMax = "presence_lost_after_max"
 )
 
 // presenceWatcher is the watch as the shim holds it.
@@ -185,6 +188,10 @@ func (p *presenceWatcher) noticeText(e watchEvent) string {
 		return fmt.Sprintf("presence: %s absent before a gap in the watch", e.Unit)
 	case "foreign":
 		return fmt.Sprintf("presence: key %s does not have the shape a supervisor writes and is not counted", e.Text)
+	case "lost":
+		return fmt.Sprintf("presence: cluster %s lost: absent %s, past its %s bound (host sleep not counted)", e.Unit, p.w.AbsenceDuration(e.Unit, e.At).Round(time.Second), e.Text)
+	case "lost-after-ignored", "lost-after-clamped":
+		return fmt.Sprintf("presence: cluster %s: %s", e.Unit, e.Text)
 	case "flapping":
 		return fmt.Sprintf("presence: %s is flapping (%s); further transitions are quiet until it settles", e.Unit, e.Text)
 	}
@@ -221,11 +228,13 @@ func (b *Bus) startPresenceWatch(logf func(string, ...any)) error {
 	if err != nil {
 		return err
 	}
-	table, err := loadThresholds(dir)
+	table, notes, err := loadThresholdsNotes(dir)
 	if err != nil {
 		return err
 	}
 	th := defaultWatchThresholds()
+	th.LostAfter = table[thresholdPresenceLostAfter]
+	th.LostMax = table[thresholdPresenceLostAfterMax]
 	th.FlapWindow = table[thresholdPresenceFlapWindow]
 	th.FlapQuiet = table[thresholdPresenceFlapQuiet]
 	store := newWatchStore(dir)
@@ -242,6 +251,9 @@ func (b *Bus) startPresenceWatch(logf func(string, ...any)) error {
 		return g.watchScan(ctx, g.cfg.presenceKey(b.instance))
 	}
 	b.watch = newPresenceWatcher(store, w, scan, logf)
+	for _, n := range notes {
+		b.watch.pending = append(b.watch.pending, "presence: "+n)
+	}
 	b.watch.hold = newHeldStore(dir)
 	b.watch.sellBy = sellBy
 	b.watch.publish = func(ctx context.Context, e *Envelope) (*sendResult, error) {
@@ -398,12 +410,13 @@ func (g *globalTier) watchScan(ctx context.Context, selfKey string) watchScan {
 			continue
 		}
 		var rec struct {
-			State string `json:"state"`
-			TS    string `json:"ts"`
+			State     string `json:"state"`
+			TS        string `json:"ts"`
+			LostAfter string `json:"lost_after"`
 		}
 		if json.Unmarshal(entry.Value(), &rec) == nil {
 			ts, _ := time.Parse(time.RFC3339, rec.TS)
-			row.Rec = &watchRec{State: rec.State, TS: ts}
+			row.Rec = &watchRec{State: rec.State, TS: ts, LostAfter: rec.LostAfter}
 		}
 		sc.Rows = append(sc.Rows, row)
 	}
