@@ -20,6 +20,13 @@ Design: sim/design/card-ingest.md (issue #320). A script cannot write the Desk
       slug the read does not hold), appends a "checked" line to the log, and exits
       nonzero on any mismatch or missing slug.
 
+  card-ingest backfill --docs DIR
+      DIR holds the decisions docs as read back from the Desk (<slug>.json). For each
+      open card with no rec_key whose recommendation names exactly one 'Option N' the
+      card has, writes a batch of updates adding rec_key and `recommended: true` on that
+      option; prints UNPARSED <slug>: <reason> for the rest. A new card from `parse`
+      carries both fields already.
+
 The card file: a heading `## Card N. <question>` or `# Card: <question>`; the parts
 `**IN SHORT.**`, `**Problem.**`, `**Terms.**` (`None.` is a value), `**Options.**`
 (lines `N. ...`), `**Recommendation.**` (its first sentence names `Option N`),
@@ -45,7 +52,7 @@ LOG = os.path.join(STATE, "card-ingest.jsonl")
 LOCK = os.path.join(STATE, "card-ingest.lock")
 THRESHOLD_HOURS = 24  # THRESHOLD_HOURS["desk snapshot"] in dws
 
-CONTENT_FIELDS = ("title", "question", "context", "options", "rec", "expiry", "source", "kind")
+CONTENT_FIELDS = ("title", "question", "context", "options", "rec", "rec_key", "expiry", "source", "kind")
 SILENCE = ("absent a ruling", "takes effect", "if no answer", "default holds")
 CANON = {"in short": "IN SHORT", "problem": "Problem", "terms": "Terms", "options": "Options",
          "recommendation": "Recommendation", "valid until": "Valid until", "source": "Source", "kind": "Kind"}
@@ -287,6 +294,7 @@ def check_card(card, pre, kind_default_source, a, snap, logseen, today):
             if not re.search(r"\bcosts?\b", t, re.I):
                 notes.append("option %d says nothing about its cost" % n)
     rec = value_of(one["recommendation"]) if "recommendation" in one else ""
+    rec_key = None  # the option the Recommendation names; the page tags it
     if rec:
         first = re.split(r"(?<=[.!?])\s", rec, maxsplit=1)[0]
         named = sorted({int(x) for x in re.findall(r"\boption\s+(\d+)", first, re.I)})
@@ -297,6 +305,7 @@ def check_card(card, pre, kind_default_source, a, snap, logseen, today):
         else:
             if opts and named[0] not in [n for n, _ in opts]:
                 errs.append("the recommendation names option %d; the card has %d" % (named[0], len(opts)))
+            rec_key = str(named[0])
             if len(marks) == 1 and marks[0] != named[0]:
                 errs.append("RECOMMENDED marks option %d and the recommendation names option %d" % (marks[0], named[0]))
     expiry = value_of(one["valid until"]) if "valid until" in one else ""
@@ -356,8 +365,8 @@ def check_card(card, pre, kind_default_source, a, snap, logseen, today):
     for rec_ in context:
         ctx.append("\n".join(rec_["raw_lines"]).rstrip())
     data = {"title": head, "question": question, "context": "\n\n".join(ctx),
-            "options": [{"key": str(n), "text": t} for n, t in opts],
-            "rec": rec, "expiry": expiry, "source": source, "kind": kind}
+            "options": [dict({"key": str(n), "text": t}, **({"recommended": True} if str(n) == rec_key else {})) for n, t in opts],
+            "rec": rec, "rec_key": rec_key, "expiry": expiry, "source": source, "kind": kind}
     return [], {"slug": slug, "num": num, "data": data}, notes
 
 
@@ -465,6 +474,70 @@ def cmd_parse(a):
         print(f"card-ingest: {w['op']} {w['doc_id']}")
 
 
+def named_option(rec, keys):
+    """(key, None) when the recommendation's first sentence names exactly one 'Option N' that the
+    card has; (None, reason) otherwise. The same reading parse applies to a new card."""
+    rec = (rec or "").strip()
+    if not rec:
+        return None, "no recommendation text"
+    first = re.split(r"(?<=[.!?])\s", rec, maxsplit=1)[0]
+    named = sorted({int(x) for x in re.findall(r"\boption\s+(\d+)", first, re.I)})
+    if not named:
+        return None, "first sentence names no 'Option N'"
+    if len(named) > 1:
+        return None, "first sentence names options %s" % " and ".join(str(n) for n in named)
+    if str(named[0]) not in keys:
+        return None, "names option %d; the card has %s" % (named[0], ", ".join(keys) or "none")
+    return str(named[0]), None
+
+
+def cmd_backfill(a):
+    """Write a batch of updates that add `recommended` to the named option and `rec_key`, for open
+    cards that lack rec_key and whose recommendation parses exactly. Reports the rest."""
+    docs = {}
+    paths = [a.docs] if os.path.isfile(a.docs) else sorted(os.path.join(a.docs, f) for f in os.listdir(a.docs) if f.endswith(".json"))
+    for pth in paths:
+        with open(pth) as f:
+            v = json.load(f)
+        if os.path.isfile(a.docs):
+            docs.update({k: (x.get("data") if isinstance(x.get("data"), dict) else x) for k, x in v.items()})
+        else:
+            docs[os.path.basename(pth)[:-5]] = v.get("data") if isinstance(v.get("data"), dict) else v
+    writes, unparsed, skipped = [], [], 0
+    for slug in sorted(docs):
+        d = docs[slug]
+        if d.get("status") != "open" or d.get("rec_key") or not isinstance(d.get("options"), list):
+            skipped += 1
+            continue
+        keys = [str(o.get("key")) for o in d["options"]]
+        if str(d.get("rec", "")).strip() in keys:
+            skipped += 1  # older shape: rec is the bare key, which the page already tags
+            continue
+        key, why = named_option(d.get("rec"), keys)
+        if key is None:
+            unparsed.append((slug, why))
+            continue
+        opts = [dict(o, recommended=True) if str(o.get("key")) == key else {k: v for k, v in o.items() if k != "recommended"} for o in d["options"]]
+        writes.append({"op": "update", "collection": "decisions", "doc_id": slug, "data": {"options": opts, "rec_key": key}})
+    today = now()
+    body = json.dumps(writes, sort_keys=True)
+    sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    batch = {"made_at": today, "file_sha256": sha, "writes": writes}
+    path = os.path.join(BATCHDIR, f"backfill-{sha[:8]}.json")
+    if writes:
+        os.makedirs(STATE, exist_ok=True)
+        with open(LOCK, "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            atomic_write(path, batch)
+    for w in writes:
+        print(f"BACKFILL {w['doc_id']} option {w['data']['rec_key']}")
+    for slug, why in unparsed:
+        print(f"UNPARSED {slug}: {why}")
+    print(f"card-ingest: backfill: {len(writes)} to write, {len(unparsed)} unparsed, {skipped} skipped (not open, already tagged, or bare key)")
+    if writes:
+        print(f"card-ingest: batch {path}")
+
+
 def cmd_check(a):
     try:
         with open(a.batch) as f:
@@ -486,7 +559,8 @@ def cmd_check(a):
             print(f"MISSING {slug}")
             bad += 1
             continue
-        fields = CONTENT_FIELDS if w["op"] == "update" else sorted(w["data"])
+        # an update carries the content fields it writes (a backfill writes two of them)
+        fields = [f for f in CONTENT_FIELDS if f in w["data"]] if w["op"] == "update" else sorted(w["data"])
         diffs = [fl for fl in fields if doc.get(fl) != w["data"].get(fl)]
         if diffs:
             bad += 1
@@ -515,6 +589,9 @@ def main(argv):
     w.add_argument("--prefix", required=True)
     w.add_argument("--update", action="store_true")
     w.set_defaults(fn=cmd_parse)
+    b = sub.add_parser("backfill")
+    b.add_argument("--docs", required=True, help="directory of <slug>.json decision docs, or one JSON file of {slug: doc}")
+    b.set_defaults(fn=cmd_backfill)
     c = sub.add_parser("check")
     c.add_argument("--batch", required=True)
     c.add_argument("--read", required=True)

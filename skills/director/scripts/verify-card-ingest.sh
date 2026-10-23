@@ -126,13 +126,14 @@ assert [x["doc_id"] for x in w] == ["rpt-1", "rpt-2"], w
 for x in w:
     assert x["op"] == "set" and x["collection"] == "decisions", x
     d = x["data"]
-    assert sorted(d) == sorted(["title", "question", "context", "options", "rec", "expiry", "source", "kind", "area", "owner", "status", "ruling", "opened"]), sorted(d)
+    assert sorted(d) == sorted(["title", "question", "context", "options", "rec", "rec_key", "expiry", "source", "kind", "area", "owner", "status", "ruling", "opened"]), sorted(d)
     assert d["status"] == "open" and d["ruling"] == "" and d["opened"] == sys.argv[2], d
     assert d["area"] == "test-area" and d["owner"] == "test-seat" and d["kind"] == "choice", d
 d = w[0]["data"]
 assert d["title"] == "Should the nightly report run at 06:00 or 07:00?", d["title"]
 assert d["question"] == "Should the nightly report run at 06:00 or 07:00?", d["question"]
-assert d["options"] == [{"key": "1", "text": "*Keep 06:00.* Nothing changes. The cost is a report short of late data."}, {"key": "2", "text": "*Move to 07:00.* One schedule line changes. The cost is a later report."}], d["options"]
+assert d["options"] == [{"key": "1", "text": "*Keep 06:00.* Nothing changes. The cost is a report short of late data."}, {"key": "2", "text": "*Move to 07:00.* One schedule line changes. The cost is a later report.", "recommended": True}], d["options"]
+assert d["rec_key"] == "2", d["rec_key"]
 assert d["rec"] == "Option 2. Complete data matters more than an hour.", d["rec"]
 assert d["expiry"] == "2026-11-02. The reporting seat re-checks it then.", d["expiry"]
 assert d["source"] == "bus 01EXAMPLE, the request for this card", d["source"]
@@ -626,7 +627,7 @@ if run "$root/u.md" --update >"$root/out" 2>"$root/err"; then
 import json, sys
 w = json.load(open(sys.argv[1]))["writes"]
 assert len(w) == 1 and w[0]["op"] == "update" and w[0]["doc_id"] == "rpt-4" and w[0]["collection"] == "decisions", w
-assert sorted(w[0]["data"]) == sorted(["title", "question", "context", "options", "rec", "expiry", "source", "kind"]), sorted(w[0]["data"])
+assert sorted(w[0]["data"]) == sorted(["title", "question", "context", "options", "rec", "rec_key", "expiry", "source", "kind"]), sorted(w[0]["data"])
 P
 else bad "--update of an open, unanswered card" "$(cat "$root/err")"; fi
 sub "$root/u.md" '## Card 1.' '## Card 5.'
@@ -739,6 +740,59 @@ if [[ "$CI" == "$here/card-ingest" ]]; then
 else
   echo "SKIP the mutant cases: CI_BIN names another tool ($CI), and mutants are built from $here/card-ingest"
 fi
+
+# --- backfill: tag the recommended option on open cards that predate rec_key -------------------
+bf="$root/bf"; rm -rf "$bf"; mkdir -p "$bf"
+python3 - "$bf" <<'P'
+import json, sys
+d = sys.argv[1]
+def card(slug, status, rec, **kw):
+    doc = {"status": status, "rec": rec, "options": [{"key": "1", "text": "a"}, {"key": "2", "text": "b"}]}
+    doc.update(kw)
+    json.dump(doc, open("%s/%s.json" % (d, slug), "w"))
+card("ok-prose", "open", "Option 2. It is cheaper.")
+card("ok-marker", "open", "option 1: keep it.", )
+card("no-option", "open", "Do the second thing.")
+card("two-options", "open", "Option 1 or Option 2. Either works.")
+card("out-of-range", "open", "Option 3. Larger.")
+card("empty-rec", "open", "")
+card("later-sentence", "open", "It depends. Option 2 wins.")
+card("bare-key", "open", "2")
+card("done", "closed", "Option 1. Old.")
+card("tagged", "open", "Option 1. Old.", rec_key="1")
+P
+clean_state
+if "$CI" backfill --docs "$bf" >"$root/out" 2>"$root/err" && python3 - "$(batch_json)" "$root/out" <<'P'
+import json, sys
+b = json.load(open(sys.argv[1])); out = open(sys.argv[2]).read()
+w = {x["doc_id"]: x for x in b["writes"]}
+assert sorted(w) == ["ok-marker", "ok-prose"], sorted(w)
+assert all(x["op"] == "update" and x["collection"] == "decisions" for x in w.values()), w
+assert sorted(w["ok-prose"]["data"]) == ["options", "rec_key"], w["ok-prose"]
+assert w["ok-prose"]["data"]["rec_key"] == "2", w["ok-prose"]
+assert w["ok-prose"]["data"]["options"] == [{"key": "1", "text": "a"}, {"key": "2", "text": "b", "recommended": True}], w["ok-prose"]
+assert w["ok-marker"]["data"]["options"][0] == {"key": "1", "text": "a", "recommended": True}, w["ok-marker"]
+for slug in ("no-option", "two-options", "out-of-range", "empty-rec", "later-sentence"):
+    assert "UNPARSED " + slug in out, (slug, out)
+for slug in ("bare-key", "done", "tagged", "ok-prose"):
+    assert "UNPARSED " + slug not in out, (slug, out)
+assert "2 to write, 5 unparsed, 3 skipped" in out, out
+P
+then ok "backfill writes updates for exact parses only, reports the five that do not parse, skips closed, tagged and bare-key cards"; else bad "backfill" "$(cat "$root/err") $(cat "$root/out")"; fi
+# a read-back of the backfill passes when the Desk holds the batch, and names a doc that lacks it
+python3 - "$(batch_json)" "$root/readback.json" <<'P'
+import json, sys
+b = json.load(open(sys.argv[1]))
+json.dump({x["doc_id"]: dict(x["data"], title="t", status="open") for x in b["writes"]}, open(sys.argv[2], "w"))
+P
+if "$CI" check --batch "$(batch_json)" --read "$root/readback.json" >"$root/out" 2>&1 && [[ "$(grep -c '^PASS ' "$root/out")" == 2 ]]; then ok "check passes a backfill batch against what the Desk holds"; else bad "check of a backfill batch" "$(cat "$root/out")"; fi
+python3 - "$root/readback.json" <<'P'
+import json, sys
+d = json.load(open(sys.argv[1])); d["ok-prose"]["rec_key"] = "1"; json.dump(d, open(sys.argv[1], "w"))
+P
+rc=0; "$CI" check --batch "$(batch_json)" --read "$root/readback.json" >"$root/out" 2>&1 || rc=$?
+if [[ $rc -ne 0 ]] && grep -q "MISMATCH ok-prose rec_key" "$root/out"; then ok "check names a backfilled field the Desk does not hold"; else bad "check misses a rec_key mismatch" "rc=$rc $(cat "$root/out")"; fi
+clean_state
 
 echo "card-ingest: $pass passed, $fail failed"
 [[ "$fail" == 0 ]]
