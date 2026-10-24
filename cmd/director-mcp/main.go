@@ -105,16 +105,12 @@ func main() {
 		stop()
 		os.Exit(code)
 	}
-	self := Sender{
-		AgentID:   env("DIRECTOR_AGENT_ID", ""),
-		Role:      env("DIRECTOR_ROLE", ""),
-		Team:      env("DIRECTOR_TEAM", "default"),
-		Workspace: env("DIRECTOR_WORKSPACE", "default"),
-	}
-	if self.AgentID == "" {
-		fmt.Fprintln(os.Stderr, "director-mcp: DIRECTOR_AGENT_ID is required")
+	se, err := resolveSeatEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "director-mcp: %v\n", err)
 		os.Exit(2)
 	}
+	self := se.self
 	// Reject a malformed identity at spawn (director#3, R-76 and R-78): the
 	// launcher-assigned levers are checked against the closed subject-token
 	// class and the shim exits before any subject is built. Rejected, never
