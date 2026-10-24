@@ -2660,6 +2660,271 @@ does for findings.
 the O-2078 citation in the 2026-10-14 harvest diff.*
 *Source: OBSERVED. Cross-refs R-163, R-192.*
 
+**R-221 (OBSERVED) · director reports the revision of each installed component
+and each running seat's binary against main, and names the seats still on a
+pre-fix revision.** The sweep script a skill step names was missing from the
+installed bin while the checkout carried it, because the installer had not been
+re-run. A reviewer seat reported "no responders" on every receive while sends to
+it were accepted; about 30 receive processes ran on one host, the oldest started
+before the durable-recovery fix. Another host installed the fix, and every seat
+started before the install kept the old binary in memory, so one seat had failed
+local reads for two days. Three builder seats hit the same symptom the next
+morning, and one acted on an ask without seeing the follow-up that gated it. An
+install reaches only processes started after it, and nothing showed which seats
+lagged. At sweep time director shows installed revision against main, lists the
+running seats whose binary predates the install, and offers the reconnect or
+restart that brings each one current.
+*Earned by: O-2097 (2026-10-19); friction 2026-10-21 08:40Z (long-lived seats keep
+pre-fix binaries); friction 2026-10-22 01:05Z and 11:18Z (builder bus receive
+fails); friction 2026-10-22 07:24Z (an install does not reach running seats).*
+*Source: OBSERVED. Cross-refs R-108, R-154.*
+
+**R-222 (OBSERVED) · director reads every answered card from where the decision
+page writes answers, and relaying an answer and closing its card are one act.**
+The page writes answers to a separate store keyed by card id. Director read only
+the card records for days, so 109 ready answers sat unrelayed, the oldest ten
+days old, and told the operator the page held none of their edits. Later, six
+answered cards were relayed on the bus and left open on the page for 20 hours, so
+the operator saw them as unconsumed, and a note-only answer was never relayed at
+all. The sweep joins each ready answer to its open card, relays it with its note
+verbatim, writes the card's status in the same step, and lists every ready answer
+not yet relayed, note-only answers included.
+*Earned by: O-2102, O-2104 (2026-10-19); O-2108 (2026-10-23).*
+*Source: OBSERVED. Sharpens R-218; cross-refs R-215.*
+
+**R-223 (OBSERVED) · the drain heartbeat is written by the drain itself, and an
+undrained inbox and an aged merge recommendation surface without the operator
+asking.** For about five and a half hours director answered operator turns and
+sent eight relays while 66 messages queued, 13 of them merge recommendations, the
+oldest five hours old. The heartbeat was recorded after each send, so the drain
+age it printed reset without a drain. Earlier the same day 26 messages, four reach
+tests and an operator-blocking proposal among them, waited because every drain
+started inside an operator turn; a team measured director's reach-test ack
+latency at 90 seconds to 6 hours. Only a drain records a drain. A merge
+recommendation older than an hour, and any message older than the drain
+interval, appear in the next status line on their own.
+*Earned by: O-2094, O-2103 (2026-10-19).*
+*Source: OBSERVED. Cross-refs R-168, R-169, R-179.*
+
+**R-224 (OBSERVED) · a restart wave is planned per role from each seat's running
+revision, and each role shifts only on its supervisor's safe-point
+acknowledgement, which director acts on promptly.** Asked to restart 14 seats
+after a fix, director picked the waves by reading session ages against the fix's
+install time, because marvel restarts by role and shows no per-seat revision. It
+shifted an architect its supervisor had just dispatched work to, since the
+safe-point reply arrived after the wave. The same afternoon a review supervisor
+gave a safe point and then held five reviews idle for 17 minutes while director
+ran another task. Director groups seats by role with their revisions, warns when
+a role mixes pre-fix and post-fix seats, waits for each role's safe point, and
+treats a safe point as perishable custody to act on at once.
+*Earned by: observation 2026-10-21 (rolling restart picked by hand); friction
+2026-10-21 18:00Z (safe point held 17 minutes).*
+*Source: OBSERVED. Extends R-145; cross-refs R-204, R-221.*
+
+**R-225 (OBSERVED) · a watch loop says each round whether any watched item can
+reach its goal, names each item's blocker and who clears it, and proposes
+stopping when its subject has had no new input for a set time.** A loop kept
+approved pull requests current for an hour and printed states without saying
+that none could merge: one failed a required check with auto-merge off, two had
+lost approval to conflict pushes, one should have closed. It also re-ran CI on a
+dead item, and it listed a re-approval as the operator's step when the operator
+was the author. The operator: "you're looping but you're doing something wrong".
+The same day a bus-wait loop re-armed itself for about 50 turns of "quiet,
+waiting again" while its subject thread had no new comment for 13 hours, and two
+duplicate crons for one prompt queued 22 copies. The operator: "you're stuck
+arnt you?" A loop reports reachability per item, does no work on an item that
+cannot reach its goal, keeps one schedule per prompt, and says once that its
+subject has gone quiet.
+*Earned by: friction 2026-10-22 10:45Z (update loop); friction 2026-10-22 13:32Z
+(self re-arming wait).*
+*Source: OBSERVED, with operator corrections quoted. Cross-refs R-217.*
+
+**R-226 (OBSERVED) · every standing rule director holds carries its origin, and
+an inference is never cited as a ruling.** Director told the operator "your rule
+says" every request needs a ring; the operator had made no such ruling. The
+source was director's own practice, built from two sightings, and it conflicted
+with a ruling the operator had relayed two days earlier. Separately, director
+gave a seat a general-sounding reason ("seats do not write" a path) for a single
+classifier refusal, and another seat adopted it as fleet policy within a minute.
+Each rule director keeps records whether it is an operator ruling (with the
+quote), a relayed ruling (with its relay), or a director inference (with its
+evidence). Director cites only the first two as rules, and gives a reason scoped
+to its case, since seats copy director wording as policy.
+*Earned by: O-2111 (2026-10-24); friction 2026-10-22 03:28Z (an instruction
+worded as a rule spread to another seat).*
+*Source: OBSERVED. Extends R-201; cross-refs R-186.*
+
+**R-227 (OBSERVED) · a ring cannot leave residue: director confirms the text was
+submitted, or removes it.** A ring into two supervisor panes typed its text and
+the Enter did not submit it. The text sat in both composers for 17 and 21 hours,
+typed and not a suggestion, blocking every later ring and waiting to be submitted
+by the next Enter; the seats had read the bus anyway, so the ring added nothing.
+Earlier, a ring's Enter landed on a harness menu and did not submit, and a ring
+landed on an auto-mode setup dialog whose Enter would have accepted a shell
+history scan. After a ring director reads the composer again: empty means
+submitted; its own text still there means it clears that text and reports the
+ring as failed. A wake path that types nothing into the composer is preferred
+wherever a seat has one.
+*Earned by: O-2112 (2026-10-24); friction FR-netmove-50 (2026-10-11); friction
+2026-10-21 00:20Z (auto-mode setup dialog).*
+*Source: OBSERVED. Extends R-194; cross-refs R-112, R-200.*
+
+**R-228 (OBSERVED) · a row reaches the operator's "blocked on you" list only if it
+carries its own context in plain words, is fresh, and was checked first.** The
+operator, on a seven-row list: "all the blocked on you are trash, unactionable
+reminders of shit I didn't read the first time." Three rows were ledger entries
+stale for two weeks that no tick aged out, one used a label from a report the
+operator never read, and one was a seat's open question a three-call read would
+have settled. Rows that go stale age out to parked. Anything director can settle
+with a read or a reversible act is settled, not listed. Each row that stays
+states its question and options in words, not by id or label.
+*Earned by: observation 2026-10-22 15:10Z (operator correction); O-2092
+(2026-10-19, needless items on the list); O-2098 (a recommendation without its
+details).*
+*Source: OBSERVED, with the operator's correction quoted. Cross-refs R-135,
+R-197, R-202, R-203.*
+
+**R-229 (OBSERVED) · a blocker or recommendation director presents is checked
+against the request's stated purpose and the current facts, and an open
+question copied from an older document is not a blocker until it is confirmed
+open.** A card recommended skipping a clean-room pilot because the target already
+had a license; the operator's purpose was to pilot the process itself, so the
+recommendation served the wrong objective, and director relayed it and the
+operator's quick pick before that was caught. Later, director presented a design
+idea's month-old open question (whether a notice and policy existed) as a
+precondition for the work. They existed, and the operator: "stop pretending to
+be a traffic cop". Before director names something as a blocker or recommends
+skipping a step, it restates the purpose the requester gave and shows the
+recommendation still serves it, and it treats a question copied from a document
+as a question to confirm with one check, not a gate.
+*Earned by: observation 2026-10-22 23:38Z (clean-room premise misframed); the
+2026-10-24 correction on a work-reconstitution design idea.*
+*Source: OBSERVED, with the operator's correction quoted. Cross-refs R-174,
+R-215.*
+
+**R-230 (OBSERVED) · a ruling that sets a value or asks for a recurring measure
+is written where the tool that acts on it reads it, in the same act, and its
+first reading is shown.** The operator ruled the quiet threshold for the
+stalled-ideas scan, it was never written to the file the scan reads, and the scan
+kept reporting "not run" until director told the operator they had never ruled.
+The operator: "yes i did, but it was too many. you lost it." Separately, a ruling
+asked for a daily count of how work split across accounts; none was kept, and
+when the operator asked, director rebuilt a proxy by hand from the relay log.
+When a ruling sets a threshold, a count or a cadence, director writes it to the
+consuming tool's config or schedule at once, runs the tool once, and shows that
+reading.
+*Earned by: O-2109 (2026-10-24); observation 2026-10-21 19:10Z (the daily count
+never kept).*
+*Source: OBSERVED, with the operator's correction quoted. Sharpens R-127.*
+
+### Harvest diff (2026-10-24)
+
+Covers `observations.md` O-2094 to O-2112 and the unnumbered entries dated
+2026-10-20 to 2026-10-23, and `friction.md` FR-2028 onward (2026-10-19 to
+2026-10-24). `shortcuts.md` unchanged since 2026-10-05; no spec changed;
+`relay-log.md` not read.
+
+- **Promoted (10):** R-221 (installed and running revisions against main), R-222
+  (answers read from the answer store; relay and close in one act), R-223 (the
+  drain writes its own heartbeat; aged mail surfaces), R-224 (restart waves per
+  role on a safe-point ack), R-225 (watch loops report reachability and go quiet),
+  R-226 (rule provenance; inference never cited as a ruling), R-227 (a ring
+  leaves no residue), R-228 (admission rule for blocked-on-you rows), R-229
+  (blockers checked against the request's purpose), R-230 (a ruled value is
+  written where its tool reads it).
+- **Unchanged, new instances:**
+  - R-149 and R-194: a dim suggestion reported up as the operator's unsent line
+    and nearly sent with an Enter (O-2096); composer-check read UNCLEAR on an empty
+    composer under an update banner (FR-2028), a fixture for its verify script.
+  - R-150, R-184 and R-191: a ruling about rules refused at director's own send
+    as [Self-Modification] (O-2099); kinu role shifts refused as [Interfere With
+    Workloads] (friction 2026-10-21 18:08Z); an answer to a codex seat's prompt
+    refused as [Create Unsafe Agents] (friction 2026-10-21 22:15Z). None retried.
+  - R-174: a peer's permission claim relayed to the operator before a check and
+    withdrawn eight minutes later (observation 2026-10-21 18:25Z); a merge line
+    sent while the reviewer's latest COMMENT at head read "Verdict: CHANGES"
+    (O-relayed-unverified-ready, 2026-10-22), also R-172.
+  - R-180 and R-152: two stacked children merged into feature-branch bases after
+    their parents merged without branch deletion (O-stack-merge-off-main); the
+    guard now stops on a non-default base. A retargeted child ran none of main's
+    pull-request CI and the guard said PROCEED (friction 2026-10-21); one
+    instance, kept as an observation for the guard's builder. A superseded,
+    cancelled check suite caused a STOP on a clean PR (friction 2026-10-22
+    02:00Z); one instance, a guard fix.
+  - R-182 and R-213: four sends and a night of review GATEs addressed to the wrong
+    cluster (friction 2026-10-20 21:58Z, 2026-10-22 02:13Z), and a ring to a seat
+    matched by text that missed a team prefix (friction 2026-10-21 20:30Z). Three
+    instances; R-213 is the build that would have prevented all of them.
+  - R-192: times in two notes derived from tool timeouts, retracted after reading
+    the clock (friction 2026-10-22 02:25Z).
+  - R-195: three of four remote reviewer seats listed healthy while blocked on a
+    permission prompt, one for about nine days (O-2105); freebusy counts heartbeat
+    activity as busy (friction 2026-10-21 12:15Z), a freebusy fix.
+  - R-197 and R-132: a seat's report with seven draft cards and two asks reached
+    director and was dropped for 19 hours (O-2107). The operator: "director is
+    failing in its objective pretty hard".
+  - R-200 and R-216: corporate seats cast on 10-21 never had a turn while their
+    supervisor routed them work for two days (friction 2026-10-22 07:27Z).
+  - R-202: about ten operator decisions put in chat replies, never carded; the
+    operator: "why are questions not on the decision desk cards??" (O-2110).
+  - R-203: no post path to the team chat channel the re-review route names, twice
+    (friction 2026-10-22 02:09Z and 15:45Z); recorded as a capability gap, not an
+    operator chore. The operator requested the 2026-10-24 reviews directly.
+  - R-204: requests sent to a supervisor between its handoff and its shift were in
+    neither the handoff nor the successor's inbox (friction 2026-10-21 18:22Z and
+    21:45Z); a standing cadence lost in a succession, 17.4 hours without a sweep
+    (friction 2026-10-22 11:19Z).
+  - R-210, R-211 and R-212: corporate absent from global presence again, found at a
+    send (O-2100).
+  - R-218: 23 cards from four formats and three more from bus prose, hand-ingested
+    (O-2095, O-2101); card ingest has since shipped.
+  - R-173 and R-156: two of four ruled pull requests readied, reported as all done
+    (O-2106); one instance, kept with R-173.
+  - R-157: a run's first attempt reported as its outcome after a rerun had already
+    finished the job (friction 2026-10-22 12:09Z).
+  - R-201: a re-review nudged while it was on a ruled 30-minute stable-head hold
+    (friction 2026-10-22 06:07Z).
+  - R-146: the 2026-10-24 wake-cue rollout went to supervisors whose role write
+    domain and limits did not cover editing their own manifest or shifting
+    themselves, and two supervisors held it as a question. The operator then ruled
+    (quoted under "Retrospective", episode E). The ruling's own text belongs to the
+    supervisor role definition, not this register.
+- **Still observations (one instance each, not promoted):**
+  - The public-write identity check (observation 2026-10-20 22:05Z, "post them"
+    relayed to seats that post under the operator's own identity). R-150 is the
+    nearest entry; promote on a second instance.
+  - A seat's comment watermark that never advanced on a GitHub thread (friction
+    2026-10-21 05:40Z): the R-105 read-receipt need on a second channel.
+  - Crons that do not fire while a seat waits on the bus (friction 2026-10-22
+    04:42Z): the case for a scheduler outside the seat.
+  - A fan-out message counted as unanswered by every supervisor (friction
+    2026-10-22 03:41Z): a cue fix, cross-refs R-183.
+  - Ringing a seat took six lookups, and a remote pane cannot be composer-checked
+    (friction 2026-10-22 14:58Z and 16:21Z): R-194 tooling.
+  - A security fix sat 17 days in bot pull requests while a default-branch
+    scheduled check stayed red (friction 2026-10-22 10:53Z). A daily check was
+    asked for that day, but the capture does not quote the ruling.
+- **Rejected for the register (routed elsewhere):**
+  - Reporting "no upstream fix" from a title and commit search when the fix never
+    cited the issue (observation 2026-10-20 23:21Z): general research practice,
+    true with or without director. Goes to the upstream claim gate skill.
+  - Every stacked child conflicting after its parent's squash (friction
+    2026-10-21): a workflow cost of squash plus keep-branch. Goes to the
+    stacked-PR merge order rule and the code restructure plan.
+  - `marvel shift` completing without a handoff request (friction 2026-10-21
+    18:37Z): a marvel defect, candidate marvel issue.
+  - `display.session_columns` ignored silently when given as a string (friction
+    2026-10-22 18:05Z): a marvel defect, candidate marvel issue.
+  - A codex seat stuck on a read prompt for a brief path outside its workdir
+    (friction 2026-10-21 22:15Z): dispatch practice for supervisors (briefs inside
+    the seat's workdir or inline). Routed to the lane supervisor already.
+  - A shared checkout with `core.bare = true` (friction 2026-10-24 18:58Z):
+    checkout configuration, owned by the maintainer seat, routed 2026-10-24.
+  - The operator's 2026-10-24 ruling that supervisors spec file changes and wake a
+    builder, and may shift any member of their own team including themselves:
+    a role rule. It goes to the supervisor role definition as a proposal through
+    ratification; its director face is R-146 above.
+
 ### Harvest diff (2026-10-19)
 
 Covers `observations.md` entries not cited by any earlier harvest: O 2026-10-14w
