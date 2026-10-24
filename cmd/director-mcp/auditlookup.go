@@ -64,6 +64,9 @@ func auditLookup(ctx context.Context, js jetstream.JetStream, own string, raw js
 	if c, ok := args["cluster"]; ok && json.Unmarshal(c, &given) != nil {
 		given = string(c)
 	}
+	if given == "" {
+		return nil, fmt.Errorf("audit_lookup: cluster is required; this session is on cluster %s, so pass cluster %s to read its log", own, own)
+	}
 	if given != own {
 		return nil, fmt.Errorf("audit_lookup: this session is on cluster %s, not %s; read it with marvel bus audit %d --cluster %s", own, given, seq, given)
 	}
