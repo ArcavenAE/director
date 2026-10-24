@@ -1,0 +1,159 @@
+id: brief-operational-diagnostic-battery
+type: brief
+confidence: frontier
+title: "Probe: what the ruled diagnostics battery covers of director's areas, and which of its premises still hold"
+content: |
+  Source idea: _kos/ideas/director-operational-diagnostic-battery.md (filed
+  2026-09-27, shape RULED the same day: U3-1 and U3-2). Sibling brief, same
+  ask with marvel as the subject: marvel/_kos/probes/brief-operational-diagnostic-battery.md.
+  One ask, two subjects, per the subject test.
+
+  ## Question
+
+  The idea names six director areas: reach and addressing on both tiers,
+  presence, durable replay, grants, and the launcher. A design for the
+  runnable battery already exists (sim/design/ops-diagnostics-battery.md,
+  U3, director#142, 2026-09-27) and five flat build tickets were filed from
+  it on 2026-10-10 (aae-orc-kdin1 runner and gate 0, x6bky gate A, dskt6
+  gate B, iv77o gate C, 4ihzc gate D). All five are open and unassigned
+  [measured] bd sql. No runner exists: the orc has no tools/diag/
+  [measured] git ls-tree aae-orc origin/main tools/.
+
+  So the open question is not "should there be a battery" (ruled yes) but:
+
+  1. Which of the six areas does U3's check list leave without a positive
+     and negative pair, given the 43 single-purpose verify-*.sh scripts
+     director already carries ([measured] git ls-tree -r on origin/main)?
+  2. Which of U3's registered premises have drifted in the four weeks
+     since it was written?
+  3. Can the existing scratch verifiers be called as U3 checks unchanged
+     (pair-shaped, exit codes mappable to PASS, FAIL, skip, INSTRUMENT), or
+     does each need a wrapper?
+
+  ## What is already built (not re-proposed here)
+
+  - U3 design: runner `diag run`, one file per check, per-case exit codes
+    0/1/2/3, JSON-line report under ~/.director/state/diag/, gate 0 as the
+    positive control, always exits 0 [read]
+    director sim/design/ops-diagnostics-battery.md:24-75.
+  - Launcher: sim/twin/verify-cast-launch.sh (the global-tier levers per
+    role) and scripts/director-install/verify-director-install.sh
+    (install, verify, atomic switch, rollback, lag report) [read] file
+    headers. `director-install --status` exists and always exits 0, as a
+    diagnostic [read] scripts/director-install/director-install:10,36,301.
+  - Broker readiness before a seat starts: `director-mcp --preflight`
+    [read] cmd/director-mcp/main.go:64, cmd/director-mcp/unread.go:121.
+  - Grants: probe/nats-phase-0/verify-auth.sh proves the director#4
+    authorization block on a throwaway broker [read] header.
+  - Reach on the global tier: verify-global.sh, verify-global-shim.sh,
+    verify-roundtrip-receipts.sh (two real shims, receipts), on throwaway
+    leaves [read] probe/nats-global-tier/ headers.
+  - Presence: scripts/verify-presence-watch.sh (a send to an absent cluster
+    is held, then released once) [read] header.
+  - Replay across a partition: verify-jetstream-partition.sh [read] header.
+
+  ## Hypothesis
+
+  U3 covers grants (A3b), the launcher (gate B) and part of reach (A3), and
+  leaves presence, durable replay, and receiver-side acknowledgement (R-08:
+  accepted is not delivered or read) without a check, even though scratch
+  verifiers exist for presence and replay. The operator's second evidence
+  item (a "Login expired" supervisor that swallowed six accepted sends) is
+  the R-08 case, and no U3 row tests it [inferred] from U3's tables against
+  the idea's areas.
+
+  Premise drift expected [inferred]:
+  - Gate B's blocker aae-orc-v0mu6 closed 2026-10-15 [measured] bd sql,
+    so gate B is no longer blocked by it.
+  - A3b's "known FAIL on kinu" rests on the phase-0 broker having no
+    authorization block. marvel's managed bus now renders one confined user
+    per team in the director#4 shape, while the team user keeps its global
+    grants in stage 2 [read] marvel internal/bus/declared.go:212-220. Which
+    broker kinu runs today decides whether A3b is still a known FAIL.
+  - Gate D's live read overlaps marvel's write probe and headroom warning,
+    which landed under aae-orc-kjix3 (still in_progress) [read] marvel
+    internal/bus/writeprobe.go:14, headroom.go:14.
+  - The idea cites R-92 as "a global send to an absent seat is refused, not
+    queued". R-92 as written is "the routing subject is derived from the
+    recipient's resolved identity" [read] sim/requirements.md:265, and the
+    presence watch holds a send to an absent cluster rather than refusing
+    it. The anchor has drifted, which is the idea's own "anchors drift"
+    tension in practice.
+
+  ## Approach
+
+  Read-only plus scratch. No live bus publish, no live daemon, no credential
+  read.
+
+  1. Coverage map. A table of the six areas against three columns: U3 rows,
+     existing verify scripts, and the anchor (R-number or design section).
+     Each cell says positive only, negative only, pair, or none.
+  2. Premise re-check. For each U3 known result and blocker, one command:
+     bd sql for ticket state; read kinu's broker config by grant name only
+     (never values) to settle A3b; re-read each R-number U3 and the idea
+     cite and record any that changed meaning.
+  3. Callability. Run each scratch verifier named above once, under the
+     relay run conditions (scratch HOME and short TMPDIR, no MARVEL_SOCKET,
+     localhost-only sandbox with a refused-connection control, the sandbox
+     write proof). Record its exit code, whether it has a negative case, and
+     whether a failure is distinguishable from an instrument fault. Scripts
+     that need the hub operator's seeds (verify-global.sh) are recorded as
+     NOT-APPLICABLE for this probe, never run.
+
+  ## Pass and fail criteria
+
+  - Hypothesis SUPPORTED: the map shows presence, replay and R-08 with no
+    U3 row, and at least one of the premise checks in Hypothesis has
+    changed state since 2026-09-27.
+  - Hypothesis FALSIFIED: every area has a U3 row with a pair, and every
+    U3 premise still holds; then the battery needs only kdin1 built.
+  - VOID: a verifier cannot run under the run conditions for reasons
+    unrelated to its subject (the sandbox blocks it); record it as
+    INSTRUMENT and do not count it either way.
+
+  ## Excluded scope
+
+  - Building the runner or any check (that is aae-orc-kdin1 and its
+    siblings).
+  - Any live publish, including A3's marked probes (U3-3 is still open).
+  - marvel's areas (spawn, restart, shifts, inject, reexec, bus auth); the
+    sibling brief covers them.
+  - Making any check a gate. The battery is diagnostic (ADR-007,
+    diagnostic-not-gate.md).
+
+  ## Open questions for the operator or the author (not settled here)
+
+  - Home. U3 places the runner at the orc (tools/diag/) because it tests
+    the composition. The idea files the ask once per subject graph. Whether
+    director-only checks also ship from director, and how a runner at the
+    orc reaches component checks, is not decided.
+  - Whether presence, replay and R-08 checks join U3 as a new gate or
+    extend gate A.
+  - Who may run an interventional check, and who ratifies it, beyond the
+    one U3-3 consent.
+  - Which R-number anchors the "absent seat" behavior, now that R-92 does
+    not say it.
+
+  ## Harvest
+
+  A finding in this graph with the coverage map, the premise table and the
+  callability results. If supported: notes on aae-orc-kdin1 naming the
+  drifted premises, and a proposal (not a filing) for the uncovered areas.
+  A question node for the battery is minted at harvest if the finding
+  leaves an open question; none exists today.
+edges: []
+provenance:
+  created_by: agent
+  session: aae-orc-research-supervisor-g4-0 research subagent, stalled-ideas sweep 2026-10-24
+  created_at: "2026-10-24"
+  notes: >
+    Read at director origin/main 4dc2d0a and marvel origin/main 9672ca5;
+    bd state read 2026-10-24. Draft held for the research supervisor; not
+    committed. predicted_confidence 0.75 is for the uncovered-areas half;
+    the drift half is already partly measured.
+brief:
+  hypothesis: "The ruled U3 battery design covers grants, the launcher and part of reach, and leaves presence, durable replay and receiver-side acknowledgement (R-08) without a positive and negative pair; several of its registered premises (gate B's blocker, A3b's known FAIL, gate D's overlap with marvel's write probe, the R-92 anchor) have drifted since 2026-09-27."
+  excluded_scope: "Building the runner or checks; any live bus publish or live daemon change; reading credential values; marvel's areas (sibling brief); wiring any check into CI or a hook."
+  success_signal: "A coverage map of the six areas against U3 rows and existing verifiers with each cell marked pair, positive only, negative only or none; a premise table with one command's result per U3 premise; and each scratch verifier's exit code and pair shape under the relay run conditions."
+  timebox: "One working session for the map and premise table; one more for the scratch runs."
+  predicted_confidence: 0.75
