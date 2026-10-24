@@ -1,5 +1,9 @@
 # Design brief 4: authority is never carried in content
 
+Status: done. The three tags were harvested into `../requirements.md` as
+R-67 (INJ-A), R-68 (INJ-B) and R-69 (INJ-C), each citing this brief. The open
+questions below were not harvested and stay open.
+
 Developed from the party roundtable (2026-09-12), the A2A research, and the
 director requirements register. Kept proportionate: the operator asked to go
 light on the malicious case for now. This is awareness and a named vector, not a
