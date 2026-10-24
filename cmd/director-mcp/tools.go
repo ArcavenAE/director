@@ -35,9 +35,18 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		summaryDesc += " Covers both the local inbox and this session's global inbox."
 		rosterDesc += " Rows from both tiers are merged and carry a tier column; global rows carry the cluster and role that address them."
 	}
+	// readOnlyHint (MCP 2025-06-18 tool annotations) on every tool, so a
+	// harness that lets read-only tools through plan mode lets a plan-mode cast
+	// poll the bus (aae-orc-r675b). The three that read the bus are true; the
+	// four that write (a send, a broadcast, a status, a presence row) are false.
+	// wait_for_message and inbox_summary are true although a wait acks what it
+	// returns and a cue_ack moves the cue state: what they change is this
+	// seat's own inbox, and a plan-mode cast must be able to receive.
+	readOnly := func(b bool) *toolAnnotations { return &toolAnnotations{ReadOnlyHint: b} }
 	tools := []toolDef{
 		{
 			Name:        "send_message",
+			Annotations: readOnly(false),
 			Description: sendDesc,
 			InputSchema: map[string]any{
 				"type": "object",
@@ -55,6 +64,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		},
 		{
 			Name:        "wait_for_message",
+			Annotations: readOnly(true),
 			Description: waitDesc,
 			InputSchema: map[string]any{
 				"type": "object",
@@ -66,6 +76,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		},
 		{
 			Name:        "inbox_summary",
+			Annotations: readOnly(true),
 			Description: summaryDesc,
 			InputSchema: map[string]any{
 				"type": "object",
@@ -76,11 +87,13 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		},
 		{
 			Name:        "list_roster",
+			Annotations: readOnly(true),
 			Description: rosterDesc,
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
 		{
 			Name:        "set_presence",
+			Annotations: readOnly(false),
 			Description: "Record this session's presence heartbeat (state, e.g. idle or busy). Must be repeated within the presence window or the entry expires.",
 			InputSchema: map[string]any{
 				"type":       "object",
@@ -90,6 +103,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		},
 		{
 			Name:        "report_status",
+			Annotations: readOnly(false),
 			Description: "Tell the sender of an ask that you are working on it, or blocked on someone. One INFORM signal in reply to the ask, so the ask ledger can show working and blocked-on instead of silence. Send it when you start work on a request and again if you stop on someone else.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -104,6 +118,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		},
 		{
 			Name:        "broadcast",
+			Annotations: readOnly(false),
 			Description: "Send an INFORM to every seat live in the workspace or a team: one durable send per seat found in presence, excluding you. Returns recipients:N and refuses when N is 0. A seat that joins after the call is not included.",
 			InputSchema: map[string]any{
 				"type": "object",

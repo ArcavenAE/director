@@ -30,6 +30,14 @@ forms whole), so a colour parameter is never read as the dim attribute; only SGR
 2 sets dim, and 0, 22 and 39 clear it (39 is not strictly SGR for dim, but it
 errs toward refusing).
 
+A seat that is mid-turn with a queued message shows "Press up to edit queued
+messages" on the composer's mark line (dim, then ESC[39m, then the phrase, so it
+does not read as a dim suggestion). When the mark line's plain text, colour codes
+stripped, is exactly that phrase and the rest of the frame is blank, the verdict
+is QUEUED, decided before the scan for typed text. The queued message itself sits
+in the transcript above the frame with its own prompt mark, and the phrase
+anywhere outside the mark line, above or below the frame, is not the banner.
+
 The menu is recognised only as its own block BELOW the bottom rule: the title
 line followed within a few lines by an option line "1. Yes" and a later
 "2. Not now" (a leading cursor mark on an option line is allowed). The phrase in
@@ -44,12 +52,17 @@ Verdict on stdout, one word, and the exit code:
   HAS-TEXT   1  non-dim text after the mark: REFUSE, do not inject
   MENU       2  the auto-mode menu is showing: answer "2. Not now", then ring
   UNCLEAR    3  no frame, or no single mark line in it: refuse; look at the pane first
+  QUEUED     4  the queued-messages banner is on the mark line: the seat is mid-turn
+                and already holds a queued message; do not ring; the seat will read
+                the queue at turn end
 
 With --handle-menu and --pane, a MENU verdict sends the single key `2` (the
 "2. Not now" entry; never Enter, never "Don't show again"), recaptures, and
 reports the verdict of the recapture. If the menu is still there it stays MENU
 (exit 2). Nothing else is ever sent, and nothing is sent on any other verdict.
-A capture or a send that fails exits nonzero with no verdict on stdout.
+A capture or a send that fails exits nonzero with no verdict on stdout (Python's
+exit with a message, which is 1), and a usage error exits 2 (argparse); neither
+prints a verdict, so read stdout, not the code alone, for those two.
 Without --handle-menu the script only reads.
 
 TMUX_BIN overrides the tmux binary (the tests use a fake).
@@ -71,6 +84,7 @@ def is_rule(raw):
     return bool(RULE_COLOUR.match(raw)) and bool(RULE_SHAPE.match(plain(raw)))
 
 
+QUEUED_BANNER = "Press up to edit queued messages"
 MENU_TITLE = re.compile(r"Teach auto mode", re.I)
 OPT_YES = re.compile(r"^\s*(?:[\u276f>]\s*)?1\.\s+Yes\b")
 OPT_NOT_NOW = re.compile(r"^\s*(?:[\u276f>]\s*)?2\.\s+Not now\b")
@@ -154,6 +168,11 @@ def verdict(text):
     marks = [i for i in range(top + 1, bot) if plain(lines[i]).lstrip().startswith(PROMPT)]
     if len(marks) != 1:
         return "UNCLEAR"
+    # The queued banner, before the scan for typed text: its ESC[39m ends the dim before
+    # the phrase, so the scan would read it as HAS-TEXT.
+    after = plain(lines[marks[0]]).split(PROMPT, 1)[1].replace("\u00a0", " ").strip()
+    if after == QUEUED_BANNER and all(blank(plain(lines[i])) for i in range(top + 1, bot) if i != marks[0]):
+        return "QUEUED"
     state = "EMPTY"
     for i in range(top + 1, bot):
         seen = i != marks[0]
@@ -179,7 +198,7 @@ def verdict(text):
     return state
 
 
-CODES = {"EMPTY": 0, "SUGGESTION": 0, "HAS-TEXT": 1, "MENU": 2, "UNCLEAR": 3}
+CODES = {"EMPTY": 0, "SUGGESTION": 0, "HAS-TEXT": 1, "MENU": 2, "UNCLEAR": 3, "QUEUED": 4}
 
 
 def main():
