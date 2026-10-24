@@ -1424,6 +1424,7 @@ func (b *Bus) writeGlobalPresenceView(ctx context.Context, state string, view pr
 func (b *Bus) attachCue(c *cue) {
 	c.mu.Lock()
 	c.oldest, c.pendingUnverified = b.oldestPending, b.pending.unverified
+	c.oldestUnacked = func() bool { return b.pending.oldestUnacked(time.Now()) }
 	c.mu.Unlock()
 	b.cueState, b.cueSampling = c.presenceAt, c.sampling
 }
@@ -1453,7 +1454,7 @@ func (b *Bus) presenceView(ctx context.Context) presenceView {
 		if m, err := (busCueSource{b}).oldestMetaOn(ctx, tier); err == nil && m != nil {
 			id = m.MessageID
 		}
-		v.cueReason = joinReason(stalledReason(id, age), v.cueReason)
+		v.cueReason = joinReason(stalledReason(id, age, b.pending.oldestUnacked(time.Now())), v.cueReason)
 	}
 	return v
 }

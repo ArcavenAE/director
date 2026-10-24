@@ -9,18 +9,20 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// pendingTracker keeps how long this seat's oldest unread message has waited,
+// pendingTracker keeps how long this seat's oldest unacked message has waited,
 // on the shim's own clock, from consumer and stream state sampled over time
 // (director#297). No broker timestamp is read, so there is no clock skew
 // between hosts.
 //
-// Unread is NumPending: messages not yet delivered to this seat. Ack-pending
-// mail was delivered, so a message read and held (handled mode) does not age
-// toward stalled; stalled means mail nobody has drained. A message Nak'd after
-// a cancel was delivered once, so it is not counted while it waits to be
-// delivered again.
+// The count is NumPending plus NumAckPending, the same count the cue uses, as
+// the marvel watcher design rules (section 11.5): every message not yet acked.
+// A message read and held ack-pending (handled mode) keeps aging, and so does
+// one Nak'd after a cancel while it waits to be delivered again; only the ack
+// takes it off. The clock stays this sample-inferred age. The reference for
+// it is the watcher's age, which reads the broker's own clock; the two can
+// differ by the sample interval and by the start-of-sampling stamp below.
 //
-// Each sample carries the tier's NumPending and, while anything is unread, T:
+// Each sample carries the tier's count and, while anything is unacked, T:
 // the number of messages the stream holds on this consumer's own filter
 // subjects, from STREAM.INFO with a subjects filter (a verb the hub grants a
 // leaf on its inbox stream). The inbox streams use limits retention, so a
@@ -59,7 +61,8 @@ type pendingTracker struct {
 
 type tierPending struct {
 	at         time.Time // the last good sample's stamp
-	unread     uint64    // its NumPending
+	unread     uint64    // its NumPending plus NumAckPending
+	ackPending uint64    // its NumAckPending, so the reason can say unacked
 	total      uint64    // its T, when it was read
 	haveTotal  bool
 	batches    []pendingBatch
@@ -74,11 +77,12 @@ type pendingBatch struct {
 // pendingSample is one tier's state, read after at. failed, when set, is why
 // the stream read failed, and the rest is not used.
 type pendingSample struct {
-	unread    uint64 // NumPending
-	total     uint64 // T, valid when haveTotal
-	haveTotal bool
-	failed    string
-	at        time.Time
+	unread     uint64 // NumPending plus NumAckPending
+	ackPending uint64 // NumAckPending
+	total      uint64 // T, valid when haveTotal
+	haveTotal  bool
+	failed     string
+	at         time.Time
 }
 
 // mark applies one sample for a tier.
@@ -130,7 +134,7 @@ func (p *pendingTracker) mark(tier string, s pendingSample) {
 	if sum < s.unread {
 		push(s.unread - sum)
 	}
-	t.at, t.unread, t.total, t.haveTotal = s.at, s.unread, s.total, s.haveTotal
+	t.at, t.unread, t.ackPending, t.total, t.haveTotal = s.at, s.unread, s.ackPending, s.total, s.haveTotal
 }
 
 // age is how long the oldest waiting message has waited at now; 0 when none.
@@ -144,6 +148,21 @@ func (p *pendingTracker) age(now time.Time) time.Duration {
 func (p *pendingTracker) oldest(now time.Time) (time.Duration, string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.oldestLocked(now)
+}
+
+// oldestUnacked reports whether the oldest waiting message is ack-pending:
+// its tier's last good sample held ack-pending mail, which a consumer
+// delivered before anything still undelivered.
+func (p *pendingTracker) oldestUnacked(now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, tier := p.oldestLocked(now)
+	t := p.tiers[tier]
+	return t != nil && t.ackPending > 0
+}
+
+func (p *pendingTracker) oldestLocked(now time.Time) (time.Duration, string) {
 	var at time.Time
 	tier := ""
 	for name, t := range p.tiers {
@@ -228,12 +247,12 @@ func (b *Bus) readTier(ctx context.Context, tier string, js jetstream.JetStream,
 }
 
 // sampleOf is one tier's tracker sample. T is read only when something is
-// unread, as one STREAM.INFO with a subjects filter per filter subject, under
-// the caller's bound. A sample with nothing unread needs no T: the next one's
-// unread mail all arrived after it. A failed or timed-out read marks the
+// unacked, as one STREAM.INFO with a subjects filter per filter subject, under
+// the caller's bound. A sample with nothing unacked needs no T: the next one's
+// unacked mail all arrived after it. A failed or timed-out read marks the
 // sample failed.
 func sampleOf(ctx context.Context, js jetstream.JetStream, stream string, info *jetstream.ConsumerInfo, at time.Time) pendingSample {
-	s := pendingSample{unread: info.NumPending, at: at}
+	s := pendingSample{unread: info.NumPending + uint64(info.NumAckPending), ackPending: uint64(info.NumAckPending), at: at}
 	if s.unread == 0 {
 		return s
 	}

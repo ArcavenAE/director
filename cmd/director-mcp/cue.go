@@ -125,15 +125,22 @@ type cue struct {
 	// pendingUnverified is why that age cannot be trusted for a tier right now
 	// (pendingTracker.unverified); empty, or nil, when it can.
 	pendingUnverified func() string
+	// oldestUnacked says whether that message is ack-pending
+	// (pendingTracker.oldestUnacked); nil reads as not.
+	oldestUnacked func() bool
 }
 
 // stalledReason is the presence reason for a stalled cue. An empty id is left
-// out.
-func stalledReason(id string, age time.Duration) string {
+// out. unacked names an oldest message that was delivered and not acked.
+func stalledReason(id string, age time.Duration, unacked bool) string {
 	if id != "" {
 		id += " "
 	}
-	return fmt.Sprintf("stalled: oldest pending %swaiting %ds with no wait open", id, int64(age/time.Second))
+	kind := "pending"
+	if unacked {
+		kind = "unacked"
+	}
+	return fmt.Sprintf("stalled: oldest %s %swaiting %ds with no wait open", kind, id, int64(age/time.Second))
 }
 
 func newCue(cfg cueConfig, src cueSource, emit func(map[string]any), warn func([]string, string), now func() time.Time, nonce func() string) *cue {
@@ -270,7 +277,7 @@ func (c *cue) reconnected() {
 // adds it when it writes the row (presenceView).
 func (c *cue) presence() (state, reason string) {
 	c.mu.Lock()
-	oldest, unver := c.oldest, c.pendingUnverified
+	oldest, unver, unacked := c.oldest, c.pendingUnverified, c.oldestUnacked
 	c.mu.Unlock()
 	var age time.Duration
 	if oldest != nil {
@@ -282,7 +289,7 @@ func (c *cue) presence() (state, reason string) {
 	}
 	state, reason, stalled := c.presenceAt(age, oldest != nil, why)
 	if stalled {
-		reason = joinReason(stalledReason("", age), reason)
+		reason = joinReason(stalledReason("", age, unacked != nil && unacked()), reason)
 	}
 	return state, reason
 }
