@@ -1,0 +1,15 @@
+Source: two Claude Code panes captured on mokuzai on 2026-10-24, each as a `tmux capture-pane -p -e`
+capture (the .ansi.txt files) and a plain `capture-pane -p` capture (the .txt files). The status-line
+words read "example" as delivered; the check does not read that line.
+
+  composer-check.mokuzai-frame-a-idle.ansi.txt   956 bytes  sha256 3cad17b3ac7ebaed6fadcda09aa23c4dd54d66adefd85c0e7aa77023b349e779
+  composer-check.mokuzai-frame-a-idle.txt        654 bytes  sha256 d2c50d81006858205bc3300448d649e3bb9fe32fac9b4b09b62d902acad40c36
+  composer-check.mokuzai-frame-b-draft.ansi.txt  958 bytes  sha256 4a97b6aa1b94136546e8753bb6f70442a71a41483e3ff958a410954db322b506
+  composer-check.mokuzai-frame-b-draft.txt       656 bytes  sha256 f9606352f8134df32593684862bc865e7e68a5d51b1bc6472e3f48e6b91163f8
+
+Frame A is an idle, empty composer. Frame B holds typed text with no dim code. On this host the drawn
+rules are ESC[37m then 80 U+2500 with no label, and the mark is followed by U+00A0.
+
+Why a copy: these are the only measured frames in this colour. verify-composer-check.sh checks each
+file against the sha above before it reads it. Do not edit the copies by hand; a new capture replaces
+a file and its line here together.

@@ -384,5 +384,58 @@ $(queued_screen "$Q_EMPTY")"
 check "the banner phrase below the frame is not QUEUED" EMPTY 0 "$(queued_screen "$Q_EMPTY")
   Press up to edit queued messages"
 
+# --- real frames from mokuzai, where the drawn rules are ESC[37m ---------------------------------
+# Byte for byte from two live panes (fixtures/composer-check.mokuzai.pin). Each copy is checked
+# against its pinned sha first, so a changed copy fails here instead of passing a weaker test.
+pinned() { # file, sha256
+  local f="$here/fixtures/$1"
+  [[ -f "$f" && "$(shasum -a 256 "$f" | cut -d' ' -f1)" == "$2" ]] \
+    && /usr/bin/grep -q "$2" "$here/fixtures/composer-check.mokuzai.pin" \
+    && ok "fixture $1 matches its pin" || bad "fixture $1 matches its pin"
+}
+real() { # name, expected verdict, expected rc, fixture
+  local got r
+  set +e; got="$("$C" --file "$here/fixtures/$4" 2>/dev/null)"; r=$?; set -e
+  [[ "$got" == "$2" && "$r" == "$3" ]] && ok "$1" || bad "$1" "got $got rc=$r, want $2 rc=$3"
+}
+pinned composer-check.mokuzai-frame-a-idle.ansi.txt  3cad17b3ac7ebaed6fadcda09aa23c4dd54d66adefd85c0e7aa77023b349e779
+pinned composer-check.mokuzai-frame-a-idle.txt       d2c50d81006858205bc3300448d649e3bb9fe32fac9b4b09b62d902acad40c36
+pinned composer-check.mokuzai-frame-b-draft.ansi.txt 4a97b6aa1b94136546e8753bb6f70442a71a41483e3ff958a410954db322b506
+pinned composer-check.mokuzai-frame-b-draft.txt      f9606352f8134df32593684862bc865e7e68a5d51b1bc6472e3f48e6b91163f8
+real "the real mokuzai idle frame is EMPTY"           EMPTY    0 composer-check.mokuzai-frame-a-idle.ansi.txt
+real "the real mokuzai draft frame is HAS-TEXT"       HAS-TEXT 1 composer-check.mokuzai-frame-b-draft.ansi.txt
+# the plain captures of the same panes carry no colour, so their rules are not drawn rules
+real "the plain capture of the idle frame is UNCLEAR"  UNCLEAR 3 composer-check.mokuzai-frame-a-idle.txt
+real "the plain capture of the draft frame is UNCLEAR" UNCLEAR 3 composer-check.mokuzai-frame-b-draft.txt
+
+# ESC[37m is a rule colour only at the start of the line, in front of a rule shape
+R37="${E}[37m${RUN20}"
+check "an ESC[37m rule pair frames an empty composer"  EMPTY    0 "${R37}
+${P}
+${R37}"
+check "an ESC[37m rule after ESC[39m frames a draft"   HAS-TEXT 1 "${E}[39m${R37}
+${P} typed
+${E}[39m${R37}"
+check "ESC[37m ASCII dashes are not a rule"            UNCLEAR  3 "${E}[37m--------------------
+${P}
+${E}[37m--------------------"
+check "ESC[37m mid-line is not a rule"                 UNCLEAR  3 "x ${R37}
+${P}
+${R37}"
+# mokuzai draws dim transcript text as ESC[2m ESC[37m; the colour must start the line
+check "a dim ESC[2m ESC[37m run is not a rule"         UNCLEAR  3 "${E}[2m${R37}
+${P} 
+${E}[2m${R37}"
+check "another basic colour, ESC[36m, is not a rule"   UNCLEAR  3 "${E}[36m${RUN20}
+${P} 
+${E}[36m${RUN20}"
+check "ESC[37;2m is not the measured code"             UNCLEAR  3 "${E}[37;2m${RUN20}
+${P} 
+${E}[37;2m${RUN20}"
+# a coloured rule inside a framed draft poses as the frame's top; the second guard refuses it
+check "an ESC[37m box rule inside a framed draft is refused, not read EMPTY" UNCLEAR 3 "$(framed "${P} typed
+${R37}
+more draft")"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
