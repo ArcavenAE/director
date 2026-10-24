@@ -9,9 +9,13 @@
 //	NATS_URL=nats://127.0.0.1:4222 director-mcp
 //
 // The three identity values are subject tokens and must match [A-Za-z0-9_-];
-// anything else is refused at startup (director#3). Optional broker
-// credentials: DIRECTOR_NATS_CREDS (a .creds file) or DIRECTOR_NATS_USER with
-// DIRECTOR_NATS_PASS; unset means an anonymous connection, as before.
+// anything else is refused at startup (director#3). Inside a marvel session
+// they come from MARVEL_SESSION, MARVEL_TEAM and MARVEL_WORKSPACE when the
+// DIRECTOR_* values are unset, and with neither the shim refuses (seatenv.go).
+// Optional broker credentials: DIRECTOR_NATS_CREDS (a .creds file) or
+// DIRECTOR_NATS_USER with DIRECTOR_NATS_PASS, else user director with the
+// cluster's seat password; with none of them the connection is anonymous, as
+// before, with a note on stderr.
 //
 // The global tier (R-86) is off unless DIRECTOR_GLOBAL_DOMAIN names the hub's
 // JetStream domain, and needs two more levers when it is on:
@@ -111,6 +115,15 @@ func main() {
 		os.Exit(2)
 	}
 	self := se.self
+	// The seat password reaches dial the way the wrapper's export did, so
+	// connect and preflight read one credential.
+	if se.natsUser != "" {
+		_ = os.Setenv("DIRECTOR_NATS_USER", se.natsUser)
+		_ = os.Setenv("DIRECTOR_NATS_PASS", se.natsPass)
+	}
+	if se.note != "" {
+		fmt.Fprintf(os.Stderr, "director-mcp: %s\n", se.note)
+	}
 	// Reject a malformed identity at spawn (director#3, R-76 and R-78): the
 	// launcher-assigned levers are checked against the closed subject-token
 	// class and the shim exits before any subject is built. Rejected, never

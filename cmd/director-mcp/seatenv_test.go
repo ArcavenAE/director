@@ -209,3 +209,22 @@ func TestResolveSeatEnvDefaultsTheBusStateUnderHome(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// With no MARVEL_BUS_STATE and no HOME the seat password cannot be found, so
+// the chain reaches its no-credential step rather than refusing on its own.
+func TestResolveSeatEnvWithNoHomeReachesTheNoCredentialStep(t *testing.T) {
+	for _, k := range seatVars {
+		t.Setenv(k, "")
+	}
+	t.Setenv("HOME", "")
+	t.Setenv("DIRECTOR_AGENT_ID", "hand-kinu-7k2m")
+	t.Setenv("DIRECTOR_TEAM", "ops")
+	t.Setenv("DIRECTOR_WORKSPACE", "w")
+	se, err := resolveSeatEnv()
+	if err != nil {
+		t.Fatalf("refused: %v", err)
+	}
+	if se.natsUser != "" || !strings.Contains(se.note, "connecting anonymously") {
+		t.Fatalf("credential %q, note %q; want the anonymous step", se.natsUser, se.note)
+	}
+}
