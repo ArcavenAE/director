@@ -715,7 +715,9 @@ func toolCatalogHandled(gcfg *globalConfig, cueOn, handledOn bool) []toolDef {
 	}
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 	return append(tools, toolDef{
+		// readOnlyHint false: it writes a ledger record, then acks (aae-orc-r675b).
 		Name:        "mark_handled",
+		Annotations: &toolAnnotations{ReadOnlyHint: false},
 		Description: "Record what you did with a message you read, then ack it. The record is written first and the ack second. handled: you acted. forwarded: you passed it on (give the forward's message_id). parked: it waits (give a one-line reason); a parked message is acked and stays visible through the ledger. Offered only when the handled mode is on.",
 		InputSchema: map[string]any{
 			"type": "object",
