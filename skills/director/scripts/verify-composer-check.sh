@@ -305,8 +305,11 @@ printf '%s\n' "$EMPTY_PANE" >"$root/cap-empty"
 if "$C" --file "$root/cap-empty" --handle-menu >/dev/null 2>&1; then bad "--handle-menu with --file is refused"; else ok "--handle-menu with --file is refused (an empty-composer file would otherwise exit 0)"; fi
 
 # a pane that is not a menu: --handle-menu sends nothing, on every verdict
-for kind in empty suggestion typed unclear typed-with-phrase typed-menu; do
+for kind in empty suggestion typed unclear typed-with-phrase typed-menu queued; do
   case "$kind" in
+    queued)     body="${E}[38;5;244m${RUN20} neutral-seat ${RUN10}
+${E}[38;5;246m${P}"$'\xc2\xa0'"${E}[2m${E}[39mPress up to edit queued messages${E}[0m
+${R}" ;;
     empty)      body="$EMPTY_PANE" ;;
     suggestion) body="$(framed "${P} ${E}[2mgo ahead${E}[0m")" ;;
     typed)      body="$(framed "${P} typed draft")" ;;
@@ -352,6 +355,32 @@ FAKE
 chmod +x "$root/tmux4"
 set +e; got="$(TMUX_BIN="$root/tmux4" "$C" --pane %1 --handle-menu 2>/dev/null)"; r=$?; set -e
 [[ -z "$got" && "$r" -ne 0 ]] && ok "a failed send-keys exits nonzero with no verdict" || bad "a failed send-keys exits nonzero with no verdict" "got '$got' rc=$r"
+
+# --- the queued banner -------------------------------------------------------------------
+# Rebuilt from a read-only `tmux capture-pane -e -p` of a kinu seat that was mid-turn with a
+# queued message (2026-10-24), with the queued text and the seat label changed. The two mark
+# lines are byte for byte, including the no-break space after the mark. The rules keep the
+# measured lengths (44, a label, then 1 above; 80 below) in this file's drawn-rule colour,
+# since the report gave their shape and not their colour bytes.
+RUN44="$(for _ in $(seq 1 44); do printf '\xe2\x94\x80'; done)"
+RUN80="$(for _ in $(seq 1 80); do printf '\xe2\x94\x80'; done)"
+Q_TOP="${E}[38;5;244m${RUN44} neutral-seat $(printf '\xe2\x94\x80')"
+Q_BOT="${E}[39m${E}[38;5;244m${RUN80}"
+Q_TRANSCRIPT="${E}[48;5;237m${P} check your director inbox: a neutral phrase${E}[39m
+  ctrl+x ctrl+s to send now
+* Working"
+Q_MARK="${E}[38;5;246m${P}"$'\xc2\xa0'"${E}[2m${E}[39mPress up to edit queued messages${E}[0m"
+Q_EMPTY="${E}[38;5;246m${P}"$'\xc2\xa0'"${E}[39m"
+queued_screen() { printf '%s\n%s\n%s\n%s' "$Q_TRANSCRIPT" "$Q_TOP" "$1" "$Q_BOT"; }
+
+check "the queued banner on the mark line is QUEUED" QUEUED 4 "$(queued_screen "$Q_MARK")"
+check "the queued message in the transcript above the frame is not QUEUED" EMPTY 0 "$(queued_screen "$Q_EMPTY")"
+check "non-dim text on the mark line below a queued message stays HAS-TEXT" HAS-TEXT 1 "$(queued_screen "${E}[38;5;246m${P}"$'\xc2\xa0'"${E}[39mhalf a message")"
+check "the measured empty mark line is EMPTY" EMPTY 0 "$(printf '%s\n%s\n%s' "$Q_TOP" "$Q_EMPTY" "$Q_BOT")"
+check "the banner phrase in the transcript only is not QUEUED" EMPTY 0 "Press up to edit queued messages
+$(queued_screen "$Q_EMPTY")"
+check "the banner phrase below the frame is not QUEUED" EMPTY 0 "$(queued_screen "$Q_EMPTY")
+  Press up to edit queued messages"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
