@@ -39,9 +39,15 @@ type rpcError struct {
 }
 
 type toolDef struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	InputSchema map[string]any   `json:"inputSchema"`
+	Annotations *toolAnnotations `json:"annotations,omitempty"`
+}
+
+// toolAnnotations are the MCP tool hints (2025-06-18).
+type toolAnnotations struct {
+	ReadOnlyHint bool `json:"readOnlyHint"`
 }
 
 type Server struct {
