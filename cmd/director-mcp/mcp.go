@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 )
 
 type rpcRequest struct {
@@ -52,6 +53,8 @@ type Server struct {
 	log   func(string, ...any)
 	// cue is the P1 channel cue, nil unless the seat opted in (cue.go).
 	cue *cue
+	// running counts tools/call requests in flight.
+	running atomic.Int32
 }
 
 func newServer(bus *Bus, logf func(string, ...any), cueOn bool) *Server {
@@ -59,6 +62,9 @@ func newServer(bus *Bus, logf func(string, ...any), cueOn bool) *Server {
 	s.tools = withHoldTools(toolCatalogHandled(bus.globalCfg, cueOn, bus.handled != nil), bus.watch != nil)
 	return s
 }
+
+// inFlight reports how many tools/call requests are running.
+func (s *Server) inFlight() int { return int(s.running.Load()) }
 
 // serve reads JSON-RPC messages line by line and dispatches them. Requests
 // carry an id and get a response; notifications (no id) are acted on silently.
@@ -132,6 +138,8 @@ func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
 		s.replyErr(req.ID, -32602, "bad params: "+err.Error())
 		return
 	}
+	s.running.Add(1)
+	defer s.running.Add(-1)
 	done := s.cueBefore(p.Name, p.Args)
 	res, err := dispatchTool(ctx, s.bus, p.Name, p.Args)
 	done(res)

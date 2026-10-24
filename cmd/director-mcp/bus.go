@@ -82,6 +82,11 @@ type Bus struct {
 	// lookup is a test seam for the broker lookup of the local durable; nil in
 	// production (localrecover.go lookupLocal).
 	lookup func(ctx context.Context, durable string) error
+	// testAfterFetch and testAfterAck are test seams in the local receive, run
+	// with the call's context just after a fetch returns a message and just
+	// after its ack; nil in production (concurrent_test.go).
+	testAfterFetch func(ctx context.Context)
+	testAfterAck   func(ctx context.Context)
 }
 
 // localConsumerInactive is the local durable's inactive threshold. The inbox
