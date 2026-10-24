@@ -76,7 +76,9 @@ no instance id is stored:
 `seat-decision@1`, then one `field: value` line per field. A line not in that
 form is refused, so a value cannot run onto a second line and be stored cut
 short. `changes` is split on whitespace, and each link goes through the
-existing `typed_link` check. `test` accepts `1 ok` to `8 ok` in order,
+existing `typed_link` check, and a link that starts with `pr:`, `issue:` or
+`bd:` must fully match the existing `LINK` pattern. `test` accepts `1 ok` to
+`8 ok` in order,
 separated by spaces, commas or semicolons; case is ignored. `estimate` and
 `--hours` accept a number with an optional trailing `h`: digits and one
 decimal point, so a negative value, `nan` and `inf` are refused, and zero is
