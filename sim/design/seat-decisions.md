@@ -72,6 +72,20 @@ no instance id is stored:
 | `actual_h` | `SEAT-DECISION-ACTUAL` | optional until the work is done; its source is kept |
 | `state` | set by `dws` | below |
 
+**Block form and parsing.** A block is an optional first line
+`seat-decision@1`, then one `field: value` line per field. A line not in that
+form is refused, so a value cannot run onto a second line and be stored cut
+short. `changes` is split on whitespace, and each link goes through the
+existing `typed_link` check. `test` accepts `1 ok` to `8 ok` in order,
+separated by spaces, commas or semicolons; case is ignored. `estimate` and
+`--hours` accept a number with an optional trailing `h`: digits and one
+decimal point, so a negative value, `nan` and `inf` are refused, and zero is
+accepted. On the daily line, "overridden" counts overridden and reworked, and
+"rework h seat-hours" sums their hours at risk (the actual, else the
+estimate). Without `--trial-start` the line says "trial day unknown" and does
+not refuse, since `decisions` never refuses. `--ref` is required and must not
+be blank; it is not checked against the relay log.
+
 **States.** `decided-by-seat`, then `confirmed` or `overridden`; an
 overridden decision becomes `reworked` once every affected row is resolved.
 A two-path record (section 8) starts as `paths-open` and leaves it only by
@@ -82,8 +96,8 @@ final. No other move exists, and none happens on a clock.
 |---|---|---|
 | `dws decision add --from FILE` | parses one `seat-decision@1` block and appends `decided-by-seat` | a field is missing, unknown or repeated; the id exists; the test is not eight oks; the estimate is over 4 |
 | `dws decision actual <id> --hours H --source S` | records the actual figure | the id is unknown |
-| `dws decision confirm <id> --words W --ref R` | `confirmed`; W is the operator's words, R the relay id | not `decided-by-seat`; W empty |
-| `dws decision override <id> --words W --ref R --instead I` | `overridden`; prints the decision's own `changes` (D1), and from D2 the full affected list of section 6 | not `decided-by-seat`; W empty |
+| `dws decision confirm <id> --words W --ref R` | `confirmed`; W is the operator's words, R the relay id | not `decided-by-seat`; W empty; R blank |
+| `dws decision override <id> --words W --ref R --instead I` | `overridden`; prints the decision's own `changes` (D1), and from D2 the full affected list of section 6 | not `decided-by-seat`; W empty; R blank |
 | `dws decision rework <id>` | `reworked` | any affected row is still open (section 6) |
 | `dws decisions [--json] [--unconfirmed] [--daily]` | lists decisions; `--daily` prints the daily line | never; it writes nothing |
 
