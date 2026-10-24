@@ -35,7 +35,8 @@ refuses() {  # LABEL WORD cmd...
 }
 
 # block FILE ID [field=value...]: a seat-decision@1 block with every field set; a
-# field=value pair replaces that field, field= drops it, and +line appends a line.
+# field=value pair replaces that field, field= drops it, +line appends a line, and
+# -header leaves out the seat-decision@1 line.
 block() {
   local file="$1" id="$2"; shift 2
   python3 - "$file" "$id" "$@" <<'P'
@@ -49,14 +50,18 @@ fields = [("id", did), ("seat", "team-a/builder"),
           ("estimate", "2"), ("undo", "set it back to 5 s in one commit"),
           ("changes", "pr:ArcavenAE/director#901 bd:aae-orc-x1")]
 extra = []
+header = "seat-decision@1\n"
 for e in edits:
+    if e == "-header":
+        header = ""
+        continue
     if e.startswith("+"):
         extra.append(e[1:])
         continue
     k, _, v = e.partition("=")
     fields = [(fk, v if fk == k else fv) for fk, fv in fields if not (fk == k and v == "")]
 with open(path, "w") as f:
-    f.write("seat-decision@1\n" + "".join(f"{k}: {v}\n" for k, v in fields) + "".join(x + "\n" for x in extra))
+    f.write(header + "".join(f"{k}: {v}\n" for k, v in fields) + "".join(x + "\n" for x in extra))
 P
 }
 
@@ -103,6 +108,14 @@ block "$root/r" team-a/builder-20261020-2 estimate=4.5
 refuses "add refuses an estimate over 4" "over 4" "$DWS" decision add --from "$root/r"
 block "$root/r" team-a/builder-20261020-2 estimate=soon
 refuses "add refuses an estimate that is not a number" "number" "$DWS" decision add --from "$root/r"
+block "$root/r" team-a/builder-20261020-2 "+and a value carried onto a second line"
+refuses "add refuses a value continued onto a second line" "is not a 'field: value' line" "$DWS" decision add --from "$root/r"
+block "$root/r" team-a/builder-20261020-2 "changes=relay:R-1,relay:R-2"
+refuses "add refuses a malformed typed link in changes, naming it" "relay:R-1,relay:R-2" "$DWS" decision add --from "$root/r"
+block "$root/r" team-a/builder-20261020-2 "test=2 ok 1 ok 3 ok 4 ok 5 ok 6 ok 7 ok 8 ok"
+refuses "add refuses the eight oks in the wrong order" "eight" "$DWS" decision add --from "$root/r"
+block "$root/r" team-a/builder-20261020-2 estimate=-1
+refuses "add refuses a negative estimate" "number" "$DWS" decision add --from "$root/r"
 block "$root/r" team-a/builder-g9-9-20261020-2
 refuses "add refuses an id that carries an instance id" "instance id" "$DWS" decision add --from "$root/r"
 block "$root/r" team-a/builder-20261020-2 seat=builder-g9-9
@@ -114,6 +127,16 @@ block "$root/r" team-a/builder-20261020-2
 refuses "only director appends a decision" "refresh may append" "$DWS" --actor refresh decision add --from "$root/r"
 block "$root/d2" team-a/builder-20261020-2 estimate=4
 "$DWS" decision add --from "$root/d2" >/dev/null 2>"$root/e" && ok "add accepts an estimate of exactly 4" || bad "add accepts an estimate of exactly 4" "$(cat "$root/e")"
+# the accepted forms of section 3's "Block form and parsing" (accepted here, so
+# they are counted in the later listings: each adds one decided-by-seat decision)
+block "$root/f1" team-a/builder-20261020-3 -header
+"$DWS" decision add --from "$root/f1" >/dev/null 2>"$root/e" && ok "add accepts a block with no seat-decision@1 line" || bad "add accepts a block with no seat-decision@1 line" "$(cat "$root/e")"
+block "$root/f2" team-a/builder-20261020-4 "test=1 ok, 2 ok; 3 ok,4 ok;5 ok 6 ok, 7 ok; 8 ok"
+"$DWS" decision add --from "$root/f2" >/dev/null 2>"$root/e" && ok "add accepts the eight oks separated by commas and semicolons" || bad "add accepts the eight oks separated by commas and semicolons" "$(cat "$root/e")"
+block "$root/f3" team-a/builder-20261020-5 estimate=3h
+"$DWS" decision add --from "$root/f3" >/dev/null 2>"$root/e" && ok "add accepts 3h as an estimate" || bad "add accepts 3h as an estimate" "$(cat "$root/e")"
+"$DWS" decisions --json >"$root/j" 2>/dev/null || true
+[[ "$(q "[x for x in d['decisions'] if x['id']=='team-a/builder-20261020-5'][0]['estimate_h']" <"$root/j" 2>/dev/null)" == "3.0" ]] && ok "3h is stored as 3" || bad "3h is stored as 3"
 
 # --- actual ------------------------------------------------------------------------------------
 refuses "actual refuses an unknown id" "no decision" "$DWS" decision actual team-a/builder-20261020-9 --hours 1 --source "SEAT-DECISION-ACTUAL relay:R-12"
@@ -126,6 +149,8 @@ refuses "actual refuses an unknown id" "no decision" "$DWS" decision actual team
 # --- confirm, override, rework: state checks -------------------------------------------------
 refuses "confirm refuses empty words" "words" "$DWS" decision confirm team-a/builder-20261020-1 --words "  " --ref relay:R-20
 refuses "override refuses empty words" "words" "$DWS" decision override team-a/builder-20261020-1 --words "" --ref relay:R-20 --instead "a) 5 s"
+refuses "confirm refuses a blank --ref" "--ref is required" "$DWS" decision confirm team-a/builder-20261020-1 --words yes --ref "  "
+refuses "override refuses a blank --ref" "--ref is required" "$DWS" decision override team-a/builder-20261020-1 --words no --ref "" --instead "a) 5 s"
 refuses "confirm refuses an unknown id" "no decision" "$DWS" decision confirm team-a/builder-20261020-9 --words yes --ref relay:R-20
 refuses "override refuses an unknown id" "no decision" "$DWS" decision override team-a/builder-20261020-9 --words no --ref relay:R-20 --instead x
 refuses "rework refuses an unknown id" "no decision" "$DWS" decision rework team-a/builder-20261020-9
@@ -218,6 +243,18 @@ block "$root/e5" team-a/builder-20261022-1 estimate=1
 "$DWS" decision add --from "$root/e5" >/dev/null 2>&1 || bad "add e5"
 "$DWS" decisions --daily --trial-start 2026-10-19 >"$root/daily" 2>/dev/null || true
 grep -qF '1 new today, 5 total' "$root/daily" && ok "a decision added today counts as new today" || bad "a decision added today counts as new today" "$(cat "$root/daily")"
+
+# a reworked decision counts as overridden, and its hours at risk are its actual
+export DIRECTOR_STATE="$root/st4"; mkdir -p "$DIRECTOR_STATE"
+at 2026-10-21T08:00:00Z
+block "$root/w1" team-a/builder-20261021-1 estimate=2
+"$DWS" decision add --from "$root/w1" >/dev/null 2>&1 || bad "add w1"
+"$DWS" decision actual team-a/builder-20261021-1 --hours 3.5 --source "SEAT-DECISION-ACTUAL relay:R-40" >/dev/null 2>&1 || bad "actual w1"
+"$DWS" decision override team-a/builder-20261021-1 --words no --ref relay:R-41 --instead other >/dev/null 2>&1 || bad "override w1"
+"$DWS" decision rework team-a/builder-20261021-1 >/dev/null 2>&1 || bad "rework w1"
+at 2026-10-22T09:00:00Z
+"$DWS" decisions --daily --trial-start 2026-10-19 >"$root/daily" 2>"$root/e" || bad "decisions --daily runs on a reworked ledger" "$(cat "$root/e")"
+grep -qxF 'Seat decisions (trial day 4 of 14): 0 new today, 1 total, 0 confirmed, 1 overridden, rework 3.5 seat-hours.' "$root/daily" && ok "a reworked decision counts as overridden and sums its actual hours" || bad "a reworked decision counts as overridden and sums its actual hours" "$(cat "$root/daily")"
 
 # an empty ledger lists nothing and does not refuse
 export DIRECTOR_STATE="$root/st3"; mkdir -p "$DIRECTOR_STATE"
