@@ -436,7 +436,7 @@ func (s busCueSource) count(ctx context.Context) (uint64, error) {
 		g := s.b.global
 		s.b.globalMu.Unlock()
 		if g != nil {
-			gi, err := g.consumer.Info(ctx)
+			gi, err := g.cons().Info(ctx)
 			if err != nil {
 				return 0, err
 			}
@@ -453,7 +453,7 @@ func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
 	}
 	if s.b.globalCfg != nil {
 		if g, gerr := s.b.globalReady(ctx); gerr == nil {
-			gitems, _, _, gerr := peekWaiting(ctx, g.js, g.consumer, "global", 1)
+			gitems, _, _, gerr := peekWaiting(ctx, g.js, g.cons(), "global", 1)
 			if gerr == nil && len(gitems) > 0 && gitems[0].Env != nil {
 				return metaOf(gitems[0].Env), nil
 			}

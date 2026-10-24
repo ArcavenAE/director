@@ -82,6 +82,11 @@ type Bus struct {
 	// lookup is a test seam for the broker lookup of the local durable; nil in
 	// production (localrecover.go lookupLocal).
 	lookup func(ctx context.Context, durable string) error
+	// testAfterFetch and testAfterAck are test seams in the local receive, run
+	// with the call's context just after a fetch returns a message and just
+	// after its ack; nil in production (concurrent_test.go).
+	testAfterFetch func(ctx context.Context)
+	testAfterAck   func(ctx context.Context)
 }
 
 // localConsumerInactive is the local durable's inactive threshold. The inbox
@@ -1049,15 +1054,20 @@ func (b *Bus) refuseArgs(ctx context.Context, raw json.RawMessage, refusal error
 // ack-pending until mark_handled. A redelivery of a message already held, or
 // already in the ledger, is not returned, so the poll goes on for the rest of
 // its budget.
+//
+// A cancelled ctx ends the fetch at once. A message fetched after the cancel
+// is Nak'd, so it is redelivered rather than lost; one already acked is
+// returned, and its caller answers with it.
 func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, uint64, error) {
 	deadline := time.Now().Add(timeout)
+	fctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	rebuilt := false
 	for {
-		left := time.Until(deadline)
-		if left <= 0 {
-			left = time.Millisecond // always one fetch, so a zero budget still reads
+		msgs, err := fetchBy(fctx, b.cons(), deadline)
+		if err = fetchErr(ctx, err); err != nil && ctx.Err() != nil {
+			return nil, 0, err
 		}
-		msgs, err := b.cons().Fetch(1, jetstream.FetchMaxWait(left))
 		if err != nil {
 			// A durable the broker no longer has is rebuilt once and the fetch
 			// retried (director#269).
@@ -1071,8 +1081,18 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			}
 			return nil, 0, err
 		}
+		if msgs == nil {
+			return nil, 0, nil // the fetch context's deadline: a clean empty
+		}
 		skipped := false
 		for m := range msgs.Messages() {
+			if b.testAfterFetch != nil {
+				b.testAfterFetch(ctx)
+			}
+			if ctx.Err() != nil {
+				_ = m.Nak()
+				return nil, 0, ctx.Err()
+			}
 			var e Envelope
 			if err := json.Unmarshal(m.Data(), &e); err != nil {
 				_ = m.Term() // poison message: do not redeliver a thing we cannot parse
@@ -1085,6 +1105,9 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			if b.handled == nil {
 				_ = m.Ack()
 				b.noteLocalAcked(seq)
+				if b.testAfterAck != nil {
+					b.testAfterAck(ctx)
+				}
 				return &e, seq, nil
 			}
 			deliver, herr := b.handled.settle(ctx, m, "local", &e, seq)
@@ -1096,7 +1119,10 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			}
 			skipped = true
 		}
-		if err := msgs.Error(); err != nil {
+		if err := fetchErr(ctx, msgs.Error()); err != nil {
+			if ctx.Err() != nil {
+				return nil, 0, err
+			}
 			if !rebuilt {
 				rebuilt = true
 				if ok, rerr := b.recoverLocal(ctx, err); rerr != nil {
@@ -1122,6 +1148,40 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			return nil, 0, nil // a clean empty, not an error
 		}
 	}
+}
+
+// ctxFetchFloor is the shortest budget a fetch runs under its context. A
+// shorter one, down to the 1 ms that lets a zero budget still read, uses a
+// plain max wait, because FetchContext refuses a deadline already past.
+const ctxFetchFloor = 100 * time.Millisecond
+
+// fetchBy pulls at most one message from c before deadline. fctx carries that
+// deadline and the call's cancel, so a cancel ends the pull at once.
+func fetchBy(fctx context.Context, c jetstream.Consumer, deadline time.Time) (jetstream.MessageBatch, error) {
+	left := time.Until(deadline)
+	if left < ctxFetchFloor {
+		if left <= 0 {
+			left = time.Millisecond // always one fetch, so a zero budget still reads
+		}
+		return c.Fetch(1, jetstream.FetchMaxWait(left))
+	}
+	return c.Fetch(1, jetstream.FetchContext(fctx))
+}
+
+// fetchErr sorts a fetch error. A cancelled call reports its own ctx error.
+// The fetch context's own deadline passing is a clean empty, the same as a
+// max wait running out, not a fault to recover from.
+func fetchErr(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
 }
 
 // noteTierAcked tells the global tier an ack landed, so its acked floor
@@ -1167,7 +1227,7 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 	g.handled = b.handled
 	g.violations = b.violations
 	b.global = g
-	b.noteResumed("global", g.resumedFrom, g.consumer, g.floorWhy)
+	b.noteResumed("global", g.resumedFrom, g.cons(), g.floorWhy)
 	return g, nil
 }
 
@@ -1217,6 +1277,9 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 	}
 	deadline := time.Now().Add(timeout)
 	for {
+		if ctx.Err() != nil {
+			return done(), ctx.Err()
+		}
 		slice, ok := sliceLeft(deadline)
 		if !ok {
 			return done(), nil

@@ -166,7 +166,7 @@ func drainAll(pull func(int) ([]drained, int, error), n int) ([]drained, int, er
 func (g *globalTier) drainNoWait(ctx context.Context, n int, agentID, instance string) ([]drained, int, error) {
 	rebuilt := false
 	out, disc, err := drainAll(func(k int) ([]drained, int, error) {
-		out, disc, err := pullNoWait(ctx, g.consumer, k, "global", g.handled)
+		out, disc, err := pullNoWait(ctx, g.cons(), k, "global", g.handled)
 		if len(out) == 0 && disc == 0 && !rebuilt {
 			rebuilt = true
 			var ok bool
@@ -180,7 +180,7 @@ func (g *globalTier) drainNoWait(ctx context.Context, n int, agentID, instance s
 				return nil, 0, rerr
 			}
 			if ok {
-				return pullNoWait(ctx, g.consumer, k, "global", g.handled)
+				return pullNoWait(ctx, g.cons(), k, "global", g.handled)
 			}
 		}
 		return out, disc, err
@@ -330,7 +330,7 @@ func (b *Bus) remaining(ctx context.Context) map[string]uint64 {
 		g := b.global
 		b.globalMu.Unlock()
 		if g != nil {
-			if info, err := g.consumer.Info(ctx); err == nil {
+			if info, err := g.cons().Info(ctx); err == nil {
 				out["global"] = info.NumPending + uint64(info.NumAckPending)
 			}
 		}
@@ -584,13 +584,13 @@ func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, err
 		if gerr != nil {
 			res.GlobalWarn = gerr.Error()
 		} else {
-			gitems, gexp, gmaybe, gerr := peekWaiting(ctx, g.js, g.consumer, "global", limit)
+			gitems, gexp, gmaybe, gerr := peekWaiting(ctx, g.js, g.cons(), "global", limit)
 			if gerr != nil {
 				ok, rerr := g.recover(ctx, gerr, b.self.AgentID, b.instance)
 				if rerr != nil {
 					gerr = rerr
 				} else if ok {
-					gitems, gexp, gmaybe, gerr = peekWaiting(ctx, g.js, g.consumer, "global", limit)
+					gitems, gexp, gmaybe, gerr = peekWaiting(ctx, g.js, g.cons(), "global", limit)
 				}
 			}
 			if gerr != nil {
