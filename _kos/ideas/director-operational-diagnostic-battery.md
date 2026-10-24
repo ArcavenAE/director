@@ -90,3 +90,14 @@ negative cases most of them lack.
   tier on this cluster) says so, rather than passing.
 - **Anchors drift.** A check tied to an R-number goes stale when the
   requirement changes; the anchor is how that is noticed.
+
+## Became (2026-10-24)
+
+- Design: `sim/design/ops-diagnostics-battery.md` (U3, director#142), with
+  build tickets aae-orc-kdin1, x6bky, dskt6, iv77o and 4ihzc.
+- Probe: `_kos/probes/brief-operational-diagnostic-battery.yaml`, which asks
+  which of this idea's areas U3 leaves without a check and which U3
+  premises have drifted. Sibling probe:
+  `marvel/_kos/probes/brief-operational-diagnostic-battery.md`.
+- Anchor note: R-92 does not say "a send to an absent seat is refused"; see
+  the probe.
