@@ -518,6 +518,21 @@ func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
 	return nil, err
 }
 
+// oldestMetaOn reads the oldest waiting message on one tier, the one the
+// pending tracker found oldest, and falls back to oldestMeta when that tier
+// has nothing to show or is not the global one.
+func (s busCueSource) oldestMetaOn(ctx context.Context, tier string) (*cueMeta, error) {
+	if tier == "global" && s.b.globalCfg != nil {
+		if g, err := s.b.globalReady(ctx); err == nil {
+			items, _, _, err := peekWaiting(ctx, g.js, g.consumer, "global", 1)
+			if err == nil && len(items) > 0 && items[0].Env != nil {
+				return metaOf(items[0].Env), nil
+			}
+		}
+	}
+	return s.oldestMeta(ctx)
+}
+
 func metaOf(e *Envelope) *cueMeta {
 	return &cueMeta{Sender: senderLabel(e), Performative: e.Performative, MessageID: e.MessageID}
 }

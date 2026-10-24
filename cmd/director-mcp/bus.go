@@ -1377,7 +1377,7 @@ type presenceView struct {
 }
 
 func (b *Bus) presenceView(ctx context.Context) presenceView {
-	age := b.oldestPending()
+	age, tier := b.pending.oldest(time.Now())
 	v := presenceView{oldestS: int64(age / time.Second)}
 	if b.cueState == nil {
 		return v
@@ -1387,7 +1387,7 @@ func (b *Bus) presenceView(ctx context.Context) presenceView {
 	v.cue, v.cueReason, stalled = b.cueState(age, true)
 	if stalled {
 		id := ""
-		if m, err := (busCueSource{b}).oldestMeta(ctx); err == nil && m != nil {
+		if m, err := (busCueSource{b}).oldestMetaOn(ctx, tier); err == nil && m != nil {
 			id = m.MessageID
 		}
 		v.cueReason = joinReason(stalledReason(id, age), v.cueReason)

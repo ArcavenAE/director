@@ -78,21 +78,29 @@ func (p *pendingTracker) mark(tier string, n uint64, at time.Time) {
 
 // age is how long the oldest waiting message has waited at now; 0 when none.
 func (p *pendingTracker) age(now time.Time) time.Duration {
+	d, _ := p.oldest(now)
+	return d
+}
+
+// oldest is age with the tier whose front is the oldest, empty when nothing
+// waits.
+func (p *pendingTracker) oldest(now time.Time) (time.Duration, string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var oldest time.Time
-	for _, t := range p.tiers {
+	var at time.Time
+	tier := ""
+	for name, t := range p.tiers {
 		if len(t.batches) == 0 {
 			continue
 		}
-		if s := t.batches[0].seen; oldest.IsZero() || s.Before(oldest) {
-			oldest = s
+		if s := t.batches[0].seen; at.IsZero() || s.Before(at) {
+			at, tier = s, name
 		}
 	}
-	if oldest.IsZero() || now.Before(oldest) {
-		return 0
+	if at.IsZero() || now.Before(at) {
+		return 0, tier
 	}
-	return now.Sub(oldest)
+	return now.Sub(at), tier
 }
 
 // oldestPending is the age of this seat's oldest waiting message.
