@@ -30,6 +30,7 @@ const (
 	cueStateOff     = "off"
 	cueStateUnver   = "unverified"
 	cueStateLive    = "live"
+	cueStateStalled = "stalled"
 	cueTodayVersion = "2025-06-18"
 )
 
@@ -117,7 +118,14 @@ type cue struct {
 	// the reason beside, never instead of, the self-test reason.
 	readErr string
 	logf    func(string, ...any)
+	// oldest is the age of the seat's oldest waiting message (Bus.oldestPending);
+	// nil leaves presence as it was.
+	oldest func() time.Duration
 }
+
+// stalledReason is the presence reason for a stalled cue. An empty id is left
+// out.
+func stalledReason(id string, age time.Duration) string { return "" }
 
 func newCue(cfg cueConfig, src cueSource, emit func(map[string]any), warn func([]string, string), now func() time.Time, nonce func() string) *cue {
 	return &cue{cfg: cfg, src: src, emit: emit, warn: warn, now: now, nonce: nonce,

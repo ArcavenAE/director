@@ -71,6 +71,9 @@ type Bus struct {
 	resumed   []string
 	// cueState reports the channel cue state for presence; nil when off.
 	cueState func() (state, reason string)
+	// pending is the age of the oldest waiting message, from sampled counts
+	// (pending.go).
+	pending pendingTracker
 	// handled is the handled-mode state (K4); nil keeps ack-on-read.
 	handled *handledState
 	// watch is the presence watch (presencewatch_shim.go); nil when off.
