@@ -877,6 +877,13 @@ func (g *globalTier) fetchOne(timeout time.Duration) (env *Envelope, seq uint64,
 // the same session and a reader can get from a global address back to the
 // local id without a rename (R-06, R-79, R-94).
 func (g *globalTier) writePresence(ctx context.Context, self Sender, instance string, pid int, state string) error {
+	return g.writePresenceWith(ctx, self, instance, pid, state, nil)
+}
+
+// writePresenceWith is writePresence with the bus's view added to the record
+// (presenceView.fields): the age of the oldest waiting message, and the cue
+// state when the cue is on. nil adds nothing.
+func (g *globalTier) writePresenceWith(ctx context.Context, self Sender, instance string, pid int, state string, extra func(map[string]any)) error {
 	rec := map[string]any{
 		"cluster":   g.cfg.Cluster,
 		"role":      g.cfg.Role,
@@ -893,6 +900,9 @@ func (g *globalTier) writePresence(ctx context.Context, self Sender, instance st
 	// uses its own row.
 	if v := os.Getenv("DIRECTOR_PRESENCE_LOST_AFTER"); v != "" {
 		rec["lost_after"] = v
+	}
+	if extra != nil {
+		extra(rec)
 	}
 	body, _ := json.Marshal(rec)
 	// The ts is recorded before the Put, whether or not it succeeds: the watch
