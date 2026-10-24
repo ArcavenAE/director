@@ -450,23 +450,37 @@ func TestTheBusSwapOnASharedStreamDoesNotInheritTheAge(t *testing.T) {
 	}
 }
 
-// Stalled ages unread mail only: a message delivered and held ack-pending does
-// not count, and neither does one Nak'd after a cancel while it waits to be
-// delivered again (disclosed in the body).
-func TestTheTrackerCountsUnreadMailOnly(t *testing.T) {
+// Stalled counts every message not yet acked, NumPending plus NumAckPending,
+// as the cue count does (the marvel watcher design, section 11.5): a message
+// delivered and held ack-pending counts and keeps its age, so does one Nak'd
+// after a cancel while it waits to be delivered again, and the stalled reason
+// says unacked. Only the ack takes it off.
+func TestTheTrackerCountsAckPendingAndNakdMail(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
 	_, js := provision(t, ctx, url)
 	bus := roleBus(t, ctx, url, "held-seat", "")
+	r := newCueRig(t)
+	r.started()
+	r.c.ack("nonce1")
+	bus.attachCue(r.c)
 	bus.pending.mark("local", pendingSample{at: time.Now().Add(-1000 * time.Second)})
 	pubEnv(t, ctx, js, "agent.aae-orc.ops.held-seat.inbox", "m-held", "INFORM", "held")
 	m := fetchOneLocal(t, bus) // delivered, not acked: ack-pending
 	if _, err := (busCueSource{bus}).count(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := bus.oldestPending(); got != 0 {
-		t.Fatalf("an ack-pending message was read: want 0, got %s", got)
+	if got := bus.oldestPending(); got < 1000*time.Second {
+		t.Fatalf("an ack-pending message counts and keeps its age: want at least 1000s, got %s", got)
+	}
+	if err := bus.writePresence(ctx, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	row := presenceRow(t, ctx, bus)
+	reason, _ := row["cue_reason"].(string)
+	if row["cue"] != cueStateStalled || !strings.HasPrefix(reason, "stalled: oldest unacked m-held waiting 1") {
+		t.Fatalf("an ack-pending oldest message reads unacked: %v", row)
 	}
 	if err := m.Nak(); err != nil {
 		t.Fatal(err)
@@ -474,8 +488,18 @@ func TestTheTrackerCountsUnreadMailOnly(t *testing.T) {
 	if _, err := (busCueSource{bus}).count(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if got := bus.oldestPending(); got < 1000*time.Second {
+		t.Fatalf("a Nak'd message waiting for redelivery counts and keeps its age: want at least 1000s, got %s", got)
+	}
+	m = fetchOneLocal(t, bus)
+	if err := m.DoubleAck(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if got := bus.oldestPending(); got != 0 {
-		t.Fatalf("a Nak'd message waiting for redelivery is not counted: want 0, got %s", got)
+		t.Fatalf("an acked message is off the count: want 0, got %s", got)
 	}
 }
 
