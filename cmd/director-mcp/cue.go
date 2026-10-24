@@ -122,6 +122,8 @@ type cue struct {
 	// oldest is the age of the seat's oldest waiting message (Bus.oldestPending);
 	// nil leaves presence as it was.
 	oldest func() time.Duration
+	// pendingUnverified is a stub for the red tests; not yet read.
+	pendingUnverified func() string
 }
 
 // stalledReason is the presence reason for a stalled cue. An empty id is left
@@ -273,7 +275,7 @@ func (c *cue) presence() (state, reason string) {
 	if oldest != nil {
 		age = oldest()
 	}
-	state, reason, stalled := c.presenceAt(age, oldest != nil)
+	state, reason, stalled := c.presenceAt(age, oldest != nil, "")
 	if stalled {
 		reason = joinReason(stalledReason("", age), reason)
 	}
@@ -283,7 +285,7 @@ func (c *cue) presence() (state, reason string) {
 // presenceAt is presence for a given age of the oldest waiting message, with
 // stalled reported apart so the caller can name the message in the reason.
 // known false means no age is available, and then it is never stalled.
-func (c *cue) presenceAt(age time.Duration, known bool) (state, reason string, stalled bool) {
+func (c *cue) presenceAt(age time.Duration, known bool, unverified string) (state, reason string, stalled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	state, reason = c.state, c.reasonLocked()

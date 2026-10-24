@@ -71,7 +71,7 @@ type Bus struct {
 	resumed   []string
 	// cueState reports the channel cue state for presence at an age of the
 	// oldest waiting message (cue.presenceAt); nil when off.
-	cueState func(age time.Duration, known bool) (state, reason string, stalled bool)
+	cueState func(age time.Duration, known bool, unverified string) (state, reason string, stalled bool)
 	// cueSampling reports whether the cue watcher samples the pending tracker;
 	// nil when the cue is off.
 	cueSampling func() bool
@@ -1447,7 +1447,7 @@ func (b *Bus) presenceView(ctx context.Context) presenceView {
 	}
 	v.cueOn = true
 	var stalled bool
-	v.cue, v.cueReason, stalled = b.cueState(age, true)
+	v.cue, v.cueReason, stalled = b.cueState(age, true, b.pending.unverified())
 	if stalled {
 		id := ""
 		if m, err := (busCueSource{b}).oldestMetaOn(ctx, tier); err == nil && m != nil {

@@ -61,7 +61,14 @@ type pendingSample struct {
 	delivered uint64 // Delivered.Stream
 	tag       uint64 // the highest sequence on the consumer's filter subjects
 	at        time.Time
+	// Stubs for the red tests (round 2); not yet read.
+	total     uint64
+	haveTotal bool
+	failed    string
 }
+
+// unverified is a stub for the red tests: it reports no failed tier yet.
+func (p *pendingTracker) unverified() string { return "" }
 
 // mark applies one sample for a tier.
 func (p *pendingTracker) mark(tier string, s pendingSample) {
