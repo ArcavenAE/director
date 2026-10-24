@@ -1227,7 +1227,7 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 	g.handled = b.handled
 	g.violations = b.violations
 	b.global = g
-	b.noteResumed("global", g.resumedFrom, g.consumer, g.floorWhy)
+	b.noteResumed("global", g.resumedFrom, g.cons(), g.floorWhy)
 	return g, nil
 }
 

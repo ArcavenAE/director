@@ -461,7 +461,7 @@ type globalTier struct {
 	// the bus.
 	resumedFrom uint64
 
-	// mu guards the fields below. acked is the highest hub stream sequence
+	// mu guards consumer (read it through cons) and the fields below. acked is the highest hub stream sequence
 	// this session has acked on its durable, or the seat floor it resumed
 	// after; a recreated durable resumes after it, so a loss does not replay
 	// mail already read. notice is a recreate the caller has not been told
@@ -517,7 +517,7 @@ func attachGlobal(ctx context.Context, nc *nats.Conn, cfg globalConfig, agentID,
 func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance string) error {
 	durable := globalDurable(agentID, instance)
 	if cons, err := g.js.Consumer(ctx, g.cfg.streamName(), durable); err == nil {
-		g.consumer = cons
+		g.setConsumer(cons)
 		if info := cons.CachedInfo(); info != nil {
 			g.noteAcked(info.AckFloor.Stream)
 		}
@@ -536,7 +536,7 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 	if err != nil {
 		return fmt.Errorf("global durable on %s: %w (%s)", g.cfg.streamName(), err, hubHint(g.cfg))
 	}
-	g.consumer = cons
+	g.setConsumer(cons)
 	g.resumedFrom = floor
 	g.noteAcked(floor)
 	if info := cons.CachedInfo(); info != nil {
@@ -646,6 +646,22 @@ func (g *globalTier) consumerConfig(agentID, instance string, start uint64) jets
 	return cfg
 }
 
+// cons returns the current global consumer. restore replaces it, and since
+// tool calls run concurrently another call may be fetching or reading state on
+// it, so every reader takes it here and not from the field, as the local tier
+// does with Bus.cons.
+func (g *globalTier) cons() jetstream.Consumer {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.consumer
+}
+
+func (g *globalTier) setConsumer(c jetstream.Consumer) {
+	g.mu.Lock()
+	g.consumer = c
+	g.mu.Unlock()
+}
+
 // noteAcked records an acked hub stream sequence.
 func (g *globalTier) noteAcked(seq uint64) {
 	g.mu.Lock()
@@ -747,7 +763,7 @@ func (g *globalTier) restore(ctx context.Context, agentID, instance string) (boo
 	if err != nil {
 		return false, fmt.Errorf("the hub has lost this session's global durable %s and recreating it failed: %w (%s)", durable, err, hubHint(g.cfg))
 	}
-	g.consumer = cons
+	g.setConsumer(cons)
 	msg := fmt.Sprintf("the hub had lost this session's global durable %s; it was recreated", durable)
 	if resumed {
 		msg += fmt.Sprintf(" to resume after stream sequence %d, so mail already read does not replay and mail sent while it was missing is delivered", start-1)
@@ -794,6 +810,12 @@ func (g *globalTier) receive(ctx context.Context, timeout time.Duration, agentID
 			return nil, 0, discarded, nil
 		}
 		e, s, poison, err := g.fetchOne(ctx, remaining)
+		// A message fetchOne returns is already acked (or held), so it goes to
+		// the caller even when the call was cancelled meanwhile; the context
+		// ends only an empty or failed pull, as in the local receive.
+		if e != nil {
+			return e, s, discarded, nil
+		}
 		if ctx.Err() != nil {
 			return nil, 0, discarded, ctx.Err()
 		}
@@ -843,7 +865,7 @@ func (g *globalTier) fetchOne(ctx context.Context, timeout time.Duration) (env *
 	fctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	for {
-		msgs, err := fetchBy(fctx, g.consumer, deadline)
+		msgs, err := fetchBy(fctx, g.cons(), deadline)
 		if err = fetchErr(ctx, err); err != nil {
 			return nil, 0, false, err
 		}
