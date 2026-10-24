@@ -30,6 +30,7 @@ const (
 	cueStateOff     = "off"
 	cueStateUnver   = "unverified"
 	cueStateLive    = "live"
+	cueStateStalled = "stalled"
 	cueTodayVersion = "2025-06-18"
 )
 
@@ -111,12 +112,25 @@ type cue struct {
 	lastSeen      uint64
 	lastCueAt     time.Time
 	fold          uint64
+	rearm         bool // the last open wait ended; cue what is still waiting
 	out           *pendingCue
 	reconnect     bool
 	// readErr is set while the watcher cannot read inbox state. It shows in
 	// the reason beside, never instead of, the self-test reason.
 	readErr string
 	logf    func(string, ...any)
+	// oldest is the age of the seat's oldest waiting message (Bus.oldestPending);
+	// nil leaves presence as it was.
+	oldest func() time.Duration
+}
+
+// stalledReason is the presence reason for a stalled cue. An empty id is left
+// out.
+func stalledReason(id string, age time.Duration) string {
+	if id != "" {
+		id += " "
+	}
+	return fmt.Sprintf("stalled: oldest pending %swaiting %ds with no wait open", id, int64(age/time.Second))
 }
 
 func newCue(cfg cueConfig, src cueSource, emit func(map[string]any), warn func([]string, string), now func() time.Time, nonce func() string) *cue {
@@ -209,12 +223,27 @@ func (c *cue) waitBegin() {
 	c.mu.Unlock()
 }
 
+// When the last open wait ends, the next tick cues whatever is still waiting:
+// an arrival seen during the wait was not cued, and the wait may not have
+// delivered it (it took another message, or a second call ran beside it).
 func (c *cue) waitEnd() {
 	c.mu.Lock()
 	if c.openWaits > 0 {
 		c.openWaits--
+		if c.openWaits == 0 {
+			c.rearm = true
+		}
 	}
 	c.mu.Unlock()
+}
+
+// sampling reports whether the watcher reads inbox state on every poll, which
+// also samples the seat's pending tracker. An inactive cue's tick returns
+// before the read, so the heartbeat samples instead.
+func (c *cue) sampling() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.active
 }
 
 // reconnected makes the next tick treat whatever is waiting as an arrival, so
@@ -229,14 +258,53 @@ func (c *cue) reconnected() {
 // whose watcher cannot read its inbox state is never cued, so it must not read
 // live there (director#173); inbox_summary keeps the state it earned and shows
 // the read failure in the reason.
+//
+// It reads stalled while the oldest waiting message has waited at least 2W
+// with no wait open and the watcher reading inbox state (director#297): the
+// seat is then on the manual wake whatever the cue state says. Stalled is
+// computed on each read and never stored, so it clears as soon as the mail
+// leaves or a wait opens. The reason here leaves out the message id; the bus
+// adds it when it writes the row (presenceView).
 func (c *cue) presence() (state, reason string) {
+	c.mu.Lock()
+	oldest := c.oldest
+	c.mu.Unlock()
+	var age time.Duration
+	if oldest != nil {
+		age = oldest()
+	}
+	state, reason, stalled := c.presenceAt(age, oldest != nil)
+	if stalled {
+		reason = joinReason(stalledReason("", age), reason)
+	}
+	return state, reason
+}
+
+// presenceAt is presence for a given age of the oldest waiting message, with
+// stalled reported apart so the caller can name the message in the reason.
+// known false means no age is available, and then it is never stalled.
+func (c *cue) presenceAt(age time.Duration, known bool) (state, reason string, stalled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	state, reason = c.state, c.reasonLocked()
 	if c.readErr != "" && state == cueStateLive {
 		state = cueStateUnver
 	}
-	return state, reason
+	if known && c.active && c.readErr == "" && c.openWaits == 0 && age >= 2*c.cfg.Window {
+		state, stalled = cueStateStalled, true
+	}
+	return state, reason, stalled
+}
+
+// joinReason puts two reasons side by side, either of which may be empty.
+func joinReason(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + "; " + b
 }
 
 func (c *cue) status() map[string]string {
@@ -343,6 +411,10 @@ func (c *cue) tick(ctx context.Context) {
 		}
 		c.lastSeen = n
 	}
+	if c.rearm && c.openWaits == 0 {
+		c.rearm = false
+		c.fold = max(c.fold, n)
+	}
 	sendNew := c.fold > 0 && (c.lastCueAt.IsZero() || now.Sub(c.lastCueAt) >= c.cfg.Floor)
 	var recue, warnOut *pendingCue
 	if c.out != nil && now.Sub(c.out.at) >= c.cfg.Window {
@@ -424,26 +496,10 @@ type busCueSource struct{ b *Bus }
 // count fails when a tier's state cannot be read, so the watcher skips that
 // tick: a tier left out would read as a drop and the next good read as an
 // arrival, one spurious cue. A hub not yet attached is left out, as in
-// remaining().
+// remaining(). The same read marks the seat's pending tracker, so with the cue
+// on the age is sampled every poll.
 func (s busCueSource) count(ctx context.Context) (uint64, error) {
-	info, err := s.b.cons().Info(ctx)
-	if err != nil {
-		return 0, err
-	}
-	n := info.NumPending + uint64(info.NumAckPending)
-	if s.b.globalCfg != nil {
-		s.b.globalMu.Lock()
-		g := s.b.global
-		s.b.globalMu.Unlock()
-		if g != nil {
-			gi, err := g.cons().Info(ctx)
-			if err != nil {
-				return 0, err
-			}
-			n += gi.NumPending + uint64(gi.NumAckPending)
-		}
-	}
-	return n, nil
+	return s.b.pendingByTier(ctx)
 }
 
 func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
@@ -460,6 +516,21 @@ func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
 		}
 	}
 	return nil, err
+}
+
+// oldestMetaOn reads the oldest waiting message on one tier, the one the
+// pending tracker found oldest, and falls back to oldestMeta when that tier
+// has nothing to show or is not the global one.
+func (s busCueSource) oldestMetaOn(ctx context.Context, tier string) (*cueMeta, error) {
+	if tier == "global" && s.b.globalCfg != nil {
+		if g, err := s.b.globalReady(ctx); err == nil {
+			items, _, _, err := peekWaiting(ctx, g.js, g.cons(), "global", 1)
+			if err == nil && len(items) > 0 && items[0].Env != nil {
+				return metaOf(items[0].Env), nil
+			}
+		}
+	}
+	return s.oldestMeta(ctx)
 }
 
 func metaOf(e *Envelope) *cueMeta {
