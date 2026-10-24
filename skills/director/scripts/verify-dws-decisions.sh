@@ -112,6 +112,8 @@ block "$root/r" team-a/builder-20261020-2 "+and a value carried onto a second li
 refuses "add refuses a value continued onto a second line" "is not a 'field: value' line" "$DWS" decision add --from "$root/r"
 block "$root/r" team-a/builder-20261020-2 "changes=relay:R-1,relay:R-2"
 refuses "add refuses a malformed typed link in changes, naming it" "relay:R-1,relay:R-2" "$DWS" decision add --from "$root/r"
+block "$root/r" team-a/builder-20261020-2 "changes=pr:ArcavenAE/director#901,pr:ArcavenAE/director#902"
+refuses "add refuses a comma list of pr: links in changes, naming it" "pr:ArcavenAE/director#901,pr:ArcavenAE/director#902" "$DWS" decision add --from "$root/r"
 block "$root/r" team-a/builder-20261020-2 "test=2 ok 1 ok 3 ok 4 ok 5 ok 6 ok 7 ok 8 ok"
 refuses "add refuses the eight oks in the wrong order" "eight" "$DWS" decision add --from "$root/r"
 block "$root/r" team-a/builder-20261020-2 estimate=-1
