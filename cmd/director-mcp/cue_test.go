@@ -23,11 +23,19 @@ type fakeSource struct {
 	// seat's tracker, stamped by clock.
 	tr    *pendingTracker
 	clock func() time.Time
+	// seq models the stream for the tracker: each message the count gains takes
+	// the next sequence, and the consumer delivers in order, so what has been
+	// delivered is seq minus what is still waiting.
+	seq, lastN uint64
 }
 
 func (f *fakeSource) count(context.Context) (uint64, error) {
 	if f.tr != nil && f.err == nil {
-		f.tr.mark("local", f.n, f.clock())
+		if f.n > f.lastN {
+			f.seq += f.n - f.lastN
+		}
+		f.lastN = f.n
+		f.tr.mark("local", pendingSample{unread: f.n, delivered: f.seq - f.n, tag: f.seq, at: f.clock()})
 	}
 	return f.n, f.err
 }

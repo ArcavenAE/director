@@ -4,43 +4,64 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
-// pendingTracker keeps how long this seat's oldest waiting message has waited,
-// on the shim's own clock, from pending counts sampled over time (director#297).
+// pendingTracker keeps how long this seat's oldest unread message has waited,
+// on the shim's own clock, from consumer state sampled over time (director#297).
 // No broker timestamp is read, so there is no clock skew between hosts.
 //
-// Each tier keeps its own FIFO of (how many, first seen). A wait drains local
-// before global, so the two tiers do not leave in arrival order, but within one
-// consumer JetStream delivers in order, so each tier pops from its front. The
-// oldest age is the older of the two fronts.
+// Unread is NumPending: messages not yet delivered to this seat. Ack-pending
+// mail was delivered, so a message read and held (handled mode) does not age
+// toward stalled; stalled means mail nobody has drained. A message Nak'd after
+// a cancel was delivered once, so it is not counted while it waits to be
+// delivered again.
 //
-// The approximation: a rise in the count is stamped at the PREVIOUS sample's
-// time, the latest moment the new messages were known not to be there yet, so
-// the age is never below the true age. It can read high by up to one sample
-// interval: 2 s while the cue watcher samples, 30 s on the heartbeat when it
-// does not. The first sample of a tier has no previous one and is stamped at
-// its own time, so a backlog that was already waiting at start reads young. A
-// sample older than the last one applied (a slow read landing after a newer
-// one) is dropped.
+// Each sample carries the tier's NumPending, Delivered.Stream (the highest
+// stream sequence delivered to this consumer) and a tag: the highest sequence
+// on this consumer's own filter subjects at that sample. A tier keeps one mark
+// per sample at which its tag moved, holding the tag and the previous sample's
+// stamp. A consumer delivers in stream order, so the oldest unread message has
+// a sequence above Delivered.Stream and at or below the first mark's tag past
+// it, and above the mark before: it arrived after that previous sample and was
+// there by the mark's own sample. So the age, read from the first mark whose tag
+// is above Delivered.Stream, never reads low and reads high by at most one
+// sample: 2 s while the cue watcher samples, 30 s on the heartbeat when it does
+// not. It counts no arrivals or departures, so a message that leaves while
+// another arrives inside one sample, or a redelivery, cannot shift the age.
+//
+// That holds from the second sample on. A tier's first sample has nothing
+// before it, so a backlog already waiting at start is stamped at that sample's
+// own time and reads young. A sample stamped before the last one applied (a
+// slow read landing after a newer one) is dropped. With NumPending 0 every mark
+// is cleared; a mark whose tag Delivered.Stream has reached is popped.
 type pendingTracker struct {
 	mu    sync.Mutex
 	tiers map[string]*tierPending
 }
 
 type tierPending struct {
-	n       uint64    // the count at the last applied sample
-	at      time.Time // that sample's stamp
-	batches []pendingBatch
+	n       uint64
+	at      time.Time
+	batches []pendingMark
 }
 
-type pendingBatch struct {
+// pendingMark is (how many, first seen) in today's net-count tracker.
+type pendingMark struct {
 	n    uint64
 	seen time.Time
 }
 
-// mark applies one count sample for a tier, stamped before the read.
-func (p *pendingTracker) mark(tier string, n uint64, at time.Time) {
+type pendingSample struct {
+	unread    uint64
+	delivered uint64
+	tag       uint64
+	at        time.Time
+}
+
+// mark is today's tracker: it acts on the net count alone.
+func (p *pendingTracker) mark(tier string, s pendingSample) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.tiers == nil {
@@ -51,6 +72,7 @@ func (p *pendingTracker) mark(tier string, n uint64, at time.Time) {
 		t = &tierPending{}
 		p.tiers[tier] = t
 	}
+	n, at := s.unread, s.at
 	if !t.at.IsZero() && at.Before(t.at) {
 		return
 	}
@@ -60,7 +82,7 @@ func (p *pendingTracker) mark(tier string, n uint64, at time.Time) {
 		if seen.IsZero() {
 			seen = at
 		}
-		t.batches = append(t.batches, pendingBatch{n: n - t.n, seen: seen})
+		t.batches = append(t.batches, pendingMark{n: n - t.n, seen: seen})
 	case n < t.n:
 		drop := t.n - n
 		for drop > 0 && len(t.batches) > 0 {
@@ -106,34 +128,43 @@ func (p *pendingTracker) oldest(now time.Time) (time.Duration, string) {
 // oldestPending is the age of this seat's oldest waiting message.
 func (b *Bus) oldestPending() time.Duration { return b.pending.age(time.Now()) }
 
-// pendingByTier reads each tier's waiting count from consumer state, marking
-// the tracker with every tier it could read. The error is the first tier that
-// could not be read. A hub not yet attached is left out, as in remaining().
+// pendingByTier reads each tier's waiting count from consumer state for the
+// cue (NumPending plus NumAckPending, as before) and marks the pending tracker
+// with each tier it could read. The error is the first tier that could not be
+// read. A hub not yet attached is left out, as in remaining().
 func (b *Bus) pendingByTier(ctx context.Context) (uint64, error) {
 	at := time.Now()
 	info, err := b.cons().Info(ctx)
 	if err != nil {
 		return 0, err
 	}
-	local := info.NumPending + uint64(info.NumAckPending)
-	b.pending.mark("local", local, at)
+	if s, ok := sampleOf(ctx, b.js, "AGENT_INBOX", info, at); ok {
+		b.pending.mark("local", s)
+	}
+	n := info.NumPending + uint64(info.NumAckPending)
 	if b.globalCfg == nil {
-		return local, nil
+		return n, nil
 	}
 	b.globalMu.Lock()
 	g := b.global
 	b.globalMu.Unlock()
 	if g == nil {
-		return local, nil
+		return n, nil
 	}
 	at = time.Now()
 	gi, err := g.cons().Info(ctx)
 	if err != nil {
 		return 0, err
 	}
-	global := gi.NumPending + uint64(gi.NumAckPending)
-	b.pending.mark("global", global, at)
-	return local + global, nil
+	if s, ok := sampleOf(ctx, g.js, g.cfg.streamName(), gi, at); ok {
+		b.pending.mark("global", s)
+	}
+	return n + gi.NumPending + uint64(gi.NumAckPending), nil
+}
+
+// sampleOf is today's sample: the count with ack-pending, no tag.
+func sampleOf(_ context.Context, _ jetstream.JetStream, _ string, info *jetstream.ConsumerInfo, at time.Time) (pendingSample, bool) {
+	return pendingSample{unread: info.NumPending + uint64(info.NumAckPending), at: at}, true
 }
 
 // samplePending is the heartbeat's sample, taken when the cue watcher is not

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // trackedRig is a cue rig whose source marks a tracker on the rig's clock, the
@@ -187,55 +189,132 @@ var trackT0 = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
 func atS(s int) time.Time { return trackT0.Add(time.Duration(s) * time.Second) }
 
+// smp is one tier sample: unread (NumPending), delivered (Delivered.Stream),
+// the tag, and the second it was taken.
+func smp(unread, delivered, tag uint64, s int) pendingSample {
+	return pendingSample{unread: unread, delivered: delivered, tag: tag, at: atS(s)}
+}
+
+// Review 5638952074: message A (seq 5) leaves and B (seq 9) arrives inside one
+// sample, so the count stays 1. B must not inherit A's first-seen time.
+func TestTrackerSwapInsideOneSampleDoesNotInheritTheAge(t *testing.T) {
+	var p pendingTracker
+	p.mark("local", smp(0, 0, 0, 0))
+	p.mark("local", smp(1, 0, 5, 2))    // A
+	p.mark("local", smp(1, 5, 9, 1000)) // A delivered, B arrived
+	if got := p.age(atS(1000)); got > 998*time.Second {
+		t.Fatalf("B arrived after the sample at 2 s: want at most 998s, got %s", got)
+	}
+}
+
+// A redelivery between samples moves neither Delivered.Stream nor the tag, so
+// it cannot pop the oldest unread message early.
+func TestTrackerARedeliveryDoesNotUnderstate(t *testing.T) {
+	var p pendingTracker
+	p.mark("local", smp(0, 0, 0, 0))
+	p.mark("local", smp(1, 0, 5, 10)) // seen at 0
+	p.mark("local", smp(1, 0, 5, 20)) // an older message was redelivered in between
+	if got := p.age(atS(20)); got != 20*time.Second {
+		t.Fatalf("the unread message has waited since 0: want 20s, got %s", got)
+	}
+}
+
+// Two messages arrive in one sample; one is delivered. The mark covers both
+// and stays until the second is delivered too.
+func TestTrackerAPartlyDeliveredMarkIsKeptWhole(t *testing.T) {
+	var p pendingTracker
+	p.mark("local", smp(0, 0, 0, 0))
+	p.mark("local", smp(2, 0, 7, 10)) // seqs 6 and 7, seen at 0
+	p.mark("local", smp(1, 6, 7, 20)) // 6 delivered, 7 still unread
+	if got := p.age(atS(20)); got != 20*time.Second {
+		t.Fatalf("seq 7 has waited since 0: want 20s, got %s", got)
+	}
+}
+
+// The reconcile: nothing unread clears every mark, and the next arrival is
+// stamped at the sample before it.
+func TestTrackerNothingUnreadClearsEveryMark(t *testing.T) {
+	var p pendingTracker
+	p.mark("local", smp(0, 0, 0, 0))
+	p.mark("local", smp(1, 0, 5, 10))
+	p.mark("local", smp(0, 5, 0, 20))
+	if got := p.age(atS(20)); got != 0 {
+		t.Fatalf("nothing unread: want 0, got %s", got)
+	}
+	p.mark("local", smp(1, 5, 8, 30))
+	if got := p.age(atS(30)); got != 10*time.Second {
+		t.Fatalf("the next arrival is stamped at 20: want 10s, got %s", got)
+	}
+}
+
+// A count that drops while Delivered.Stream stays put (a message removed from
+// the stream, not delivered) keeps the mark: the age reads high, never low.
+func TestTrackerADropWithoutADeliveryKeepsTheAge(t *testing.T) {
+	var p pendingTracker
+	p.mark("local", smp(0, 0, 0, 0))
+	p.mark("local", smp(2, 0, 7, 10))
+	p.mark("local", smp(1, 0, 7, 20))
+	if got := p.age(atS(20)); got != 20*time.Second {
+		t.Fatalf("want 20s, got %s", got)
+	}
+}
+
 // A wait drains local first, so a local message can leave before an older
-// global one. One tracker per tier keeps the global message's age.
+// global one. Each tier keeps its own marks.
 func TestTrackerCrossTierDrainReadsTheOlderFront(t *testing.T) {
 	var p pendingTracker
-	p.mark("local", 0, atS(0))
-	p.mark("global", 0, atS(0))
-	p.mark("global", 1, atS(10)) // seen at the previous sample, 0
-	p.mark("local", 1, atS(20))  // seen at 10
-	p.mark("local", 0, atS(30))  // the wait took the local one
+	p.mark("local", smp(0, 0, 0, 0))
+	p.mark("global", smp(0, 0, 0, 0))
+	p.mark("global", smp(1, 0, 3, 10)) // seen 0
+	p.mark("local", smp(0, 0, 0, 10))
+	p.mark("local", smp(1, 0, 4, 20)) // seen 10
+	p.mark("local", smp(0, 4, 0, 30)) // the wait took the local one
 	if got := p.age(atS(30)); got != 30*time.Second {
 		t.Fatalf("the global message is the oldest: want 30s, got %s", got)
 	}
 }
 
-func TestTrackerDropsAStaleMark(t *testing.T) {
+func TestTrackerDropsAStaleSample(t *testing.T) {
 	var p pendingTracker
-	p.mark("local", 0, atS(0))
-	p.mark("local", 2, atS(10))
-	p.mark("local", 0, atS(5)) // a read stamped earlier, landing late
+	p.mark("local", smp(0, 0, 0, 0))
+	p.mark("local", smp(2, 0, 7, 10))
+	p.mark("local", smp(0, 7, 0, 5)) // a read stamped earlier, landing late
 	if got := p.age(atS(20)); got != 20*time.Second {
-		t.Fatalf("a stale mark leaves the age unchanged: want 20s, got %s", got)
+		t.Fatalf("a stale sample leaves the age unchanged: want 20s, got %s", got)
 	}
 }
 
-// A message that arrives between two samples is stamped at the earlier one, so
-// its age is never below its true age (at most one sample above it).
+// From the second sample on, a message is stamped at the sample before it
+// arrived, so its age is at least its true age and at most one sample more.
 func TestTrackerAgeIsAtLeastTheTrueAge(t *testing.T) {
 	var p pendingTracker
-	p.mark("local", 0, atS(0))
+	p.mark("local", smp(0, 0, 0, 0))
 	// the message arrives at 5
-	p.mark("local", 1, atS(10))
+	p.mark("local", smp(1, 0, 3, 10))
 	got := p.age(atS(20))
 	if got < 15*time.Second || got > 20*time.Second {
 		t.Fatalf("true age 15s, sample interval 10s: want 15s..20s, got %s", got)
 	}
 }
 
-func TestTrackerPopsFromTheFrontAndEmpties(t *testing.T) {
+func TestTrackerPopsAMarkOnceDeliveredReachesIt(t *testing.T) {
 	var p pendingTracker
-	p.mark("local", 0, atS(0))
-	p.mark("local", 1, atS(10)) // seen 0
-	p.mark("local", 2, atS(20)) // seen 10
-	p.mark("local", 1, atS(30)) // the first one left
+	p.mark("local", smp(0, 0, 0, 0))
+	p.mark("local", smp(1, 0, 3, 10)) // seen 0
+	p.mark("local", smp(2, 0, 6, 20)) // seen 10
+	p.mark("local", smp(1, 3, 6, 30)) // seq 3 delivered
 	if got := p.age(atS(30)); got != 20*time.Second {
-		t.Fatalf("after the oldest leaves, the next is seen at 10: want 20s, got %s", got)
+		t.Fatalf("after seq 3 leaves, the next mark is seen at 10: want 20s, got %s", got)
 	}
-	p.mark("local", 0, atS(40))
-	if got := p.age(atS(40)); got != 0 {
-		t.Fatalf("nothing waiting: want 0, got %s", got)
+}
+
+// The first sample has nothing before it, so a backlog already waiting at
+// start is stamped at that sample's own time and reads young (disclosed).
+func TestTrackerAFirstSampleIsStampedAtItsOwnTime(t *testing.T) {
+	var p pendingTracker
+	p.mark("local", smp(3, 0, 9, 100))
+	if got := p.age(atS(110)); got != 10*time.Second {
+		t.Fatalf("want 10s, got %s", got)
 	}
 }
 
@@ -248,7 +327,7 @@ func TestTheCueTickReadMarksTheSeatsTracker(t *testing.T) {
 	_, js := provision(t, ctx, url)
 	bus := roleBus(t, ctx, url, "cue-seat", "")
 	pubEnv(t, ctx, js, "agent.aae-orc.ops.cue-seat.inbox", "m-tick", "INFORM", "hello")
-	bus.pending.mark("local", 0, time.Now().Add(-100*time.Second))
+	bus.pending.mark("local", pendingSample{at: time.Now().Add(-100 * time.Second)})
 	n, err := busCueSource{bus}.count(ctx)
 	if err != nil || n != 1 {
 		t.Fatalf("count = %d, %v; want 1", n, err)
@@ -265,10 +344,86 @@ func TestTheHeartbeatSampleMarksTheTrackerWithTheCueOff(t *testing.T) {
 	_, js := provision(t, ctx, url)
 	bus := roleBus(t, ctx, url, "beat-seat", "")
 	pubEnv(t, ctx, js, "agent.aae-orc.ops.beat-seat.inbox", "m-beat", "INFORM", "hello")
-	bus.pending.mark("local", 0, time.Now().Add(-100*time.Second))
+	bus.pending.mark("local", pendingSample{at: time.Now().Add(-100 * time.Second)})
 	bus.samplePending(ctx)
 	if got := bus.oldestPending(); got < 100*time.Second {
 		t.Fatalf("the heartbeat sample marks the tracker: want at least 100s, got %s", got)
+	}
+}
+
+// fetchOne takes the next message from the seat's local durable without the
+// shim, so a test can deliver, hold or Nak it.
+func fetchOneLocal(t *testing.T, bus *Bus) jetstream.Msg {
+	t.Helper()
+	b, err := bus.cons().Fetch(1, jetstream.FetchMaxWait(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for m := range b.Messages() {
+		return m
+	}
+	t.Fatal("no message fetched")
+	return nil
+}
+
+// The swap through the bus, on a stream other seats share: A is delivered and
+// B arrives between two samples, with another seat's message on the stream
+// after A. The tag is this seat's own last sequence, so A's mark pops and B is
+// stamped at the sample before it.
+func TestTheBusSwapOnASharedStreamDoesNotInheritTheAge(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	bus := roleBus(t, ctx, url, "swap-seat", "")
+	bus.pending.mark("local", pendingSample{at: time.Now().Add(-1000 * time.Second)})
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.swap-seat.inbox", "m-a", "INFORM", "a")
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.other-seat.inbox", "m-x", "INFORM", "not ours")
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := bus.oldestPending(); got < 1000*time.Second {
+		t.Fatalf("setup: A is stamped at the old sample: want at least 1000s, got %s", got)
+	}
+	m := fetchOneLocal(t, bus)
+	if err := m.DoubleAck(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.swap-seat.inbox", "m-b", "INFORM", "b")
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := bus.oldestPending(); got > 60*time.Second {
+		t.Fatalf("B arrived after the last sample: want under a minute, got %s", got)
+	}
+}
+
+// Stalled ages unread mail only: a message delivered and held ack-pending does
+// not count, and neither does one Nak'd after a cancel while it waits to be
+// delivered again (disclosed in the body).
+func TestTheTrackerCountsUnreadMailOnly(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	bus := roleBus(t, ctx, url, "held-seat", "")
+	bus.pending.mark("local", pendingSample{at: time.Now().Add(-1000 * time.Second)})
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.held-seat.inbox", "m-held", "INFORM", "held")
+	m := fetchOneLocal(t, bus) // delivered, not acked: ack-pending
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := bus.oldestPending(); got != 0 {
+		t.Fatalf("an ack-pending message was read: want 0, got %s", got)
+	}
+	if err := m.Nak(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := bus.oldestPending(); got != 0 {
+		t.Fatalf("a Nak'd message waiting for redelivery is not counted: want 0, got %s", got)
 	}
 }
 
@@ -359,8 +514,8 @@ func TestAStalledRowNamesTheOldestMessageAndItsAge(t *testing.T) {
 	r.started()
 	r.c.ack("nonce1")
 	bus.attachCue(r.c)
-	bus.pending.mark("local", 0, time.Now().Add(-700*time.Second))
-	bus.pending.mark("local", 1, time.Now().Add(-650*time.Second))
+	bus.pending.mark("local", pendingSample{at: time.Now().Add(-700 * time.Second)})
+	bus.pending.mark("local", pendingSample{unread: 1, tag: 1, at: time.Now().Add(-650 * time.Second)})
 	if err := bus.writePresence(ctx, "idle"); err != nil {
 		t.Fatal(err)
 	}
@@ -391,10 +546,10 @@ func TestAStalledRowNamesTheOlderTiersMessage(t *testing.T) {
 	r.c.ack("nonce1")
 	bus.attachCue(r.c)
 	now := time.Now()
-	bus.pending.mark("global", 0, now.Add(-800*time.Second))
-	bus.pending.mark("global", 1, now.Add(-790*time.Second)) // seen 800 s ago
-	bus.pending.mark("local", 0, now.Add(-700*time.Second))
-	bus.pending.mark("local", 1, now.Add(-690*time.Second)) // seen 700 s ago
+	bus.pending.mark("global", pendingSample{at: now.Add(-800 * time.Second)})
+	bus.pending.mark("global", pendingSample{unread: 1, tag: 1, at: now.Add(-790 * time.Second)}) // seen 800 s ago
+	bus.pending.mark("local", pendingSample{at: now.Add(-700 * time.Second)})
+	bus.pending.mark("local", pendingSample{unread: 1, tag: 1, at: now.Add(-690 * time.Second)}) // seen 700 s ago
 	if _, err := bus.setPresence(ctx, "idle"); err != nil {
 		t.Fatal(err)
 	}
@@ -417,8 +572,8 @@ func TestTheBusReadMarksEachTierApart(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	bus.pending.mark("global", 0, now.Add(-200*time.Second))
-	bus.pending.mark("local", 0, now.Add(-100*time.Second))
+	bus.pending.mark("global", pendingSample{at: now.Add(-200 * time.Second)})
+	bus.pending.mark("local", pendingSample{at: now.Add(-100 * time.Second)})
 	pubEnv(t, ctx, gjs, g.cfg.inboxSubject(), "m-global", "INFORM", "hello")
 	if n, err := (busCueSource{bus}).count(ctx); err != nil || n != 1 {
 		t.Fatalf("count = %d, %v; want 1", n, err)
