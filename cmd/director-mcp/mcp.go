@@ -11,12 +11,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 )
 
 type rpcRequest struct {
@@ -52,7 +54,16 @@ type Server struct {
 	log   func(string, ...any)
 	// cue is the P1 channel cue, nil unless the seat opted in (cue.go).
 	cue *cue
+	// running counts tools/call requests in flight; calls maps each one's
+	// request id to the cancel that notifications/cancelled fires, and wg
+	// lets serve wait for them on EOF.
+	running atomic.Int32
+	callsMu sync.Mutex
+	calls   map[string]*callEntry
+	wg      sync.WaitGroup
 }
+
+type callEntry struct{ cancel context.CancelFunc }
 
 func newServer(bus *Bus, logf func(string, ...any), cueOn bool) *Server {
 	s := &Server{bus: bus, out: bufio.NewWriter(os.Stdout), log: logf}
@@ -60,9 +71,23 @@ func newServer(bus *Bus, logf func(string, ...any), cueOn bool) *Server {
 	return s
 }
 
+// inFlight reports how many tools/call requests are running.
+func (s *Server) inFlight() int { return int(s.running.Load()) }
+
 // serve reads JSON-RPC messages line by line and dispatches them. Requests
 // carry an id and get a response; notifications (no id) are acted on silently.
+//
+// A tools/call with an id runs on its own goroutine, so the loop goes on
+// reading while a wait blocks: a ping is answered at once and a
+// notifications/cancelled reaches the call it names. Everything else stays
+// inline, so the handshake keeps its order. On EOF serve cancels the calls in
+// flight and waits for them before it returns.
 func (s *Server) serve(ctx context.Context, in io.Reader) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		cancel()
+		s.wg.Wait()
+	}()
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 0, 1<<20), 1<<20)
 	for sc.Scan() {
@@ -75,9 +100,68 @@ func (s *Server) serve(ctx context.Context, in io.Reader) error {
 			s.log("parse error: %v", err)
 			continue
 		}
+		if req.Method == "tools/call" && len(req.ID) > 0 {
+			s.startCall(ctx, &req)
+			continue
+		}
 		s.dispatch(ctx, &req)
 	}
 	return sc.Err()
+}
+
+// startCall runs one tools/call on its own goroutine under a context that
+// notifications/cancelled can end.
+func (s *Server) startCall(ctx context.Context, req *rpcRequest) {
+	cctx, cancel := context.WithCancel(ctx)
+	key, entry := callKey(req.ID), &callEntry{cancel: cancel}
+	s.callsMu.Lock()
+	if s.calls == nil {
+		s.calls = map[string]*callEntry{}
+	}
+	s.calls[key] = entry
+	s.callsMu.Unlock()
+	s.running.Add(1)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer s.running.Add(-1)
+		defer func() {
+			s.callsMu.Lock()
+			if s.calls[key] == entry {
+				delete(s.calls, key)
+			}
+			s.callsMu.Unlock()
+			cancel()
+		}()
+		s.callTool(cctx, req)
+	}()
+}
+
+// cancelCall ends the call a notifications/cancelled names. An id that is not
+// in flight (already answered, or never sent) is ignored, as MCP allows.
+func (s *Server) cancelCall(params json.RawMessage) {
+	var p struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil || len(p.RequestID) == 0 {
+		return
+	}
+	s.callsMu.Lock()
+	e := s.calls[callKey(p.RequestID)]
+	s.callsMu.Unlock()
+	if e != nil {
+		e.cancel()
+	}
+}
+
+// callKey is a request id in compact form, so 9 and "w1" match however the
+// client spaced them.
+func callKey(id json.RawMessage) string {
+	var b bytes.Buffer
+	if err := json.Compact(&b, id); err != nil {
+		return string(id)
+	}
+	return b.String()
 }
 
 func (s *Server) dispatch(ctx context.Context, req *rpcRequest) {
@@ -105,6 +189,7 @@ func (s *Server) dispatch(ctx context.Context, req *rpcRequest) {
 		}
 	case "notifications/cancelled":
 		// notifications: no response
+		s.cancelCall(req.Params)
 	case "tools/list":
 		s.reply(req.ID, map[string]any{"tools": s.tools})
 	case "tools/call":
@@ -135,6 +220,13 @@ func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
 	done := s.cueBefore(p.Name, p.Args)
 	res, err := dispatchTool(ctx, s.bus, p.Name, p.Args)
 	done(res)
+	if err != nil && ctx.Err() != nil {
+		// Cancelled: MCP 2025-06-18 says a cancelled request gets no response.
+		// A call that already holds a message returns it without an error and
+		// is answered below, so the cancel never loses a message (R-08).
+		s.log("call %s cancelled: %v", callKey(req.ID), err)
+		return
+	}
 	if err != nil {
 		// A tool-level failure is reported inside the result with isError,
 		// per MCP, so the model sees the failure rather than an RPC fault.

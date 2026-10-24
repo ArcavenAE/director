@@ -509,7 +509,7 @@ func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
 	}
 	if s.b.globalCfg != nil {
 		if g, gerr := s.b.globalReady(ctx); gerr == nil {
-			gitems, _, _, gerr := peekWaiting(ctx, g.js, g.consumer, "global", 1)
+			gitems, _, _, gerr := peekWaiting(ctx, g.js, g.cons(), "global", 1)
 			if gerr == nil && len(gitems) > 0 && gitems[0].Env != nil {
 				return metaOf(gitems[0].Env), nil
 			}
@@ -524,7 +524,7 @@ func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
 func (s busCueSource) oldestMetaOn(ctx context.Context, tier string) (*cueMeta, error) {
 	if tier == "global" && s.b.globalCfg != nil {
 		if g, err := s.b.globalReady(ctx); err == nil {
-			items, _, _, err := peekWaiting(ctx, g.js, g.consumer, "global", 1)
+			items, _, _, err := peekWaiting(ctx, g.js, g.cons(), "global", 1)
 			if err == nil && len(items) > 0 && items[0].Env != nil {
 				return metaOf(items[0].Env), nil
 			}

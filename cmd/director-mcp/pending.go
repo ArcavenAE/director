@@ -127,7 +127,7 @@ func (b *Bus) pendingByTier(ctx context.Context) (uint64, error) {
 		return local, nil
 	}
 	at = time.Now()
-	gi, err := g.consumer.Info(ctx)
+	gi, err := g.cons().Info(ctx)
 	if err != nil {
 		return 0, err
 	}
