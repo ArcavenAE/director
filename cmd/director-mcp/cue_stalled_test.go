@@ -373,3 +373,35 @@ func TestAStalledRowNamesTheOldestMessageAndItsAge(t *testing.T) {
 		t.Fatalf("oldest_pending_s: want at least 700, got %v", row["oldest_pending_s"])
 	}
 }
+
+// The reason names the oldest message by the tracker's tier: a wait drains
+// local first, so the local front can be younger than a global message.
+func TestAStalledRowNamesTheOlderTiersMessage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	bus, gjs := healthyGlobalBus(t, ctx)
+	g, err := bus.globalReady(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubEnv(t, ctx, bus.js, "agent.aae-orc.ops.operator.inbox", "m-local", "INFORM", "younger")
+	pubEnv(t, ctx, gjs, g.cfg.inboxSubject(), "m-global", "INFORM", "older")
+	r := newCueRig(t)
+	r.started()
+	r.c.ack("nonce1")
+	bus.attachCue(r.c)
+	now := time.Now()
+	bus.pending.mark("global", 0, now.Add(-800*time.Second))
+	bus.pending.mark("global", 1, now.Add(-790*time.Second)) // seen 800 s ago
+	bus.pending.mark("local", 0, now.Add(-700*time.Second))
+	bus.pending.mark("local", 1, now.Add(-690*time.Second)) // seen 700 s ago
+	if _, err := bus.setPresence(ctx, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	for name, row := range map[string]map[string]any{"local": presenceRow(t, ctx, bus), "global": globalRow(t, ctx, bus)} {
+		reason, _ := row["cue_reason"].(string)
+		if row["cue"] != cueStateStalled || !strings.HasPrefix(reason, "stalled: oldest pending m-global waiting 8") {
+			t.Errorf("%s row: the reason names the global message, the older one: %v", name, row)
+		}
+	}
+}
