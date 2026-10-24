@@ -273,7 +273,9 @@ func TestAuditLookupClusterBinding(t *testing.T) {
 		own, args, want string
 	}{
 		{"c1", `{"cluster":"c2","seq":7}`, "audit_lookup: this session is on cluster c1, not c2; read it with marvel bus audit 7 --cluster c2"},
-		{"c1", `{"seq":7}`, "audit_lookup: this session is on cluster c1, not ; read it with marvel bus audit 7 --cluster "},
+		// a missing cluster gets its own text, before any broker read (ruling on #407, item 4)
+		{"c1", `{"seq":7}`, "audit_lookup: cluster is required; this session is on cluster c1, so pass cluster c1 to read its log"},
+		{"c1", `{"cluster":"","seq":7}`, "audit_lookup: cluster is required; this session is on cluster c1, so pass cluster c1 to read its log"},
 		{"", `{"cluster":"c1","seq":7}`, lookupUnsetText},
 	} {
 		out, err := auditLookup(ctx, dead, c.own, json.RawMessage(c.args))
