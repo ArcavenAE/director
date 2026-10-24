@@ -13,10 +13,11 @@ prompt suggestion exactly like typed text. In a capture, typed text follows the
 prompt mark in the default colour; a suggestion is wrapped in the dim code.
 
 The composer is the region framed by the last two rule lines on screen. A rule is
-a DRAWN rule: the colour ESC[38;5;244m (after an optional ESC[39m) then a run of
-U+2500, optionally with a label between two runs, as measured from three live
-Claude Code panes; ASCII dashes and uncoloured box characters are never a rule,
-so a rule-shaped line typed into a draft is just draft text. The frame must hold
+a DRAWN rule: the colour ESC[38;5;244m or ESC[37m (after an optional ESC[39m) then
+a run of U+2500, optionally with a label between two runs, as measured from three
+live Claude Code panes on one host and two on mokuzai; ASCII dashes and uncoloured
+box characters are never a rule, so a rule-shaped line typed into a draft is just
+draft text. The frame must hold
 exactly one line that begins with the prompt mark. Any non-dim text in the frame,
 on the mark line or on any other line, is HAS-TEXT. A frame that is missing
 (fewer than two coloured rules: another theme, another harness, a scrolled-off
@@ -75,8 +76,9 @@ ANSI = re.compile(r"\x1b\[([0-9;:]*)m")
 # ESC[39m, the colour ESC[38;5;244m, then a run of U+2500 (never ASCII "-"); the top rule
 # carries a label between two runs. Typed text does not carry that colour, so a typed
 # rule-shaped line is not a rule. With another theme no rule is found, the frame is
-# missing, and the check refuses.
-RULE_COLOUR = re.compile(r"^(?:\x1b\[39m)?\x1b\[38;5;244m")
+# missing, and the check refuses. Two panes on mokuzai (2026-10-24) draw both rules in ESC[37m,
+# with no label (fixtures/composer-check.mokuzai.pin).
+RULE_COLOUR = re.compile(r"^(?:\x1b\[39m)?\x1b\[(?:38;5;244|37)m")
 RULE_SHAPE = re.compile(r"^\u2500{5,}(?: .* \u2500+)?$")
 
 
