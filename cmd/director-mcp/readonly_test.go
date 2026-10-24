@@ -21,83 +21,121 @@ var wantReadOnly = map[string]bool{
 	"broadcast":        false,
 	"report_status":    false,
 	"set_presence":     false,
+	"mark_handled":     false,
+	"cancel_held":      false,
 }
 
-// toolsListed is the tools/list result as a client reads it.
-func toolsListed(t *testing.T, gcfg *globalConfig, cueOn bool) []map[string]any {
+// servedList is the raw tools/list result of the server main builds, through
+// newServer, for a seat with the given levers. newServer reads only these
+// fields of the bus, so no broker is needed.
+func servedList(t *testing.T, gcfg *globalConfig, cueOn, handledOn, watchOn bool) json.RawMessage {
 	t.Helper()
+	bus := &Bus{globalCfg: gcfg}
+	if handledOn {
+		bus.handled = &handledState{}
+	}
+	if watchOn {
+		bus.watch = &presenceWatcher{}
+	}
+	s := newServer(bus, func(string, ...any) {}, cueOn)
 	var buf bytes.Buffer
-	s := &Server{out: bufio.NewWriter(&buf), tools: toolCatalog(gcfg, cueOn), log: func(string, ...any) {}}
-	s.dispatch(context.Background(), &rpcRequest{ID: json.RawMessage(`1`), Method: "tools/list"})
-	var resp struct {
-		Result struct {
-			Tools []map[string]any `json:"tools"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(buf.Bytes(), &resp); err != nil {
-		t.Fatalf("tools/list reply: %v: %s", err, buf.String())
-	}
-	return resp.Result.Tools
-}
-
-func TestEveryToolDeclaresReadOnlyHint(t *testing.T) {
-	for _, gcfg := range []*globalConfig{nil, {Domain: "global", Cluster: "c1", Role: roleDirector}} {
-		for _, cueOn := range []bool{false, true} {
-			t.Run(fmt.Sprintf("global=%v cue=%v", gcfg != nil, cueOn), func(t *testing.T) {
-				tools := toolsListed(t, gcfg, cueOn)
-				if len(tools) != len(wantReadOnly) {
-					t.Fatalf("%d tools listed, want %d", len(tools), len(wantReadOnly))
-				}
-				for _, tool := range tools {
-					name, _ := tool["name"].(string)
-					want, known := wantReadOnly[name]
-					if !known {
-						t.Errorf("tool %q has no expected hint", name)
-						continue
-					}
-					ann, _ := tool["annotations"].(map[string]any)
-					got, ok := ann["readOnlyHint"].(bool)
-					if !ok {
-						t.Errorf("%s: no readOnlyHint in %v", name, tool["annotations"])
-						continue
-					}
-					if got != want {
-						t.Errorf("%s: readOnlyHint %v, want %v", name, got, want)
-					}
-				}
-			})
-		}
-	}
-}
-
-// The exact tools/list result with the global tier and the cue off. Run with
-// DIRECTOR_UPDATE_GOLDEN=1 to rewrite it after an intended change.
-func TestToolsListMatchesTheGolden(t *testing.T) {
-	var buf bytes.Buffer
-	s := &Server{out: bufio.NewWriter(&buf), tools: toolCatalog(nil, false), log: func(string, ...any) {}}
+	s.out = bufio.NewWriter(&buf)
 	s.dispatch(context.Background(), &rpcRequest{ID: json.RawMessage(`1`), Method: "tools/list"})
 	var resp struct {
 		Result json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &resp); err != nil {
+		t.Fatalf("tools/list reply: %v: %s", err, buf.String())
+	}
+	return resp.Result
+}
+
+// servedTools is servedList decoded, one map per tool.
+func servedTools(t *testing.T, gcfg *globalConfig, cueOn, handledOn, watchOn bool) []map[string]any {
+	t.Helper()
+	var res struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(servedList(t, gcfg, cueOn, handledOn, watchOn), &res); err != nil {
 		t.Fatal(err)
 	}
-	var pretty bytes.Buffer
-	if err := json.Indent(&pretty, resp.Result, "", "  "); err != nil {
-		t.Fatal(err)
-	}
-	pretty.WriteByte('\n')
-	const path = "testdata/tools-list.golden.json"
-	if os.Getenv("DIRECTOR_UPDATE_GOLDEN") == "1" {
-		if err := os.WriteFile(path, pretty.Bytes(), 0o644); err != nil {
-			t.Fatal(err)
+	return res.Tools
+}
+
+// Every tool the server serves declares readOnlyHint, in all sixteen
+// combinations of global tier, cue, handled mode and presence watch.
+func TestEveryToolDeclaresReadOnlyHint(t *testing.T) {
+	for _, gcfg := range []*globalConfig{nil, {Domain: "global", Cluster: "c1", Role: roleDirector}} {
+		for _, cueOn := range []bool{false, true} {
+			for _, handledOn := range []bool{false, true} {
+				for _, watchOn := range []bool{false, true} {
+					name := fmt.Sprintf("global=%v cue=%v handled=%v watch=%v", gcfg != nil, cueOn, handledOn, watchOn)
+					t.Run(name, func(t *testing.T) {
+						tools := servedTools(t, gcfg, cueOn, handledOn, watchOn)
+						want := 7
+						if handledOn {
+							want++
+						}
+						if watchOn {
+							want++
+						}
+						if len(tools) != want {
+							t.Fatalf("%d tools listed, want %d", len(tools), want)
+						}
+						for _, tool := range tools {
+							name, _ := tool["name"].(string)
+							wantHint, known := wantReadOnly[name]
+							if !known {
+								t.Errorf("tool %q has no expected hint", name)
+								continue
+							}
+							ann, _ := tool["annotations"].(map[string]any)
+							got, ok := ann["readOnlyHint"].(bool)
+							if !ok {
+								t.Errorf("%s: no readOnlyHint in %v", name, tool["annotations"])
+								continue
+							}
+							if got != wantHint {
+								t.Errorf("%s: readOnlyHint %v, want %v", name, got, wantHint)
+							}
+						}
+					})
+				}
+			}
 		}
 	}
-	want, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(pretty.Bytes(), want) {
-		t.Fatalf("tools/list differs from %s:\n got %s\nwant %s", path, pretty.Bytes(), want)
+}
+
+// The exact tools/list result the server serves, with everything off, and with
+// handled mode and the presence watch on (all nine tools). Run with
+// DIRECTOR_UPDATE_GOLDEN=1 to rewrite them after an intended change.
+func TestToolsListMatchesTheGolden(t *testing.T) {
+	for _, c := range []struct {
+		path               string
+		handledOn, watchOn bool
+	}{
+		{"testdata/tools-list.golden.json", false, false},
+		{"testdata/tools-list-handled-watch.golden.json", true, true},
+	} {
+		t.Run(c.path, func(t *testing.T) {
+			raw := servedList(t, nil, false, c.handledOn, c.watchOn)
+			var pretty bytes.Buffer
+			if err := json.Indent(&pretty, raw, "", "  "); err != nil {
+				t.Fatal(err)
+			}
+			pretty.WriteByte('\n')
+			if os.Getenv("DIRECTOR_UPDATE_GOLDEN") == "1" {
+				if err := os.WriteFile(c.path, pretty.Bytes(), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want, err := os.ReadFile(c.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(pretty.Bytes(), want) {
+				t.Fatalf("tools/list differs from %s:\n got %s\nwant %s", c.path, pretty.Bytes(), want)
+			}
+		})
 	}
 }
