@@ -1423,7 +1423,7 @@ func (b *Bus) writeGlobalPresenceView(ctx context.Context, state string, view pr
 // It is the one place the row's cue state is wired, so a test can cover it.
 func (b *Bus) attachCue(c *cue) {
 	c.mu.Lock()
-	c.oldest = b.oldestPending
+	c.oldest, c.pendingUnverified = b.oldestPending, b.pending.unverified
 	c.mu.Unlock()
 	b.cueState, b.cueSampling = c.presenceAt, c.sampling
 }

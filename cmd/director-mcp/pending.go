@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -10,8 +10,9 @@ import (
 )
 
 // pendingTracker keeps how long this seat's oldest unread message has waited,
-// on the shim's own clock, from consumer state sampled over time (director#297).
-// No broker timestamp is read, so there is no clock skew between hosts.
+// on the shim's own clock, from consumer and stream state sampled over time
+// (director#297). No broker timestamp is read, so there is no clock skew
+// between hosts.
 //
 // Unread is NumPending: messages not yet delivered to this seat. Ack-pending
 // mail was delivered, so a message read and held (handled mode) does not age
@@ -19,56 +20,66 @@ import (
 // a cancel was delivered once, so it is not counted while it waits to be
 // delivered again.
 //
-// Each sample carries the tier's NumPending, Delivered.Stream (the highest
-// stream sequence delivered to this consumer) and a tag: the highest sequence
-// on this consumer's own filter subjects at that sample. A tier keeps one mark
-// per sample at which its tag moved, holding the tag and the previous sample's
-// stamp. A consumer delivers in stream order, so the oldest unread message has
-// a sequence above Delivered.Stream and at or below the first mark's tag past
-// it, and above the mark before: it arrived after that previous sample and was
-// there by the mark's own sample. So the age, read from the first mark whose tag
-// is above Delivered.Stream, never reads low and reads high by at most one
-// sample: 2 s while the cue watcher samples, 30 s on the heartbeat when it does
-// not. It counts no arrivals or departures, so a message that leaves while
-// another arrives inside one sample, or a redelivery, cannot shift the age.
+// Each sample carries the tier's NumPending and, while anything is unread, T:
+// the number of messages the stream holds on this consumer's own filter
+// subjects, from STREAM.INFO with a subjects filter (a verb the hub grants a
+// leaf on its inbox stream). The inbox streams use limits retention, so a
+// message stays on its subject after it is read, and T rises by exactly the
+// arrivals between two samples. A stream moved to work-queue or interest
+// retention would drop read messages from T, and the counts would stop meaning
+// arrivals.
 //
-// That holds from the second sample on. A tier's first sample has nothing
-// before it, so a backlog already waiting at start is stamped at that sample's
-// own time and reads young. A sample stamped before the last one applied (a
-// slow read landing after a newer one) is dropped. With NumPending 0 every mark
-// is cleared; a mark whose tag Delivered.Stream has reached is popped.
+// Each tier keeps a FIFO of (how many, first seen). Arrivals, max(0, T -
+// T_prev), are pushed stamped at the PREVIOUS sample, the latest moment they
+// were known not to be there. Then the batches reconcile to NumPending: the
+// front is popped while the total is above it, since a consumer delivers in
+// stream order, and any shortfall is pushed at the previous sample. A message
+// that leaves while another arrives inside one sample therefore cannot pass its
+// age on, and a redelivery moves neither T nor NumPending. A message aging out
+// by the stream's limits while another arrives makes T undercount arrivals;
+// the shortfall push stamps the newcomer at the previous sample, so the age
+// does not read low. A drop with no delivery (an age-out or a delete) keeps
+// older batches, so the age reads high.
+//
+// From the second sample on the age never reads low, and it reads high by at
+// most one sample: 2 s while the cue watcher samples, 30 s on the heartbeat
+// when it does not. A tier's first sample has nothing before it, so a backlog
+// present at start is stamped at that sample's own time and reads young. With
+// NumPending 0 on the sample before, every message unread now arrived after
+// it, so T is not read on an empty sample.
+//
+// A sample stamped before the last one applied is dropped. A stream read that
+// fails or times out marks the tier unverified until its next good sample: its
+// batches are kept, so its age keeps growing and is never reset to 0, and the
+// cue reads unverified, never stalled.
 type pendingTracker struct {
 	mu    sync.Mutex
 	tiers map[string]*tierPending
 }
 
 type tierPending struct {
-	at    time.Time // the last applied sample's stamp
-	tag   uint64    // its tag
-	marks []pendingMark
+	at         time.Time // the last good sample's stamp
+	unread     uint64    // its NumPending
+	total      uint64    // its T, when it was read
+	haveTotal  bool
+	batches    []pendingBatch
+	unverified string // why the last sample failed; empty when it did not
 }
 
-// pendingMark is a sample at which the tier's tag moved: every message with a
-// sequence at or below tag and above the mark before was not there at seen.
-type pendingMark struct {
-	tag  uint64
+type pendingBatch struct {
+	n    uint64
 	seen time.Time
 }
 
-// pendingSample is one tier's consumer state, read after at.
+// pendingSample is one tier's state, read after at. failed, when set, is why
+// the stream read failed, and the rest is not used.
 type pendingSample struct {
 	unread    uint64 // NumPending
-	delivered uint64 // Delivered.Stream
-	tag       uint64 // the highest sequence on the consumer's filter subjects
-	at        time.Time
-	// Stubs for the red tests (round 2); not yet read.
-	total     uint64
+	total     uint64 // T, valid when haveTotal
 	haveTotal bool
 	failed    string
+	at        time.Time
 }
-
-// unverified is a stub for the red tests: it reports no failed tier yet.
-func (p *pendingTracker) unverified() string { return "" }
 
 // mark applies one sample for a tier.
 func (p *pendingTracker) mark(tier string, s pendingSample) {
@@ -85,29 +96,41 @@ func (p *pendingTracker) mark(tier string, s pendingSample) {
 	if !t.at.IsZero() && s.at.Before(t.at) {
 		return
 	}
+	if s.failed != "" {
+		t.unverified = s.failed
+		return
+	}
+	t.unverified = ""
 	prev := t.at
 	if prev.IsZero() {
 		prev = s.at // a first sample is stamped at its own time
 	}
-	t.at = s.at
-	if s.unread == 0 {
-		// The reconcile: nothing is unread, so no mark stands. The tag is not
-		// read with nothing unread, so the last one is kept.
-		t.marks = nil
-		return
+	push := func(n uint64) {
+		if k := len(t.batches); k > 0 && t.batches[k-1].seen.Equal(prev) {
+			t.batches[k-1].n += n
+			return
+		}
+		t.batches = append(t.batches, pendingBatch{n: n, seen: prev})
 	}
-	if s.tag < t.tag {
-		t.marks = nil // the stream went backwards (replaced): start over
+	if t.haveTotal && s.haveTotal && s.total > t.total {
+		push(s.total - t.total)
 	}
-	for len(t.marks) > 0 && t.marks[0].tag <= s.delivered {
-		t.marks = t.marks[1:]
+	var sum uint64
+	for _, b := range t.batches {
+		sum += b.n
 	}
-	// New sequences since the last sample, or unread mail no mark covers (a
-	// first sample, or a redelivery after every mark was passed).
-	if s.tag > t.tag || len(t.marks) == 0 {
-		t.marks = append(t.marks, pendingMark{tag: s.tag, seen: prev})
+	for sum > s.unread && len(t.batches) > 0 {
+		drop := min(sum-s.unread, t.batches[0].n)
+		t.batches[0].n -= drop
+		sum -= drop
+		if t.batches[0].n == 0 {
+			t.batches = t.batches[1:]
+		}
 	}
-	t.tag = s.tag
+	if sum < s.unread {
+		push(s.unread - sum)
+	}
+	t.at, t.unread, t.total, t.haveTotal = s.at, s.unread, s.total, s.haveTotal
 }
 
 // age is how long the oldest waiting message has waited at now; 0 when none.
@@ -124,10 +147,10 @@ func (p *pendingTracker) oldest(now time.Time) (time.Duration, string) {
 	var at time.Time
 	tier := ""
 	for name, t := range p.tiers {
-		if len(t.marks) == 0 {
+		if len(t.batches) == 0 {
 			continue
 		}
-		if s := t.marks[0].seen; at.IsZero() || s.Before(at) {
+		if s := t.batches[0].seen; at.IsZero() || s.Before(at) {
 			at, tier = s, name
 		}
 	}
@@ -137,22 +160,35 @@ func (p *pendingTracker) oldest(now time.Time) (time.Duration, string) {
 	return now.Sub(at), tier
 }
 
+// unverified is the reason, for the cue, that a tier's last sample failed;
+// empty when every tier's last sample was good. Local is named first.
+func (p *pendingTracker) unverified() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	reason := ""
+	for _, tier := range []string{"local", "global"} {
+		if t := p.tiers[tier]; t != nil && t.unverified != "" {
+			reason = joinReason(reason, fmt.Sprintf("pending age unverified on the %s tier: %s", tier, t.unverified))
+		}
+	}
+	return reason
+}
+
 // oldestPending is the age of this seat's oldest waiting message.
 func (b *Bus) oldestPending() time.Duration { return b.pending.age(time.Now()) }
 
 // pendingByTier reads each tier's waiting count from consumer state for the
 // cue (NumPending plus NumAckPending, as before) and marks the pending tracker
-// with each tier it could read. The error is the first tier that could not be
-// read. A hub not yet attached is left out, as in remaining().
+// with each tier it could read. The error is the first tier whose consumer
+// state could not be read. A hub not yet attached is left out, as in
+// remaining().
 func (b *Bus) pendingByTier(ctx context.Context) (uint64, error) {
 	at := time.Now()
 	info, err := b.cons().Info(ctx)
 	if err != nil {
 		return 0, err
 	}
-	if s, ok := sampleOf(ctx, b.js, "AGENT_INBOX", info, at); ok {
-		b.pending.mark("local", s)
-	}
+	b.pending.mark("local", sampleOf(ctx, b.js, "AGENT_INBOX", info, at))
 	n := info.NumPending + uint64(info.NumAckPending)
 	if b.globalCfg == nil {
 		return n, nil
@@ -168,45 +204,47 @@ func (b *Bus) pendingByTier(ctx context.Context) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if s, ok := sampleOf(ctx, g.js, g.cfg.streamName(), gi, at); ok {
-		b.pending.mark("global", s)
-	}
+	b.pending.mark("global", sampleOf(ctx, g.js, g.cfg.streamName(), gi, at))
 	return n + gi.NumPending + uint64(gi.NumAckPending), nil
 }
 
-// sampleOf is one tier's tracker sample. The tag is read only when something
-// is unread: the highest sequence on the consumer's own filter subjects, one
-// read per subject. The stream's own last sequence would not do, since a
-// stream like AGENT_INBOX carries every seat's mail and its last sequence moves
-// with theirs. A subject with no message counts as 0. Any other failed read
-// returns ok false and the tier's sample is skipped, as a failed count read
-// is: a tag read low would pop a mark early and the age could read low.
-func sampleOf(ctx context.Context, js jetstream.JetStream, stream string, info *jetstream.ConsumerInfo, at time.Time) (pendingSample, bool) {
-	s := pendingSample{unread: info.NumPending, delivered: info.Delivered.Stream, at: at}
+// streamReadTimeout bounds one tier's stream reads for a sample. A denied
+// request gets no answer and would otherwise wait out the whole tick; loopback
+// answers in about 1 ms and a leaf to hub in tens of ms, so 500 ms leaves wide
+// room while both tiers still fit inside the 2 s cue poll.
+var streamReadTimeout = 500 * time.Millisecond
+
+// sampleOf is one tier's tracker sample. T is read only when something is
+// unread, as one STREAM.INFO with a subjects filter per filter subject, under
+// streamReadTimeout. A sample with nothing unread needs no T: the next one's
+// unread mail all arrived after it. A failed or timed-out read marks the
+// sample failed.
+func sampleOf(ctx context.Context, js jetstream.JetStream, stream string, info *jetstream.ConsumerInfo, at time.Time) pendingSample {
+	s := pendingSample{unread: info.NumPending, at: at}
 	if s.unread == 0 {
-		return s, true
+		return s
 	}
 	subjects := info.Config.FilterSubjects
 	if info.Config.FilterSubject != "" {
 		subjects = append([]string{info.Config.FilterSubject}, subjects...)
 	}
-	st, err := js.Stream(ctx, stream)
+	rctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
+	defer cancel()
+	st, err := js.Stream(rctx, stream)
 	if err != nil {
-		return s, false
+		s.failed = err.Error()
+		return s
 	}
 	for _, subj := range subjects {
-		m, err := st.GetLastMsgForSubject(ctx, subj)
-		if errors.Is(err, jetstream.ErrMsgNotFound) {
-			continue
-		}
+		si, err := st.Info(rctx, jetstream.WithSubjectFilter(subj))
 		if err != nil {
-			return s, false
+			s.failed = err.Error()
+			return s
 		}
-		if m.Sequence > s.tag {
-			s.tag = m.Sequence
-		}
+		s.total += si.State.Subjects[subj]
 	}
-	return s, true
+	s.haveTotal = true
+	return s
 }
 
 // samplePending is the heartbeat's sample, taken when the cue watcher is not

@@ -122,7 +122,8 @@ type cue struct {
 	// oldest is the age of the seat's oldest waiting message (Bus.oldestPending);
 	// nil leaves presence as it was.
 	oldest func() time.Duration
-	// pendingUnverified is a stub for the red tests; not yet read.
+	// pendingUnverified is why that age cannot be trusted for a tier right now
+	// (pendingTracker.unverified); empty, or nil, when it can.
 	pendingUnverified func() string
 }
 
@@ -269,13 +270,17 @@ func (c *cue) reconnected() {
 // adds it when it writes the row (presenceView).
 func (c *cue) presence() (state, reason string) {
 	c.mu.Lock()
-	oldest := c.oldest
+	oldest, unver := c.oldest, c.pendingUnverified
 	c.mu.Unlock()
 	var age time.Duration
 	if oldest != nil {
 		age = oldest()
 	}
-	state, reason, stalled := c.presenceAt(age, oldest != nil, "")
+	why := ""
+	if unver != nil {
+		why = unver()
+	}
+	state, reason, stalled := c.presenceAt(age, oldest != nil, why)
 	if stalled {
 		reason = joinReason(stalledReason("", age), reason)
 	}
@@ -285,14 +290,17 @@ func (c *cue) presence() (state, reason string) {
 // presenceAt is presence for a given age of the oldest waiting message, with
 // stalled reported apart so the caller can name the message in the reason.
 // known false means no age is available, and then it is never stalled.
+// unverified, when set, is why the age cannot be trusted for a tier: presence
+// then reads unverified with that reason, never live and never stalled.
 func (c *cue) presenceAt(age time.Duration, known bool, unverified string) (state, reason string, stalled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	state, reason = c.state, c.reasonLocked()
-	if c.readErr != "" && state == cueStateLive {
+	if (c.readErr != "" || unverified != "") && state == cueStateLive {
 		state = cueStateUnver
 	}
-	if known && c.active && c.readErr == "" && c.openWaits == 0 && age >= 2*c.cfg.Window {
+	reason = joinReason(reason, unverified)
+	if known && unverified == "" && c.active && c.readErr == "" && c.openWaits == 0 && age >= 2*c.cfg.Window {
 		state, stalled = cueStateStalled, true
 	}
 	return state, reason, stalled
