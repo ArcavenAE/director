@@ -422,6 +422,16 @@ ${E}[37m--------------------"
 check "ESC[37m mid-line is not a rule"                 UNCLEAR  3 "x ${R37}
 ${P}
 ${R37}"
+# mokuzai draws dim transcript text as ESC[2m ESC[37m; the colour must start the line
+check "a dim ESC[2m ESC[37m run is not a rule"         UNCLEAR  3 "${E}[2m${R37}
+${P} 
+${E}[2m${R37}"
+check "another basic colour, ESC[36m, is not a rule"   UNCLEAR  3 "${E}[36m${RUN20}
+${P} 
+${E}[36m${RUN20}"
+check "ESC[37;2m is not the measured code"             UNCLEAR  3 "${E}[37;2m${RUN20}
+${P} 
+${E}[37;2m${RUN20}"
 # a coloured rule inside a framed draft poses as the frame's top; the second guard refuses it
 check "an ESC[37m box rule inside a framed draft is refused, not read EMPTY" UNCLEAR 3 "$(framed "${P} typed
 ${R37}
