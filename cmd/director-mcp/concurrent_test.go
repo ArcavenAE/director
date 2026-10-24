@@ -324,7 +324,9 @@ func TestCancelAfterTheGlobalAckStillAnswers(t *testing.T) {
 		t.Fatal("the wait is not in flight")
 	}
 	r.publishGlobal("keep-me-global")
-	m := r.next(5 * time.Second)
+	// The global fetch starts only after the 5 s local slice (tierPollSlice),
+	// so a 5 s read bound sat within half a second of a pass.
+	m := r.next(10 * time.Second)
 	if idOf(m) != `23` || !strings.Contains(toolText(t, m), "keep-me-global") {
 		t.Fatalf("a call cancelled after the global ack must still answer with the message: %v", m)
 	}
