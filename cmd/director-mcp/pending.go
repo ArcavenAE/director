@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -42,25 +43,27 @@ type pendingTracker struct {
 }
 
 type tierPending struct {
-	n       uint64
-	at      time.Time
-	batches []pendingMark
+	at    time.Time // the last applied sample's stamp
+	tag   uint64    // its tag
+	marks []pendingMark
 }
 
-// pendingMark is (how many, first seen) in today's net-count tracker.
+// pendingMark is a sample at which the tier's tag moved: every message with a
+// sequence at or below tag and above the mark before was not there at seen.
 type pendingMark struct {
-	n    uint64
+	tag  uint64
 	seen time.Time
 }
 
+// pendingSample is one tier's consumer state, read after at.
 type pendingSample struct {
-	unread    uint64
-	delivered uint64
-	tag       uint64
+	unread    uint64 // NumPending
+	delivered uint64 // Delivered.Stream
+	tag       uint64 // the highest sequence on the consumer's filter subjects
 	at        time.Time
 }
 
-// mark is today's tracker: it acts on the net count alone.
+// mark applies one sample for a tier.
 func (p *pendingTracker) mark(tier string, s pendingSample) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -72,30 +75,32 @@ func (p *pendingTracker) mark(tier string, s pendingSample) {
 		t = &tierPending{}
 		p.tiers[tier] = t
 	}
-	n, at := s.unread, s.at
-	if !t.at.IsZero() && at.Before(t.at) {
+	if !t.at.IsZero() && s.at.Before(t.at) {
 		return
 	}
-	switch {
-	case n > t.n:
-		seen := t.at
-		if seen.IsZero() {
-			seen = at
-		}
-		t.batches = append(t.batches, pendingMark{n: n - t.n, seen: seen})
-	case n < t.n:
-		drop := t.n - n
-		for drop > 0 && len(t.batches) > 0 {
-			if t.batches[0].n <= drop {
-				drop -= t.batches[0].n
-				t.batches = t.batches[1:]
-				continue
-			}
-			t.batches[0].n -= drop
-			drop = 0
-		}
+	prev := t.at
+	if prev.IsZero() {
+		prev = s.at // a first sample is stamped at its own time
 	}
-	t.n, t.at = n, at
+	t.at = s.at
+	if s.unread == 0 {
+		// The reconcile: nothing is unread, so no mark stands. The tag is not
+		// read with nothing unread, so the last one is kept.
+		t.marks = nil
+		return
+	}
+	if s.tag < t.tag {
+		t.marks = nil // the stream went backwards (replaced): start over
+	}
+	for len(t.marks) > 0 && t.marks[0].tag <= s.delivered {
+		t.marks = t.marks[1:]
+	}
+	// New sequences since the last sample, or unread mail no mark covers (a
+	// first sample, or a redelivery after every mark was passed).
+	if s.tag > t.tag || len(t.marks) == 0 {
+		t.marks = append(t.marks, pendingMark{tag: s.tag, seen: prev})
+	}
+	t.tag = s.tag
 }
 
 // age is how long the oldest waiting message has waited at now; 0 when none.
@@ -112,10 +117,10 @@ func (p *pendingTracker) oldest(now time.Time) (time.Duration, string) {
 	var at time.Time
 	tier := ""
 	for name, t := range p.tiers {
-		if len(t.batches) == 0 {
+		if len(t.marks) == 0 {
 			continue
 		}
-		if s := t.batches[0].seen; at.IsZero() || s.Before(at) {
+		if s := t.marks[0].seen; at.IsZero() || s.Before(at) {
 			at, tier = s, name
 		}
 	}
@@ -162,9 +167,39 @@ func (b *Bus) pendingByTier(ctx context.Context) (uint64, error) {
 	return n + gi.NumPending + uint64(gi.NumAckPending), nil
 }
 
-// sampleOf is today's sample: the count with ack-pending, no tag.
-func sampleOf(_ context.Context, _ jetstream.JetStream, _ string, info *jetstream.ConsumerInfo, at time.Time) (pendingSample, bool) {
-	return pendingSample{unread: info.NumPending + uint64(info.NumAckPending), at: at}, true
+// sampleOf is one tier's tracker sample. The tag is read only when something
+// is unread: the highest sequence on the consumer's own filter subjects, one
+// read per subject. The stream's own last sequence would not do, since a
+// stream like AGENT_INBOX carries every seat's mail and its last sequence moves
+// with theirs. A subject with no message counts as 0. Any other failed read
+// returns ok false and the tier's sample is skipped, as a failed count read
+// is: a tag read low would pop a mark early and the age could read low.
+func sampleOf(ctx context.Context, js jetstream.JetStream, stream string, info *jetstream.ConsumerInfo, at time.Time) (pendingSample, bool) {
+	s := pendingSample{unread: info.NumPending, delivered: info.Delivered.Stream, at: at}
+	if s.unread == 0 {
+		return s, true
+	}
+	subjects := info.Config.FilterSubjects
+	if info.Config.FilterSubject != "" {
+		subjects = append([]string{info.Config.FilterSubject}, subjects...)
+	}
+	st, err := js.Stream(ctx, stream)
+	if err != nil {
+		return s, false
+	}
+	for _, subj := range subjects {
+		m, err := st.GetLastMsgForSubject(ctx, subj)
+		if errors.Is(err, jetstream.ErrMsgNotFound) {
+			continue
+		}
+		if err != nil {
+			return s, false
+		}
+		if m.Sequence > s.tag {
+			s.tag = m.Sequence
+		}
+	}
+	return s, true
 }
 
 // samplePending is the heartbeat's sample, taken when the cue watcher is not
