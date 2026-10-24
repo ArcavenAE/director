@@ -789,7 +789,10 @@ func (g *globalTier) receive(ctx context.Context, timeout time.Duration, agentID
 		if remaining <= 0 {
 			return nil, 0, discarded, nil
 		}
-		e, s, poison, err := g.fetchOne(remaining)
+		e, s, poison, err := g.fetchOne(ctx, remaining)
+		if ctx.Err() != nil {
+			return nil, 0, discarded, ctx.Err()
+		}
 		switch {
 		case err != nil && !rebuilt:
 			rebuilt = true
@@ -828,19 +831,27 @@ func (g *globalTier) receive(ctx context.Context, timeout time.Duration, agentID
 // With the handled mode on the message is held ack-pending, not acked, and a
 // redelivery of one already held or already in the ledger is not returned (the
 // fetch goes on for the rest of the budget).
-func (g *globalTier) fetchOne(timeout time.Duration) (env *Envelope, seq uint64, poison bool, err error) {
+//
+// A cancelled ctx ends the fetch, and a message fetched after the cancel is
+// Nak'd so it is redelivered, as in the local receive.
+func (g *globalTier) fetchOne(ctx context.Context, timeout time.Duration) (env *Envelope, seq uint64, poison bool, err error) {
 	deadline := time.Now().Add(timeout)
+	fctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	for {
-		left := time.Until(deadline)
-		if left <= 0 {
-			left = time.Millisecond
-		}
-		msgs, err := g.consumer.Fetch(1, jetstream.FetchMaxWait(left))
-		if err != nil {
+		msgs, err := fetchBy(fctx, g.consumer, deadline)
+		if err = fetchErr(ctx, err); err != nil {
 			return nil, 0, false, err
+		}
+		if msgs == nil {
+			return nil, 0, false, nil // the fetch context's deadline: a clean empty
 		}
 		skipped := false
 		for m := range msgs.Messages() {
+			if ctx.Err() != nil {
+				_ = m.Nak()
+				return nil, 0, false, ctx.Err()
+			}
 			var e Envelope
 			if err := json.Unmarshal(m.Data(), &e); err != nil {
 				_ = m.Term() // do not redeliver a thing we cannot parse
@@ -863,7 +874,7 @@ func (g *globalTier) fetchOne(timeout time.Duration) (env *Envelope, seq uint64,
 			}
 			skipped = true
 		}
-		if err := msgs.Error(); err != nil {
+		if err := fetchErr(ctx, msgs.Error()); err != nil {
 			return nil, 0, false, err
 		}
 		if !skipped || time.Until(deadline) <= 0 {
