@@ -447,6 +447,8 @@ func TestAuditLookupReturnsANonEnvelopeBodyAsRaw(t *testing.T) {
 		"not json {",
 		`{"sender":{"agent_id":"sup","workspace":"w","principal":null},"raw_arguments":"{\"to\": 7}"}`,
 		`[1,2]`,
+		`{"schema_version":1,"message_id":"m1","not_an_envelope_field":true}`,
+		`{"schema_version":1,"message_id":"m1"} trailing`,
 	} {
 		seq := publishAudit(t, ctx, js, "", []byte(body))
 		out, err := auditLookup(ctx, js, "c1", lookupArgs(t, map[string]any{"cluster": "c1", "seq": seq}))
