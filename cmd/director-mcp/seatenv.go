@@ -13,7 +13,13 @@ type seatEnv struct {
 	self     Sender
 	natsUser string
 	natsPass string
+	// note is a line for stderr, set when the seat connects with no credential.
+	note string
 }
+
+// refuseWithoutCredential is the chain's last step, for a seat with no
+// credential and no seat password file.
+var refuseWithoutCredential = false
 
 // resolveSeatEnv reads the seat launch's identity from the environment.
 func resolveSeatEnv() (seatEnv, error) {

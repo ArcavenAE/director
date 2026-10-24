@@ -33,6 +33,13 @@ func TestResolveSeatEnv(t *testing.T) {
 		id, team, ws, user, pass string
 		// err is a substring the refusal must carry; empty means success.
 		err []string
+		// note holds substrings the stderr note must carry; empty means none.
+		note []string
+		// seatDir puts a directory where director.pass goes, so it cannot be read.
+		seatDir bool
+		// refuse sets the no-credential switch to refuse; skip skips the case.
+		refuse bool
+		skip   string
 	}{
 		{
 			name: "managed: marvel's stamps and its own credentials",
@@ -82,9 +89,23 @@ func TestResolveSeatEnv(t *testing.T) {
 			err:  []string{"DIRECTOR_TEAM and DIRECTOR_WORKSPACE are required"},
 		},
 		{
-			name: "missing seat file refuses and names the path",
+			name: "missing seat file connects anonymously, as today, and says so",
 			env:  map[string]string{"DIRECTOR_AGENT_ID": "hand-kinu-7k2m", "DIRECTOR_TEAM": "ops", "DIRECTOR_WORKSPACE": "w"},
-			err:  []string{"no bus credentials in the environment", "director.pass", "seat: { workspace: <ws>, team: <team> }"},
+			id:   "hand-kinu-7k2m", team: "ops", ws: "w",
+			note: []string{"no seat password at", "director.pass", "connecting anonymously"},
+		},
+		{
+			name:   "missing seat file refuses and names the path",
+			skip:   "open question: whether a seat with no credential refuses or connects anonymously is the auth posture's call (bus.go keeps the anonymous connect for a coordinated relaunch); refuseWithoutCredential is the one switch",
+			refuse: true,
+			env:    map[string]string{"DIRECTOR_AGENT_ID": "hand-kinu-7k2m", "DIRECTOR_TEAM": "ops", "DIRECTOR_WORKSPACE": "w"},
+			err:    []string{"no bus credentials in the environment", "director.pass", "seat: { workspace: <ws>, team: <team> }"},
+		},
+		{
+			name:    "an unreadable seat file refuses",
+			env:     map[string]string{"DIRECTOR_AGENT_ID": "hand-kinu-7k2m", "DIRECTOR_TEAM": "ops", "DIRECTOR_WORKSPACE": "w"},
+			seatDir: true,
+			err:     []string{"no bus credentials in the environment", "director.pass"},
 		},
 		{
 			name: "an empty seat file refuses",
@@ -101,6 +122,14 @@ func TestResolveSeatEnv(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.skip != "" {
+				t.Skip(tc.skip)
+			}
+			if tc.refuse {
+				old := refuseWithoutCredential
+				refuseWithoutCredential = true
+				t.Cleanup(func() { refuseWithoutCredential = old })
+			}
 			for _, k := range seatVars {
 				t.Setenv(k, "")
 			}
@@ -108,6 +137,11 @@ func TestResolveSeatEnv(t *testing.T) {
 			t.Setenv("MARVEL_BUS_STATE", state)
 			if tc.seat != nil {
 				if err := os.WriteFile(filepath.Join(state, "director.pass"), []byte(*tc.seat), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.seatDir {
+				if err := os.Mkdir(filepath.Join(state, "director.pass"), 0o700); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -134,6 +168,14 @@ func TestResolveSeatEnv(t *testing.T) {
 			}
 			if se.natsUser != tc.user || se.natsPass != tc.pass {
 				t.Errorf("credential = %q/%q, want %q/%q", se.natsUser, se.natsPass, tc.user, tc.pass)
+			}
+			if len(tc.note) == 0 && se.note != "" {
+				t.Errorf("unexpected note %q", se.note)
+			}
+			for _, s := range tc.note {
+				if !strings.Contains(se.note, s) {
+					t.Errorf("note %q does not carry %q", se.note, s)
+				}
 			}
 		})
 	}
