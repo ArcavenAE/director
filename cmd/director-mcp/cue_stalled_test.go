@@ -604,8 +604,10 @@ func TestACueStaysSuppressedThroughARealWaitBesideASecondCall(t *testing.T) {
 	if got := idOf(p.next(2 * time.Second)); got != `42` {
 		t.Fatalf("the second call was not answered while the wait was open: got %s", got)
 	}
-	if n := p.s.inFlight(); n != 1 {
-		t.Fatalf("the wait should still be open beside the second call: %d in flight", n)
+	// The second call's count drops in a defer after its reply is written
+	// (mcp.go startCall), so wait for it to settle rather than read it once.
+	if !p.untilInFlight(1, 2*time.Second) {
+		t.Fatalf("the wait should still be open beside the second call: %d in flight", p.s.inFlight())
 	}
 	r.src.n = 2 // two arrive while the wait is open
 	r.step(2 * time.Second)
