@@ -427,3 +427,46 @@ func TestTheBusReadMarksEachTierApart(t *testing.T) {
 		t.Fatalf("the global message is stamped at the global tier's previous sample: want at least 200s, got %s", got)
 	}
 }
+
+// The same through real dispatch (T1): a wait_for_message runs through serve,
+// a second tools/call is answered while it is open, and a message is then
+// delivered. Mail that arrives during the wait is not cued; what is still
+// waiting when the wait ends is cued once.
+func TestACueStaysSuppressedThroughARealWaitBesideASecondCall(t *testing.T) {
+	p := newPipeRig(t, false)
+	r := newCueRig(t)
+	r.started()
+	r.c.ack("nonce1")
+	r.cues = nil
+	p.s.cue = r.c // set before any call; the pipe write orders it before the calls read it
+	r.step(2 * time.Second)
+
+	p.wait(`41`, 10, 1)
+	if !p.untilInFlight(1, 2*time.Second) {
+		t.Fatal("the wait is not in flight")
+	}
+	p.send(`{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"list_roster","arguments":{}}}`)
+	if got := idOf(p.next(2 * time.Second)); got != `42` {
+		t.Fatalf("the second call was not answered while the wait was open: got %s", got)
+	}
+	if n := p.s.inFlight(); n != 1 {
+		t.Fatalf("the wait should still be open beside the second call: %d in flight", n)
+	}
+	r.src.n = 2 // two arrive while the wait is open
+	r.step(2 * time.Second)
+	if n := len(r.mailCues()); n != 0 {
+		t.Fatalf("no cue while the wait is open: got %d", n)
+	}
+
+	p.publish("m-41")
+	m := p.next(5 * time.Second)
+	if idOf(m) != `41` || !strings.Contains(toolText(t, m), "m-41") {
+		t.Fatalf("the wait did not deliver the message: %v", m)
+	}
+	r.src.n = 1 // the wait took one; one is still waiting
+	r.step(2 * time.Second)
+	cues := r.mailCues()
+	if len(cues) != 1 || meta(t, cues[0])["count"] != "1" {
+		t.Fatalf("the mail still waiting after the wait is cued once with count 1: %v", cues)
+	}
+}
