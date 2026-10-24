@@ -2177,11 +2177,21 @@ def decision_event(fields):
     if estimate > DECISION_ESTIMATE_MAX:
         raise Refused(f"estimate {estimate:g}h is over {DECISION_ESTIMATE_MAX} seat-hours (card 2); "
                       "a larger choice goes to the Desk")
-    changes = [typed_link(checked("changes", x)) for x in stored_form(fields["changes"]).split(" ")]
+    changes = [decision_link(typed_link(checked("changes", x))) for x in stored_form(fields["changes"]).split(" ")]
     return {"event": "decision", "op": "add", "id": did, "seat": checked("seat", fields["seat"]),
             "question": checked("question", fields["question"]), "options": checked("options", fields["options"]),
             "chosen": chosen.strip(), "reason": reason.strip(), "test": test, "estimate_h": estimate,
             "undo": checked("undo", fields["undo"]), "changes": changes}
+
+
+def decision_link(link):
+    """A changes entry that starts with pr:, issue: or bd: must fully match LINK, so
+    a comma list is not stored as one link. Row links (typed_link, dws link) are
+    unchanged."""
+    if link.startswith(("pr:", "issue:", "bd:")) and not LINK.fullmatch(link):
+        raise Refused(f"changes link {link!r} is not pr:<owner>/<repo>#<n>, issue:<owner>/<repo>#<n> "
+                      "or bd:<id>; give each link once, separated by spaces")
+    return link
 
 
 def write_decision(actor, event, check):
