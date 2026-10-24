@@ -179,16 +179,14 @@ func (b *Bus) oldestPending() time.Duration { return b.pending.age(time.Now()) }
 
 // pendingByTier reads each tier's waiting count from consumer state for the
 // cue (NumPending plus NumAckPending, as before) and marks the pending tracker
-// with each tier it could read. The error is the first tier whose consumer
-// state could not be read. A hub not yet attached is left out, as in
-// remaining().
+// with each tier it read. A tier whose read fails or passes the bound is
+// marked unverified, and the error is the first such tier's. A hub not yet
+// attached is left out, as in remaining().
 func (b *Bus) pendingByTier(ctx context.Context) (uint64, error) {
-	at := time.Now()
-	info, err := b.cons().Info(ctx)
+	info, err := b.readTier(ctx, "local", b.js, "AGENT_INBOX", b.cons())
 	if err != nil {
 		return 0, err
 	}
-	b.pending.mark("local", sampleOf(ctx, b.js, "AGENT_INBOX", info, at))
 	n := info.NumPending + uint64(info.NumAckPending)
 	if b.globalCfg == nil {
 		return n, nil
@@ -199,24 +197,39 @@ func (b *Bus) pendingByTier(ctx context.Context) (uint64, error) {
 	if g == nil {
 		return n, nil
 	}
-	at = time.Now()
-	gi, err := g.cons().Info(ctx)
+	gi, err := b.readTier(ctx, "global", g.js, g.cfg.streamName(), g.cons())
 	if err != nil {
 		return 0, err
 	}
-	b.pending.mark("global", sampleOf(ctx, g.js, g.cfg.streamName(), gi, at))
 	return n + gi.NumPending + uint64(gi.NumAckPending), nil
 }
 
-// streamReadTimeout bounds one tier's stream reads for a sample. A denied
-// request gets no answer and would otherwise wait out the whole tick; loopback
-// answers in about 1 ms and a leaf to hub in tens of ms, so 500 ms leaves wide
-// room while both tiers still fit inside the 2 s cue poll.
+// streamReadTimeout bounds one tier's whole read for a sample: the consumer
+// Info call and the stream reads after it (operator ruling 2026-10-24, option
+// 1). A denied request gets no answer and would otherwise wait out the whole
+// tick; loopback answers in about 1 ms and a leaf to hub in tens of ms, so
+// 500 ms leaves wide room while both tiers still fit inside the 2 s cue poll.
 var streamReadTimeout = 500 * time.Millisecond
+
+// readTier reads one tier's consumer state and marks the tracker with it,
+// all under streamReadTimeout. A consumer Info that fails or passes the bound
+// marks the tier unverified and is returned as the error.
+func (b *Bus) readTier(ctx context.Context, tier string, js jetstream.JetStream, stream string, cons jetstream.Consumer) (*jetstream.ConsumerInfo, error) {
+	at := time.Now()
+	rctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
+	defer cancel()
+	info, err := cons.Info(rctx)
+	if err != nil {
+		b.pending.mark(tier, pendingSample{at: at, failed: err.Error()})
+		return nil, err
+	}
+	b.pending.mark(tier, sampleOf(rctx, js, stream, info, at))
+	return info, nil
+}
 
 // sampleOf is one tier's tracker sample. T is read only when something is
 // unread, as one STREAM.INFO with a subjects filter per filter subject, under
-// streamReadTimeout. A sample with nothing unread needs no T: the next one's
+// the caller's bound. A sample with nothing unread needs no T: the next one's
 // unread mail all arrived after it. A failed or timed-out read marks the
 // sample failed.
 func sampleOf(ctx context.Context, js jetstream.JetStream, stream string, info *jetstream.ConsumerInfo, at time.Time) pendingSample {
@@ -228,15 +241,13 @@ func sampleOf(ctx context.Context, js jetstream.JetStream, stream string, info *
 	if info.Config.FilterSubject != "" {
 		subjects = append([]string{info.Config.FilterSubject}, subjects...)
 	}
-	rctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
-	defer cancel()
-	st, err := js.Stream(rctx, stream)
+	st, err := js.Stream(ctx, stream)
 	if err != nil {
 		s.failed = err.Error()
 		return s
 	}
 	for _, subj := range subjects {
-		si, err := st.Info(rctx, jetstream.WithSubjectFilter(subj))
+		si, err := st.Info(ctx, jetstream.WithSubjectFilter(subj))
 		if err != nil {
 			s.failed = err.Error()
 			return s
