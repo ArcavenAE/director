@@ -113,7 +113,8 @@ C1="$(cat "$root/co-director.c1")"
 M1="$(cat "$root/co-marvel.c1")"
 cat >"$root/bin/marvel" <<SH
 #!/bin/sh
-echo "marvel version $M1"
+echo "marvel 0.1.0-alpha.20261022.094913.${M1:0:7} (alpha)"
+echo "daemon  0.1.0-alpha.20261022.094913.${M1:0:7} (alpha) commit $M1 pid 1 started 2026-10-22T14:52:03Z"
 SH
 cat >"$root/bin/go" <<SH
 #!/bin/sh
@@ -337,6 +338,68 @@ mk "$root/proj/-work-aae-orc/thin.jsonl" --agent director --ok 100 --den 50
 run --since today --config "$conf" --no-append >"$root/o" 2>/dev/null
 grep -q '^GAP denials .*under 2000' "$root/o" && ! grep -q '^denials ' "$root/o" && ok "a thin day with a high rate is a GAP, never a denials line" || bad "thin day" "$(grep -i denial "$root/o")"
 rm -f "$root/proj/-work-aae-orc/thin.jsonl"
+
+# denials with no baseline: the count is recorded, the line says the baseline is forming, and a later day
+# bands against it (aae-orc-952ap)
+rm -f "$state/introspector/records.jsonl"
+mk "$root/proj/-work-aae-orc/big.jsonl" --agent director --ok 2380 --den 20
+run --since today --config "$conf" >"$root/o" 2>/dev/null
+grep '^denials ' "$root/o" | grep -q 'baseline forming (0 of 20 weekdays)' && ok "denials with no baseline says baseline forming (0 of 20 weekdays), never a GAP" || bad "baseline forming line" "$(grep -i denial "$root/o")"
+! grep -q '^GAP denials' "$root/o" && ok "and no GAP denials line is printed" || bad "no GAP denials" "$(grep -i denial "$root/o")"
+python3 - "$state/introspector/records.jsonl" <<'PY2' && ok "the count record (n=21, d=2446) is written with no baseline" || bad "count record without baseline"
+import json, sys
+r = [json.loads(l) for l in open(sys.argv[1])]
+x = [y for y in r if y["line"] == "denials"][-1]
+assert x["state"] == "count" and x["n"] == 21 and x["d"] == 2446 and x["band"] == "none", x
+PY2
+rm -f "$root/proj/-work-aae-orc/big.jsonl"
+mk "$root/proj/-work-aae-orc/big.jsonl" --agent director --day 2026-10-21 --ok 2340 --den 60
+NOW_OVERRIDE="2026-10-21T18:44:00Z" run --since today --config "$conf" --no-append >"$root/o" 2>/dev/null
+grep '^denials ' "$root/o" | grep -q 'weekday 8.59' && ok "the next day bands against the recorded count (weekday 8.59)" || bad "next day bands" "$(grep -i denial "$root/o")"
+rm -f "$root/proj/-work-aae-orc/big.jsonl" "$state/introspector/records.jsonl"
+
+# marvel_revision and go_revision read the real stamps (aae-orc-5y0da, aae-orc-t87tf)
+mkdir -p "$root/bin2"; cp "$root/bin/go" "$root/bin2/go"
+cat >"$root/bin2/dmcp" <<SH
+#!/bin/sh
+echo "director-mcp 0.1.0-alpha.20261021.070654.${C1:0:7} rev $C1 channel alpha"
+SH
+chmod +x "$root/bin2/dmcp"
+sed "s#^install.director-mcp=.*#install.director-mcp=$root/bin2/dmcp#" "$conf" >"$root/c3.conf"
+marvel_case() { # $1 label, $2 expected revision prefix; marvel and go stubs already in bin2
+  run_p() { env -i HOME="$root/home" PATH="$root/bin2:$FIXPATH" LANG=en_US.UTF-8 TMPDIR="$root/t" DIRECTOR_STATE="$state" INTROSPECT_NOW="$NOW" python3 -I "$S" "$@"; }
+  run_p --since today --config "$root/c3.conf" --no-append >"$root/o" 2>/dev/null
+  grep '^not-installed ' "$root/o" | grep -q "marvel $2 2 behind" && ok "$1" || bad "$1" "$(grep -i install "$root/o")"
+}
+cat >"$root/bin2/marvel" <<SH
+#!/bin/sh
+echo "marvel 0.1.0-alpha.20261022.094913.1234567 (alpha)"
+echo "daemon  0.1.0-alpha.20261022.094913.1234567 (alpha) commit $M1 pid 89929 started 2026-10-22T14:52:03Z"
+SH
+chmod +x "$root/bin2/marvel"
+printf '#!/bin/sh\nexit 1\n' >"$root/bin2/go.fail"
+marvel_case "marvel_revision prefers the daemon line's commit over the version's digits" "${M1:0:7}"
+cat >"$root/bin2/marvel" <<SH
+#!/bin/sh
+echo "marvel 0.1.0-alpha.20261022.094913.1234567 (alpha)"
+SH
+cat >"$root/bin2/go" <<SH
+#!/bin/sh
+case "\$3" in *marvel*) printf '%s: go1.24\n\tbuild\tvcs.revision=$M1\n' "\$3";; *) printf '%s: go1.24\n' "\$3";; esac
+SH
+chmod +x "$root/bin2/go"
+marvel_case "with no daemon line, marvel_revision reads vcs.revision from the marvel binary" "${M1:0:7}"
+cat >"$root/bin2/go" <<SH
+#!/bin/sh
+printf '%s: go1.24\n' "\$3"
+SH
+cat >"$root/bin2/marvel" <<SH
+#!/bin/sh
+echo "marvel 0.1.0-alpha.20261022.094913.${M1:0:7} (alpha)"
+SH
+marvel_case "with neither, marvel_revision takes the suffix after the last dot (not the date digits)" "${M1:0:7}"
+grep '^not-installed ' "$root/o" | grep -q "director-mcp ${C1:0:7} 3 behind" && ok "go_revision falls back to the director-mcp --version stamp when go reports no vcs.revision" || bad "go_revision fallback" "$(grep -i install "$root/o")"
+rm -rf "$root/bin2"
 
 # ================================================================ records (P2, schema, modes)
 rm -f "$state/introspector/records.jsonl"

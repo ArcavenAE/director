@@ -565,8 +565,11 @@ def last_good(rows, line):
     return None
 
 
-def weekday_mean(rows, t_now):
-    """Trailing weekday mean of denials per 1000 results, from the last 20 count records before today."""
+WEEKDAY_WINDOW = 20
+
+
+def weekday_rates(rows, t_now):
+    """Denials per 1000 results for the last WEEKDAY_WINDOW weekdays before today that have a count record."""
     rates = []
     for r in rows:
         if r.get("line") != "denials" or r.get("state") != "count" or not r.get("d"):
@@ -578,7 +581,12 @@ def weekday_mean(rows, t_now):
         if day.weekday() < 5 and day.date() < t_now.date():
             rates.append((day, r["n"] / r["d"] * 1000.0))
     rates.sort()
-    rates = [x for _, x in rates][-20:]
+    return [x for _, x in rates][-WEEKDAY_WINDOW:]
+
+
+def weekday_mean(rows, t_now):
+    """Trailing weekday mean of denials per 1000 results, from the last 20 count records before today."""
+    rates = weekday_rates(rows, t_now)
     return sum(rates) / len(rates) if rates else None
 
 
@@ -723,7 +731,9 @@ def line_denials(tally, research, wk, rows, cfg, t_now, provisional):
         return gap("denials", rows, "no denial in 20000 or more results in 7 days; the source may not be seeing them")
     mean = weekday_mean(rows, t_now)
     if mean is None:
-        return gap("denials", rows, "no weekday baseline yet")
+        k = len(weekday_rates(rows, t_now))
+        return Line("denials", fmt_line("denials", f"baseline forming ({k} of {WEEKDAY_WINDOW} weekdays): {n} of {d} results"),
+                    n=n, d=d, band="none")
     rate = n / d * 1000.0
     over = rate >= mean * cfg["band.denials_ratio"]
     ln = Line("denials", "", n=n, d=d, band="over" if over else "none")
@@ -749,15 +759,39 @@ def line_bus(tally, rows):
     return ln
 
 
-def go_revision(binary):
+def go_vcs_revision(binary):
     rc, out = sh(["go", "version", "-m", binary])
     m = re.search(r"vcs\.revision=([0-9a-f]{7,40})", out) if rc == 0 else None
     return m.group(1) if m else None
 
 
+def go_revision(binary):
+    """The revision a binary was built from: the VCS stamp, else the ldflags stamp its --version prints
+    (scripts/build-director-mcp builds with -buildvcs=false, so only the second one exists on an installed copy)."""
+    rev = go_vcs_revision(binary)
+    if rev:
+        return rev
+    rc, out = sh([binary, "--version"])
+    m = re.search(r"\brev ([0-9a-f]{40})\b", out) if rc == 0 else None
+    return m.group(1) if m else None
+
+
 def marvel_revision(cmd):
+    """The commit marvel was built from: the daemon line's commit, else the binary's vcs.revision, else the
+    seven-character suffix after the last dot of the version (marvel 0.1.0-alpha.20261022.094913.740115f)."""
     rc, out = sh([cmd, "version"])
-    m = re.search(r"\b([0-9a-f]{7,40})\b", out) if rc == 0 else None
+    if rc != 0:
+        return None
+    m = re.search(r"\bcommit ([0-9a-f]{7,40})\b", out)
+    if m:
+        return m.group(1)
+    path = shutil.which(cmd)
+    if path:
+        m = go_vcs_revision(path)
+        if m:
+            return m
+    first = out.split("\n", 1)[0].split()
+    m = re.fullmatch(r"[^\s]*\.([0-9a-f]{7})", first[1]) if len(first) > 1 else None
     return m.group(1) if m else None
 
 
