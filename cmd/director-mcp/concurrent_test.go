@@ -24,6 +24,7 @@ type pipeRig struct {
 	s     *Server
 	bus   *Bus
 	js    jetstream.JetStream
+	gjs   jetstream.JetStream // the hub domain, for a global publish
 	in    *io.PipeWriter
 	lines chan map[string]any
 	done  chan error
@@ -35,7 +36,11 @@ func newPipeRig(t *testing.T, global bool) *pipeRig {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
 	url := startScratchServer(t)
-	_, js := provision(t, ctx, url)
+	nc, js := provision(t, ctx, url)
+	gjs, err := jetstream.NewWithDomain(nc, "global")
+	if err != nil {
+		t.Fatal(err)
+	}
 	self := Sender{AgentID: "operator", Workspace: "w", Team: "ops"}
 	var gcfg *globalConfig
 	if global {
@@ -46,10 +51,17 @@ func newPipeRig(t *testing.T, global bool) *pipeRig {
 		t.Fatal(err)
 	}
 	t.Cleanup(bus.close)
+	if global {
+		// Attach the hub now, so a test can set a seam on the tier before
+		// any call reads it.
+		if _, err := bus.globalReady(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	s := &Server{bus: bus, out: bufio.NewWriter(outW), tools: toolCatalog(gcfg, false), log: func(string, ...any) {}}
-	r := &pipeRig{t: t, ctx: ctx, s: s, bus: bus, js: js, in: inW, lines: make(chan map[string]any, 64), done: make(chan error, 1), inbox: "agent.w.ops.operator.inbox"}
+	r := &pipeRig{t: t, ctx: ctx, s: s, bus: bus, js: js, gjs: gjs, in: inW, lines: make(chan map[string]any, 64), done: make(chan error, 1), inbox: "agent.w.ops.operator.inbox"}
 	go func() {
 		sc := bufio.NewScanner(outR)
 		sc.Buffer(make([]byte, 0, 1<<20), 1<<20)
@@ -107,6 +119,11 @@ func (r *pipeRig) next(d time.Duration) map[string]any {
 func (r *pipeRig) publish(id string) {
 	r.t.Helper()
 	pubEnv(r.t, r.ctx, r.js, r.inbox, id, "INFORM", "hello "+id)
+}
+
+func (r *pipeRig) publishGlobal(id string) {
+	r.t.Helper()
+	pubEnv(r.t, r.ctx, r.gjs, r.bus.global.cfg.inboxSubject(), id, "INFORM", "hello "+id)
 }
 
 // untilInFlight waits until the server reports n calls in flight.
@@ -282,6 +299,69 @@ func TestCancelAfterTheAckStillAnswers(t *testing.T) {
 	if idOf(m) != `13` || !strings.Contains(toolText(t, m), "keep-me") {
 		t.Fatalf("a call cancelled after its ack must still answer with the message: %v", m)
 	}
+}
+
+// The same on the global tier: a cancel after the hub ack still answers. The
+// wait runs through receiveTiered, so this covers a blocking max wait too.
+func TestCancelAfterTheGlobalAckStillAnswers(t *testing.T) {
+	r := newPipeRig(t, true)
+	var once sync.Once
+	r.bus.global.testAfterAck = func(ctx context.Context) {
+		fired := false
+		once.Do(func() { fired = true })
+		if !fired {
+			return
+		}
+		r.cancel(`23`)
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+			t.Error("the cancel did not reach the call")
+		}
+	}
+	r.wait(`23`, 10, 1)
+	if !r.untilInFlight(1, 2*time.Second) {
+		t.Fatal("the wait is not in flight")
+	}
+	r.publishGlobal("keep-me-global")
+	m := r.next(5 * time.Second)
+	if idOf(m) != `23` || !strings.Contains(toolText(t, m), "keep-me-global") {
+		t.Fatalf("a call cancelled after the global ack must still answer with the message: %v", m)
+	}
+}
+
+// Two calls on the global tier at once: one fetching while another recreates
+// the durable, which is what a wait beside a second wait or inbox_summary does
+// once calls run concurrently. The lookup answers not found, so every restore
+// replaces the consumer. Run under -race; before this PR calls ran inline and
+// these never overlapped.
+func TestGlobalFetchBesideADurableRecreate(t *testing.T) {
+	r := newPipeRig(t, true)
+	g := r.bus.global
+	g.lookup = func(context.Context, string) error { return jetstream.ErrConsumerNotFound }
+	end := time.Now().Add(time.Second)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for time.Now().Before(end) {
+			if _, _, _, err := g.fetchOne(r.ctx, 20*time.Millisecond); err != nil && r.ctx.Err() == nil {
+				// A pull on a consumer being replaced can fail; the race is
+				// the point here, not the pull's answer.
+				continue
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for time.Now().Before(end) {
+			if _, err := g.restore(r.ctx, r.bus.self.AgentID, r.bus.instance); err != nil {
+				t.Errorf("restore: %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
 }
 
 // On stdin EOF, serve cancels what is in flight and waits for it.

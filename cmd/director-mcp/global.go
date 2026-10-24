@@ -474,6 +474,10 @@ type globalTier struct {
 	// lookup is a test seam for the hub lookup of the durable; nil in
 	// production (lookupConsumer).
 	lookup func(ctx context.Context, durable string) error
+
+	// testAfterAck is a test seam run right after the global ack, as the local
+	// receive's is; nil in production.
+	testAfterAck func(ctx context.Context)
 }
 
 // attachGlobal builds the second JetStream context over the SAME connection
@@ -863,6 +867,9 @@ func (g *globalTier) fetchOne(ctx context.Context, timeout time.Duration) (env *
 			if g.handled == nil {
 				_ = m.Ack()
 				g.noteAcked(seq)
+				if g.testAfterAck != nil {
+					g.testAfterAck(ctx)
+				}
 				return &e, seq, false, nil
 			}
 			deliver, herr := g.handled.settle(context.Background(), m, "global", &e, seq)
