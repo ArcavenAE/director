@@ -134,7 +134,8 @@ it visible to the seat that calls it.
 | case | text |
 |---|---|
 | `seq` missing, not a whole number, or below 1 | `audit_lookup: seq must be a whole number of 1 or more` |
-| `cluster` missing or not this session's | `audit_lookup: this session is on cluster <own>, not <given>; read it with marvel bus audit <seq> --cluster <given>` |
+| `cluster` missing | `audit_lookup: cluster is required; this session is on cluster <own>, so pass cluster <own> to read its log` |
+| `cluster` not this session's | `audit_lookup: this session is on cluster <own>, not <given>; read it with marvel bus audit <seq> --cluster <given>` |
 | `DIRECTOR_CLUSTER` unset, or not a valid token | `audit_lookup: this session names no usable cluster (DIRECTOR_CLUSTER is unset or not a valid token), so a number cannot be tied to a log` |
 | no stream | `audit_lookup: cluster <c> has no AGENT_AUDIT stream` |
 | the stream is empty | `audit_lookup: AGENT_AUDIT on <c> holds no records` |
