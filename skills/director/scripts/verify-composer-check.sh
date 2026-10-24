@@ -377,6 +377,8 @@ check "the queued banner on the mark line is QUEUED" QUEUED 4 "$(queued_screen "
 check "the queued message in the transcript above the frame is not QUEUED" EMPTY 0 "$(queued_screen "$Q_EMPTY")"
 check "non-dim text on the mark line below a queued message stays HAS-TEXT" HAS-TEXT 1 "$(queued_screen "${E}[38;5;246m${P}"$'\xc2\xa0'"${E}[39mhalf a message")"
 check "the measured empty mark line is EMPTY" EMPTY 0 "$(printf '%s\n%s\n%s' "$Q_TOP" "$Q_EMPTY" "$Q_BOT")"
+check "the banner with typed text on another frame line is HAS-TEXT, not QUEUED" HAS-TEXT 1 "$(queued_screen "$Q_MARK
+typed on a second line")"
 check "the banner phrase in the transcript only is not QUEUED" EMPTY 0 "Press up to edit queued messages
 $(queued_screen "$Q_EMPTY")"
 check "the banner phrase below the frame is not QUEUED" EMPTY 0 "$(queued_screen "$Q_EMPTY")
