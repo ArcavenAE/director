@@ -37,7 +37,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 	}
 	// readOnlyHint (MCP 2025-06-18 tool annotations) on every tool, so a
 	// harness that lets read-only tools through plan mode lets a plan-mode cast
-	// poll the bus (aae-orc-r675b). The three that read the bus are true; the
+	// poll the bus (aae-orc-r675b). The four that read the bus are true; the
 	// four that write (a send, a broadcast, a status, a presence row) are false.
 	// wait_for_message and inbox_summary are true although a wait acks what it
 	// returns and a cue_ack moves the cue state: what they change is this
@@ -130,6 +130,20 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 				"required": []string{"text"},
 			},
 		},
+		{
+			Name:        "audit_lookup",
+			Annotations: readOnly(true),
+			Description: "Read one record of this cluster's audit log (AGENT_AUDIT) by its sequence number. Use only the number from a refusal's audit text, \"audit: recorded agent.audit seq N on cluster <name>\", never the sequence in a send result, which numbers a different stream. cluster must be this session's own cluster; a record on another cluster is read there with marvel bus audit <seq> --cluster <name>. message_id, when given, must be the record's, which binds the number to one record. A record holds the full envelope of a send, its text included, and any session on this cluster can read any record on its audit log by number. Reads only: it never publishes, acks, deletes or creates a consumer.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"cluster":    str("this session's cluster, as named in the audit text"),
+					"seq":        map[string]any{"type": "integer", "description": "the audit record's sequence number, 1 or more"},
+					"message_id": str("optional: the envelope's message_id; the record's Nats-Msg-Id must be it or it plus -refused"),
+				},
+				"required": []string{"cluster", "seq"},
+			},
+		},
 	}
 	if cueOn {
 		// The self-test proof (channel-cue.md 3.3): only a model that received a
@@ -159,6 +173,8 @@ func dispatchTool(ctx context.Context, bus *Bus, name string, rawArgs json.RawMe
 		return toolBroadcast(ctx, bus, rawArgs)
 	case "report_status":
 		return toolReportStatus(ctx, bus, rawArgs)
+	case "audit_lookup":
+		return toolAuditLookup(ctx, bus, rawArgs)
 	case "cancel_held":
 		if bus.watch == nil {
 			return nil, errors.New("unknown tool: " + name) // behind the watch's flag, as main answers

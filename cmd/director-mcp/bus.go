@@ -1012,6 +1012,11 @@ func (b *Bus) auditRefusal(ctx context.Context, msgID, stage string, body []byte
 	if err != nil {
 		return "not recorded: " + err.Error()
 	}
+	// The cluster binds the number to one log (audit-lookup.md section 3); a
+	// sequence alone names a different record on every cluster.
+	if c := sessionCluster(); c != "" {
+		return fmt.Sprintf("recorded agent.audit seq %d on cluster %s", ack.Sequence, c)
+	}
 	return fmt.Sprintf("recorded agent.audit seq %d", ack.Sequence)
 }
 
