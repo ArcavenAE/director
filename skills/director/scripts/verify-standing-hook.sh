@@ -7,7 +7,9 @@
 #   - a future stamp and a garbled file read as unknown;
 #   - the checklist is printed after the age line, three numbered lines;
 #   - `beat` takes no argument that could set the time;
-#   - the heartbeat is replaced by rename (an old hard link keeps the old bytes).
+#   - the heartbeat is replaced by rename (an old hard link keeps the old bytes);
+#   - "dash last applied: T" is the last_run in dash-writer.json, sits between the checklist and the stalled-ideas
+#     line, reads unknown with no file or a garbled one, and the hook never writes that file.
 #
 # Usage: skills/director/scripts/verify-standing-hook.sh   Exit nonzero on any miss.
 set -euo pipefail
@@ -83,6 +85,26 @@ echo "$old" >"$DIRECTOR_STATE/last-stalled-scan"
 echo "garbage" >"$DIRECTOR_STATE/last-stalled-scan"
 "$H" | tail -n 1 | grep -q '^stalled ideas: unknown' && ok "a garbled scan stamp reads as unknown" || bad "a garbled scan stamp reads as unknown"
 if "$H" scan-beat 2000-01-01T00:00:00Z >/dev/null 2>&1; then bad "scan-beat refuses a time argument"; else ok "scan-beat refuses a time argument"; fi
+
+# --- the dash cue: the last batch the session applied, read from dash-writer.json -------------------
+rm -f "$DIRECTOR_STATE/dash-writer.json"
+out="$("$H")"
+[[ "$(printf '%s\n' "$out" | grep -c '^dash last applied: ')" == 1 ]] && ok "the dash line is printed once" || bad "the dash line is printed once"
+[[ "$(printf '%s\n' "$out" | grep '^dash last applied: ')" == "dash last applied: unknown, no batch recorded"* ]] && ok "no dash-writer.json reads as unknown" || bad "no dash-writer.json reads as unknown"
+[[ ! -e "$DIRECTOR_STATE/dash-writer.json" ]] && ok "the hook does not create dash-writer.json" || bad "the hook created dash-writer.json"
+echo '{"last_run": "2026-10-22T09:30:00Z", "runs": 4, "days": []}' >"$DIRECTOR_STATE/dash-writer.json"
+[[ "$("$H" | grep '^dash last applied: ')" == "dash last applied: 2026-10-22T09:30:00Z" ]] && ok "the line carries the last_run dash-writer ack recorded" || bad "the line carries last_run" "$("$H" | grep '^dash last applied: ')"
+out="$("$H")"
+[[ "$(printf '%s\n' "$out" | sed -n 2p)" == "Before you answer:" && "$(printf '%s\n' "$out" | grep -c '^[123]\. ')" == 3 ]] && ok "the dash line leaves the age line and the checklist as they were" || bad "the dash line moved the checklist"
+n_dash="$(printf '%s\n' "$out" | grep -n '^dash last applied: ' | cut -d: -f1)"; n_chk="$(printf '%s\n' "$out" | grep -n '^3\. ' | cut -d: -f1)"; n_scan="$(printf '%s\n' "$out" | grep -n '^stalled ideas: ' | cut -d: -f1)"
+[[ "$n_dash" -gt "$n_chk" && "$n_scan" -gt "$n_dash" ]] && ok "the dash line sits after the checklist and before the stalled-ideas line" || bad "the dash line order" "$n_chk $n_dash $n_scan"
+echo '{not json' >"$DIRECTOR_STATE/dash-writer.json"
+"$H" | grep -q '^dash last applied: unknown' && ok "a garbled dash-writer.json reads as unknown" || bad "a garbled dash-writer.json reads as unknown"
+echo '{"last_run": "yesterday-ish"}' >"$DIRECTOR_STATE/dash-writer.json"
+"$H" | grep -q '^dash last applied: unknown' && ok "a last_run that is not a time reads as unknown, never echoed" || bad "a bad last_run is echoed"
+echo '{"runs": 2}' >"$DIRECTOR_STATE/dash-writer.json"
+"$H" | grep -q '^dash last applied: unknown' && ok "a file with no last_run reads as unknown" || bad "no last_run reads as unknown"
+rm -f "$DIRECTOR_STATE/dash-writer.json"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

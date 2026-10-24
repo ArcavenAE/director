@@ -24,6 +24,10 @@ no heartbeat the hook says so rather than inventing an age. The first line is
 the drain age and nothing else: inbox depth is not shown, because a number
 nobody has checked teaches the reader to trust it.
 
+The line before it says when the operations dashboard was last applied: `dash last applied: T`, the
+`last_run` that `dash-writer ack` recorded in $DIRECTOR_STATE/dash-writer.json, so a sweep that never reached
+step 5 shows in the next answer. It prompts; it gates nothing.
+
 The last line is the age of the last stalled-ideas scan, read from
 $DIRECTOR_STATE/last-stalled-scan the same way. The hook never runs the scan itself: dbi asks
 each repo's remote, which takes seconds, and a prompt hook must not. It only shows how old the
@@ -31,7 +35,7 @@ last one is, so a sweep that skipped the block shows that in the next answer.
 
 The hook never types into a pane and never reads the hub; it reads one file.
 """
-import datetime, os, sys, tempfile
+import datetime, json, os, sys, tempfile
 
 CHECKLIST = """Before you answer:
 1. Drained, and answered Desk cards read, since my last answer? If not, do both first.
@@ -86,6 +90,16 @@ def scan_line():
     return f"stalled ideas: last scan {hours}h ago ({raw})"
 
 
+def dash_line():
+    try:
+        with open(os.path.join(os.path.dirname(state_file()), "dash-writer.json")) as f:
+            raw = json.load(f)["last_run"]
+        datetime.datetime.strptime(raw, FMT)
+    except (OSError, ValueError, KeyError, TypeError):
+        return "dash last applied: unknown, no batch recorded (sweep step 5 runs `dash-writer`, then `dash-writer ack`)"
+    return f"dash last applied: {raw}"
+
+
 def age_line():
     try:
         with open(state_file()) as f:
@@ -107,6 +121,7 @@ def main():
         return
     print(age_line())
     print(CHECKLIST)
+    print(dash_line())
     print(scan_line())
 
 

@@ -274,12 +274,15 @@ hook's three-line checklist asks about:
    This gives `desk-snapshot.json`.
 4. Move the rows: `dws refresh --local` (`board-html` runs it on render). This
    gives the moved rows.
-5. Write the operations dashboard, at most every 30 minutes: run
-   `${DIRECTOR_HOME:-$HOME/.director}/bin/dash-writer run`, apply the `writes` it prints as one `ArtifactData`
-   batch (a script cannot write artifact data), then run `dash-writer ack --at <ack.at> --deleted <ack.deleted, comma separated>` with the `ack` field the run printed. When it prints `skipped`, there is
-   nothing to apply. It reads the ledger, `marvel get sessions` and the Desk snapshot and writes nothing of
-   its own; only the fields of `sim/design/ops-dashboard.md` section 3 reach the documents. This gives the
-   `dash_*` documents.
+5. Write the operations dashboard, at most every 30 minutes. Run `dash-writer run`; if it prints
+   `skipped`, stop here. Otherwise `list` dash_panels, dash_daily and dash_meta, write a
+   `{collection/doc_id: version}` map to scratch, and run `dash-writer run --versions <file>`.
+   Apply its `writes` unedited as one ArtifactData batch. Only if the batch reports success, run
+   `dash-writer ack` with the `ack` it printed. On refusal, no ack and no retry: the next tick runs
+   fresh. Two refusals in a row go to the operator as text. A busy tick may skip this step. The
+   writer reads `dash-withhold.txt` (0600, in `$DIRECTOR_STATE`, one name per line); seed it from the
+   tracked private-names list plus the client-team session prefixes, and know that with no list the
+   writer refuses the waiting, in-flight and sessions panels. This gives the `dash_*` documents.
 6. If `$DIRECTOR_STATE/digest.md` is older than 12 hours, run `dws digest`. This
    gives the digest the operator reads twice a day, by event and not by timer:
    a session runs it on its own tick, and nothing runs on silence. The digest is
