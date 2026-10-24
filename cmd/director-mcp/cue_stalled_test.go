@@ -405,3 +405,25 @@ func TestAStalledRowNamesTheOlderTiersMessage(t *testing.T) {
 		}
 	}
 }
+
+// The bus read marks each tier apart: a global message keeps its own first
+// seen time, whatever the local count does.
+func TestTheBusReadMarksEachTierApart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	bus, gjs := healthyGlobalBus(t, ctx)
+	g, err := bus.globalReady(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	bus.pending.mark("global", 0, now.Add(-200*time.Second))
+	bus.pending.mark("local", 0, now.Add(-100*time.Second))
+	pubEnv(t, ctx, gjs, g.cfg.inboxSubject(), "m-global", "INFORM", "hello")
+	if n, err := (busCueSource{bus}).count(ctx); err != nil || n != 1 {
+		t.Fatalf("count = %d, %v; want 1", n, err)
+	}
+	if got := bus.oldestPending(); got < 200*time.Second {
+		t.Fatalf("the global message is stamped at the global tier's previous sample: want at least 200s, got %s", got)
+	}
+}
