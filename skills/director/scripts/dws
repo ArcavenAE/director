@@ -27,7 +27,9 @@ K13: `--blocked operator` needs `--ask <card id>`, and refuses unless that card 
 open in a Desk snapshot no older than THRESHOLD_HOURS["desk snapshot"] hours. A
 session reads the Desk and runs `desk-snapshot write`; without a usable snapshot
 dws refuses and says UNREAD, and never takes the id on faith. The card goes on the
-row as an ask: link.
+row as an ask: link. LF4: when a fresh snapshot shows that card in a status in
+CLOSING_STATUSES, `refresh --local` clears the block (set blocked "", as refresh)
+and leaves the next action director's.
 
 K8: every new event carries "tag", set by dws from the actor and never by a caller:
 mirror for refresh (a cited outside fact), judgment for director. proposal is
@@ -108,6 +110,11 @@ SNAPSHOT = os.path.join(STATE, "desk-snapshot.json")
 # director-glst; the table of the automation boundary, ADR-007). A diagnostic
 # bound, not a gate on anything else. The operator changes it here.
 THRESHOLD_HOURS = {"desk snapshot": 24}
+
+# LF4 (ledger-fill.md section 3, operator ruling 1 of 2026-10-19): a Desk card in one of
+# these statuses has closed, so refresh clears the operator block on a row that links it.
+# A wrong entry clears a block early, so the table is the operator's to edit, here.
+CLOSING_STATUSES = ("closed", "resolved", "withdrawn", "superseded", "relayed")
 
 # Section 3. The order is the sort order; parked sorts last.
 STAGES = ["idea", "defined", "designed", "building", "in review", "merged",
@@ -392,8 +399,14 @@ def allowed(actor, event):
             return
         if ev == "stage" and (event.get("from"), event.get("to")) in REFRESH_MOVES:
             return
-        raise Refused("refresh may append observe events, its run record and the two factual stage moves only "
-                      "(building to in review, in review to merged); director makes every other move")
+        # LF4: one set, of blocked to empty and no other field, carrying the Desk read it came
+        # from. The fill checks that the row was blocked on the operator by that card.
+        if (ev == "set" and {k for k in ("owner", "next", "blocked", "repos") if k in event} == {"blocked"}
+                and event["blocked"] == "" and str(event.get("src", "")).startswith("desk:")):
+            return
+        raise Refused("refresh may append observe events, its run record, the two factual stage moves "
+                      "(building to in review, in review to merged) and the fill's clear of an operator block "
+                      "whose Desk card closed (LF4) only; director makes every other move")
 
 
 def check_tag(tag):
@@ -763,7 +776,8 @@ def cmd_refresh(a):
 # to a row by an id its writer recorded (relay-log --ws, a relay:R-<n> link, an ask:<card>
 # link) and never by reading message text (R-186, authority-never-in-content). Each event it
 # appends carries src, the fact it consumed; the fold keeps that set per row and the fill skips
-# any src already there, so replaying the same sources writes nothing.
+# any src already there, so replaying the same sources writes nothing. Its events are observe,
+# plus the LF4 clear of an operator block whose linked card closed.
 RELAY_LOCK_TIMEOUT = 5.0
 RELAY_HEAD = re.compile(r"^## R-([0-9]+) \((\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\) -> (.+)$")
 RELAY_OUTCOME = re.compile(r"^### R-([0-9]+) outcome \((\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\)$")
@@ -922,6 +936,12 @@ def desk_events(row, snap, t_now, gaps):
         events.append({"event": "observe", "ws": row["slug"], "link": link,
                        "seen": {"kind": "desk", "state": st, "read_at": snap["read_at"]},
                        "src": src, "checked_at": t_now})
+        # LF4: the card is the one source for "blocked on the operator" (K13), so when it
+        # closes the block clears. The next action stays director's; the hint says so.
+        if st in CLOSING_STATUSES and row["blocked"] == "operator":
+            events.append({"event": "set", "ws": row["slug"], "blocked": "", "src": src,
+                           "hint": f"card {card} is {st}; the next action is director's"})
+            row = {**row, "blocked": ""}
     return events
 
 
@@ -959,7 +979,9 @@ def cmd_refresh_local(a):
     events = write_many("refresh", plan, lambda evs: {"event": "refresh-run", "at": t_now, "rows": len(slugs),
                                                       "links": 0, "warnings": len(gaps), "local": True})
     for e in events:
-        if e.get("moved_at"):
+        if e["event"] == "set":
+            print(f"{e['ws']}: operator block cleared ({e['src']}); hint: {e['hint']}")
+        elif e.get("moved_at"):
             print(f"{e['ws']}: moved {e['moved_at']} ({e['src']})")
         elif e.get("link"):
             print(f"{e['ws']}: {e['link']} is {e['seen']['state']} on the Desk"

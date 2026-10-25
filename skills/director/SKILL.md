@@ -165,7 +165,9 @@ release, revise or cancel (the cancel_held tool).
    about a stream, add `--ws <slug>` to the `relay-log append`, and
    `${DIRECTOR_HOME:-$HOME/.director}/bin/dws refresh --local` (which
    `board-html` runs on every render) moves that row from the entry, with no
-   network. For an entry already written, link it afterwards with
+   network. When a fresh Desk snapshot shows a row's linked card closed, the
+   same fill clears that row's operator block; the next action stays yours.
+   For an entry already written, link it afterwards with
    `dws link <slug> relay:R-<n>`. Nothing is matched from message text. Read
    `${DIRECTOR_HOME:-$HOME/.director}/bin/dws unlinked` for what the fill
    could not tie to a row, and act on it: it moves no row and proposes nothing.
