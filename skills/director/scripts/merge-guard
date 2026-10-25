@@ -59,6 +59,14 @@
 # of the guard this holds only for merges made through it; a merge made outside
 # it stays honor-only.
 #
+# Seat decisions (seat-decide-window, sim/design/seat-decisions.md section 5). Before any gh
+# call it reads the workstream ledger ($DIRECTOR_STATE/workstreams.jsonl, DIRECTOR_STATE default
+# ~/.director/state) through dws merge-hold, which sits beside this script (MERGE_GUARD_DWS names
+# another): a row that links pr:<repo>#<n> and waits on a seat decision that is not confirmed STOPs
+# the merge, with the decision's id. A missing ledger, a dws that cannot be run and a ledger that
+# cannot be read all STOP. A PR no row links is not stopped by this read, and like every check here
+# it holds only for merges made through the guard.
+#
 # Read-only: it runs gh pr view, gh pr list and gh api (check suites), reads the
 # rulings file, and never merges anything.
 set -uo pipefail
@@ -101,6 +109,21 @@ excl="$(jq -r 'if type != "object" then error("a rulings line is not an object: 
   || stop "the rulings file $rulings has an unreadable exclusion: $(head -c 200 "$err" | tr '\n' ' ')"
 if [[ -n "$excl" ]]; then
   excl_note="$(grep -c . <<<"$excl") exclusion record(s), none matching"
+fi
+
+# Seat decisions: nothing waiting on an unconfirmed decision merges (seat-decide-window).
+ledger="${DIRECTOR_STATE:-$HOME/.director/state}/workstreams.jsonl"
+dws="${MERGE_GUARD_DWS:-$(dirname -- "$0")/dws}"
+[[ -e "$ledger" ]] || stop "no workstream ledger at $ledger; the guard cannot tell a PR that waits on a seat decision from one that does not (seat-decide-window)"
+[[ -f "$ledger" ]] || stop "the ledger path $ledger exists and is not a file; cannot read the seat decisions"
+[[ -x "$dws" ]] || stop "dws not found at $dws; cannot read the seat decisions (seat-decide-window)"
+hold_rc=0
+hold="$("$dws" merge-hold "$repo#$num" 2>&1)" || hold_rc=$?
+if [[ $hold_rc -ne 0 ]]; then
+  if [[ "$hold" == *"waits on seat decision"* ]]; then
+    stop "$(sed -e 's/^dws: refused: //' <<<"$hold" | tr '\n' ' ' | sed 's/ $//')"
+  fi
+  stop "the ledger read failed (dws merge-hold exit $hold_rc): $(head -c 200 <<<"$hold" | tr '\n' ' ')"
 fi
 
 # read_json LABEL ARGS...: run gh, leave parseable output in $json, or STOP.

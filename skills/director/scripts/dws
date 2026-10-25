@@ -92,6 +92,14 @@ the operator's words as given. A skip is no command, and no move happens on a cl
 [--json] [--unconfirmed] [--daily --trial-start DATE]` reads them and writes nothing. The wait edges,
 the window and the affected list are D2.
 
+D2: `set --waits decision:<id>` and `--unwait` keep a row's wait edges to decisions in their own field
+(waits, never links), as `wait` events; `link` refuses a decision: string. A decision takes at most three
+dependents (rows with an edge that are not parked) and no new one more than 120 hours after its add, and
+the same checks run when `stage` moves a row out of parked. `decisions` orders the unconfirmed with a full
+window first and carries the affected rows; `decision override` prints them and `rework` refuses while one
+is open. `decision paths|pick|withdraw` record two paths at once (section 8). `merge-hold REPO#N` is the
+read merge-guard makes: it holds a PR whose row waits on a decision that is not confirmed.
+
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
 """
@@ -294,7 +302,7 @@ def apply(rows, e):
             "owner": e.get("owner", ""), "stage": e.get("stage", "idea"),
             "last_moved": ts, "next": e.get("next", ""), "blocked": e.get("blocked", ""),
             "links": list(e.get("links", [])), "opened": ts,
-            "hints": [], "observed": {}, "facts": [], "tags": {}, "consumed": [],
+            "hints": [], "observed": {}, "facts": [], "tags": {}, "consumed": [], "waits": [],
         }
         count_tag(rows[slug], e)
         return
@@ -318,6 +326,13 @@ def apply(rows, e):
             if link not in r["links"]:
                 r["links"].append(link)
         r["links"] = [x for x in r["links"] if x not in e.get("remove", [])]
+    elif ev == "wait":
+        # D2: a decision edge, apart from links. The check ran on write; a stored line is applied as it stands.
+        for did in e.get("add", []):
+            if did not in r["waits"]:
+                r["waits"].append(did)
+        r["waits"] = [x for x in r["waits"] if x not in e.get("remove", [])]
+        r["last_moved"] = max(r["last_moved"], ts)
     elif ev == "observe":
         # A src names the fact an event consumed (ledger fill, section 6); the fill
         # skips any src already here, so replaying a source writes nothing.
@@ -444,6 +459,20 @@ def write_many(actor, plan, run_record=None):
     return events
 
 
+def write_plan(actor, plan):
+    """Fold rows and decisions together, let plan(rows, decisions) return the events or raise Refused,
+    and append them under one lock, so every check sees the state the write lands on (D2)."""
+    with Locked():
+        decisions = {}
+        rows, _ = fold(decisions=decisions)
+        events = [stamp(actor, e) for e in plan(rows, decisions)]
+        for e in events:
+            append(e)
+    if events:
+        rerender()
+    return events
+
+
 def rerender():
     """After a write, re-render the page when board.html exists (opt-in by
     existence, the rule the renderer already follows). board-html launches the
@@ -482,6 +511,8 @@ def cmd_open(a):
     ask_link = blocked_on_operator(a.blocked, a.ask)
     if ask_link:
         ev["blocked"] = "operator"
+    for link in a.link or []:
+        decision_link_refused(link)
     if a.link or ask_link:
         ev["links"] = list(a.link or []) + ([ask_link] if ask_link and ask_link not in (a.link or []) else [])
 
@@ -494,11 +525,20 @@ def cmd_open(a):
 def move(a, event, to):
     ev = {"event": event, "ws": a.slug, "from": stage_name(a.from_), "to": stage_name(to)}
 
-    def check(rows):
-        cur = need(rows, a.slug)["stage"]
+    def plan(rows, decisions):
+        r = need(rows, a.slug)
+        cur = r["stage"]
         if cur != a.from_:
             raise Refused(f"stale move: {a.slug!r} is in {cur!r}, not {a.from_!r}; re-read and retry")
-    write(a.actor, ev, check)
+        if cur == "parked" and ev["to"] != "parked":
+            # D2 section 5: out of parked, the row is a dependent again, so the window applies to
+            # every decision it still waits on that has not been answered.
+            t_now = parse_time(now())
+            for did in r.get("waits", []):
+                if decisions.get(did, {}).get("state") in DECISION_OPEN:
+                    window_check(rows, decisions, did, a.slug, t_now)
+        return [ev]
+    write_plan(a.actor, plan)
 
 
 def cmd_stage(a):
@@ -509,6 +549,16 @@ def cmd_park(a):
     move(a, "park", "parked")
 
 
+def wait_ids(values, flag):
+    """The decision ids of --waits or --unwait values, in order; Refused on any other kind."""
+    ids = []
+    for v in values or []:
+        if not v.startswith("decision:") or len(v) == len("decision:"):
+            raise Refused(f"{flag} takes decision:<id>" + (" or ask:<card id>" if flag == "--waits" else "") + f", not {v!r}")
+        ids.append(stored_form(v[len("decision:"):]))
+    return ids
+
+
 def cmd_set(a):
     ev = {"event": "set", "ws": a.slug}
     for field in ("owner", "next", "blocked"):
@@ -517,22 +567,46 @@ def cmd_set(a):
             ev[field] = checked(field, v)
     if a.repos is not None:
         ev["repos"] = a.repos
+    # --waits ask:<card> keeps K13 and stays a link; --waits decision:<id> is a wait edge.
+    asks = [v for v in a.waits or [] if v.startswith("ask:")]
+    waits = wait_ids([v for v in a.waits or [] if not v.startswith("ask:")], "--waits")
+    unwaits = wait_ids(a.unwait, "--unwait")
+    ask_links = []
     ask_link = blocked_on_operator(a.blocked, a.ask)
     if ask_link:
         ev["blocked"] = "operator"
-    if len(ev) == 2 and not ask_link:
-        raise Refused("set needs at least one of --owner, --next, --blocked, --repos")
-    if not ask_link:
-        write(a.actor, ev, lambda rows: need(rows, a.slug))
-        return
+        ask_links.append(ask_link)
+    for v in asks:
+        card = v[len("ask:"):]
+        if not card or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", card):
+            raise Refused(f"--waits {v!r} is not ask:<card id>")
+        print(f"dws: {desk_card_open(card)}")
+        if v not in ask_links:
+            ask_links.append(v)
+    if len(ev) == 2 and not ask_links and not waits and not unwaits:
+        raise Refused("set needs at least one of --owner, --next, --blocked, --repos, --waits, --unwait")
 
-    def plan(rows):
+    def plan(rows, decisions):
         r = need(rows, a.slug)
-        events = [ev]
-        if ask_link not in r["links"]:
-            events.append({"event": "link", "ws": a.slug, "add": [ask_link]})
+        events = [ev] if len(ev) > 2 or ask_link else []
+        links = [l for l in ask_links if l not in r["links"]]
+        if links:
+            events.append({"event": "link", "ws": a.slug, "add": links})
+        t_now = parse_time(now())
+        for did in waits:
+            if did in r["waits"]:
+                continue
+            window_check(rows, decisions, did, a.slug, t_now)
+            events.append({"event": "wait", "ws": a.slug, "add": [did]})
+        for did in unwaits:
+            if did not in r["waits"]:
+                raise Refused(f"{a.slug!r} has no edge to decision {did!r}; nothing to drop")
+            if decisions.get(did, {}).get("state") in DECISION_OPEN:
+                raise Refused(f"decision {did!r} is {decisions[did]['state']!r}: an edge cannot be dropped before a "
+                              "confirm, so a PR cannot stop waiting by losing its edge; park the row instead")
+            events.append({"event": "wait", "ws": a.slug, "remove": [did]})
         return events
-    write_many(a.actor, plan)
+    write_plan(a.actor, plan)
 
 
 RELAY_LINK = re.compile(r"^relay:R-[0-9]+$")
@@ -549,9 +623,16 @@ def typed_link(link):
     return link
 
 
+def decision_link_refused(link):
+    if link.startswith("decision:"):
+        raise Refused(f"link {link!r}: a decision edge is set with dws set --waits, which holds it to the window")
+
+
 def cmd_link(a):
     for link in a.links:
         typed_link(link)
+        if not a.remove:
+            decision_link_refused(link)
     ev = {"event": "link", "ws": a.slug, ("remove" if a.remove else "add"): a.links}
     write(a.actor, ev, lambda rows: need(rows, a.slug))
 
@@ -1045,9 +1126,17 @@ def last_refresh(path=LEDGER):
     return best
 
 
+def waits_state(state):
+    """D2: a decision edge as the reader sees it. A confirm meets it; a withdrawn record ends it."""
+    return {"confirmed": "met", "withdrawn": "ended", None: "unknown"}.get(state, "waiting" if state in DECISION_OPEN else state)
+
+
 def cmd_show(a):
     total = {}
-    rows, torn = fold(tally=total)
+    decisions = {}
+    rows, torn = fold(tally=total, decisions=decisions)
+    for r in rows.values():
+        r["waits_state"] = {did: waits_state(decisions.get(did, {}).get("state")) for did in r["waits"]}
     ordered = sorted_rows(rows)
     if a.json:
         json.dump({"ledger": LEDGER, "torn": torn, "tags": total, "last_refresh": last_refresh(), "rows": ordered}, sys.stdout, indent=2, ensure_ascii=False)
@@ -2103,6 +2192,12 @@ DECISION_MOVES = {"confirm": ("decided-by-seat", "confirmed"),
                   "rework": ("overridden", "reworked")}
 # card 1: a two-week trial; its start is given to --daily, never held in the ledger
 TRIAL_DAYS = 14
+# D2. The states a decision waits for the operator in: a seat decision, and a record of two paths.
+DECISION_OPEN = ("decided-by-seat", "paths-open")
+# card 4: at most three dependents for one decision, and none may start more than five days after it
+WINDOW_DEPENDENTS = 3
+WINDOW_HOURS = 120
+WINDOW_FULL = "window full: stop, and the decision goes to the top of the operator's list"
 
 
 def apply_decision(decisions, e):
@@ -2118,8 +2213,31 @@ def apply_decision(decisions, e):
                           "changes": list(e.get("changes", [])), "actual_h": None, "actual_source": None,
                           "state": "decided-by-seat", "added": ts, "moves": []}
         return
+    if op == "paths":
+        # D2 section 8: one record for two paths, open until pick or withdraw
+        if not isinstance(did, str) or did in decisions:
+            return
+        a, b = e.get("a") or {}, e.get("b") or {}
+        m = DECISION_ID.match(did)
+        decisions[did] = {"id": did, "seat": m.group(1) if m else "", "question": f"which path for card {e.get('card')}",
+                          "options": f"a: {a.get('row')}; b: {b.get('row')}", "chosen": None, "reason": None,
+                          "test": a.get("test"), "estimate_h": (a.get("estimate") or 0) + (b.get("estimate") or 0),
+                          "undo": None, "changes": [], "actual_h": None, "actual_source": None,
+                          "state": "paths-open", "added": ts, "moves": [],
+                          "paths": {"card": e.get("card"), "evidence": e.get("evidence"),
+                                    "why_waiting": e.get("why_waiting"), "a": a, "b": b}}
+        return
     d = decisions.get(did)
     if d is None:
+        return
+    if op == "pick" and d["state"] == "paths-open" and e.get("winner") in ("a", "b"):
+        w = d["paths"][e["winner"]]
+        d["chosen"], d["estimate_h"], d["state"] = f"path {e['winner']}: {w.get('row')}", w.get("estimate"), "decided-by-seat"
+        d["moves"].append({"to": d["state"], "ts": ts, "op": "pick", "winner": e["winner"], "result": e.get("result")})
+        return
+    if op == "withdraw" and d["state"] == "paths-open":
+        d["state"] = "withdrawn"
+        d["moves"].append({"to": d["state"], "ts": ts, **{k: e[k] for k in ("words", "ref") if k in e}})
         return
     if op == "actual":
         d["actual_h"], d["actual_source"] = e.get("hours"), e.get("source")
@@ -2271,17 +2389,169 @@ def cmd_decision_confirm(a):
     decision_move(a, "confirm", operator_words(a))
 
 
+def dependents(rows, did):
+    """Card 4: the rows with an edge to the decision whose stage is not parked."""
+    return [r for r in rows.values() if did in r.get("waits", []) and r["stage"] != "parked"]
+
+
+def affected(rows, did):
+    """Section 6: every row with an edge to the decision, with its stage and its pr: links."""
+    return [{"slug": r["slug"], "stage": r["stage"], "prs": [l for l in r["links"] if l.startswith("pr:")]}
+            for r in sorted(rows.values(), key=lambda r: r["slug"]) if did in r.get("waits", [])]
+
+
+def window_check(rows, decisions, did, slug, t_now):
+    """Section 5, checks 1 to 3, for a row that would be a dependent of the decision. Refused
+    unless the decision is decided-by-seat, has fewer than three other dependents, and was added
+    no more than 120 hours ago by the ledger clock."""
+    if did not in decisions:
+        raise Refused(f"no decision {did!r}; add it first with dws decision add --from FILE")
+    d = decisions[did]
+    if d["state"] != "decided-by-seat":
+        raise Refused(f"decision {did!r} is {d['state']!r}, not 'decided-by-seat'; a confirmed decision needs no "
+                      "window, and an overridden, withdrawn or paths-open one takes no new work")
+    others = [r["slug"] for r in dependents(rows, did) if r["slug"] != slug]
+    if len(others) >= WINDOW_DEPENDENTS:
+        raise Refused(f"decision {did!r} already has {len(others)} dependents ({', '.join(sorted(others))}); {WINDOW_FULL}")
+    added = parse_ts(d.get("added"))
+    if added is not None and (t_now - added).total_seconds() > WINDOW_HOURS * 3600:
+        hours = int((t_now - added).total_seconds() // 3600)
+        raise Refused(f"decision {did!r} was decided {hours} hours ago, past the {WINDOW_HOURS}-hour window; {WINDOW_FULL}")
+
+
+def print_affected(rows, did):
+    print("rows that wait on it:")
+    for x in affected(rows, did):
+        print(f"  {x['slug']}  {x['stage']}  {' '.join(x['prs'])}".rstrip())
+    if not affected(rows, did):
+        print("  none")
+
+
 def cmd_decision_override(a):
     d = decision_move(a, "override", {**operator_words(a), "instead": stored_form(nonblank("instead", a.instead))})
-    # D1 prints the decision's own changes; the rows that wait on it come with D2's edges.
-    print("the decision's own changes (rows that wait on it are not tracked until D2):")
+    print("the decision's own changes:")
     for link in d["changes"]:
         print(f"  {link}")
+    rows, _ = fold()
+    print_affected(rows, a.id)
 
 
 def cmd_decision_rework(a):
-    # State checks only in D1; D2 adds the refusal while an affected row is open.
-    decision_move(a, "rework")
+    """Section 6: refused while any row with an edge to the decision is not parked."""
+    def plan(rows, decisions):
+        d = need_decision(decisions, a.id)
+        if d["state"] != "overridden":
+            raise Refused(f"decision {a.id!r} is {d['state']!r}, not 'overridden'; rework follows an override only")
+        open_ = [r["slug"] for r in dependents(rows, a.id)]
+        if open_:
+            raise Refused(f"decision {a.id!r} still has {len(open_)} affected row(s) that are not closed or redone: "
+                          f"{', '.join(sorted(open_))}; park a row whose work was closed, or --unwait one redone on the new choice")
+        return [{"event": "decision", "op": "rework", "id": a.id}]
+    write_plan(a.actor, plan)
+    print(f"dws: decision {a.id} reworked")
+
+
+def paths_hours(flag, value):
+    m = HOURS.match(stored_form(value))
+    if not m:
+        raise Refused(f"{flag} {value!r} is not a number of seat-hours")
+    return float(m.group(1))
+
+
+def paths_test(flag, value):
+    if not DECISION_TEST.match(stored_form(value).lower()):
+        raise Refused(f"{flag} {value!r} does not read 1 ok to 8 ok; all four parts must hold (card 6, part 4: eight oks)")
+    return stored_form(value)
+
+
+def cmd_decision_paths(a):
+    """Section 8: two paths at once for a card that waits on the operator, as one record."""
+    did = checked("id", stored_form(a.id))
+    if not DECISION_ID.match(did):
+        raise Refused(f"id {did!r} must be <seat label>-<YYYYMMDD>-<n>, lower case")
+    est_a, est_b = paths_hours("--estimate-a", a.estimate_a), paths_hours("--estimate-b", a.estimate_b)
+    if est_a + est_b > DECISION_ESTIMATE_MAX:
+        raise Refused(f"the two estimates add to {est_a + est_b:g} seat-hours, over {DECISION_ESTIMATE_MAX} (card 6, part 1)")
+    test_a, test_b = paths_test("--test-a", a.test_a), paths_test("--test-b", a.test_b)
+    evidence = checked("evidence", nonblank("evidence", a.evidence))
+    why = checked("why-waiting", nonblank("why-waiting", a.why_waiting))
+    row_a, row_b = stored_form(a.row_a), stored_form(a.row_b)
+    if row_a == row_b:
+        raise Refused("the two rows must be two rows: --row-a and --row-b name the same workstream")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", a.card):
+        raise Refused(f"--card {a.card!r} is not a card id")
+    print(f"dws: {desk_card_open(a.card)}")
+    ev = {"event": "decision", "op": "paths", "id": did, "card": a.card, "evidence": evidence, "why_waiting": why,
+          "a": {"row": row_a, "estimate": est_a, "test": test_a}, "b": {"row": row_b, "estimate": est_b, "test": test_b}}
+
+    def plan(rows, decisions):
+        if did in decisions:
+            raise Refused(f"decision {did!r} is already in the ledger; nothing written")
+        for x in decisions.values():
+            if x.get("paths", {}).get("card") == a.card:
+                raise Refused(f"card {a.card!r} already has a paths record ({x['id']!r}, {x['state']}); one card gets one pair "
+                              "of paths, ever. A reworked and reposted card has a new id, and may get a new pair")
+        need(rows, row_a), need(rows, row_b)
+        return [ev, {"event": "wait", "ws": row_a, "add": [did]}, {"event": "wait", "ws": row_b, "add": [did]}]
+    write_plan(a.actor, plan)
+    print(f"dws: wrote paths record {did} (paths-open); edges set on {row_a} and {row_b}")
+
+
+def cmd_decision_pick(a):
+    if a.winner not in ("a", "b"):
+        raise Refused(f"--winner is a or b, not {a.winner!r}")
+    result = checked("result", nonblank("result", a.result))
+
+    def plan(rows, decisions):
+        d = need_decision(decisions, a.id)
+        if d["state"] != "paths-open":
+            raise Refused(f"decision {a.id!r} is {d['state']!r}, not 'paths-open'; pick records the evidence for a paths record only")
+        loser = d["paths"]["b" if a.winner == "a" else "a"]["row"]
+        stage = rows[loser]["stage"] if loser in rows else None
+        if stage != "parked":
+            raise Refused(f"the losing path's row {loser!r} is {stage!r}, not 'parked'; park it, and close its PR as a draft, first")
+        return [{"event": "decision", "op": "pick", "id": a.id, "winner": a.winner, "result": result}]
+    write_plan(a.actor, plan)
+    print(f"dws: decision {a.id} decided-by-seat (path {a.winner}); the operator still confirms it")
+
+
+def cmd_decision_withdraw(a):
+    words = {"words": nonblank("words", a.words), "ref": stored_form(nonblank("ref", a.ref))}
+
+    def plan(rows, decisions):
+        d = need_decision(decisions, a.id)
+        if d["state"] != "paths-open":
+            raise Refused(f"decision {a.id!r} is {d['state']!r}, not 'paths-open'; withdraw ends a paths record only")
+        live = [d["paths"][k]["row"] for k in ("a", "b") if rows.get(d["paths"][k]["row"], {}).get("stage") != "parked"]
+        if live:
+            raise Refused(f"row(s) {', '.join(live)} are not parked; park both paths before the record is withdrawn")
+        return [{"event": "decision", "op": "withdraw", "id": a.id, **words}]
+    write_plan(a.actor, plan)
+    print(f"dws: decision {a.id} withdrawn")
+
+
+def cmd_merge_hold(a):
+    """The read merge-guard makes (section 5): Refused, with the line merge-guard prints, when a row
+    that links the PR waits on a decision that is not confirmed. A PR no row links is not held."""
+    m = re.fullmatch(r"([^#\s]+)#([0-9]+)", a.pr)
+    if not m:
+        raise Refused(f"{a.pr!r} is not <owner/repo>#<number>")
+    want = f"pr:{m.group(1).lower()}#{m.group(2)}"
+    decisions = {}
+    try:
+        rows, _ = fold(decisions=decisions)
+    except OSError as err:
+        print(f"dws: the ledger cannot be read ({type(err).__name__})", file=sys.stderr)
+        sys.exit(2)
+    held = []
+    for r in sorted(rows.values(), key=lambda r: r["slug"]):
+        if want not in [l.lower() for l in r["links"] if l.startswith("pr:")]:
+            continue
+        for did in r.get("waits", []):
+            if decisions.get(did, {}).get("state") != "confirmed":
+                held.append(f"waits on seat decision {did}, not confirmed (seat-decide-window)")
+    if held:
+        raise Refused("; ".join(dict.fromkeys(held)))
 
 
 def decision_at_risk(d):
@@ -2290,29 +2560,31 @@ def decision_at_risk(d):
     return h if isinstance(h, (int, float)) else 0
 
 
-def decision_view(d, t_now):
+def decision_view(d, t_now, rows):
     added = parse_ts(d.get("added"))
     age = max(0, int((t_now - added).total_seconds() // 86400)) if added else None
-    # No wait edges exist before D2, so nothing waits on any decision yet.
-    return {**d, "age_days": age, "waiting": 0, "at_risk_h": decision_at_risk(d)}
+    waiting = len(dependents(rows, d["id"]))
+    past = added is not None and (t_now - added).total_seconds() > WINDOW_HOURS * 3600
+    full = d["state"] == "decided-by-seat" and (waiting >= WINDOW_DEPENDENTS or (past and waiting >= 1))
+    return {**d, "age_days": age, "waiting": waiting, "window_full": full, "at_risk_h": decision_at_risk(d),
+            "affected": affected(rows, d["id"])}
 
 
 def decision_order(v):
-    """Card 4's order for the unconfirmed: most waiting first, then oldest, then most
-    seat-hours at risk; ties by seat label, date, then <n> as a number. A full window,
-    which sorts first, needs D2's edges."""
+    """Card 4's order for the unconfirmed: a full window first, then most dependents, then oldest,
+    then most seat-hours at risk; ties by seat label, date, then <n> as a number."""
     m = DECISION_ID.match(v["id"])
     tie = (m.group(1), m.group(2), int(m.group(3))) if m else (v["id"], "", 0)
-    return (-v["waiting"], v.get("added") or "", -v["at_risk_h"]) + tie
+    return (0 if v["window_full"] else 1, -v["waiting"], v.get("added") or "", -v["at_risk_h"]) + tie
 
 
 def cmd_decisions(a):
     decisions = {}
-    _, torn = fold(decisions=decisions)
+    rows, torn = fold(decisions=decisions)
     t_now = parse_time(now())
-    views = [decision_view(d, t_now) for d in decisions.values()]
-    open_ = sorted((v for v in views if v["state"] == "decided-by-seat"), key=decision_order)
-    rest = sorted((v for v in views if v["state"] != "decided-by-seat"), key=lambda v: (v.get("added") or "", v["id"]))
+    views = [decision_view(d, t_now, rows) for d in decisions.values()]
+    open_ = sorted((v for v in views if v["state"] in DECISION_OPEN), key=decision_order)
+    rest = sorted((v for v in views if v["state"] not in DECISION_OPEN), key=lambda v: (v.get("added") or "", v["id"]))
     listed = open_ if a.unconfirmed else open_ + rest
     if a.daily:
         today = t_now.date()
@@ -2384,6 +2656,8 @@ def main(argv):
     t.add_argument("--blocked")
     t.add_argument("--ask")
     t.add_argument("--repos", nargs="+")
+    t.add_argument("--waits", action="append", metavar="decision:ID|ask:CARD", help="the row waits on a seat decision (D2, held to the window) or an open Desk card (K13)")
+    t.add_argument("--unwait", action="append", metavar="decision:ID", help="drop a decision edge; refused before the decision is answered (D2)")
     t.set_defaults(fn=cmd_set)
 
     n = sub.add_parser("link")
@@ -2512,12 +2786,37 @@ def main(argv):
     dr.add_argument("id")
     dr.set_defaults(fn=cmd_decision_rework)
 
+    dp = ds.add_parser("paths", help="record two paths at once for a card that waits on the operator (card 6)")
+    dp.add_argument("id")
+    dp.add_argument("--card", required=True)
+    dp.add_argument("--evidence", required=True)
+    dp.add_argument("--why-waiting", dest="why_waiting", required=True)
+    for k in ("a", "b"):
+        dp.add_argument(f"--row-{k}", dest=f"row_{k}", required=True)
+        dp.add_argument(f"--estimate-{k}", dest=f"estimate_{k}", required=True)
+        dp.add_argument(f"--test-{k}", dest=f"test_{k}", required=True)
+    dp.set_defaults(fn=cmd_decision_paths)
+    dk = ds.add_parser("pick", help="the evidence picked a path: paths-open to decided-by-seat")
+    dk.add_argument("id")
+    dk.add_argument("--winner", required=True)
+    dk.add_argument("--result", required=True, help="where the loser's lessons went in the winner's PR notes")
+    dk.set_defaults(fn=cmd_decision_pick)
+    dw = ds.add_parser("withdraw", help="the operator ruled for neither path: paths-open to withdrawn")
+    dw.add_argument("id")
+    dw.add_argument("--words", required=True)
+    dw.add_argument("--ref", required=True)
+    dw.set_defaults(fn=cmd_decision_withdraw)
+
     dl = sub.add_parser("decisions", help="list seat decisions; --daily prints the daily line; writes nothing (D1)")
     dl.add_argument("--json", action="store_true")
     dl.add_argument("--unconfirmed", action="store_true", help="decided-by-seat only, in card 4's order")
     dl.add_argument("--daily", action="store_true", help="the trial's daily line and the unconfirmed list")
     dl.add_argument("--trial-start", dest="trial_start", metavar="YYYY-MM-DD", help="the trial's first day, for --daily")
     dl.set_defaults(fn=cmd_decisions)
+
+    mh = sub.add_parser("merge-hold", help="exit 1 with the reason when a row linking the PR waits on an unconfirmed decision; read only (D2)")
+    mh.add_argument("pr", metavar="OWNER/REPO#N")
+    mh.set_defaults(fn=cmd_merge_hold)
 
     a, extra = p.parse_known_args(argv)
     if extra and not (a.cmd == "record" and a.kind == "exclusion"):
