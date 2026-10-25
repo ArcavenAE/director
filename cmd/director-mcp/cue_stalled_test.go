@@ -503,6 +503,47 @@ func TestTheTrackerCountsAckPendingAndNakdMail(t *testing.T) {
 	}
 }
 
+// Review 5640723021: acks need not come in stream order. A is delivered and
+// held; B arrives, is delivered and acked while A is still held. The count
+// falls by one, but the ack floor has not passed A, so A's batch must stay and
+// its age keep growing.
+func TestAnOutOfOrderAckLeavesTheHeldMessageAging(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	bus := roleBus(t, ctx, url, "order-seat", "")
+	bus.pending.mark("local", pendingSample{at: time.Now().Add(-3000 * time.Second)})
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.order-seat.inbox", "m-a", "INFORM", "a")
+	a := fetchOneLocal(t, bus) // held
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.order-seat.inbox", "m-b", "INFORM", "b")
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b := fetchOneLocal(t, bus)
+	if err := b.DoubleAck(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := bus.oldestPending(); got < 3000*time.Second {
+		t.Fatalf("A is still held after B's ack: want at least 3000s, got %s", got)
+	}
+	if err := a.DoubleAck(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := bus.oldestPending(); got != 0 {
+		t.Fatalf("both acked: want 0, got %s", got)
+	}
+}
+
 // The review's probe: STREAM.MSG.GET and DIRECT.GET denied, as the hub grants
 // them only on the presence bucket. The sample reads STREAM.INFO instead, so it
 // is fast and the global age is right.
