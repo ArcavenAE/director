@@ -143,7 +143,7 @@ the board and the roster as above.
 A script the operator must run at a host (an at-host operator script) stays on
 that list as its own line, with its path and its sha256, until it is run or
 dropped. It is never left out because it was sent earlier or a newer ask
-arrived; a line leaves the list when the operator says it ran or dropped it.
+arrived.
 
 When the presence watch is on (`DIRECTOR_PRESENCE_WATCH=1` on the director's
 shim), `$DIRECTOR_STATE/presence-watch.json` lists each cluster the watch has seen. For each whose status
