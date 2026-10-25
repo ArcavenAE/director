@@ -330,14 +330,35 @@ P
 grep -q "card c1 is closed" "$root/out" && grep -q "director's" "$root/out" && ok "test 11: a hint names the card and says the next action is director's" || bad "test 11: the hint" "$(cat "$root/out")"
 n="$(lines)"; refresh_local >/dev/null 2>&1
 [[ "$(lines)" == "$n" ]] && ok "test 11: a second run over the same snapshot writes nothing" || bad "test 11: replay wrote" "$n -> $(lines)"
-# a block director sets again later is not cleared by the snapshot already consumed, and is
-# cleared again by a later one
-printf '{"ts":"2026-10-19T13:00:00Z","actor":"director","tag":"judgment","event":"set","ws":"b1","blocked":"operator"}\n' >>"$LEDGER"
-n="$(lines)"; refresh_local >/dev/null 2>&1
-[[ "$(lines)" == "$n" && "$(field b1 blocked)" == "operator" ]] && ok "test 11: a block set again stays while only the consumed snapshot says closed" || bad "test 11: re-block" "$(field b1 blocked)"
-desk 2026-10-19T14:00:00Z c1=closed
-NOW=2026-10-19T15:00:00Z refresh_local >/dev/null 2>&1
-[[ "$(field b1 blocked)" == "" && "$(sets)" == 2 ]] && ok "test 11: a later snapshot clears it again, once" || bad "test 11: second clear" "$(field b1 blocked) sets=$(sets)"
+# a block director sets again later goes through the writer (K13: dws set --blocked operator
+# --ask <an open card>), so the row then links the old closed card and the new open one. A
+# later snapshot that still shows the old card closed must not clear the new block; it clears
+# when the new card closes too (review 5644084635, finding 1, steps 3 and 4).
+desk 2026-10-19T13:00:00Z c1=closed c2=open
+DWS_NOW=2026-10-19T13:30:00Z "$DWS" set b1 --blocked operator --ask c2 >/dev/null 2>&1
+[[ "$(field b1 blocked)" == "operator" ]] && ok "test 11: a block set again through dws set --ask holds" || bad "test 11: re-block through the writer" "$(field b1 blocked)"
+NOW=2026-10-19T13:45:00Z refresh_local >/dev/null 2>&1
+desk 2026-10-19T14:00:00Z c1=closed c2=open
+NOW=2026-10-19T14:30:00Z refresh_local >"$root/out" 2>&1
+[[ "$(field b1 blocked)" == "operator" && "$(sets)" == 1 ]] && ok "test 11: a stale closed card does not clear a block whose current card is open" || bad "test 11: a stale card cleared a live block" "$(field b1 blocked) sets=$(sets) $(cat "$root/out")"
+desk 2026-10-19T15:00:00Z c1=closed c2=resolved
+NOW=2026-10-19T15:30:00Z refresh_local >/dev/null 2>&1
+[[ "$(field b1 blocked)" == "" && "$(sets)" == 2 ]] && ok "test 11: when every linked card is closing it clears again, once" || bad "test 11: second clear" "$(field b1 blocked) sets=$(sets)"
+
+# review 5644084635, finding 1, steps 1 to 4, through the writer only
+fresh_state
+desk 2026-10-19T09:00:00Z c1=open
+DWS_NOW=2026-10-19T09:10:00Z "$DWS" open r1 --title "reviewer repro" --owner director --blocked operator --ask c1 >/dev/null 2>&1
+[[ "$(field r1 blocked)" == "operator" ]] && ok "test 11 repro: step 1, open blocked on c1" || bad "test 11 repro: step 1" "$(field r1 blocked)"
+desk 2026-10-19T10:00:00Z c1=closed
+NOW=2026-10-19T10:10:00Z refresh_local >/dev/null 2>&1
+[[ "$(field r1 blocked)" == "" ]] && ok "test 11 repro: step 2, c1 closing clears it" || bad "test 11 repro: step 2" "$(field r1 blocked)"
+desk 2026-10-19T10:20:00Z c1=closed c2=open
+DWS_NOW=2026-10-19T10:30:00Z "$DWS" set r1 --blocked operator --ask c2 >/dev/null 2>&1
+[[ "$(field r1 blocked)" == "operator" ]] && ok "test 11 repro: step 3, blocked again on c2" || bad "test 11 repro: step 3" "$(field r1 blocked)"
+desk 2026-10-19T11:00:00Z c1=closed c2=open
+NOW=2026-10-19T11:10:00Z refresh_local >"$root/out" 2>&1
+[[ "$(field r1 blocked)" == "operator" ]] && ok "test 11 repro: step 4, c1 closed and c2 open leaves the block" || bad "test 11 repro: step 4 cleared a live block" "$(cat "$root/out")"
 
 # every status in the starting table clears; yours, split and open do not
 for st in resolved withdrawn superseded relayed; do
