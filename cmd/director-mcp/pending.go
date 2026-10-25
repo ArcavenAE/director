@@ -98,6 +98,7 @@ type pendingSample struct {
 	haveTotal  bool
 	lastSeq    uint64 // the stream's last sequence, read with T; 0 when not read
 	ackFloor   uint64 // the consumer's AckFloor.Stream
+	delivered  uint64 // the consumer's Delivered.Stream
 	failed     string
 	at         time.Time
 }

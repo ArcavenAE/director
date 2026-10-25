@@ -223,6 +223,32 @@ func TestTrackerAnOutOfOrderAckPopsNothingTheFloorHasNotPassed(t *testing.T) {
 	}
 }
 
+// onShared is a sample on a stream other seats also use, so its last sequence
+// runs ahead of T: the count, how many are ack-pending, T, the stream's last
+// sequence, the ack floor, the consumer's delivered sequence and the second.
+func onShared(unread, ackPending, total, lastSeq, floor, delivered uint64, s int) pendingSample {
+	return pendingSample{unread: unread, ackPending: ackPending, total: total, haveTotal: unread > 0,
+		lastSeq: lastSeq, ackFloor: floor, delivered: delivered, at: atS(s)}
+}
+
+// Review 5640841466, its samples: A (seq 400) arrives with other seats' mail
+// to 500, is delivered and held; C (seq 600) arrives at 998 and is held; A is
+// acked in order. A's batch must pop at its ack even though the stream's last
+// sequence when it was counted was above A, so the age is C's.
+func TestTrackerAnInOrderAckOnASharedStreamPopsTheAckedBatch(t *testing.T) {
+	var p pendingTracker
+	p.mark("local", onShared(0, 0, 0, 300, 300, 300, 0))
+	p.mark("local", onShared(1, 0, 1, 500, 399, 399, 2)) // A arrives, undelivered
+	p.mark("local", onShared(1, 1, 1, 500, 399, 400, 4)) // A delivered and held
+	p.mark("local", onShared(1, 1, 1, 500, 399, 400, 996))
+	p.mark("local", onShared(2, 2, 2, 650, 399, 600, 998))  // C arrives and is held
+	p.mark("local", onShared(1, 1, 2, 650, 400, 600, 1000)) // A acked, C held
+	p.mark("local", onShared(1, 1, 2, 650, 400, 600, 1300))
+	if got := p.age(atS(1300)); got > 304*time.Second {
+		t.Fatalf("only C waits, seen at 996: want at most 304s, got %s", got)
+	}
+}
+
 // The in-order case: A is acked first, so the floor passes A's batch and B,
 // still held, ages from its own batch.
 func TestTrackerAnInOrderAckPopsTheBatchTheFloorPassed(t *testing.T) {
@@ -580,6 +606,39 @@ func TestAnOutOfOrderAckLeavesTheHeldMessageAging(t *testing.T) {
 	}
 	if got := bus.oldestPending(); got != 0 {
 		t.Fatalf("both acked: want 0, got %s", got)
+	}
+}
+
+// Review 5640841466: AGENT_INBOX is shared, so the stream's last sequence runs
+// ahead of this seat's own mail. A is delivered and held while another seat's
+// message lands after it; C arrives and is held; A is acked in order. A's
+// batch must pop at its ack, so the age is C's, not A's.
+func TestAnInOrderAckOnASharedStreamPopsTheAckedBatch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	bus := roleBus(t, ctx, url, "shared-seat", "")
+	bus.pending.mark("local", pendingSample{at: time.Now().Add(-1000 * time.Second)})
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.shared-seat.inbox", "m-a", "INFORM", "a")
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.other-seat.inbox", "m-x", "INFORM", "another seat's mail")
+	a := fetchOneLocal(t, bus) // held
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.shared-seat.inbox", "m-c", "INFORM", "c")
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = fetchOneLocal(t, bus) // C, held
+	if err := a.DoubleAck(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (busCueSource{bus}).count(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := bus.oldestPending(); got > 100*time.Second {
+		t.Fatalf("A was acked in order; only C waits, seen moments ago: want under 100s, got %s", got)
 	}
 }
 
