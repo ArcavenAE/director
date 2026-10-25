@@ -75,7 +75,9 @@ no instance id is stored:
 **Block form and parsing.** A block is an optional first line
 `seat-decision@1`, then one `field: value` line per field. A line not in that
 form is refused, so a value cannot run onto a second line and be stored cut
-short. `changes` is split on whitespace, and each link goes through the
+short. `changes` is split on whitespace, and each entry must be one of the
+typed links, as row links are: `pr:`, `issue:`, `bd:`, `relay:` or `msg:`, and
+anything else is refused. Each link goes through the
 existing `typed_link` check, and a link that starts with `pr:`, `issue:` or
 `bd:` must fully match the existing `LINK` pattern. `test` accepts `1 ok` to
 `8 ok` in order,
