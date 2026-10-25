@@ -2,11 +2,11 @@
 # Prove the ledger fill (sim/design/ledger-fill.md, issue #321): workstream rows
 # move from the records director already writes, joined by an explicit id, and
 # never by reading message text. LF1 is relay-log --ws (verify-relay-log.sh); this
-# file covers LF2 (the fold), LF3 (refresh --local, unlinked, no render loop).
+# file covers LF2 (the fold), LF3 (refresh --local, unlinked, no render loop) and LF4
+# (refresh clears "blocked operator" when the linked Desk card closes, operator ruling 1
+# of 2026-10-19; the design's test 11).
 #
-# Held, and not tested here: LF4 (refresh clears "blocked operator" when the linked
-# Desk card closes) and the design's test 11 need operator ruling 1; W5 (the ask
-# ledger source) has no source file yet.
+# Held, and not tested here: W5 (the ask ledger source) has no source file yet.
 #
 # Every test uses a scratch DIRECTOR_STATE and RELAY_LOG, DWS_TEST_CLOCK=1, and stubbed
 # gh and bd that log their calls; nothing reads the live state.
@@ -207,7 +207,8 @@ open_at 2026-10-05T10:00:00Z j1 --title "judge me" --owner director --stage "in 
 entry 3000 2026-10-18T10:00:00Z agent://t/z j1
 # Sources that suggest each judging move: a PR link on an in-review row, a relay entry whose
 # header and text say accepted, parked, released and deployed, and a Desk card that is closed
-# on a row blocked on the operator (the held LF4 move).
+# on a row blocked on the operator. LF4 may clear that block and nothing more: the card
+# closing never moves a stage, parks, opens, links or sets any other field.
 open_at 2026-10-05T10:00:00Z j2 --title "blocked on a closed card" --owner director --blocked operator --ask c9 --link ask:c9 2>/dev/null || true
 cat >>"$LEDGER" <<'J'
 {"ts":"2026-10-05T10:00:00Z","actor":"director","tag":"judgment","event":"open","ws":"j2","title":"blocked on a closed card","owner":"director","blocked":"operator","links":["ask:c9"]}
@@ -216,23 +217,32 @@ J
 printf '{"c9": {"status": "closed"}}' >"$root/cards7.json"
 DWS_NOW=2099-01-01T00:00:00Z "$SNAP" write --cards "$root/cards7.json" --reported 1 >/dev/null
 NOW=2099-01-01T00:00:00Z refresh_local >/dev/null 2>&1
-[[ "$(field j2 blocked)" == "operator" ]] && ok "test 7: a closed linked card does not clear the operator block (LF4 is held)" || bad "test 7: the block was cleared" "$(field j2 blocked)"
-[[ "$(field j1 stage)" == "in review" ]] && ok "test 7: no stage moved on any suggestion" || bad "test 7: a stage moved" "$(field j1 stage)"
-python3 - "$LEDGER" <<'P' && ok "test 7: the fill appends observe events only (no stage, park, open, set or link)" || bad "test 7: the fill appended a judging event"
+[[ "$(field j1 stage)" == "in review" && "$(field j2 stage)" == "idea" ]] && ok "test 7: no stage moved on any suggestion" || bad "test 7: a stage moved" "$(field j1 stage) $(field j2 stage)"
+python3 - "$LEDGER" <<'P' && ok "test 7: the fill appends observe events and the LF4 clear only (no stage, park, open, link, or set of another field)" || bad "test 7: the fill appended a judging event"
 import json, sys
 ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 ev = [e for e in ev if e["event"] != "refresh-run"]
-bad = [e["event"] for e in ev if e["actor"] == "refresh" and e["event"] != "observe"]
+def lf4(e):
+    fields = {k for k in ("owner", "next", "blocked", "repos", "stage", "to", "title", "add", "remove") if k in e}
+    return e["event"] == "set" and fields == {"blocked"} and e["blocked"] == "" and str(e.get("src", "")).startswith("desk:")
+bad = [e["event"] for e in ev if e["actor"] == "refresh" and e["event"] != "observe" and not lf4(e)]
 assert not bad, bad
 assert all(e["actor"] == "refresh" and e["tag"] == "mirror" for e in ev if "src" in e), ev
 P
 # the regression pin, which already passes on main: refresh may not make these moves
-for cmd in "stage j1 accepted --from in-review" "park j1 --from in-review" "open j9 --title x" "set j1 --next no" "link j1 pr:o/r#9"; do
+for cmd in "stage j1 accepted --from in-review" "park j1 --from in-review" "open j9 --title x" "set j1 --next no" "set j1 --owner x" "link j1 pr:o/r#9"; do
   n="$(lines)"
   if "$DWS" --actor refresh $cmd >"$root/out" 2>&1; then bad "test 7 pin: --actor refresh $cmd is refused" "accepted"
   elif [[ "$(lines)" != "$n" ]]; then bad "test 7 pin: --actor refresh $cmd" "appended anyway"
   else ok "test 7 pin: --actor refresh $cmd is refused and appends nothing"; fi
 done
+
+# LF4 is the fill's move, from a snapshot it read, and never a by-hand one: --actor refresh
+# with set --blocked "" is refused like every other set.
+n="$(lines)"
+if "$DWS" --actor refresh set j2 --blocked "" >"$root/out" 2>&1; then bad "test 7 pin: --actor refresh set --blocked \"\" is refused" "accepted"
+elif [[ "$(lines)" != "$n" ]]; then bad "test 7 pin: --actor refresh set --blocked \"\"" "appended anyway"
+else ok "test 7 pin: --actor refresh set --blocked \"\" is refused and appends nothing"; fi
 
 # --- test 8: an after-the-fact link moves the row once --------------------------------------
 fresh_state
@@ -285,6 +295,77 @@ n="$(lines)"; refresh_local >/dev/null 2>&1
 [[ "$(lines)" == "$n" ]] && ok "the Desk reader writes nothing on a replay of the same snapshot" || bad "Desk replay"
 DWS_NOW="${NOW:-2026-10-19T12:00:00Z}" "$DWS" unlinked >"$root/unl" 2>&1
 grep -q 'c2' "$root/unl" && ok "unlinked lists an open Desk card that no row links" || bad "unlinked: an open card with no row" "$(cat "$root/unl")"
+
+# --- test 11: LF4, a closing card clears the operator block (ruling 1, 2026-10-19) -----------
+# blocked_on SLUG CARD: a row blocked on the operator with an ask: link, written as K13 writes
+# it (the open path needs a snapshot showing the card open; the line is the same).
+blocked_on() {
+  printf '{"ts":"2026-10-05T10:00:00Z","actor":"director","tag":"judgment","event":"open","ws":"%s","title":"wait on %s","owner":"director","next":"act on the answer","blocked":"operator","links":["ask:%s"]}\n' "$1" "$2" "$2" >>"$LEDGER"
+}
+# desk AT ID=STATUS...: write a Desk snapshot read at AT.
+desk() {
+  local at="$1"; shift
+  python3 - "$root/cards11.json" "$@" <<'P'
+import json, sys
+json.dump({kv.split("=")[0]: {"status": kv.split("=")[1]} for kv in sys.argv[2:]}, open(sys.argv[1], "w"))
+P
+  DWS_NOW="$at" "$SNAP" write --cards "$root/cards11.json" --reported "$#" >/dev/null
+}
+sets() { python3 -c 'import json,sys;print(sum(1 for l in open(sys.argv[1]) if l.strip() and json.loads(l)["event"] == "set" and json.loads(l).get("actor") == "refresh"))' "$LEDGER"; }
+
+fresh_state
+blocked_on b1 c1
+desk 2026-10-19T10:00:00Z c1=closed
+refresh_local >"$root/out" 2>&1
+[[ "$(field b1 blocked)" == "" ]] && ok "test 11: a closed card clears the operator block" || bad "test 11: the block stayed" "$(field b1 blocked)"
+[[ "$(sets)" == 1 ]] && ok "test 11: exactly one set, by refresh" || bad "test 11: set count" "$(sets)"
+python3 - "$LEDGER" <<'P' && ok "test 11: the set is blocked \"\" only, as refresh with tag mirror and the card's src" || bad "test 11: the set's shape" "$(cat "$LEDGER")"
+import json, sys
+ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+s = [e for e in ev if e["event"] == "set" and e["actor"] == "refresh"][0]
+assert s["blocked"] == "" and s["tag"] == "mirror" and s["src"] == "desk:c1@2026-10-19T10:00:00Z", s
+assert not {"owner", "next", "repos"} & set(s), s
+P
+[[ "$(field b1 next)" == "act on the answer" && "$(field b1 owner)" == "director" ]] && ok "test 11: next action and owner are unchanged" || bad "test 11: next or owner moved" "$(field b1 next) / $(field b1 owner)"
+grep -q "card c1 is closed" "$root/out" && grep -q "director's" "$root/out" && ok "test 11: a hint names the card and says the next action is director's" || bad "test 11: the hint" "$(cat "$root/out")"
+n="$(lines)"; refresh_local >/dev/null 2>&1
+[[ "$(lines)" == "$n" ]] && ok "test 11: a second run over the same snapshot writes nothing" || bad "test 11: replay wrote" "$n -> $(lines)"
+# a block director sets again later is not cleared by the snapshot already consumed, and is
+# cleared again by a later one
+printf '{"ts":"2026-10-19T13:00:00Z","actor":"director","tag":"judgment","event":"set","ws":"b1","blocked":"operator"}\n' >>"$LEDGER"
+n="$(lines)"; refresh_local >/dev/null 2>&1
+[[ "$(lines)" == "$n" && "$(field b1 blocked)" == "operator" ]] && ok "test 11: a block set again stays while only the consumed snapshot says closed" || bad "test 11: re-block" "$(field b1 blocked)"
+desk 2026-10-19T14:00:00Z c1=closed
+NOW=2026-10-19T15:00:00Z refresh_local >/dev/null 2>&1
+[[ "$(field b1 blocked)" == "" && "$(sets)" == 2 ]] && ok "test 11: a later snapshot clears it again, once" || bad "test 11: second clear" "$(field b1 blocked) sets=$(sets)"
+
+# every status in the starting table clears; yours, split and open do not
+for st in resolved withdrawn superseded relayed; do
+  fresh_state; blocked_on b2 c2; desk 2026-10-19T10:00:00Z c2="$st"; refresh_local >/dev/null 2>&1
+  [[ "$(field b2 blocked)" == "" ]] && ok "test 11: a $st card clears the block" || bad "test 11: $st did not clear" "$(field b2 blocked)"
+done
+for st in yours split open; do
+  fresh_state; blocked_on b3 c3; desk 2026-10-19T10:00:00Z c3="$st"; refresh_local >"$root/out" 2>&1
+  [[ "$(field b3 blocked)" == "operator" && "$(sets)" == 0 ]] && ok "test 11: a $st card gives no clear" || bad "test 11: $st cleared" "$(field b3 blocked)"
+  if [[ "$st" == split ]]; then
+    grep -q "card c3 is split" "$root/out" && ok "test 11: a split card gives a hint" || bad "test 11: split hint" "$(cat "$root/out")"
+  fi
+done
+
+# a card absent from the snapshot is listed as not on the Desk, and clears nothing
+fresh_state; blocked_on b4 c4; desk 2026-10-19T10:00:00Z c5=closed; refresh_local >"$root/out" 2>&1
+[[ "$(field b4 blocked)" == "operator" && "$(sets)" == 0 ]] && ok "test 11: a card absent from the snapshot clears nothing" || bad "test 11: absent card cleared" "$(field b4 blocked)"
+grep -q "card c4 is not on the Desk" "$root/out" && ok "test 11: and it is listed as not on the Desk" || bad "test 11: absent card not listed" "$(cat "$root/out")"
+
+# a closed card on a row not blocked on the operator sets nothing
+fresh_state
+printf '{"ts":"2026-10-05T10:00:00Z","actor":"director","tag":"judgment","event":"open","ws":"b5","title":"other block","owner":"director","blocked":"waiting on CI","links":["ask:c6"]}\n' >>"$LEDGER"
+desk 2026-10-19T10:00:00Z c6=closed; refresh_local >/dev/null 2>&1
+[[ "$(field b5 blocked)" == "waiting on CI" && "$(sets)" == 0 ]] && ok "test 11: a closed card on a row not blocked on the operator sets nothing" || bad "test 11: another block cleared" "$(field b5 blocked)"
+
+# a stale snapshot that says closed clears nothing (the K13 bound)
+fresh_state; blocked_on b6 c7; desk 2026-10-17T10:00:00Z c7=closed; refresh_local >/dev/null 2>&1
+[[ "$(field b6 blocked)" == "operator" && "$(sets)" == 0 ]] && ok "test 11: a snapshot older than 24 hours clears nothing" || bad "test 11: stale snapshot cleared" "$(field b6 blocked)"
 
 # --- unlinked: rows with no link, and rows blocked on the operator with no card -----------------
 fresh_state
