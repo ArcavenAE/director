@@ -1,0 +1,64 @@
+{
+  "about": "Evidence id grammar for the sim/requirements.md Earned-by line, after section 4 item 4 of the design merged in director#288. Each pattern is a Python regular expression. A token class decides an entry's evidence locus by the precedence in locus_order. An entry with no Earned-by line is 'none'; one whose Earned-by line holds no token the grammar recognizes is 'unresolved'. A file-name or path token counts as tracked only when it resolves as written: a :line suffix is dropped and the rest must be an exact tracked path at the pin; a bare name that exists only deeper in the tree does not resolve.",
+  "earned_by": "Earned by:?",
+  "token_classes": {
+    "tracked": [
+      "\\bfinding-[0-9]+[a-z]?\\b",
+      "\\bfinding-[a-z]+-[0-9a-z]{4}\\b",
+      "\\bbd [a-z][a-z0-9-]*-[0-9a-z]{4,5}\\b",
+      "\\baae-orc-[0-9a-z]{4,5}\\b",
+      "\\b[A-Za-z][A-Za-z0-9_.-]*#[0-9]+\\b",
+      "(?<![A-Za-z0-9])#[0-9]+\\b",
+      "`[^`]*/[^`]*`",
+      "\\b(?:specs|design|docs|sim|skills|cmd|internal|_kos|probe)/[A-Za-z0-9_./-]*[A-Za-z0-9_](?::[0-9]+(?:-[0-9]+)?)?",
+      "\\b[A-Za-z0-9_-]+\\.(?:md|go|yaml|yml|sh|toml|conf)\\b(?::[0-9]+(?:-[0-9]+)?)?",
+      "\\bdelivery spec R[0-9]+\\b",
+      "\\b[0-9a-f]{7,40}\\b(?=[^A-Za-z0-9]|$)"
+    ],
+    "notes": [
+      "\\bO-[0-9]+[a-z]?\\b",
+      "\\bO[- ][0-9]{4}-[0-9]{2}-[0-9]{2}(?:-[a-z0-9-]+|[a-z])?",
+      "\\bFR-[0-9]+\\b",
+      "\\bFR-[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+",
+      "\\bFR-netmove-[0-9]+\\b",
+      "\\brelay log\\b",
+      "\\bO [a-z][a-z0-9]*(?:-[a-z0-9]+)+\\b",
+      "\\bFR [0-9]{4}-[0-9]{2}-[0-9]{2}\\b",
+      "\\bobservation [0-9]{4}-[0-9]{2}-[0-9]{2}\\b",
+      "\\bfriction [0-9]{4}-[0-9]{2}-[0-9]{2}\\b",
+      "\\bsim/notes/[A-Za-z0-9_./-]*[A-Za-z0-9_]"
+    ],
+    "ruling": [
+      "\\boperator(?:'s)? (?:ruling|stated|decision|direction|correction)s?\\b",
+      "\\bruled [0-9]{4}-[0-9]{2}-[0-9]{2}\\b"
+    ],
+    "session": [
+      "\\bthis session\\b",
+      "\\bthis sitting\\b",
+      "\\bthe same day\\b",
+      "\\btoday\\b",
+      "\\broundtable\\b",
+      "\\badversarial pass\\b"
+    ]
+  },
+  "locus_order": [
+    [
+      "tracked",
+      "tracked"
+    ],
+    [
+      "notes",
+      "notes-only"
+    ],
+    [
+      "ruling",
+      "ruling-no-record"
+    ],
+    [
+      "session",
+      "session-relative"
+    ]
+  ],
+  "no_earned_by": "none",
+  "no_token": "unresolved"
+}
