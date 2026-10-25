@@ -1,10 +1,12 @@
 package main
 
-// The tool catalog and dispatch. Six tools: the five from the spbc ticket
-// (send_message, wait_for_message, list_roster, set_presence, broadcast) and
-// inbox_summary. Each is request/response; wait_for_message is the long-poll
-// that answers the push-vs-poll question, and its max argument drains a
-// backlog in one call (drain.go).
+// The tool catalog and dispatch. Eight tools: send_message, wait_for_message,
+// inbox_summary, list_roster, set_presence, report_status, broadcast and
+// audit_lookup. Two more are offered only in the mode that needs them:
+// mark_handled in handled mode, and cancel_held while the presence watch is
+// on (presencewatch_shim.go). Each is request/response; wait_for_message is
+// the long-poll that answers the push-vs-poll question, and its max argument
+// drains a backlog in one call (drain.go).
 
 import (
 	"context"
