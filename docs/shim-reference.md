@@ -484,8 +484,10 @@ offered only when the presence watch is on (`DIRECTOR_PRESENCE_WATCH=1`);
 with the watch off it is not in the catalog, and a call to it is answered
 `unknown tool: cancel_held`. It is not read-only (`readOnlyHint` false).
 
-With the watch on, a send to a global address that presence refuses is held
-rather than refused, unless the send passed `fail_fast`. That send's result
+With the watch on, a send to a global address is held rather than refused
+when presence refuses it (the recipient has no live presence) or when the
+presence read itself fails (the hub did not answer), unless the send passed
+`fail_fast`. Any other failure is refused as before. That send's result
 carries `status` `held, not delivered`, its `message_id`, a `hold_id`, `to`,
 `reason`, `sell_by` and a `note`. The hold id is the envelope's
 `message_id`.
@@ -520,11 +522,13 @@ Refusals, each returned as the tool's error text:
 | `id` missing, empty, or the arguments do not parse | `cancel_held: give the id of the held send` |
 | no record has that id | `cancel_held: no held send has the id <id>` |
 | the record is not `held` or `proposed` | `cancel_held: <id> is <state>, and only a held or proposed send can be cancelled` |
-| `replacement` names no record in the held store | `cancel_held: the replacement <replacement> is not a held send` |
+| `replacement` names no record in the held store, or the held store cannot be read while looking it up | `cancel_held: the replacement <replacement> is not a held send` |
 
-An error reading or writing the held store is returned as it came. The
-`replacement` check finds a record by id in any state; it does not require
-that send to be `held`.
+An error reading the held store while looking up `id`, or writing the
+cancel record, is returned as it came. The lookup of `replacement` returns
+the replacement text above for a read error too, so that text does not by
+itself mean the record is absent. The `replacement` check finds a record by
+id in any state; it does not require that send to be `held`.
 
 ### `mark_handled` (handled mode only)
 
