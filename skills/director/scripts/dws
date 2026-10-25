@@ -84,6 +84,14 @@ prints its last-read time or UNREAD, the queue count reads "at least n" while an
 UNREAD, and a check with no readable source (recommendation sell-by, an ask unacked past
 its window, a harvest due) is listed as not run, never counted as zero.
 
+D1: `decision add --from FILE` parses one seat-decision@1 block (sim/design/seat-decisions.md,
+section 3) and appends a decision event, state decided-by-seat, to workstreams.jsonl under the same
+lock as the rows. `decision actual|confirm|override|rework` record the actual figure and the three
+moves (decided-by-seat to confirmed or overridden, overridden to reworked); confirm and override keep
+the operator's words as given. A skip is no command, and no move happens on a clock. `decisions
+[--json] [--unconfirmed] [--daily --trial-start DATE]` reads them and writes nothing. The wait edges,
+the window and the affected list are D2.
+
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
 """
@@ -231,11 +239,12 @@ def blocked_on_operator(blocked, ask):
     return f"ask:{ask}"
 
 
-def fold(path=LEDGER, tally=None):
+def fold(path=LEDGER, tally=None, decisions=None):
     """Rows by slug, and how many lines could not be read. A torn line is
     skipped and counted, never repaired. A tally dict, when given, counts every
     event line by tag, whatever became of it: a line for a slug with no row and
-    a re-open that resets a row are both in it (K8)."""
+    a re-open that resets a row are both in it (K8). A decisions dict, when
+    given, takes the decision events (D1); they never touch a row."""
     rows, torn = {}, 0
     try:
         f = open(path, "rb")
@@ -256,6 +265,10 @@ def fold(path=LEDGER, tally=None):
             if tally is not None:
                 name = tag_name(e)
                 tally[name] = tally.get(name, 0) + 1
+            if e.get("event") == "decision":
+                if decisions is not None:
+                    apply_decision(decisions, e)
+                continue
             apply(rows, e)
     return rows, torn
 
@@ -2069,6 +2082,273 @@ def cmd_reconcile(a):
         print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
 
 
+# D1: seat decisions (sim/design/seat-decisions.md, section 3). A decision is a run of
+# events in workstreams.jsonl with "event": "decision" and an "op": add, then actual,
+# confirm, override or rework. They are folded beside the rows under the same lock, so
+# D2's wait edges can be checked against the decisions in one fold. director writes
+# every event from the seat's seat-decision@1 message; the seat stays the author of the
+# content. No move happens on a clock: a skip is no command, and the state stays.
+DECISION_FORMAT = "seat-decision@1"
+DECISION_FIELDS = ("id", "seat", "question", "options", "chosen", "test", "estimate", "undo", "changes")
+# <seat label>-<YYYYMMDD>-<n>, lower case. A seat label may carry a team prefix (team-a/builder).
+DECISION_ID = re.compile(r"^([a-z0-9][a-z0-9._/-]*)-([0-9]{8})-([0-9]+)$")
+# card 1: the eight-line test, each line ok; a failed line sends the choice to the Desk
+DECISION_TEST = re.compile(r"^" + r"[ ,;]+".join(f"{n} ok" for n in range(1, 9)) + r"$")
+# card 2: at most 4 seat-hours in total, dependent work included
+DECISION_ESTIMATE_MAX = 4
+HOURS = re.compile(r"^([0-9]+(?:\.[0-9]+)?) ?h?$")
+# The only moves (section 3): op -> (from, to). Anything else is no move, on write or on read.
+DECISION_MOVES = {"confirm": ("decided-by-seat", "confirmed"),
+                  "override": ("decided-by-seat", "overridden"),
+                  "rework": ("overridden", "reworked")}
+# card 1: a two-week trial; its start is given to --daily, never held in the ledger
+TRIAL_DAYS = 14
+
+
+def apply_decision(decisions, e):
+    """One decision event into the decisions dict. An add for an id already held
+    and a move from the wrong state are not applied: add refuses both on write,
+    and a hand-written line cannot make a move the table does not have."""
+    op, did, ts = e.get("op"), e.get("id"), e.get("ts", "")
+    if op == "add":
+        if not isinstance(did, str) or did in decisions:
+            return
+        decisions[did] = {"id": did, **{k: e.get(k) for k in ("seat", "question", "options", "chosen", "reason",
+                                                             "test", "estimate_h", "undo")},
+                          "changes": list(e.get("changes", [])), "actual_h": None, "actual_source": None,
+                          "state": "decided-by-seat", "added": ts, "moves": []}
+        return
+    d = decisions.get(did)
+    if d is None:
+        return
+    if op == "actual":
+        d["actual_h"], d["actual_source"] = e.get("hours"), e.get("source")
+    elif op in DECISION_MOVES and d["state"] == DECISION_MOVES[op][0]:
+        d["state"] = DECISION_MOVES[op][1]
+        d["moves"].append({"to": d["state"], "ts": ts,
+                           **{k: e[k] for k in ("words", "ref", "instead") if k in e}})
+
+
+def decision_block(text):
+    """The fields of one seat-decision@1 block, or Refused. A leading line naming the
+    format is allowed; every other non-blank line is 'field: value', each field once."""
+    lines = [l for l in text.splitlines() if l.strip()]
+    if lines and lines[0].strip() == DECISION_FORMAT:
+        lines = lines[1:]
+    fields = {}
+    for line in lines:
+        key, sep, value = line.partition(":")
+        key = key.strip()
+        if not sep or not key:
+            raise Refused(f"line {line.strip()!r} is not a 'field: value' line of {DECISION_FORMAT}")
+        if key not in DECISION_FIELDS:
+            raise Refused(f"unknown field {key!r}; {DECISION_FORMAT} fields are {', '.join(DECISION_FIELDS)}")
+        if key in fields:
+            raise Refused(f"field {key!r} is repeated; each field is given once")
+        fields[key] = value
+    missing = [k for k in DECISION_FIELDS if not stored_form(fields.get(k, ""))]
+    if missing:
+        raise Refused(f"field(s) missing or empty: {', '.join(missing)}")
+    return fields
+
+
+def decision_event(fields):
+    """The add event's fields from a parsed block, each through checked() so no
+    instance id is stored; Refused when the id, test, estimate or chosen line is not
+    in its form."""
+    did = checked("id", fields["id"])
+    if not DECISION_ID.match(did):
+        raise Refused(f"id {did!r} is not <seat label>-<YYYYMMDD>-<n> in lower case")
+    try:
+        datetime.datetime.strptime(DECISION_ID.match(did).group(2), "%Y%m%d")
+    except ValueError:
+        raise Refused(f"id {did!r} does not carry a real date as YYYYMMDD")
+    chosen, because, reason = checked("chosen", fields["chosen"]).partition(" because ")
+    if not because or not chosen.strip() or not reason.strip():
+        raise Refused("chosen has no ' because <reason>'; the line reads chosen: <option> because <reason>")
+    test = checked("test", fields["test"])
+    if not DECISION_TEST.match(test.lower()):
+        raise Refused(f"test {test!r} does not read 1 ok to 8 ok; a decision that fails a line of the "
+                      "eight-line test goes to the Desk, not the ledger")
+    m = HOURS.match(checked("estimate", fields["estimate"]))
+    if not m:
+        raise Refused(f"estimate {fields['estimate'].strip()!r} is not a number of seat-hours")
+    estimate = float(m.group(1))
+    if estimate > DECISION_ESTIMATE_MAX:
+        raise Refused(f"estimate {estimate:g}h is over {DECISION_ESTIMATE_MAX} seat-hours (card 2); "
+                      "a larger choice goes to the Desk")
+    changes = [decision_link(typed_link(checked("changes", x))) for x in stored_form(fields["changes"]).split(" ")]
+    return {"event": "decision", "op": "add", "id": did, "seat": checked("seat", fields["seat"]),
+            "question": checked("question", fields["question"]), "options": checked("options", fields["options"]),
+            "chosen": chosen.strip(), "reason": reason.strip(), "test": test, "estimate_h": estimate,
+            "undo": checked("undo", fields["undo"]), "changes": changes}
+
+
+DECISION_LINK_KINDS = ("pr:", "issue:", "bd:", "relay:", "msg:")
+
+
+def decision_link(link):
+    """A changes entry is one of the typed link kinds, and one that starts with pr:,
+    issue: or bd: must fully match LINK, so a comma list is not stored as one link.
+    relay: and msg: keep typed_link's checks. ask: is left out: a Desk card is not a
+    change. Row links (typed_link, dws link) are unchanged."""
+    if not link.startswith(DECISION_LINK_KINDS):
+        raise Refused(f"changes link {link!r} is not a typed link; give pr:, issue:, bd:, relay: or msg: "
+                      "links, separated by spaces")
+    if link.startswith(("pr:", "issue:", "bd:")) and not LINK.fullmatch(link):
+        raise Refused(f"changes link {link!r} is not pr:<owner>/<repo>#<n>, issue:<owner>/<repo>#<n> "
+                      "or bd:<id>; give each link once, separated by spaces")
+    return link
+
+
+def write_decision(actor, event, check):
+    """Fold, check, append under the ledger lock, as write() does for rows;
+    check(decisions) raises Refused."""
+    event = stamp(actor, event)
+    with Locked():
+        decisions = {}
+        fold(decisions=decisions)
+        check(decisions)
+        append(event)
+    rerender()
+
+
+def need_decision(decisions, did):
+    if did not in decisions:
+        raise Refused(f"no decision {did!r}; add it first with dws decision add --from FILE")
+    return decisions[did]
+
+
+def cmd_decision_add(a):
+    try:
+        with open(a.from_, encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, UnicodeDecodeError) as err:
+        raise Refused(f"cannot read {a.from_} ({type(err).__name__}); nothing written")
+    ev = decision_event(decision_block(text))
+
+    def check(decisions):
+        if ev["id"] in decisions:
+            raise Refused(f"decision {ev['id']!r} is already in the ledger; nothing written")
+    write_decision(a.actor, ev, check)
+    print(f"dws: wrote decision {ev['id']} (decided-by-seat)")
+
+
+def cmd_decision_actual(a):
+    m = HOURS.match(stored_form(a.hours))
+    if not m:
+        raise Refused(f"--hours {a.hours!r} is not a number of seat-hours")
+    ev = {"event": "decision", "op": "actual", "id": a.id, "hours": float(m.group(1)),
+          "source": checked("source", nonblank("source", a.source))}
+    write_decision(a.actor, ev, lambda decisions: need_decision(decisions, a.id))
+    print(f"dws: recorded {float(m.group(1)):g}h actual for decision {a.id}")
+
+
+def decision_move(a, op, extra=None):
+    """confirm, override or rework: Refused unless the decision is in the move's from state."""
+    frm, to = DECISION_MOVES[op]
+    ev = {"event": "decision", "op": op, "id": a.id, **(extra or {})}
+    held = {}
+
+    def check(decisions):
+        d = need_decision(decisions, a.id)
+        if d["state"] != frm:
+            why = "rework follows an override only" if op == "rework" else \
+                "a confirm or override answers an unconfirmed decision only"
+            raise Refused(f"decision {a.id!r} is {d['state']!r}, not {frm!r}; {why}")
+        held.update(d)
+    write_decision(a.actor, ev, check)
+    print(f"dws: decision {a.id} {to}")
+    return held
+
+
+def operator_words(a):
+    # The operator's words are stored as given, never normalized (R-150, R-186).
+    return {"words": nonblank("words", a.words), "ref": stored_form(nonblank("ref", a.ref))}
+
+
+def cmd_decision_confirm(a):
+    decision_move(a, "confirm", operator_words(a))
+
+
+def cmd_decision_override(a):
+    d = decision_move(a, "override", {**operator_words(a), "instead": stored_form(nonblank("instead", a.instead))})
+    # D1 prints the decision's own changes; the rows that wait on it come with D2's edges.
+    print("the decision's own changes (rows that wait on it are not tracked until D2):")
+    for link in d["changes"]:
+        print(f"  {link}")
+
+
+def cmd_decision_rework(a):
+    # State checks only in D1; D2 adds the refusal while an affected row is open.
+    decision_move(a, "rework")
+
+
+def decision_at_risk(d):
+    """The seat-hours an override would throw away: actual_h where recorded, else estimate_h."""
+    h = d.get("actual_h") if d.get("actual_h") is not None else d.get("estimate_h")
+    return h if isinstance(h, (int, float)) else 0
+
+
+def decision_view(d, t_now):
+    added = parse_ts(d.get("added"))
+    age = max(0, int((t_now - added).total_seconds() // 86400)) if added else None
+    # No wait edges exist before D2, so nothing waits on any decision yet.
+    return {**d, "age_days": age, "waiting": 0, "at_risk_h": decision_at_risk(d)}
+
+
+def decision_order(v):
+    """Card 4's order for the unconfirmed: most waiting first, then oldest, then most
+    seat-hours at risk; ties by seat label, date, then <n> as a number. A full window,
+    which sorts first, needs D2's edges."""
+    m = DECISION_ID.match(v["id"])
+    tie = (m.group(1), m.group(2), int(m.group(3))) if m else (v["id"], "", 0)
+    return (-v["waiting"], v.get("added") or "", -v["at_risk_h"]) + tie
+
+
+def cmd_decisions(a):
+    decisions = {}
+    _, torn = fold(decisions=decisions)
+    t_now = parse_time(now())
+    views = [decision_view(d, t_now) for d in decisions.values()]
+    open_ = sorted((v for v in views if v["state"] == "decided-by-seat"), key=decision_order)
+    rest = sorted((v for v in views if v["state"] != "decided-by-seat"), key=lambda v: (v.get("added") or "", v["id"]))
+    listed = open_ if a.unconfirmed else open_ + rest
+    if a.daily:
+        today = t_now.date()
+        if a.trial_start is None:
+            day = "trial day unknown (no --trial-start)"
+        else:
+            try:
+                start = datetime.datetime.strptime(a.trial_start, "%Y-%m-%d").date()
+                day = f"trial day {(today - start).days + 1} of {TRIAL_DAYS}"
+            except ValueError:
+                day = f"trial day unknown (--trial-start {a.trial_start!r} is not YYYY-MM-DD)"
+        new = sum(1 for v in views if (v.get("added") or "")[:10] == today.isoformat())
+        confirmed = sum(1 for v in views if v["state"] == "confirmed")
+        overridden = [v for v in views if v["state"] in ("overridden", "reworked")]
+        rework = sum(v["at_risk_h"] for v in overridden)
+        print(f"Seat decisions ({day}): {new} new today, {len(views)} total, {confirmed} confirmed, "
+              f"{len(overridden)} overridden, rework {rework:g} seat-hours.")
+        print("Unconfirmed, most work held first:")
+        for v in open_:
+            print(f"  {v['id']}  {v['waiting']} waiting, {v['age_days']}d old, {v['at_risk_h']:g}h at risk: {v['question']}")
+        if not open_:
+            print("  none")
+    elif a.json:
+        json.dump({"ledger": LEDGER, "torn": torn, "decisions": listed}, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        cols = ("state", "decision", "seat", "age", "estimate", "actual", "question")
+        table = [cols] + [(v["state"], v["id"], v["seat"], f"{v['age_days']}d", f"{v['estimate_h']:g}h",
+                           "" if v["actual_h"] is None else f"{v['actual_h']:g}h", v["question"]) for v in listed]
+        widths = [max(len(str(row[i])) for row in table) for i in range(len(cols))]
+        for row in table:
+            print("  ".join(str(c).ljust(w) for c, w in zip(row, widths)).rstrip())
+    if torn:
+        print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="dws", description="director workstream ledger (W1)")
     p.add_argument("--actor", default="director", help="the writer, a claim checked against the writer table")
@@ -2209,6 +2489,35 @@ def main(argv):
     rc2.add_argument("--json", action="store_true")
     rc2.add_argument("--out", help="the proposals file (default $DIRECTOR_STATE/reconcile-proposals.json)")
     rc2.set_defaults(fn=cmd_reconcile)
+
+    dc = sub.add_parser("decision", help="record a seat decision and its answer (D1); actor director")
+    ds = dc.add_subparsers(dest="op", required=True)
+    da = ds.add_parser("add", help="parse one seat-decision@1 block and append it as decided-by-seat")
+    da.add_argument("--from", dest="from_", required=True, metavar="FILE")
+    da.set_defaults(fn=cmd_decision_add)
+    dh = ds.add_parser("actual", help="record the actual seat-hours and where the figure came from")
+    dh.add_argument("id")
+    dh.add_argument("--hours", required=True)
+    dh.add_argument("--source", required=True)
+    dh.set_defaults(fn=cmd_decision_actual)
+    for op, fn in (("confirm", cmd_decision_confirm), ("override", cmd_decision_override)):
+        dm = ds.add_parser(op, help=f"record the operator's {op} of a decided-by-seat decision")
+        dm.add_argument("id")
+        dm.add_argument("--words", required=True, help="the operator's words, stored as given")
+        dm.add_argument("--ref", required=True, help="the relay id the answer came in")
+        if op == "override":
+            dm.add_argument("--instead", required=True, help="what the operator chose instead")
+        dm.set_defaults(fn=fn)
+    dr = ds.add_parser("rework", help="mark an overridden decision reworked")
+    dr.add_argument("id")
+    dr.set_defaults(fn=cmd_decision_rework)
+
+    dl = sub.add_parser("decisions", help="list seat decisions; --daily prints the daily line; writes nothing (D1)")
+    dl.add_argument("--json", action="store_true")
+    dl.add_argument("--unconfirmed", action="store_true", help="decided-by-seat only, in card 4's order")
+    dl.add_argument("--daily", action="store_true", help="the trial's daily line and the unconfirmed list")
+    dl.add_argument("--trial-start", dest="trial_start", metavar="YYYY-MM-DD", help="the trial's first day, for --daily")
+    dl.set_defaults(fn=cmd_decisions)
 
     a, extra = p.parse_known_args(argv)
     if extra and not (a.cmd == "record" and a.kind == "exclusion"):
