@@ -1,0 +1,270 @@
+{
+  "tools": [
+    {
+      "name": "send_message",
+      "description": "Send a director envelope to another session or role. Returns accepted-for-delivery with a message_id; this is a send acknowledgement, not a delivery or read receipt. With the presence watch on, a send to a global address that presence refuses is held, not delivered, and released when the recipient returns; the result says so. Pass fail_fast to refuse instead.",
+      "inputSchema": {
+        "properties": {
+          "fail_fast": {
+            "description": "refuse at once when the recipient has no live presence, as without the presence watch, instead of holding the send for release when it returns",
+            "type": "boolean"
+          },
+          "in_reply_to": {
+            "description": "optional message_id being answered",
+            "type": "string"
+          },
+          "performative": {
+            "description": "one of INFORM REQUEST AGREE REFUSE FAILURE CFP PROPOSE ACCEPT-PROPOSAL REJECT-PROPOSAL CANCEL QUERY NOT-UNDERSTOOD",
+            "type": "string"
+          },
+          "refs": {
+            "description": "pointers: bd:, finding:, file:, url:, pr:",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reply_by": {
+            "description": "optional RFC3339 deadline",
+            "type": "string"
+          },
+          "text": {
+            "description": "the message body",
+            "type": "string"
+          },
+          "to": {
+            "description": "recipient address: agent://{team}/{id}, role://{team}/{role}, or broadcast://{workspace}[/{team}]",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known cold mailbox (no live presence) verbatim. Ignored for a global:// address, whose subject carries no workspace.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "to",
+          "performative",
+          "text"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "wait_for_message",
+      "description": "Block up to timeout_seconds for the next message addressed to this session, then return it. This is a poll: the model must call it. The server cannot push a message into context on its own. With max greater than 1 it returns every waiting message up to max in one call, oldest first, and consumes them as the single form does; run inbox_summary first to see what is waiting without consuming it. The handled mode is on for this session: a read does NOT ack. Each message stays pending until you record it with mark_handled, using its message_id and the tier this result gives.",
+      "inputSchema": {
+        "properties": {
+          "max": {
+            "description": "most messages to return in one call (default 1, max 50). Above 1, waiting messages return at once, oldest first.",
+            "type": "integer"
+          },
+          "timeout_seconds": {
+            "description": "how long to wait when nothing is already waiting (default 30, max 120)",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "inbox_summary",
+      "description": "Summarize the messages waiting for this session without consuming any: counts by sender and by performative, the REQUEST, FAILURE and QUERY messages and any that set reply_by, say they hold custody, or await a reply, and the waiting sequence numbers oldest first. Acks nothing; drain in order afterwards with wait_for_message max=N. The handled mode is on: messages you have read and not yet recorded are listed in their own read_unhandled section, oldest first with their age, and are not counted as waiting.",
+      "inputSchema": {
+        "properties": {
+          "limit": {
+            "description": "most waiting messages to read per tier (default 200, max 500); totals past it still come from consumer state",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "list_roster",
+      "description": "List the sessions currently present, from the presence store. Absence means silence, not a negative report.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "set_presence",
+      "description": "Record this session's presence heartbeat (state, e.g. idle or busy). Must be repeated within the presence window or the entry expires.",
+      "inputSchema": {
+        "properties": {
+          "state": {
+            "description": "idle | busy | away",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "report_status",
+      "description": "Tell the sender of an ask that you are working on it, or blocked on someone. One INFORM signal in reply to the ask, so the ask ledger can show working and blocked-on instead of silence. Send it when you start work on a request and again if you stop on someone else.",
+      "inputSchema": {
+        "properties": {
+          "in_reply_to": {
+            "description": "the message_id of the ask",
+            "type": "string"
+          },
+          "on": {
+            "description": "for blocked-on only: the agent://, role:// or global:// address, or the ref (pr:, bd:, finding:), you are waiting on, as written on the ask",
+            "type": "string"
+          },
+          "status": {
+            "description": "working | blocked-on",
+            "type": "string"
+          },
+          "to": {
+            "description": "the address of whoever sent the ask",
+            "type": "string"
+          }
+        },
+        "required": [
+          "to",
+          "in_reply_to",
+          "status"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "broadcast",
+      "description": "Send an INFORM to every seat live in the workspace or a team: one durable send per seat found in presence, excluding you. Returns recipients:N and refuses when N is 0. A seat that joins after the call is not included.",
+      "inputSchema": {
+        "properties": {
+          "team": {
+            "description": "optional team; omit for whole workspace",
+            "type": "string"
+          },
+          "text": {
+            "description": "the message body",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "optional target workspace; omit to broadcast to your own",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "audit_lookup",
+      "description": "Read one record of this cluster's audit log (AGENT_AUDIT) by its sequence number. Use only the number from a refusal's audit text, \"audit: recorded agent.audit seq N on cluster \u003cname\u003e\", never the sequence in a send result, which numbers a different stream. cluster must be this session's own cluster; a record on another cluster is read there with marvel bus audit \u003cseq\u003e --cluster \u003cname\u003e. message_id, when given, must be the record's, which binds the number to one record. A record holds the full envelope of a send, its text included, and any session on this cluster can read any record on its audit log by number. Reads only: it never publishes, acks, deletes or creates a consumer.",
+      "inputSchema": {
+        "properties": {
+          "cluster": {
+            "description": "this session's cluster, as named in the audit text",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "optional: the envelope's message_id; the record's Nats-Msg-Id must be it or it plus -refused",
+            "type": "string"
+          },
+          "seq": {
+            "description": "the audit record's sequence number, 1 or more",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cluster",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "mark_handled",
+      "description": "Record what you did with a message you read, then ack it. The record is written first and the ack second. handled: you acted. forwarded: you passed it on (give the forward's message_id). parked: it waits (give a one-line reason); a parked message is acked and stays visible through the ledger. Offered only when the handled mode is on.",
+      "inputSchema": {
+        "properties": {
+          "disposition": {
+            "description": "handled | forwarded | parked",
+            "type": "string"
+          },
+          "forward_id": {
+            "description": "for forwarded: the message_id of the forward",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "the envelope's message_id",
+            "type": "string"
+          },
+          "reason": {
+            "description": "for parked: one line on why it waits",
+            "type": "string"
+          },
+          "tier": {
+            "description": "local or global: the tier wait_for_message named",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "tier",
+          "disposition"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "cancel_held",
+      "description": "Withdraw a send the presence watch is holding (status held or proposed), optionally naming the later send that replaces it. A cancelled send is never released. Offered only when the presence watch is on.",
+      "inputSchema": {
+        "properties": {
+          "id": {
+            "description": "the hold id the send_message result gave",
+            "type": "string"
+          },
+          "replacement": {
+            "description": "optional hold id of the later send that supersedes this one",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    }
+  ]
+}

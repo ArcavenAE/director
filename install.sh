@@ -73,17 +73,43 @@ install_one "$SRC/skills/director/scripts/relay-log" "$DIRECTOR_HOME/bin/relay-l
 # what writes the snapshot it checks (K13), so an install without it would refuse
 # every operator-blocked row.
 install_one "$SRC/skills/director/scripts/desk-snapshot" "$DIRECTOR_HOME/bin/desk-snapshot"
+install_one "$SRC/skills/director/scripts/lane-ledger" "$DIRECTOR_HOME/bin/lane-ledger"
 # card-ingest turns a seat's card file into a Desk write and refuses a card missing a part (#320).
 install_one "$SRC/skills/director/scripts/card-ingest" "$DIRECTOR_HOME/bin/card-ingest"
 # The draft sweep (5yupe): a read-only list of fleet drafts nobody has reviewed and
 # fleet PRs merged with no review. It runs from beside nothing, so a copy install is whole.
 install_one "$SRC/skills/director/scripts/draft-sweep" "$DIRECTOR_HOME/bin/draft-sweep"
+# dbi, the stalled big ideas scan (ld16k): the sweep's Stalled ideas block runs it from the bin home.
+install_one "$SRC/skills/director/scripts/dbi" "$DIRECTOR_HOME/bin/dbi"
+# freebusy, the read-only free/busy table (idle-scheduler B3): the sweep runs it from the bin home after dbi.
+install_one "$SRC/skills/director/scripts/freebusy" "$DIRECTOR_HOME/bin/freebusy"
+# idle-shadow, the idle scheduler's shadow run (M2, read side): the sweep runs it from the bin home after freebusy.
+install_one "$SRC/skills/director/scripts/idle-shadow" "$DIRECTOR_HOME/bin/idle-shadow"
+# dash-writer, the operations dashboard's writer step (ghxv2): the sweep's tick runs it from the bin home.
+install_one "$SRC/skills/director/scripts/dash-writer" "$DIRECTOR_HOME/bin/dash-writer"
+# dws is installed above; dash-writer reads it from beside itself.
+# introspect, the director introspector (a script director runs, never a seat): the sweep and harvest step 6 call it.
+install_one "$SRC/skills/director/scripts/introspect" "$DIRECTOR_HOME/bin/introspect"
+# composer-check looks at a pane before an inject that ends in Enter; standing-hook prints the drain age before each answer.
+# SKILL.md tells the session to run both by name, so a host without them cannot follow it.
+install_one "$SRC/skills/director/scripts/composer-check" "$DIRECTOR_HOME/bin/composer-check"
+install_one "$SRC/skills/director/scripts/standing-hook" "$DIRECTOR_HOME/bin/standing-hook"
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"
 
 STATE="${DIRECTOR_STATE:-$HOME/.director/state}"
 mkdir -p "$STATE"
+# The default idea roots for dbi (stalled-big-ideas.md section 3). Written only when the file is
+# absent: the operator edits it, and an install never overwrites an operator's file.
+if [ -L "$STATE/idea-roots.conf" ]; then
+  # cp would write through the link, possibly into a file this script does not own.
+  echo "refusing to write through a symlink: $STATE/idea-roots.conf" >&2
+  REFUSED+=("$STATE/idea-roots.conf")
+elif [ ! -e "$STATE/idea-roots.conf" ]; then
+  cp "$SRC/skills/director/idea-roots.conf" "$STATE/idea-roots.conf"
+  echo "  $STATE/idea-roots.conf (default roots, edit freely)"
+fi
 echo "state root: $STATE  (operational; never committed)"
 if [ "${#REFUSED[@]}" -gt 0 ]; then
   echo "not installed, because a plain file is in the way (move it aside; this script never deletes your files):" >&2

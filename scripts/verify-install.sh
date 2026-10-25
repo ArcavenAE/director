@@ -12,7 +12,7 @@ pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 
-root="$(mktemp -d)"
+root="$(mktemp -d "${TMPDIR:-/tmp}/vi.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 
 run_install() { # $1 = scratch home
@@ -22,7 +22,7 @@ run_install() { # $1 = scratch home
 
 targets() { # every target install.sh places, relative to the scratch home
   printf '%s\n' claude/skills/director claude/skills/stansfield claude/commands/director.md \
-    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install director/bin/draft-sweep director/bin/card-ingest
+    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install director/bin/draft-sweep director/bin/card-ingest director/bin/dbi director/bin/introspect director/bin/dash-writer director/bin/freebusy director/bin/idle-shadow director/bin/lane-ledger director/bin/composer-check director/bin/standing-hook
 }
 
 # Positive control: a clean home installs everything and exits 0.
@@ -56,13 +56,13 @@ grep -q 'run `scripts/board-html`' "$skill" \
 # The list is the skill's: every installed-path call it makes. Each must exist in the checkout as the fallback.
 BINHOME='${DIRECTOR_HOME:-$HOME/.director}/bin'
 names="$(grep -o -E '\.director\}/bin/[A-Za-z0-9_-]+' "$skill" | sed 's#.*/bin/##' | sort -u | tr '\n' ' ')"
-for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi introspect dash-writer freebusy idle-shadow; do
   case " $names " in *" $n "*) ok "the skill references $n";; *) bad "the skill references $n" "list: $names";; esac
 done
 for n in $names; do
   [[ -x "$here/skills/director/scripts/$n" || "$n" == board-html ]] && ok "every installed-path call resolves in the checkout: $n" || bad "every installed-path call resolves in the checkout: $n"
 done
-for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi introspect dash-writer freebusy idle-shadow; do
   [[ -x "$clean/director/bin/$n" ]] && ok "install puts $n in the bin home, executable" || bad "install puts $n in the bin home, executable"
   grep -qF "$BINHOME/$n" "$skill" && ok "skill calls $n from the bin home" || bad "skill calls $n from the bin home"
   [[ -x "$here/skills/director/scripts/$n" ]] && ok "the fallback scripts/$n exists in the checkout" || bad "the fallback scripts/$n exists in the checkout"
@@ -116,7 +116,7 @@ grep -qF 'refresh --local' "$fn" && grep -qF 'dws unlinked' "$fn" && grep -qF --
 # A copy install runs from the bin home with no checkout beside it.
 cp_home="$root/copy"; mkdir -p "$cp_home"
 CLAUDE_HOME="$cp_home/claude" DIRECTOR_HOME="$cp_home/director" DIRECTOR_STATE="$cp_home/state" "$here/install.sh" --copy >"$cp_home/out" 2>&1 || true
-for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi introspect dash-writer freebusy idle-shadow; do
   [[ -f "$cp_home/director/bin/$n" && ! -L "$cp_home/director/bin/$n" && -x "$cp_home/director/bin/$n" ]] && ok "copy install puts a real executable $n in the bin home" || bad "copy install puts a real executable $n in the bin home"
 done
 # draft-sweep (5yupe) is installed for the sweep to call; it needs no checkout beside it.
@@ -129,6 +129,55 @@ DIRECTOR_STATE="$cp_home/state" "$cp_home/director/bin/dsx" >"$cp_home/dsx" 2>&1
 mkdir -p "$cp_home/home"; HOME="$cp_home/home" DIRECTOR_STATE="$cp_home/state" "$cp_home/director/bin/dsi" >"$cp_home/dsi" 2>&1; rc=$?
 [[ $rc -eq 0 ]] && ok "installed dsi runs from the bin home" || bad "installed dsi runs from the bin home" "rc=$rc"
 set -e
+
+# The default idea roots (ld16k): written when absent, never over an operator's file.
+cf="$clean/director/state/idea-roots.conf"
+[[ -s "$cf" ]] && grep -q '_kos/ideas' "$cf" && ok "a clean install writes the default idea-roots.conf" || bad "a clean install writes the default idea-roots.conf"
+echo "# mine" >"$cf"
+run_install "$clean" && [[ "$(cat "$cf")" == "# mine" ]] && ok "a second install leaves an edited idea-roots.conf alone" || bad "a second install leaves an edited idea-roots.conf alone"
+cp "$here/skills/director/idea-roots.conf" "$root/roots.conf"
+[[ "$(grep -vc -E '^(#|$)' "$root/roots.conf")" == 7 ]] && ok "the shipped default names the design's seven roots" || bad "the shipped default names the design's seven roots"
+
+# A dangling symlink at the conf path must stop the install, not be written through.
+sl="$root/sl"; mkdir -p "$sl/director/state"
+ln -s "$root/elsewhere.conf" "$sl/director/state/idea-roots.conf"
+if run_install "$sl"; then bad "a symlink at idea-roots.conf stops the install" "exit 0"; else ok "a symlink at idea-roots.conf stops the install"; fi
+[[ ! -e "$root/elsewhere.conf" ]] && ok "nothing was written through the dangling symlink" || bad "nothing was written through the dangling symlink"
+grep -q 'idea-roots.conf' "$sl/out" && ok "the refusal names the conf path" || bad "the refusal names the conf path" "$(tail -3 "$sl/out")"
+# The skill's stalled-ideas prose (review round 1 of ld16k).
+grep -qF 'do not run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat`' "$skill" && ok "the skill skips scan-beat when dbi did not run" || bad "the skill skips scan-beat when dbi did not run"
+# freebusy (idle-scheduler B3): run in sweep step 3 after dbi; a missing cluster list still shows its GAP line;
+# its count line is printed outside the pinned fence, like the Away line, so the printed contract is unchanged.
+fb_at="$(grep -n 'bin/freebusy' "$skill" | head -1 | cut -d: -f1 || true)"; dbi_at="$(grep -n 'bin/dbi --json' "$skill" | head -1 | cut -d: -f1 || true)"
+{ [[ -n "$fb_at" && -n "$dbi_at" ]] && [[ "$fb_at" -gt "$dbi_at" ]]; } && ok "the sweep runs freebusy after dbi" || bad "the sweep runs freebusy after dbi" "freebusy line ${fb_at:-none}, dbi line ${dbi_at:-none}"
+grep -q 'GAP clusters' <(grep -n -A10 'bin/freebusy' "$skill") && ok "the skill says a missing cluster list still shows its GAP clusters line" || bad "the skill says a missing cluster list still shows its GAP clusters line"
+grep -q 'outside the fence' <(grep -n -A10 'bin/freebusy' "$skill") && ok "the skill prints freebusy's count line outside the pinned fence" || bad "the skill prints freebusy's count line outside the pinned fence"
+# idle-shadow (idle-scheduler M2, read side): run in sweep step 3 right after freebusy, shown outside the pinned fence.
+is_at="$(grep -n 'bin/idle-shadow' "$skill" | head -1 | cut -d: -f1 || true)"; fb2_at="$(grep -n 'bin/freebusy' "$skill" | head -1 | cut -d: -f1 || true)"
+{ [[ -n "$is_at" && -n "$fb2_at" ]] && [[ "$is_at" -gt "$fb2_at" ]]; } && ok "the sweep runs idle-shadow after freebusy" || bad "the sweep runs idle-shadow after freebusy" "idle-shadow line ${is_at:-none}, freebusy line ${fb2_at:-none}"
+grep -q 'outside the fence' <(grep -n -A10 'bin/idle-shadow' "$skill") && ok "the skill prints idle-shadow's count line outside the pinned fence" || bad "the skill prints idle-shadow's count line outside the pinned fence"
+grep -q 'sends nothing' <(grep -n -A10 'bin/idle-shadow' "$skill") && ok "the skill says idle-shadow sends nothing" || bad "the skill says idle-shadow sends nothing"
+grep -q '^Stalled ideas: none' "$skill" && ok "the shape has a none line for a scan with no rows" || bad "the shape has a none line"
+grep -q 'No cap is ruled' "$skill" && ! grep -q 'at most five lines' "$skill" && ok "the skill applies no cap until one is ruled" || bad "the skill applies no cap until one is ruled"
+grep -q 'under "Standing checklist"' "$skill" && ! grep -q 'as in the Standing checklist' "$skill" && ok "the scan-beat pointer names where it is described" || bad "the scan-beat pointer"
+
+# Every script SKILL.md names (an installed-path call or a bare mention) has an install_one line, so a
+# host that installs from this file is not missing a tool the skill tells the session to run.
+# This is a test of the pairing, not a gate on anything else.
+while read -r name; do
+  if grep -qE "install_one \"\\\$SRC/skills/director/scripts/$name\" \"\\\$DIRECTOR_HOME/bin/$name\"" "$here/install.sh"; then
+    ok "install.sh installs $name, which the skill names"
+  else
+    bad "install.sh installs $name, which the skill names" "no install_one line for skills/director/scripts/$name"
+  fi
+done < <(
+  { grep -oE '\$\{DIRECTOR_HOME:-\$HOME/\.director\}/bin/[A-Za-z0-9_-]+' "$skill" | sed -E 's#.*/bin/##'
+    for f in "$here"/skills/director/scripts/*; do
+      n="$(basename "$f")"
+      case "$n" in (verify-*|fixtures) continue ;; esac
+      grep -qw -- "$n" "$skill" && echo "$n"
+    done
+  } | sort -u)
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

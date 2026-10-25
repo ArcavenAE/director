@@ -69,8 +69,15 @@ type Bus struct {
 	// what was waiting, reported once in the next wait_for_message result.
 	resumedMu sync.Mutex
 	resumed   []string
-	// cueState reports the channel cue state for presence; nil when off.
-	cueState func() (state, reason string)
+	// cueState reports the channel cue state for presence at an age of the
+	// oldest waiting message (cue.presenceAt); nil when off.
+	cueState func(age time.Duration, known bool, unverified string) (state, reason string, stalled bool)
+	// cueSampling reports whether the cue watcher samples the pending tracker;
+	// nil when the cue is off.
+	cueSampling func() bool
+	// pending is the age of the oldest waiting message, from sampled counts
+	// (pending.go).
+	pending pendingTracker
 	// handled is the handled-mode state (K4); nil keeps ack-on-read.
 	handled *handledState
 	// watch is the presence watch (presencewatch_shim.go); nil when off.
@@ -82,6 +89,11 @@ type Bus struct {
 	// lookup is a test seam for the broker lookup of the local durable; nil in
 	// production (localrecover.go lookupLocal).
 	lookup func(ctx context.Context, durable string) error
+	// testAfterFetch and testAfterAck are test seams in the local receive, run
+	// with the call's context just after a fetch returns a message and just
+	// after its ack; nil in production (concurrent_test.go).
+	testAfterFetch func(ctx context.Context)
+	testAfterAck   func(ctx context.Context)
 }
 
 // localConsumerInactive is the local durable's inactive threshold. The inbox
@@ -1007,6 +1019,11 @@ func (b *Bus) auditRefusal(ctx context.Context, msgID, stage string, body []byte
 	if err != nil {
 		return "not recorded: " + err.Error()
 	}
+	// The cluster binds the number to one log (audit-lookup.md section 3); a
+	// sequence alone names a different record on every cluster.
+	if c := sessionCluster(); c != "" {
+		return fmt.Sprintf("recorded agent.audit seq %d on cluster %s", ack.Sequence, c)
+	}
 	return fmt.Sprintf("recorded agent.audit seq %d", ack.Sequence)
 }
 
@@ -1049,15 +1066,20 @@ func (b *Bus) refuseArgs(ctx context.Context, raw json.RawMessage, refusal error
 // ack-pending until mark_handled. A redelivery of a message already held, or
 // already in the ledger, is not returned, so the poll goes on for the rest of
 // its budget.
+//
+// A cancelled ctx ends the fetch at once. A message fetched after the cancel
+// is Nak'd, so it is redelivered rather than lost; one already acked is
+// returned, and its caller answers with it.
 func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, uint64, error) {
 	deadline := time.Now().Add(timeout)
+	fctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	rebuilt := false
 	for {
-		left := time.Until(deadline)
-		if left <= 0 {
-			left = time.Millisecond // always one fetch, so a zero budget still reads
+		msgs, err := fetchBy(fctx, b.cons(), deadline)
+		if err = fetchErr(ctx, err); err != nil && ctx.Err() != nil {
+			return nil, 0, err
 		}
-		msgs, err := b.cons().Fetch(1, jetstream.FetchMaxWait(left))
 		if err != nil {
 			// A durable the broker no longer has is rebuilt once and the fetch
 			// retried (director#269).
@@ -1071,8 +1093,18 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			}
 			return nil, 0, err
 		}
+		if msgs == nil {
+			return nil, 0, nil // the fetch context's deadline: a clean empty
+		}
 		skipped := false
 		for m := range msgs.Messages() {
+			if b.testAfterFetch != nil {
+				b.testAfterFetch(ctx)
+			}
+			if ctx.Err() != nil {
+				_ = m.Nak()
+				return nil, 0, ctx.Err()
+			}
 			var e Envelope
 			if err := json.Unmarshal(m.Data(), &e); err != nil {
 				_ = m.Term() // poison message: do not redeliver a thing we cannot parse
@@ -1085,6 +1117,9 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			if b.handled == nil {
 				_ = m.Ack()
 				b.noteLocalAcked(seq)
+				if b.testAfterAck != nil {
+					b.testAfterAck(ctx)
+				}
 				return &e, seq, nil
 			}
 			deliver, herr := b.handled.settle(ctx, m, "local", &e, seq)
@@ -1096,7 +1131,10 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			}
 			skipped = true
 		}
-		if err := msgs.Error(); err != nil {
+		if err := fetchErr(ctx, msgs.Error()); err != nil {
+			if ctx.Err() != nil {
+				return nil, 0, err
+			}
 			if !rebuilt {
 				rebuilt = true
 				if ok, rerr := b.recoverLocal(ctx, err); rerr != nil {
@@ -1122,6 +1160,40 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			return nil, 0, nil // a clean empty, not an error
 		}
 	}
+}
+
+// ctxFetchFloor is the shortest budget a fetch runs under its context. A
+// shorter one, down to the 1 ms that lets a zero budget still read, uses a
+// plain max wait, because FetchContext refuses a deadline already past.
+const ctxFetchFloor = 100 * time.Millisecond
+
+// fetchBy pulls at most one message from c before deadline. fctx carries that
+// deadline and the call's cancel, so a cancel ends the pull at once.
+func fetchBy(fctx context.Context, c jetstream.Consumer, deadline time.Time) (jetstream.MessageBatch, error) {
+	left := time.Until(deadline)
+	if left < ctxFetchFloor {
+		if left <= 0 {
+			left = time.Millisecond // always one fetch, so a zero budget still reads
+		}
+		return c.Fetch(1, jetstream.FetchMaxWait(left))
+	}
+	return c.Fetch(1, jetstream.FetchContext(fctx))
+}
+
+// fetchErr sorts a fetch error. A cancelled call reports its own ctx error.
+// The fetch context's own deadline passing is a clean empty, the same as a
+// max wait running out, not a fault to recover from.
+func fetchErr(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
 }
 
 // noteTierAcked tells the global tier an ack landed, so its acked floor
@@ -1167,7 +1239,7 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 	g.handled = b.handled
 	g.violations = b.violations
 	b.global = g
-	b.noteResumed("global", g.resumedFrom, g.consumer, g.floorWhy)
+	b.noteResumed("global", g.resumedFrom, g.cons(), g.floorWhy)
 	return g, nil
 }
 
@@ -1217,6 +1289,9 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 	}
 	deadline := time.Now().Add(timeout)
 	for {
+		if ctx.Err() != nil {
+			return done(), ctx.Err()
+		}
 		slice, ok := sliceLeft(deadline)
 		if !ok {
 			return done(), nil
@@ -1320,10 +1395,11 @@ func (b *Bus) setPresence(ctx context.Context, state string) (globalWarn string,
 	b.stateMu.Lock()
 	b.state = state
 	b.stateMu.Unlock()
-	if err := b.writePresence(ctx, state); err != nil {
+	view := b.presenceView(ctx)
+	if err := b.writePresenceView(ctx, state, view); err != nil {
 		return "", err
 	}
-	return b.writeGlobalPresence(ctx, state), nil
+	return b.writeGlobalPresenceView(ctx, state, view), nil
 }
 
 // writeGlobalPresence puts this session's row in GLOBAL_PRESENCE, returning a
@@ -1331,6 +1407,10 @@ func (b *Bus) setPresence(ctx context.Context, state string) (globalWarn string,
 // without it. Off (no domain configured) returns an empty warning: nothing is
 // wrong, there is simply no global row to write.
 func (b *Bus) writeGlobalPresence(ctx context.Context, state string) string {
+	return b.writeGlobalPresenceView(ctx, state, b.presenceView(ctx))
+}
+
+func (b *Bus) writeGlobalPresenceView(ctx context.Context, state string, view presenceView) string {
 	if b.globalCfg == nil {
 		return ""
 	}
@@ -1338,7 +1418,7 @@ func (b *Bus) writeGlobalPresence(ctx context.Context, state string) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := g.writePresence(ctx, b.self, b.instance, b.pid, state); err != nil {
+	if err := g.writePresenceWith(ctx, b.self, b.instance, b.pid, state, view.fields); err != nil {
 		return fmt.Sprintf("global presence write failed: %v", err)
 	}
 	return ""
@@ -1346,12 +1426,63 @@ func (b *Bus) writeGlobalPresence(ctx context.Context, state string) string {
 
 // attachCue publishes the cue's presence view beside this seat's presence row.
 // It is the one place the row's cue state is wired, so a test can cover it.
-func (b *Bus) attachCue(c *cue) { b.cueState = c.presence }
+func (b *Bus) attachCue(c *cue) {
+	c.mu.Lock()
+	c.oldest, c.pendingUnverified = b.oldestPending, b.pending.unverified
+	c.oldestUnacked = func() bool { return b.pending.oldestUnacked(time.Now()) }
+	c.mu.Unlock()
+	b.cueState, b.cueSampling = c.presenceAt, c.sampling
+}
+
+// presenceView is what both presence rows carry beside the identity: the age
+// of the oldest waiting message, and the cue state when the cue is on. It is
+// built once per beat, so a stalled seat's oldest message is peeked once per
+// beat and never under the cue lock.
+type presenceView struct {
+	oldestS   int64
+	cueOn     bool
+	cue       string
+	cueReason string
+}
+
+func (b *Bus) presenceView(ctx context.Context) presenceView {
+	age, tier := b.pending.oldest(time.Now())
+	v := presenceView{oldestS: int64(age / time.Second)}
+	if b.cueState == nil {
+		return v
+	}
+	v.cueOn = true
+	var stalled bool
+	v.cue, v.cueReason, stalled = b.cueState(age, true, b.pending.unverified())
+	if stalled {
+		id := ""
+		if m, err := (busCueSource{b}).oldestMetaOn(ctx, tier); err == nil && m != nil {
+			id = m.MessageID
+		}
+		v.cueReason = joinReason(stalledReason(id, age, b.pending.oldestUnacked(time.Now())), v.cueReason)
+	}
+	return v
+}
+
+// fields puts the view into a presence record.
+func (v presenceView) fields(rec map[string]any) {
+	rec["oldest_pending_s"] = v.oldestS
+	if v.cueOn {
+		rec["cue"] = v.cue
+		if v.cueReason != "" {
+			rec["cue_reason"] = v.cueReason
+		}
+	}
+}
 
 // writePresence puts the presence record under a per-session key
 // (presence.<team>.<id>.<instance>), so N concurrent sessions under one id show
 // as N roster entries instead of last-writer-wins collapsing them to one.
 func (b *Bus) writePresence(ctx context.Context, state string) error {
+	return b.writePresenceView(ctx, state, b.presenceView(ctx))
+}
+
+func (b *Bus) writePresenceView(ctx context.Context, state string, view presenceView) error {
 	rec := map[string]any{
 		"agent_id":  b.self.AgentID,
 		"team":      b.self.Team,
@@ -1367,15 +1498,10 @@ func (b *Bus) writePresence(ctx context.Context, state string) error {
 	if b.self.Role != "" {
 		rec["role"] = b.self.Role
 	}
-	// The P1 cue state beside presence (channel-cue.md 3.3), only on a seat
-	// that opted in, so director can list seats whose cue is not live.
-	if b.cueState != nil {
-		state, reason := b.cueState()
-		rec["cue"] = state
-		if reason != "" {
-			rec["cue_reason"] = reason
-		}
-	}
+	// The age of the oldest waiting message on every row, and the P1 cue
+	// state beside presence (channel-cue.md 3.3) only on a seat that opted in,
+	// so director can list seats whose cue is not live or that are stalled.
+	view.fields(rec)
 	body, _ := json.Marshal(rec)
 	key := "presence." + b.self.Team + "." + b.self.AgentID + "." + b.instance
 	_, err := b.kv.Put(ctx, key, body)
@@ -1404,8 +1530,14 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 			b.stateMu.Lock()
 			s := b.state
 			b.stateMu.Unlock()
-			_ = b.writePresence(ctx, s)
-			b.reportGlobalWarn(b.writeGlobalPresence(ctx, s), logf)
+			// The cue watcher samples the pending counts every poll; without
+			// it the beat does, so every row's age is at most a beat stale.
+			if b.cueSampling == nil || !b.cueSampling() {
+				b.samplePending(ctx)
+			}
+			view := b.presenceView(ctx)
+			_ = b.writePresenceView(ctx, s, view)
+			b.reportGlobalWarn(b.writeGlobalPresenceView(ctx, s, view), logf)
 			b.watchTick(ctx)
 		}
 	}

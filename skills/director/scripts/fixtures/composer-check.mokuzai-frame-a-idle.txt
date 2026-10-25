@@ -1,0 +1,7 @@
+✻ Sautéed for 2m 17s · done 4:07 PM
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  Opus 5.5 (1M context) · CTX example · example · acct example example example
+  ⏵⏵ auto mode on (shift+tab to cycle)

@@ -9,9 +9,13 @@
 //	NATS_URL=nats://127.0.0.1:4222 director-mcp
 //
 // The three identity values are subject tokens and must match [A-Za-z0-9_-];
-// anything else is refused at startup (director#3). Optional broker
-// credentials: DIRECTOR_NATS_CREDS (a .creds file) or DIRECTOR_NATS_USER with
-// DIRECTOR_NATS_PASS; unset means an anonymous connection, as before.
+// anything else is refused at startup (director#3). Inside a marvel session
+// they come from MARVEL_SESSION, MARVEL_TEAM and MARVEL_WORKSPACE when the
+// DIRECTOR_* values are unset, and with neither the shim refuses (seatenv.go).
+// Optional broker credentials: DIRECTOR_NATS_CREDS (a .creds file) or
+// DIRECTOR_NATS_USER with DIRECTOR_NATS_PASS, else user director with the
+// cluster's seat password; with none of them the connection is anonymous, as
+// before, with a note on stderr.
 //
 // The global tier (R-86) is off unless DIRECTOR_GLOBAL_DOMAIN names the hub's
 // JetStream domain, and needs two more levers when it is on:
@@ -91,21 +95,34 @@ func main() {
 		cancel()
 		os.Exit(code)
 	}
+	// dossier reads the bus and the state directory and writes only its own
+	// files under dossier/; it needs no identity of its own.
+	if cli.mode == "dossier" {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		code := runDossierCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, os.Stdout, os.Stderr)
+		cancel()
+		os.Exit(code)
+	}
 	if cli.mode == "ask-reader" {
 		ctx, stop := askReaderContext()
 		code := runAskReaderCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, env("DIRECTOR_GLOBAL_DOMAIN", "global"), os.Stderr)
 		stop()
 		os.Exit(code)
 	}
-	self := Sender{
-		AgentID:   env("DIRECTOR_AGENT_ID", ""),
-		Role:      env("DIRECTOR_ROLE", ""),
-		Team:      env("DIRECTOR_TEAM", "default"),
-		Workspace: env("DIRECTOR_WORKSPACE", "default"),
-	}
-	if self.AgentID == "" {
-		fmt.Fprintln(os.Stderr, "director-mcp: DIRECTOR_AGENT_ID is required")
+	se, err := resolveSeatEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "director-mcp: %v\n", err)
 		os.Exit(2)
+	}
+	self := se.self
+	// The seat password reaches dial the way the wrapper's export did, so
+	// connect and preflight read one credential.
+	if se.natsUser != "" {
+		_ = os.Setenv("DIRECTOR_NATS_USER", se.natsUser)
+		_ = os.Setenv("DIRECTOR_NATS_PASS", se.natsPass)
+	}
+	if se.note != "" {
+		fmt.Fprintf(os.Stderr, "director-mcp: %s\n", se.note)
 	}
 	// Reject a malformed identity at spawn (director#3, R-76 and R-78): the
 	// launcher-assigned levers are checked against the closed subject-token

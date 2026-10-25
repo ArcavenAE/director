@@ -152,6 +152,9 @@ func loadThresholdsNotes(dir string) (map[string]time.Duration, []string, error)
 		if _, isCount := defaultCounts[k]; isCount {
 			continue // read by loadCountRows
 		}
+		if _, soft := dossierDefaults[k]; soft {
+			continue // read softly by loadDossierThresholds, never by this hard path
+		}
 		if _, known := defaultThresholds[k]; !known {
 			return nil, nil, fmt.Errorf("threshold table %s: unknown key %q (a misspelled row would silently keep its default)", filepath.Join(dir, "thresholds.json"), k)
 		}
@@ -728,7 +731,9 @@ func toolCatalogHandled(gcfg *globalConfig, cueOn, handledOn bool) []toolDef {
 	}
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 	return append(tools, toolDef{
+		// readOnlyHint false: it writes a ledger record, then acks (aae-orc-r675b).
 		Name:        "mark_handled",
+		Annotations: &toolAnnotations{ReadOnlyHint: false},
 		Description: "Record what you did with a message you read, then ack it. The record is written first and the ack second. handled: you acted. forwarded: you passed it on (give the forward's message_id). parked: it waits (give a one-line reason); a parked message is acked and stays visible through the ledger. Offered only when the handled mode is on.",
 		InputSchema: map[string]any{
 			"type": "object",

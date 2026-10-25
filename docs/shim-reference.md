@@ -2,7 +2,7 @@
 
 The shim is a Go program in `cmd/director-mcp/`. A harness
 launches one per session as an MCP stdio server; the shim connects to a NATS
-broker and exposes seven tools that carry director envelopes. It is the Phase
+broker and exposes eight tools that carry director envelopes. It is the Phase
 0 probe cut, kept small on purpose: it proves the transport and the receive
 shape. It is not the director software.
 
@@ -163,7 +163,7 @@ Slice M (`sim/design/unread-slice-m.md`):
 5. Log `connected to <url> as agent://<team>/<id> instance <ulid> in
    workspace <ws>`, then serve.
 
-## The seven tools
+## The eight tools
 
 Every tool is request and response. `wait_for_message` is the long poll
 that stands in for a push the transport cannot make.
@@ -203,8 +203,12 @@ stored. A global send is refused before publish when nobody is live at the
 address, so nothing is stored on the hub.
 
 A refused send, local or global, returns the refusal as a tool error with
-the audit outcome appended: `...; audit: recorded agent.audit seq N`, or
-`...; audit: not recorded: <err>` when the audit stream could not take it.
+the audit outcome appended: `...; audit: recorded agent.audit seq N on
+cluster <name>` where `DIRECTOR_CLUSTER` is a valid token, `...; audit:
+recorded agent.audit seq N` where it is not, or `...; audit: not recorded:
+<err>` when the audit stream could not take it. The pattern `audit: recorded
+agent\.audit seq (\d+)` matches both recorded forms; `audit_lookup` reads the
+record by that number.
 The refusal is returned either way; the audit never turns a refusal into a
 success. See "Refusal records" below.
 
@@ -405,6 +409,126 @@ broadcast is refused with an error naming each seat, its error and its audit
 record, rather than reported as accepted with an empty `sent`. Before director#121 a broadcast published core NATS to
 a subject no stream captured and no session subscribed, and reported
 `"broadcast sent"` for a message that reached no one.
+
+### `audit_lookup`
+
+Reads one record of this cluster's audit log, `AGENT_AUDIT`, by its
+sequence number. It reads only: it never publishes, acks, deletes or
+creates a consumer, and writes no file.
+
+```
+audit_lookup { "cluster": "<name>", "seq": <integer>, "message_id": "<optional>" }
+```
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `cluster` | yes | this session's own cluster, its `DIRECTOR_CLUSTER`, as named in the audit text |
+| `seq` | yes | the record's sequence number, a whole number of 1 or more |
+| `message_id` | no | the envelope's `message_id`; the record's `Nats-Msg-Id` must be it, or it plus `-refused` |
+
+Use only the number from a refusal's audit text (`audit: recorded
+agent.audit seq N on cluster <name>`, under `send_message` above), never the
+`sequence` in a send result, which numbers a different stream.
+
+Two bindings tie the number to a record. `cluster` binds it to a log: it
+must equal this session's `DIRECTOR_CLUSTER`, and a session whose variable is
+unset, or not a valid token, refuses every lookup. A record on another
+cluster is read there with `marvel bus audit <seq> --cluster <name>`.
+`message_id`, when given, binds it to one record. Without it the only
+binding is the cluster name, which each session declares about itself.
+
+Reach: a record holds the full envelope of a send, its text included, and
+any session on the cluster can read any record on that cluster's audit log
+by number. It reads the local tier only; there is no global audit stream.
+
+Result, one record as stored:
+
+| Field | From |
+|---|---|
+| `cluster` | this session's `DIRECTOR_CLUSTER`, the value the call was bound to |
+| `stream_created` | `AGENT_AUDIT`'s creation time, so a replaced log reads as a different log |
+| `seq`, `time` | the stream's sequence and timestamp |
+| `subject` | the message subject, `agent.audit` |
+| `outcome` | `refused` when `Director-Outcome` says so, else `sent` |
+| `stage`, `refusal` | the `Director-Stage` and `Director-Refusal` headers, present only on a refusal |
+| `msg_id` | `Nats-Msg-Id` |
+| `envelope` | the stored body parsed as an envelope; when it does not parse, `raw` holds it as a string instead |
+
+Every argument is checked before the broker is asked. Refusals and misses,
+each returned as the tool's error text:
+
+| Case | Text |
+|---|---|
+| `seq` missing, not a whole number, or below 1 | `audit_lookup: seq must be a whole number of 1 or more` |
+| `DIRECTOR_CLUSTER` unset, or not a valid token | `audit_lookup: this session names no usable cluster (DIRECTOR_CLUSTER is unset or not a valid token), so a number cannot be tied to a log` |
+| `cluster` missing | `audit_lookup: cluster is required; this session is on cluster <own>, so pass cluster <own> to read its log` |
+| `cluster` not this session's | `audit_lookup: this session is on cluster <own>, not <given>; read it with marvel bus audit <seq> --cluster <given>` |
+| no stream | `audit_lookup: cluster <c> has no AGENT_AUDIT stream` |
+| the stream is empty | `audit_lookup: AGENT_AUDIT on <c> holds no records` |
+| N below the first sequence | `audit_lookup: seq N on <c> has aged out; the stream holds F to L` |
+| N past the last sequence | `audit_lookup: seq N on <c> is past the last record, L; check the number came from an audit line for this cluster` |
+| N inside F to L with no message | `audit_lookup: seq N on <c> was deleted or purged; the stream holds F to L with gaps` |
+| `message_id` given and not the record's | `audit_lookup: seq N on <c> holds a different message` |
+| the broker refuses the read | `audit_lookup: the broker refused the read: <its error, verbatim>` |
+| no answer in 10 s | `audit_lookup: no answer from the broker in 10s` |
+
+"Aged out" also covers records purged from the front of the stream, which
+the broker cannot tell apart. A broker refusal is reported as it came back
+and is not retried.
+
+### `cancel_held` (presence watch only)
+
+Withdraws a send the presence watch is holding, optionally naming the later
+send that replaces it. A cancelled send is never released. The tool is
+offered only when the presence watch is on (`DIRECTOR_PRESENCE_WATCH=1`);
+with the watch off it is not in the catalog, and a call to it is answered
+`unknown tool: cancel_held`. It is not read-only (`readOnlyHint` false).
+
+With the watch on, a send to a global address is held rather than refused
+when presence refuses it (the recipient has no live presence) or when the
+presence read itself fails (the hub did not answer), unless the send passed
+`fail_fast`. Any other failure is refused as before. That send's result
+carries `status` `held, not delivered`, its `message_id`, a `hold_id`, `to`,
+`reason`, `sell_by` and a `note`. The hold id is the envelope's
+`message_id`.
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `id` | yes | the hold id the `send_message` result gave |
+| `replacement` | no | the hold id of the later send that supersedes this one |
+
+Only a send whose current state is `held` or `proposed` can be cancelled.
+The cancel is recorded as a new line in the held store with state
+`cancelled`, and `superseded_by` set to the replacement when one is named.
+
+Result:
+
+```json
+{
+  "status": "cancelled",
+  "id": "01M2K9Q2Q3WTRB0D6FRWAS0R0J",
+  "superseded_by": "",
+  "note": "it will not be sent"
+}
+```
+
+`superseded_by` is the `replacement` argument as given, or empty.
+
+Refusals, each returned as the tool's error text:
+
+| Case | Text |
+|---|---|
+| the session has no held store (the watch is on but its store is not open) | `cancel_held: the presence watch is off for this session (DIRECTOR_PRESENCE_WATCH is not 1), so nothing is held` |
+| `id` missing, empty, or the arguments do not parse | `cancel_held: give the id of the held send` |
+| no record has that id | `cancel_held: no held send has the id <id>` |
+| the record is not `held` or `proposed` | `cancel_held: <id> is <state>, and only a held or proposed send can be cancelled` |
+| `replacement` names no record in the held store, or the held store cannot be read while looking it up | `cancel_held: the replacement <replacement> is not a held send` |
+
+An error reading the held store while looking up `id`, or writing the
+cancel record, is returned as it came. The lookup of `replacement` returns
+the replacement text above for a read error too, so that text does not by
+itself mean the record is absent. The `replacement` check finds a record by
+id in any state; it does not require that send to be `held`.
 
 ### `mark_handled` (handled mode only)
 

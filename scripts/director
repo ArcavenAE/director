@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]
+#
+# Starts a Claude Code session as the director, on purpose. The director MCP
+# server comes from config/director-mcp.json in this repo, handed to claude with
+# --mcp-config, so a session is a director only when it was started here and not
+# because of the folder it opened in.
+#
+# Identity (agent id, cluster, global domain and role, team, workspace, broker
+# url) is never in the repo and never in the session folder. It comes from a
+# small per-host file, ${DIRECTOR_HOME:-$HOME/.director}/seat.env, or from flags.
+# The file is data: only the allowed KEY=value lines are read, and nothing in it
+# is executed.
+#
+#   first start   director start
+#   restart       director start --resume director
+#   other cluster director start --cluster <name>
+#
+# director prove, run inside a session this launcher started, checks that the
+# director MCP server is up under that session with the launch id, and writes the
+# proof the operator step needs before it removes the old project-local entry.
+#
+# Exit: 0 claude ran and exited 0 (the exit status of claude is passed through),
+# 2 usage, 3 STOP (a required value is missing, or the seat file is not valid).
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+config="$here/config/director-mcp.json"
+keys=(DIRECTOR_AGENT_ID DIRECTOR_CLUSTER DIRECTOR_GLOBAL_DOMAIN DIRECTOR_GLOBAL_ROLE DIRECTOR_TEAM DIRECTOR_WORKSPACE NATS_URL)
+required=(DIRECTOR_AGENT_ID DIRECTOR_TEAM DIRECTOR_WORKSPACE)
+
+usage() { printf 'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director prove\n' >&2; exit 2; }
+stop() { printf 'STOP: %s\n' "$*" >&2; exit 3; }
+
+dhome="${DIRECTOR_HOME:-$HOME/.director}"
+state="${DIRECTOR_STATE:-$dhome/state}"
+sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+
+# (Reading another process's environment works for the director-mcp binary, which
+# is an ordinary executable. macOS hides it for system-protected binaries.)
+# prove: this session was started by `director start`, and the director MCP
+# server is running under it with the config's own launch variable. A server the old
+# project-local entry started has no launch id, so it cannot satisfy this.
+prove() {
+  local id="${DIRECTOR_LAUNCH_ID:-}" rec pid rsha cand p found=0
+  [[ -n "$id" ]] || stop "no launch id: run this inside a session started by director start"
+  [[ "$id" =~ ^[A-Za-z0-9._-]+$ && "$id" != *..* ]] || stop "the launch id is not a plain name"
+  rec="$state/launches/$id"
+  [[ -f "$rec" ]] || stop "no launch record for this session"
+  pid="$(sed -n 's/^pid=//p' "$rec")"; rsha="$(sed -n 's/^config_sha256=//p' "$rec")"
+  [[ "$rsha" == "$(sha "$config")" ]] || stop "the MCP config changed since this session started"
+  p=$$
+  while [[ -n "$p" && "$p" -gt 1 ]]; do
+    if [[ "$p" == "$pid" ]]; then found=1; break; fi
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]')"
+  done
+  [[ "$found" == 1 ]] || stop "this shell is not inside the session the launcher started"
+  # Every descendant of the session is a candidate; director-procmatch decides. It reads
+  # each process's arguments and environment as separate lists and wants the config's own
+  # variable, DIRECTOR_LAUNCH_VIA_CONFIG=<id>. The launch id the session carries itself
+  # is inherited by every child, so a server the old project-local entry started would
+  # have it too; only the config's env block sets the other.
+  command -v python3 >/dev/null 2>&1 || stop "python3 is needed to read a process's environment"
+  cand="$(ps -axo pid=,ppid= | awk -v root="$pid" '
+    { pp[$1]=$2 }
+    END { for (q in pp) { a=q; while (a != "" && a != 0 && a != 1) { if (a == root) { print q; break } a=pp[a] } } }')"
+  local q ok=""
+  for q in $cand; do
+    if "$here/scripts/director-procmatch" --id "$id" --pid "$q" 2>/dev/null; then ok="$q"; break; fi
+  done
+  [[ -n "$ok" ]] || stop "no director MCP server running under this session with launch id $id"
+  mkdir -p "$state"
+  printf 'id=%s\nproved=%s\nmcp_pid=%s\nconfig_sha256=%s\n' "$id" "$(date +%s)" "$ok" "$rsha" >"$state/launch-proof.tmp.$$"
+  mv "$state/launch-proof.tmp.$$" "$state/launch-proof"
+  printf 'PASS the director MCP server (pid %s) is up under this launcher-started session; proof written\n' "$ok"
+}
+
+case "${1:-}" in
+  prove) prove; exit 0 ;;
+  start) shift ;;
+  *) usage ;;
+esac
+
+cluster_flag="" resume="" seat_file="${DIRECTOR_HOME:-$HOME/.director}/seat.env"
+while (($#)); do
+  case "$1" in
+    --cluster)   [[ $# -ge 2 ]] || usage; cluster_flag="$2"; shift 2 ;;
+    --resume)    [[ $# -ge 2 ]] || usage; resume="$2"; shift 2 ;;
+    --seat-file) [[ $# -ge 2 ]] || usage; seat_file="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+allowed() { local k; for k in "${keys[@]}"; do [[ "$k" == "$1" ]] && return 0; done; return 1; }
+
+for k in "${keys[@]}"; do unset "V_$k"; done  # nothing the caller exported is identity
+# values live in V_<KEY> variables, since the macOS system bash has no associative arrays
+get() { local n="V_$1"; printf %s "${!n:-}"; }
+put() { printf -v "V_$1" %s "$2"; }
+if [[ -f "$seat_file" ]]; then
+  n=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n+1))
+    [[ -z "${line//[[:space:]]/}" || "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" =~ ^([A-Z_]+)=([A-Za-z0-9._:/@+-]*)$ ]] && allowed "${BASH_REMATCH[1]}"; then
+      put "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    else
+      stop "$seat_file line $n is not an allowed KEY=value line (keys: ${keys[*]}); nothing was run"
+    fi
+  done <"$seat_file"
+fi
+
+if [[ -n "$cluster_flag" ]]; then put DIRECTOR_CLUSTER "$cluster_flag"; fi
+if [[ -z "$(get NATS_URL)" ]]; then put NATS_URL nats://127.0.0.1:4222; fi
+
+missing=()
+for k in "${required[@]}"; do [[ -n "$(get "$k")" ]] || missing+=("$k"); done
+if ((${#missing[@]})); then
+  stop "missing ${missing[*]}; put them in $seat_file as KEY=value lines or pass them by flag (--cluster covers DIRECTOR_CLUSTER only)"
+fi
+
+for k in "${keys[@]}"; do export "$k=$(get "$k")"; done
+
+export DIRECTOR_MCP_SEAT="$dhome/bin/director-mcp-seat"
+id="$(date +%s)-$$"
+export DIRECTOR_LAUNCH_ID="$id"
+mkdir -p "$state/launches"
+printf 'id=%s\npid=%s\nstarted=%s\nconfig_sha256=%s\nsession=%s\n' "$id" "$$" "$(date +%s)" "$(sha "$config")" "${resume:-director}" >"$state/launches/$id.tmp"
+mv "$state/launches/$id.tmp" "$state/launches/$id"
+
+args=(--mcp-config "$config")
+if [[ -n "$resume" ]]; then args+=(--resume "$resume"); else args+=(-n director); fi
+
+exec "${CLAUDE_BIN:-claude}" "${args[@]}"

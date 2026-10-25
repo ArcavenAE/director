@@ -14,6 +14,7 @@ Subcommands:
 
   standing-hook           print the drain age and the checklist (the hook)
   standing-hook beat      record a drain: write the heartbeat from the clock
+  standing-hook scan-beat record a stalled-ideas scan (the sweep runs `dbi --json`, then this)
 
 The session runs `standing-hook beat` after each inbox drain. The heartbeat is
 one line, an RFC 3339 UTC stamp, in $DIRECTOR_STATE/last-drain (default
@@ -23,9 +24,18 @@ no heartbeat the hook says so rather than inventing an age. The first line is
 the drain age and nothing else: inbox depth is not shown, because a number
 nobody has checked teaches the reader to trust it.
 
+The line before it says when the operations dashboard was last applied: `dash last applied: T`, the
+`last_run` that `dash-writer ack` recorded in $DIRECTOR_STATE/dash-writer.json, so a sweep that never reached
+step 5 shows in the next answer. It prompts; it gates nothing.
+
+The last line is the age of the last stalled-ideas scan, read from
+$DIRECTOR_STATE/last-stalled-scan the same way. The hook never runs the scan itself: dbi asks
+each repo's remote, which takes seconds, and a prompt hook must not. It only shows how old the
+last one is, so a sweep that skipped the block shows that in the next answer.
+
 The hook never types into a pane and never reads the hub; it reads one file.
 """
-import datetime, os, sys, tempfile
+import datetime, json, os, sys, tempfile
 
 CHECKLIST = """Before you answer:
 1. Drained, and answered Desk cards read, since my last answer? If not, do both first.
@@ -44,16 +54,50 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def beat():
-    path = state_file()
+def stamp(path):
     d = os.path.dirname(path)
     os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".last-drain.")
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".stamp.")
     with os.fdopen(fd, "w") as f:
         f.write(now().strftime(FMT) + "\n")
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
+
+
+def beat():
+    stamp(state_file())
+
+
+def scan_beat():
+    stamp(scan_file())
+
+
+def scan_file():
+    return os.path.join(os.path.dirname(state_file()), "last-stalled-scan")
+
+
+def scan_line():
+    try:
+        with open(scan_file()) as f:
+            raw = f.read().strip()
+        t = datetime.datetime.strptime(raw, FMT).replace(tzinfo=datetime.timezone.utc)
+    except (OSError, ValueError):
+        return "stalled ideas: unknown, no scan recorded (the sweep runs `dbi --json`, then `standing-hook scan-beat`)"
+    hours = int((now() - t).total_seconds() // 3600)
+    if hours < 0:
+        return f"stalled ideas: unknown, the last scan stamp ({raw}) is in the future"
+    return f"stalled ideas: last scan {hours}h ago ({raw})"
+
+
+def dash_line():
+    try:
+        with open(os.path.join(os.path.dirname(state_file()), "dash-writer.json")) as f:
+            raw = json.load(f)["last_run"]
+        datetime.datetime.strptime(raw, FMT)
+    except (OSError, ValueError, KeyError, TypeError):
+        return "dash last applied: unknown, no batch recorded (sweep step 5 runs `dash-writer`, then `dash-writer ack`)"
+    return f"dash last applied: {raw}"
 
 
 def age_line():
@@ -70,13 +114,15 @@ def age_line():
 
 
 def main():
-    if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] != "beat"):
-        sys.exit("usage: standing-hook [beat]")
+    if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] not in ("beat", "scan-beat")):
+        sys.exit("usage: standing-hook [beat|scan-beat]")
     if len(sys.argv) == 2:
-        beat()
+        (beat if sys.argv[1] == "beat" else scan_beat)()
         return
     print(age_line())
     print(CHECKLIST)
+    print(dash_line())
+    print(scan_line())
 
 
 if __name__ == "__main__":

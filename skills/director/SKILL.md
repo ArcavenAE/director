@@ -47,7 +47,7 @@ when the notes have accumulated. Say which mode you are in, once, at the start.
 
 ## Mode: sweep
 
-The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
+The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `freebusy`, `idle-shadow`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
 
 1. Run `${DIRECTOR_HOME:-$HOME/.director}/bin/dsi`. It writes `$DIRECTOR_STATE/sessions.json` (props) and
    `roster.md` (scenery). Defaults to `~/.director/state`, 4-day window.
@@ -61,6 +61,43 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`) are inst
    shown in the sweep reply only, under Drafts: they are not appended to `board.md` and not fed to `dws`. With no config
    it prints a GAP line; show that line, never skip the step silently.
    It exits 0 whether it finds nothing or a lot, so read its lines, never its exit code.
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/dbi --json` (read only, no fetch; it asks each repo's remote, so
+   allow up to a minute). When it exits 0, record the scan with `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat` (described
+   under "Standing checklist"). Its `rows` are the Stalled ideas block, its `unverified.count` the Unverified line.
+   Exit 2 means it could not run (no `stalled_idea_days` in `$DIRECTOR_STATE/thresholds.json`, or no
+   `idea-roots.conf`): do not run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat`, since the hook would then report a scan that
+   never ran as "0h ago", and print `Stalled ideas: not run (<its stderr line>)`, never an empty block. A scan
+   that did not run is not "none".
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/freebusy` (read only: no bus send, no inject, no bd write, no gh call).
+   It reads each cluster that `marvel config list` names (less any name in `$DIRECTOR_STATE/freebusy-clusters.exclude`,
+   one per line, for an alias) with `marvel get ... --cluster <name>`, and the asks rollup, and writes
+   `$DIRECTOR_STATE/freebusy/` (seats, lanes and a flow line). Print its `- GAP` lines and its one count line
+   (`freebusy: clusters: N of M read; ...`) in the sweep reply under Drafts, outside the fence above, as the Away line
+   is: they are not appended to `board.md`, and the fence is unchanged. If `marvel config list` fails or names no cluster it prints `GAP clusters`;
+   show that line, never skip the step silently. NOTE lines (an excluded cluster, an exclude name marvel does not
+   know, the retired `freebusy-clusters.conf`) are shown too. It never sets `MARVEL_SOCKET` or `MARVEL_HOME`; to read
+   another home, set `MARVEL_HOME` where you run the sweep. A cluster it could not read shows its seats as unknown, never as 0.
+   `not run: sweep in progress` means another run holds it; show that line too. It exits 0 whether it finds nothing
+   or a lot, so read its lines, never its exit code.
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/idle-shadow` (read only: it sends nothing, injects nothing, writes no bd
+   record and calls no gh). It reads the ready items with `bd ready` and the seat states freebusy just wrote, and writes
+   `$DIRECTOR_STATE/idle-shadow/` (the unmatched items, the would-pair rows and a flow line). Print its `- GAP` and `- NOTE`
+   lines, its `- unmatched ...` lines and its one count line (`idle-shadow: ready N ...`) in the sweep reply under Drafts, outside the fence above,
+   as the freebusy line is: they are not appended to `board.md`. Items labelled `scope:client` appear only as a count.
+   A component is a label the bd label convention names under Component (read at run time from the task-workflow skill file, found in the
+   checkout the sweep starts in or at `IDLE_SHADOW_LABEL_CONVENTION`); if that file cannot be read it prints `- GAP components` and the component
+   reading is GAP, never a guess from the label's shape.
+   Until items carry `class:` labels the expected reading is `would-pair 0` and every item unmatched as "no class"; that is a
+   reading, not an error. Pairing is marvel's `marvel marry` verb (read only, it sends nothing); a `- GAP marry: ...` line says it could not run
+   (a marvel without the verb, an unread input, a failed call), and `- GAP seat-eligibility` says the optional seat classes, scopes and duty
+   cells file is absent or malformed, which is the expected reading until the register scope cell ships; show both. A `- would-pair ...`
+   line is a shadow row: nothing was sent. It exits 0 whether it finds nothing or a lot, so read its lines, never its exit code.
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/introspect --since today`. It is a script, not a seat: it reads the
+   runtime's own record (classifier denials, bus errors, components merged but not installed, disk, the stalled-streams
+   page, undrained asks) and prints a header and at most 7 lines, each a fact with one id and the owner of the fix
+   by role. Show its output as it is under `Introspect:`; a source it cannot see prints a `GAP` line, which you show
+   too and never read as zero. It exits 0 on every reading, and nothing in it needs an answer. Its bands are
+   provisional (the header says until when), and `$DIRECTOR_STATE/introspector/records.jsonl` is history only.
 4. Present, in this shape and no other:
 
 ```
@@ -72,9 +109,24 @@ Stranded (N)  [dead process, ask never answered]
 7. <session> - <the ask in one line>  (died Nh ago)
 
 Running, not blocked: <names>
+Stalled ideas (N)  [research or design, no live forward pointer, quiet <threshold>d+]
+9. <repo>/<path> - <title>  (quiet 23d; pointers all closed)
+10. <repo>/<path> - <title>  (quiet 16d; no pointer; as of 2026-09-21, remote unreachable)
+Stalled ideas: none  [a scan that ran and found no rows, in place of the block above]
+Unverified ideas: K  [bd: 4; remote unreachable: 2]
 Drafts: <draft-sweep lines, GAP lines included, or "none">
+Introspect: <introspect's header and its lines as printed, GAP lines included>
 Uncaptured: <one line each, or "none">
 ```
+
+Stalled ideas: list every row, oldest quiet first; number them on from the last
+block; the reason is the row's `reason`; a row with `remote` other than `current` shows `as of <as_of>` and,
+for `unreachable`, `remote unreachable`. Unverified ideas are counted apart and never in N; omit that line
+when K is 0 and name only kinds of source in the bracket. The block presents and stops: the operator
+revives, parks (a line in `$DIRECTOR_STATE/ideas-parked.txt`) or drops. No cap is ruled
+(`sim/design/stalled-big-ideas.md` section 7, item 2: no default applies without a ruling), so nothing is
+truncated. The design proposes five lines then `(+M more)`; apply that only once the operator rules it. The
+threshold is likewise unset until ruled, which is why the block can read "not run".
 
 One line per item. No narrative, no context paragraphs, no confidence notes
 in the list. Detail on request, by number. Session 1's operator complaint was
@@ -87,6 +139,11 @@ ledger: run `${DIRECTOR_HOME:-$HOME/.director}/bin/dws show --json` and list the
 from the row's `owner`, `slug` and `next`, with the owner in the session slot.
 The other blocks are unchanged. With no ledger, or no CLI, build the list from
 the board and the roster as above.
+
+A script the operator must run at a host (an at-host operator script) stays on
+that list as its own line, with its path and its sha256, until it is run or
+dropped. It is never left out because it was sent earlier or a newer ask
+arrived.
 
 When the presence watch is on (`DIRECTOR_PRESENCE_WATCH=1` on the director's
 shim), `$DIRECTOR_STATE/presence-watch.json` lists each cluster the watch has seen. For each whose status
@@ -108,7 +165,9 @@ release, revise or cancel (the cancel_held tool).
    about a stream, add `--ws <slug>` to the `relay-log append`, and
    `${DIRECTOR_HOME:-$HOME/.director}/bin/dws refresh --local` (which
    `board-html` runs on every render) moves that row from the entry, with no
-   network. For an entry already written, link it afterwards with
+   network. When a fresh Desk snapshot shows every card a row links closed, the
+   same fill clears that row's operator block; the next action stays yours.
+   For an entry already written, link it afterwards with
    `dws link <slug> relay:R-<n>`. Nothing is matched from message text. Read
    `${DIRECTOR_HOME:-$HOME/.director}/bin/dws unlinked` for what the fill
    could not tie to a row, and act on it: it moves no row and proposes nothing.
@@ -130,7 +189,7 @@ around it, read the Desk again.
 
 A seat writes the card for an operator decision as a file, and the card goes
 to the Desk through one parse, not by retyping. A card missing a part goes
-back to the seat that wrote it, not to the operator. The check is structural
+back to the seat that wrote it, not to the operator. The parse check is structural
 (is this card well-formed?), never whether the decision is good. A minimal
 valid card:
 
@@ -176,6 +235,14 @@ snapshot read in the last 24 hours, so a slug already on the Desk is refused.
 revision of a ruled card is a new card under a new prefix whose source names
 the old slug.
 
+Before a seat's card is posted, director also reads it against the ticket: does
+the recommendation answer the question the ticket asked? That is a judgment
+the parse cannot make, and it is director's for now; it may move to a future
+judge role. Where the recommendation does not answer the ticket's question,
+director attaches its own view to the card, labelled as director's, and posts
+both. It does not rewrite the seat's recommendation and it does not hold the
+card back for this.
+
 ## Mode: standing, additionally
 
 - Re-sweep when the human asks what is in flight, and on your own after any
@@ -193,11 +260,13 @@ questions crowds them out. Three scripts in `scripts/` give them one.
 
 - `standing-hook` is a prompt hook. Wired as a Claude Code `UserPromptSubmit`
   hook, it prints the drain age and the three-line checklist before each
-  answer. After every drain, run `standing-hook beat` to record it. With no
-  heartbeat it says the age is unknown; it never invents one.
+  answer. After every drain, run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat` to record it. With no
+  heartbeat it says the age is unknown; it never invents one. Its last line gives
+  the age of the last stalled-ideas scan (`dbi`, run by the sweep, then
+  `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat`), read from a file: the hook never runs the scan.
   `verify-standing-hook.sh` proves it.
 - `reference/relay-template.md` is the form to fill before a relay.
-- `composer-check` looks at a pane before an inject that ends in Enter. It
+- `${DIRECTOR_HOME:-$HOME/.director}/bin/composer-check` looks at a pane before an inject that ends in Enter. It
   refuses when the composer holds typed text (a dim suggestion is fine), and
   with `--handle-menu` answers the "Teach auto mode" menu with `2`, "Not now",
   never Enter. `verify-composer-check.sh` proves it.
@@ -206,12 +275,44 @@ The hook entry, in the session's settings:
 
 ```json
 {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command",
-  "command": "<checkout>/skills/director/scripts/standing-hook"}]}]}}
+  "command": "${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook"}]}]}}
 ```
+
+The sweep order on the tick, which is the drain and the Desk read that the
+hook's three-line checklist asks about:
+
+1. Drain the bus inbox: `inbox_summary`, then `wait_for_message` with `max`
+   above 1 until `remaining` is 0 or the reply is the silence note. This gives
+   the messages to answer.
+2. Record the drain: `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat`. This gives `last-drain`.
+3. Read answered Desk cards and refresh the snapshot: `desk-snapshot write`.
+   This gives `desk-snapshot.json`.
+4. Move the rows: `dws refresh --local` (`board-html` runs it on render). This
+   gives the moved rows.
+5. Write the operations dashboard, at most every 30 minutes. Run `dash-writer run`; if it prints
+   `skipped`, stop here. Otherwise `list` dash_panels, dash_daily and dash_meta, write a
+   `{collection/doc_id: version}` map to scratch, and run `dash-writer run --versions <file>`.
+   Apply its `writes` unedited as one ArtifactData batch. Only if the batch reports success, run
+   `dash-writer ack` with the `ack` it printed. On refusal, no ack and no retry: the next tick runs
+   fresh. Two refusals in a row go to the operator as text. A busy tick may skip this step. The
+   writer reads `dash-withhold.txt` (0600, in `$DIRECTOR_STATE`, one name per line); seed it from the
+   tracked private-names list plus the client-team session prefixes, and know that with no list the
+   writer refuses the waiting, in-flight and sessions panels. This gives the `dash_*` documents.
+6. If `$DIRECTOR_STATE/digest.md` is older than 12 hours, run `dws digest`. This
+   gives the digest the operator reads twice a day, by event and not by timer:
+   a session runs it on its own tick, and nothing runs on silence. The digest is
+   read-only output, so it is not an action fired on a clock.
+7. Answer QUERYs and act on MERGE RECOMMENDED, through `merge-guard`. This gives
+   the replies and merges.
+
+When a step stops producing anything the next step uses, propose cutting or
+combining it. This is a prompt to propose, never a gate.
+
+Once K19 lands, step 4 is followed by `dws board-state` ("state first").
 
 ## Merging: the guard runs before every merge
 
-Before any merge you make or relay, run `${DIRECTOR_HOME:-$HOME/.director}/bin/merge-guard <owner/repo> <n>`
+Before any merge you make or relay, run `${DIRECTOR_HOME:-$HOME/.director}/bin/merge-guard [--allow-base <branch>] <owner/repo> <n>`
 for that PR, and act only on its line:
 
 - `PROCEED ... @<sha>`: merge with `--match-head-commit <sha>`, so a push after
@@ -222,6 +323,11 @@ for that PR, and act only on its line:
   for good. Then confirm each child retargeted to the default branch and
   retarget it by hand if not (stacked-pr-merge-order). Only the plain `PROCEED`
   line says a merge may delete its branch.
+- `STOP base is X, not the default branch Y`: the PR's base is not the repo's
+  default branch, so a merge would land in X and never reach Y (two stacked
+  PRs were merged into their parents that way). Retarget the PR to the default
+  branch. Only for a merge into a parent on purpose, pass
+  `--allow-base <X>` with that exact base name; it waives this check alone.
 - `STOP ...`: stop the merge run there and report the line. Never skip the PR
   and go on to the next. A skip is how a merge order gets inverted (R-152).
 
@@ -282,12 +388,21 @@ the captures and moves what has hardened into `sim/requirements.md`.
    only reports and does not write the register is session-1 behavior in a new
    costume; writing the register is the point.
 6. For an episode that produced a correction or an escalation, add a section
-   headed `Retrospective and coaching` to the report: what the seat should do
-   differently next time. Coaching is recorded under that heading, in the
-   harvest report, and never on a channel of its own, since a second channel is
-   where messages go unread (R-118). An episode with neither a correction nor
-   an escalation needs no such section, and the step is never a gate on a
-   handoff or a shift.
+   headed `Retrospective and coaching` to the report. Take the facts first, from
+   the ledger, the relay log or the transcript, so the section does not turn
+   into competing narratives. Then answer four questions: what was supposed to
+   happen, what did happen, what was right or wrong with what happened, and what
+   the seat should do differently next time. Each fix names the seat that owns
+   it. Before dispatching work of the same kind, read the last retrospective for
+   it. Coaching is recorded under that heading, in the harvest report, and never
+   on a channel of its own, since a second channel is where messages go unread
+   (R-118). An episode with neither a correction nor an escalation needs no such
+   section, and the step is never a gate on a handoff or a shift.
+   Run `${DIRECTOR_HOME:-$HOME/.director}/bin/introspect --since last-harvest --window week`
+   and cite its counts in this section, and nowhere else: a count is never an R-entry, a rule, a hook, a skill
+   trigger or a Desk card, and a pattern that seems to need one goes to the operator as a plain sentence in the report.
+   After that run, write `last_harvest=<the run's time, ISO>` into the introspect config (`$DIRECTOR_STATE/introspector/introspect.conf`);
+   with it unset, `--since last-harvest` counts from 7 days back and prints a GAP.
 
 Do not renumber existing requirements. New ones take the next R number.
 

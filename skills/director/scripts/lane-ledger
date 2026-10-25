@@ -1,0 +1,507 @@
+#!/usr/bin/env python3
+"""lane-ledger - render C1 of the fleet flow pages (the lane ledger) from director's own files.
+
+Why: the first C1 was hand-built once from one cluster's CSVs, so it read nearly all GAP and
+never changed. This page regenerates from what director already reads every sweep, so it fills
+in as the sources do and says, cell by cell, what is still missing and what would fix it.
+
+  lane-ledger [--out FILE] [--marry FILE]
+  lane-ledger --help
+
+Reads, all optional; a missing or unreadable source prints a GAP line and a GAP cell, never a 0:
+  $DIRECTOR_STATE/freebusy/seats.jsonl   one row per seat, from freebusy (all clusters)
+  $DIRECTOR_STATE/freebusy/lanes.jsonl   one row per lane, with its open asks, from freebusy
+  $DIRECTOR_STATE/desk-snapshot.json     the operator's open Desk cards, from desk-snapshot
+  --marry FILE                           a `marvel marry` output (MarryOutput JSON), for the
+                                         "ready for the lane" column; default
+                                         $DIRECTOR_STATE/idle-shadow/marry.json, which
+                                         idle-shadow writes on each run where marry answers
+Two local files the operator keeps, never in git, because no canonical source holds them:
+  lane-ledger-show.txt   one "<workspace>/<team>" per line ("#" comments allowed): the teams the
+                         page may name. Every other team prints as "team withheld", keeping only
+                         its role word, cluster and counts. Absent: every team is withheld.
+  dash-withhold.txt      the same private-name list dash-writer reads (whole words, any case). A
+                         team, role or seat name that holds one is withheld even when listed above.
+
+Writes FILE (default $DIRECTOR_STATE/flow/c1.html), atomically, mode 600. Its parent directory
+must be outside any checkout. The page is a full document with the flow pages' navigation bar,
+no external loads, no forms or scripts beyond its embedded JSON data, ASCII only.
+
+Deterministic: the same inputs give the same bytes. The page's as-of times come from the inputs,
+never from the clock. It sends nothing, injects nothing, writes no bd record and calls no gh or
+marvel command: it reads the marry output idle-shadow wrote, or the one passed with --marry.
+
+A diagnostic, not a gate: it exits 0 whatever it finds; 2 for a usage error.
+"""
+import html
+import json
+import os
+import re
+import sys
+import tempfile
+
+HOME = os.path.expanduser("~")
+STATE = os.environ.get("DIRECTOR_STATE") or os.path.join(HOME, ".director", "state")
+STATES = ("free", "busy", "waiting", "unknown")
+COUNT_KEYS = ("ready", "eligible", "unmatched", "no_class", "no_component",
+              "no_eligible_seat", "operator_only", "client", "would_pair")
+WITHHELD = "team withheld"
+
+# What would fill each GAP, printed as a numbered footnote wherever the GAP shows.
+FIX = {
+    "seats": "freebusy writes freebusy/seats.jsonl on the sweep",
+    "lanes": "freebusy writes freebusy/lanes.jsonl on the sweep",
+    "asks": "the asks rollup from director-mcp asks --json, read by freebusy",
+    "unread": "marvel exposes consumer pending per seat (S11)",
+    "last_turn": "freebusy reads marvel's LAST-TURN column once it is deployed on the cluster",
+    "runtime": "an idle signal for codex, opencode and crush seats; until then their free and busy read ACTIVE% only",
+    "ready": "idle-shadow writes a marvel marry output (idle-shadow/marry.json) when marry answers",
+    "desk": "desk-snapshot writes desk-snapshot.json from a Desk read",
+    "client": "a client-item count in the Desk snapshot",
+    "host": "the team-to-host map in git, which places bd event writers",
+    "show": "the operator lists the teams this page may name in lane-ledger-show.txt",
+}
+
+
+def usage(code):
+    sys.stdout.write(__doc__ if code == 0 else "usage: lane-ledger [--out FILE] [--marry FILE]\n")
+    sys.exit(code)
+
+
+def args(argv):
+    out = os.path.join(STATE, "flow", "c1.html")
+    marry = os.path.join(STATE, "idle-shadow", "marry.json")
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-h", "--help"):
+            usage(0)
+        if a in ("--out", "--marry") and i + 1 < len(argv) and argv[i + 1]:
+            if a == "--out":
+                out = argv[i + 1]
+            else:
+                marry = argv[i + 1]
+            i += 2
+            continue
+        usage(2)
+    return out, marry
+
+
+def read_jsonl(path, gaps, name):
+    try:
+        with open(path, "rb") as f:
+            raw = f.read().decode("utf-8")
+    except FileNotFoundError:
+        gaps.append("%s: %s not found" % (name, os.path.basename(path)))
+        return None
+    except (OSError, UnicodeDecodeError) as e:
+        gaps.append("%s: %s unreadable (%s)" % (name, os.path.basename(path), type(e).__name__))
+        return None
+    rows = []
+    for n, line in enumerate(raw.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except ValueError:
+            gaps.append("%s: line %d is not JSON; the file is not used" % (name, n))
+            return None
+        if not isinstance(r, dict):
+            gaps.append("%s: line %d is not an object; the file is not used" % (name, n))
+            return None
+        rows.append(r)
+    return rows
+
+
+def read_json(path, gaps, name):
+    try:
+        with open(path, "rb") as f:
+            v = json.loads(f.read().decode("utf-8"))
+    except FileNotFoundError:
+        gaps.append("%s: %s not found" % (name, os.path.basename(path)))
+        return None
+    except (OSError, ValueError, UnicodeDecodeError) as e:
+        gaps.append("%s: %s unreadable (%s)" % (name, os.path.basename(path), type(e).__name__))
+        return None
+    if not isinstance(v, dict):
+        gaps.append("%s: %s is not an object" % (name, os.path.basename(path)))
+        return None
+    return v
+
+
+def read_lines(path):
+    """A local list file: None when absent, else its entries (no blanks, no # comments)."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read().decode("utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError):
+        return "unreadable"
+    return [ln.strip() for ln in raw.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+
+
+def s(v):
+    return v if isinstance(v, str) else ""
+
+
+class Mask:
+    """Decides which names the page may print. Withheld is the default."""
+
+    def __init__(self, gaps):
+        show = read_lines(os.path.join(STATE, "lane-ledger-show.txt"))
+        hold = read_lines(os.path.join(STATE, "dash-withhold.txt"))
+        self.refuse_all = False
+        if show == "unreadable":
+            gaps.append("show list: lane-ledger-show.txt unreadable; every team withheld")
+            show = []
+        elif show is None:
+            gaps.append("show list: lane-ledger-show.txt not found; every team withheld")
+            show = []
+        if hold == "unreadable":
+            gaps.append("withhold list: dash-withhold.txt unreadable; every name withheld")
+            self.refuse_all = True
+            hold = []
+        self.show = set(show)
+        self.hold = [re.compile(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(w), re.I) for w in (hold or [])]
+
+    def held(self, text):
+        return any(p.search(text) for p in self.hold)
+
+    def team_shown(self, ws, team):
+        if self.refuse_all:
+            return False
+        return (ws + "/" + team) in self.show and not self.held(ws) and not self.held(team)
+
+    def word(self, text):
+        """A role or seat name on a shown lane: printed unless a withhold word is in it."""
+        return "withheld" if (self.refuse_all or self.held(text)) else text
+
+
+def compute(marry_path):
+    gaps = []
+    mask = Mask(gaps)
+    seats = read_jsonl(os.path.join(STATE, "freebusy", "seats.jsonl"), gaps, "seats")
+    lanes_in = read_jsonl(os.path.join(STATE, "freebusy", "lanes.jsonl"), gaps, "lanes")
+    desk = read_json(os.path.join(STATE, "desk-snapshot.json"), gaps, "desk")
+    marry = read_json(marry_path, gaps, "marry")
+
+    asks = {}
+    asks_read = lanes_in is not None
+    for r in lanes_in or []:
+        asks[s(r.get("lane"))] = r
+
+    # Would-pair rows from marvel marry, counted per seat address agent://<team>/<name>.
+    ready = None
+    unmatched = None
+    if marry is not None:
+        if isinstance(marry.get("pairs"), list):
+            ready = {}
+            for p in marry["pairs"]:
+                if isinstance(p, dict):
+                    ready[s(p.get("seat"))] = ready.get(s(p.get("seat")), 0) + 1
+        else:
+            gaps.append("marry: marry.json has no pairs list; ready for the lane is not read")
+        c = marry.get("count")
+        if not isinstance(c, dict):
+            gaps.append("marry: marry.json has no count object")
+        else:
+            unmatched = {k: c[k] if isinstance(c.get(k), int) and not isinstance(c.get(k), bool) else "GAP"
+                         for k in COUNT_KEYS}
+            lacking = [k for k in COUNT_KEYS if unmatched[k] == "GAP"]
+            if lacking:
+                gaps.append("marry: count lacks " + ", ".join(lacking))
+
+    lanes = {}
+    as_of = set()
+    last_turn = 0
+    for r in seats or []:
+        cl, ws, team, role, name = (s(r.get(k)) for k in ("cluster", "workspace", "team", "role", "name"))
+        st = s(r.get("state"))
+        if st not in STATES:
+            st = "unknown"
+        if s(r.get("at")):
+            as_of.add(mask.word(s(r.get("at"))))
+        if r.get("last_turn") not in (None, ""):
+            last_turn += 1
+        shown = mask.team_shown(ws, team)
+        # Withheld means masked, for every field of the lane: a withhold word never prints, in a shown lane or
+        # a withheld one, and a withheld lane prints no seat reason at all.
+        cl_p, role_p = mask.word(cl), mask.word(role)
+        key = (cl_p, ws, team, role_p) if shown else (cl_p, WITHHELD, WITHHELD, role_p)
+        ln = lanes.setdefault(key, {"cluster": cl_p, "team": team if shown else WITHHELD, "workspace": ws if shown else "",
+                                    "role": role_p, "masked": not shown,
+                                    "counts": dict.fromkeys(STATES, 0), "seats": [], "asks": [], "ready": 0})
+        ln["counts"][st] += 1
+        seat = {"state": st, "reason": mask.word(s(r.get("reason"))) if shown else "",
+                "last_active": mask.word(s(r.get("last_active"))) or None}
+        if shown:
+            seat["name"] = mask.word(name)
+        ln["seats"].append(seat)
+        a = asks.get(team + "/" + role)
+        if a is not None and (team + "/" + role) not in ln["asks"]:
+            ln["asks"].append(team + "/" + role)
+        if ready is not None:
+            ln["ready"] += ready.get("agent://%s/%s" % (team, name), 0)
+
+    out = []
+    for key in sorted(lanes):
+        ln = lanes[key]
+        ln["seats"].sort(key=lambda x: (x.get("name", ""), x["state"], x["reason"], x["last_active"] or ""))
+        if not asks_read:
+            ln["asks_open"] = "GAP"
+        else:
+            vals = [asks[k].get("asks_open") for k in ln["asks"]]
+            if not vals:
+                ln["asks_open"] = 0
+            elif any(not isinstance(v, int) for v in vals):
+                ln["asks_open"] = "GAP"
+            else:
+                ln["asks_open"] = sum(vals)
+        del ln["asks"]
+        if ready is None:
+            ln["ready"] = "GAP"
+        out.append(ln)
+
+    total = dict.fromkeys(STATES, 0)
+    for ln in out:
+        for k in STATES:
+            total[k] += ln["counts"][k]
+    op = None
+    if desk is not None:
+        bs = desk.get("by_status") if isinstance(desk.get("by_status"), dict) else {}
+        yours = bs.get("yours")
+        op = {"open": len(desk["open"]) if isinstance(desk.get("open"), list) else "GAP",
+              "yours": yours if isinstance(yours, int) and not isinstance(yours, bool) else "GAP",
+              "read_at": s(desk.get("read_at")) or "GAP"}
+        if op["open"] == "GAP":
+            gaps.append("desk: open list missing")
+        if op["yours"] == "GAP":
+            gaps.append("desk: by_status.yours missing")
+        if op["read_at"] == "GAP":
+            gaps.append("desk: read_at missing")
+    clusters = sorted({ln["cluster"] for ln in out})
+    seats_ok = bool(seats)
+    if seats is not None and not seats:
+        gaps.append("seats: seats.jsonl has no rows")
+    n_seats, measured = sum(total.values()), total["free"] + total["busy"] + total["waiting"]
+    if not seats_ok:  # no seat was read: every seat figure is a GAP, never a 0
+        total, n_seats, measured, last_turn = dict.fromkeys(STATES, "GAP"), "GAP", "GAP", "GAP"
+    return {"as_of": sorted(as_of), "clusters": clusters, "lanes": out, "total": total,
+            "seats": n_seats, "measured": measured,
+            "last_turn": last_turn, "seats_read": seats_ok, "asks_read": asks_read,
+            "operator": op, "marry": unmatched, "masked_lanes": sum(1 for ln in out if ln["masked"]),
+            "gaps": gaps}
+
+
+CSS = """
+:root{--bg:#fdfdfb;--ink:#1a1a1a;--ink2:#555;--ink3:#999;--accent:#a8551e}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141414;--ink:#e6e6e6;--ink2:#aaa;--ink3:#666;--accent:#e0955f;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#141414;--ink:#e6e6e6;--ink2:#aaa;--ink3:#666;--accent:#e0955f;color-scheme:dark}
+html,body{background:var(--bg)}
+body{color:var(--ink);font:14px/1.45 Georgia,"Times New Roman",serif;margin:0;padding:16px;max-width:980px}
+h1{font-size:20px;font-weight:normal;margin:0 0 4px}
+h2{font-size:13px;font-weight:normal;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);margin:22px 0 6px}
+.prov{color:var(--ink2);font-size:13px;margin:0 0 12px;max-width:70ch}
+.cov{display:grid;gap:6px;font-size:13px;margin-bottom:12px}
+.cov>div{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.cov .k{flex:0 0 220px;color:var(--ink2)}
+.mb{display:inline-block;width:160px;height:10px;border:1px solid var(--ink);box-sizing:border-box}
+.mb b{display:block;height:100%;background:var(--accent)}
+.lanes{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:4px 18px}
+.lr{display:flex;align-items:center;gap:8px;min-width:0;padding:3px 0;border-bottom:1px dotted var(--ink3)}
+.lt{color:var(--ink2);font-size:12px;flex:0 0 96px;overflow-wrap:anywhere}
+.lw{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.sm{display:flex;flex-wrap:wrap;gap:3px;max-width:120px}
+.sq{display:inline-block;width:14px;height:14px;box-sizing:border-box;vertical-align:middle}
+.sq.free{border:1.5px solid var(--ink)}
+.sq.busy{background:var(--accent)}
+.sq.waiting{background:var(--ink2)}
+.sq.unknown{border:1.5px dashed var(--ink3)}
+.leg{font-size:12px;color:var(--ink2);display:flex;flex-wrap:wrap;gap:4px 14px;margin:10px 0 0}
+.leg .sq{margin-right:5px}
+table.l{border-collapse:collapse;width:100%}
+table.l th,table.l td{text-align:left;vertical-align:top;padding:3px 10px 3px 0;font-weight:normal}
+table.l thead th{color:var(--ink2);font-size:13px;border-bottom:1px solid var(--ink3)}
+tr.grp td{padding-top:12px;font-weight:bold}
+td.n{font-variant-numeric:tabular-nums}
+.old{color:var(--ink2)}
+sup{font-size:12px}
+.under{margin-top:12px;font-size:13px}
+footer{margin-top:28px;font-size:12px;color:var(--ink2)}
+footer ol{padding-left:20px}
+@media (max-width:600px){.cov .k{flex-basis:100%}table.l thead{display:none}table.l,table.l tbody,table.l tr,table.l td{display:block}
+table.l tr{margin-bottom:8px}table.l td{padding:0}table.l td[data-h]::before{content:attr(data-h) ": ";color:var(--ink2)}}
+@media print{.fn{display:none}:root{--accent:#000;--ink2:#333;--ink3:#888}body{background:#fff;color:#000}tr{break-inside:avoid}}
+.fn{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--ink3);
+margin:-16px -16px 14px;padding:8px 16px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;font-size:13px}
+.fn ul{list-style:none;margin:0;padding:0;display:flex;gap:2px;overflow-x:auto;min-width:0;flex:1 1 auto}
+.fn li{flex:0 0 auto}
+.fn a{color:var(--ink);text-decoration:none;display:block;padding:4px 8px;border-radius:3px;white-space:nowrap}
+.fn a:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.fn a[aria-current=page]{color:var(--accent);box-shadow:inset 0 -2px 0 var(--accent)}
+.fn .c{color:var(--ink2);margin-right:4px}
+.fn .pn{display:flex;gap:4px;flex:0 0 auto}
+.fn .pn a{border:1px solid var(--ink3)}
+@media (max-width:600px){.fn{gap:4px}.fn .t{display:none}.fn .pn{width:100%;justify-content:space-between}}
+"""
+
+# The flow pages' bar, as the v2 build writes it for C1. Links reach sibling pages only.
+NAV = ('<nav class="fn" aria-label="Flow pages"><ul><li><a href="index.html">All pages</a></li>'
+       '<li><a href="c1.html" aria-current="page"><span class="c">C1</span><span class="t">Lane ledger</span></a></li>'
+       '<li><a href="c2.html"><span class="c">C2</span><span class="t">Stuck now</span></a></li>'
+       '<li><a href="c8.html"><span class="c">C8</span><span class="t">Stock line</span></a></li>'
+       '<li><a href="c5.html"><span class="c">C5</span><span class="t">Fix tails</span></a></li>'
+       '<li><a href="c7.html"><span class="c">C7</span><span class="t">Day ledger</span></a></li></ul>'
+       '<div class="pn"><a href="index.html" rel="prev">Previous: Index</a><a href="c2.html" rel="next">Next: C2</a></div></nav>')
+
+LEGEND = (("free", "free (ACTIVE% 0)"), ("busy", "busy (ACTIVE% above 0)"),
+          ("waiting", "waiting (parked, or account limited)"), ("unknown", "unknown (not read)"))
+
+
+def page(m):
+    e = html.escape
+    notes = []
+
+    def fn(key):
+        if FIX[key] not in notes:
+            notes.append(FIX[key])
+        return "<sup>(%d)</sup>" % (notes.index(FIX[key]) + 1)
+
+    def cell(v, key):
+        return "GAP" + fn(key) if v == "GAP" else str(v)
+
+    asof = ("%s to %s" % (m["as_of"][0], m["as_of"][-1]) if len(m["as_of"]) > 1
+            else (m["as_of"][0] if m["as_of"] else "GAP" + fn("seats")))
+    P = ["<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+         "<title>Lane ledger</title><style>%s</style></head><body>" % CSS, NAV]
+    P.append("<h1>Lane ledger: who is free now, and has work in their lane</h1>")
+    P.append('<p class="prov">Read from director\'s freebusy files as of %s, clusters read: %s. '
+             'Regenerated by lane-ledger on director\'s tick; every cell is derived, and anything not read prints GAP '
+             'with what would fill it. Nothing here acts.</p>'
+             % (e(asof), e(", ".join(m["clusters"])) if m["clusters"] else "none"))
+
+    t = m["total"]
+    if m["seats_read"]:
+        P.append('<div class="cov"><div><span class="k">seats with a measured state</span>'
+                 '<span class="mb"><b style="width:%.1f%%"></b></span><span>%d of %d</span></div>'
+                 % (100.0 * m["measured"] / m["seats"], m["measured"], m["seats"]))
+        P.append('<div><span class="k">seats by state</span><span>%s</span></div>'
+                 % "; ".join("%s %d" % (k, t[k]) for k in STATES))
+        P.append('<div><span class="k">seats with a last turn read</span><span>%d of %d%s</span></div></div>'
+                 % (m["last_turn"], m["seats"], fn("last_turn") if m["last_turn"] < m["seats"] else ""))
+    else:
+        P.append('<div class="cov"><div><span class="k">seats with a measured state</span><span>GAP%s</span></div>'
+                 % fn("seats"))
+        P.append('<div><span class="k">seats by state</span><span>GAP%s</span></div>' % fn("seats"))
+        P.append('<div><span class="k">seats with a last turn read</span><span>GAP%s</span></div></div>' % fn("seats"))
+
+    P.append('<section aria-label="Seat board"><div class="lanes">')
+    for ln in m["lanes"]:
+        marks = "".join('<i class="sq %s" title="%s"></i>' % (x["state"], e(x["state"] + (", " + x["reason"] if x["reason"] else "")))
+                        for x in ln["seats"])
+        P.append('<div class="lr"><span class="lt">%s %s</span><span class="lw">%s</span><span class="sm">%s</span></div>'
+                 % (e(ln["cluster"]), e(ln["team"]), e(ln["role"]), marks))
+    P.append("</div>")
+    P.append('<p class="leg">%s</p></section>' % "".join(
+        '<span><i class="sq %s"></i>%s%s</span>' % (k, txt, "" if (t[k] or not m["seats_read"]) else " (none now)")
+        for k, txt in LEGEND))
+
+    P.append("<h2>By lane</h2>")
+    P.append('<table class="l"><thead><tr><th>lane</th><th>free</th><th>busy</th><th>waiting</th><th>unknown</th>'
+             '<th>asks open</th><th>unread</th><th>ready for the lane</th></tr></thead><tbody>')
+    op = m["operator"]
+    if op is None:
+        P.append('<tr class="grp"><td>operator</td><td colspan="7">Desk GAP%s; client items GAP%s</td></tr>' % (fn("desk"), fn("client")))
+    else:
+        P.append('<tr class="grp"><td>operator</td><td colspan="7">Desk open %s, yours %s, as of %s; client items GAP%s</td></tr>'
+                 % (cell(op["open"], "desk"), cell(op["yours"], "desk"), e(op["read_at"]), fn("client")))
+    cur = None
+    for ln in m["lanes"]:
+        if ln["cluster"] != cur:
+            cur = ln["cluster"]
+            P.append('<tr class="grp"><td colspan="8">%s</td></tr>' % e(cur))
+        c = ln["counts"]
+        name = "%s %s" % (ln["team"], ln["role"])
+        P.append('<tr><td>%s</td><td class="n" data-h="free">%d</td><td class="n" data-h="busy">%d</td>'
+                 '<td class="n" data-h="waiting">%d</td><td class="n" data-h="unknown">%d</td>'
+                 '<td class="n" data-h="asks open">%s</td><td data-h="unread">GAP%s</td><td class="n" data-h="ready">%s</td></tr>'
+                 % (e(name), c["free"], c["busy"], c["waiting"], c["unknown"],
+                    cell(ln["asks_open"], "asks"),
+                    fn("unread"), cell(ln["ready"], "ready")))
+    if not m["lanes"]:
+        P.append('<tr><td colspan="8">no seats read: GAP%s</td></tr>' % fn("seats"))
+    P.append('<tr class="grp"><td>host unknown</td><td colspan="7">bd event writers not placed GAP%s</td></tr>' % fn("host"))
+    P.append("</tbody></table>")
+
+    mr = m["marry"]
+    if mr is None:
+        P.append('<p class="under">Ready work: GAP%s.</p>' % fn("ready"))
+    else:
+        g = lambda k: cell(mr[k], "ready")
+        P.append('<p class="under">Ready work, from marvel marry (shadow, nothing sent): ready %s, eligible %s, would-pair %s; '
+                 'unmatched %s (no class %s, no component %s, no eligible seat %s, operator-only %s); client %s, counted only.</p>'
+                 % (g("ready"), g("eligible"), g("would_pair"), g("unmatched"), g("no_class"), g("no_component"),
+                    g("no_eligible_seat"), g("operator_only"), g("client")))
+    if m["masked_lanes"]:
+        P.append('<p class="under">%d lanes print as "%s", with role, cluster and counts only%s.</p>'
+                 % (m["masked_lanes"], WITHHELD, fn("show")))
+    P.append('<p class="under">Free here means the seat\'s pane reads idle%s; it is not a claim that the seat has work '
+             'waiting. A lane has work for a free seat only where "ready for the lane" is above 0.</p>' % fn("runtime"))
+    if m["gaps"]:
+        P.append('<p class="under">Not read: %s.</p>' % e("; ".join(m["gaps"])))
+    P.append("<footer><ol>%s</ol>" % "".join("<li>fix: %s</li>" % e(n) for n in notes))
+    P.append("<p>Sources: freebusy/seats.jsonl and freebusy/lanes.jsonl (one row per seat and per lane, replaced each "
+             "sweep), desk-snapshot.json, and a marvel marry output when one is given. Presence and health set no state "
+             "here; freebusy's own reason shows on hover. Nothing here ranks seats or acts.</p></footer>")
+    data = json.dumps(m, sort_keys=True, separators=(",", ":"), ensure_ascii=True).replace("</", "<\\/")
+    P.append('<script type="application/json" id="data">%s</script>' % data)
+    P.append("</body></html>\n")
+    return "".join(P)
+
+
+def outside_checkout(path):
+    p = os.path.realpath(os.path.dirname(os.path.abspath(path)) or ".")
+    while not os.path.isdir(p) and p != "/":
+        p = os.path.dirname(p)
+    while True:
+        if os.path.exists(os.path.join(p, ".git")):
+            return False
+        if p == "/":
+            return True
+        p = os.path.dirname(p)
+
+
+def main():
+    out, marry = args(sys.argv[1:])
+    if not outside_checkout(out):
+        print("lane-ledger: not written: %s is inside a checkout; the page stays outside any repository" % out)
+        return 0
+    m = compute(marry)
+    body = page(m).encode("ascii", "xmlcharrefreplace")
+    d = os.path.dirname(os.path.abspath(out))
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".c1.")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(body)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, out)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    for g in m["gaps"]:
+        print("- GAP %s" % g)
+    t = m["total"]
+    if m["seats_read"]:
+        print("lane-ledger: %d seats in %d lanes (%s); written %s"
+              % (m["seats"], len(m["lanes"]), ", ".join("%s %d" % (k, t[k]) for k in STATES), out))
+    else:
+        print("lane-ledger: seats GAP (no seat was read); written %s" % out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

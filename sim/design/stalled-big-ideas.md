@@ -255,6 +255,14 @@ file is the record.
 
 ## 7. Rulings needed
 
+**Ruled 2026-10-24 (operator, via director):** rulings 1 and 2 below. The
+threshold is 4 days, the same for every root. There is no cap: the block lists
+every row. Both are recorded in `$DIRECTOR_STATE/thresholds.json` (`stalled_idea_days`,
+which `dbi` reads, and `stalled_ideas_cap: null`, which nothing reads; the
+sweep lists every row because SKILL.md applies no cap until one is ruled).
+The defaults below are kept as the record of what was offered. Ruling 3 (roots) is still open. S3 is
+reconsidered in `board-lifecycle.md` section 6.5.
+
 1. **Threshold.** Default 14 days. Alternative: per root (ideas 30 days,
    designs 7). This recommendation is valid until 2026-10-19 or S1's build start,
    whichever comes first; the architect re-checks it then, and no default

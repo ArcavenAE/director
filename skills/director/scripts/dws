@@ -27,7 +27,10 @@ K13: `--blocked operator` needs `--ask <card id>`, and refuses unless that card 
 open in a Desk snapshot no older than THRESHOLD_HOURS["desk snapshot"] hours. A
 session reads the Desk and runs `desk-snapshot write`; without a usable snapshot
 dws refuses and says UNREAD, and never takes the id on faith. The card goes on the
-row as an ask: link.
+row as an ask: link. LF4: when a fresh snapshot shows every ask: card on the row
+in a status in CLOSING_STATUSES, `refresh --local` clears the block (set blocked "",
+as refresh) and leaves the next action director's. An old closed card never clears
+a block that a later, open card holds.
 
 K8: every new event carries "tag", set by dws from the actor and never by a caller:
 mirror for refresh (a cited outside fact), judgment for director. proposal is
@@ -44,6 +47,10 @@ its own rulings.lock beside it. It never creates the file, refuses the exclusion
 `records [--json]` folds the file: replaces is an explicit id pointer; a target is marked
 replaced_by, and a pointer to a missing id or another kind is counted, never guessed.
 
+K15: `inherit ROLE [--json]` is the by-role read a successor makes (R-204): the role's standing terms
+(a replaced term is marked, not standing), grants in force, pending and expired, and open asks. A
+source it cannot read is UNREAD and its section is none, never an empty list. Read only.
+
 K14: `ring SEAT --idle-minutes N --mail N` records a ring in rings.jsonl (Q6: 10 minutes idle with
 mail, at most 3 rings per seat per hour, then it refuses and the seat is reported stuck);
 `ring-note SEAT first-turn|ack|blocker [--text T]` follows it; `rings [--json]` reads per seat.
@@ -53,6 +60,26 @@ card-ingest's format. `grant-confirm <id> --card C --quote WORDS` records the gr
 (replacing the draft, which is never edited) only when the fresh Desk snapshot lists C as answered;
 the quote is the session's claim of the operator's words.
 
+K18: `digest` renders the operator digest and the close-or-kill list on demand, from the reconciler and the
+queue, to stdout and $DIRECTOR_STATE/digest.md; nothing runs it on a clock. Its interrupt list is the Q1
+default list (DIGEST_INTERRUPTS), for the operator to edit.
+
+K12: `queue [--json]` is the operator's queue: the open Desk cards joined to ledger rows by their ask: links.
+A card whose linked PRs are all observed draft, merged or closed is hidden until director closes it; any other
+open card is shown, and a card no row links is "unclassified, shown". The checks that need card fields the
+snapshot lacks (kind, text, source) are listed as not run. Read only. While the ledger has a torn line nothing is
+hidden; dws never repairs one, so the operator clears it by correcting or removing that line of workstreams.jsonl
+(`dws show` and `dws queue` print the unreadable-line count), and hiding resumes on the next run.
+
+K19: `board-state` rewrites only the text between `<!-- state:begin -->` and `<!-- state:end -->` in
+$DIRECTOR_STATE/board.md from the ledger and the Desk snapshot (the block goes first when there are no
+markers; a malformed pair is refused and nothing is written; dws never creates board.md). `board-check
+[--json]` lists the `ask:<id>` and `ws:<slug>` ids in the prose that resolve to no record, exits 0, and
+says "not checked" for an id whose store is UNREAD. The block takes its line ending from the board's first
+line (CRLF if that line ends in one, else LF), so a board already mixed gets one ending in the block and keeps
+its other lines as they are: the rule is cheap to state and never rewrites authored text; it is not a claim
+that a mixed board is well formed.
+
 K11: `reconcile [--json] [--out FILE]` reads the Desk snapshot, the ledger, rulings.jsonl,
 rings.jsonl and the PR state the ledger observed, and writes proposals (tag proposal) to
 $DIRECTOR_STATE/reconcile-proposals.json. It appends no record to any store. Each source
@@ -60,10 +87,18 @@ prints its last-read time or UNREAD, the queue count reads "at least n" while an
 UNREAD, and a check with no readable source (recommendation sell-by, an ask unacked past
 its window, a harvest due) is listed as not run, never counted as zero.
 
+D1: `decision add --from FILE` parses one seat-decision@1 block (sim/design/seat-decisions.md,
+section 3) and appends a decision event, state decided-by-seat, to workstreams.jsonl under the same
+lock as the rows. `decision actual|confirm|override|rework` record the actual figure and the three
+moves (decided-by-seat to confirmed or overridden, overridden to reworked); confirm and override keep
+the operator's words as given. A skip is no command, and no move happens on a clock. `decisions
+[--json] [--unconfirmed] [--daily --trial-start DATE]` reads them and writes nothing. The wait edges,
+the window and the affected list are D2.
+
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
 """
-import argparse, datetime, fcntl, json, os, re, subprocess, sys, time, unicodedata
+import argparse, datetime, fcntl, json, os, re, subprocess, sys, tempfile, time, unicodedata
 
 HOME = os.path.expanduser("~")
 STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
@@ -76,6 +111,11 @@ SNAPSHOT = os.path.join(STATE, "desk-snapshot.json")
 # director-glst; the table of the automation boundary, ADR-007). A diagnostic
 # bound, not a gate on anything else. The operator changes it here.
 THRESHOLD_HOURS = {"desk snapshot": 24}
+
+# LF4 (ledger-fill.md section 3, operator ruling 1 of 2026-10-19): a Desk card in one of
+# these statuses has closed, so refresh clears the operator block on a row that links it.
+# A wrong entry clears a block early, so the table is the operator's to edit, here.
+CLOSING_STATUSES = ("closed", "resolved", "withdrawn", "superseded", "relayed")
 
 # Section 3. The order is the sort order; parked sorts last.
 STAGES = ["idea", "defined", "designed", "building", "in review", "merged",
@@ -207,11 +247,12 @@ def blocked_on_operator(blocked, ask):
     return f"ask:{ask}"
 
 
-def fold(path=LEDGER, tally=None):
+def fold(path=LEDGER, tally=None, decisions=None):
     """Rows by slug, and how many lines could not be read. A torn line is
     skipped and counted, never repaired. A tally dict, when given, counts every
     event line by tag, whatever became of it: a line for a slug with no row and
-    a re-open that resets a row are both in it (K8)."""
+    a re-open that resets a row are both in it (K8). A decisions dict, when
+    given, takes the decision events (D1); they never touch a row."""
     rows, torn = {}, 0
     try:
         f = open(path, "rb")
@@ -232,6 +273,10 @@ def fold(path=LEDGER, tally=None):
             if tally is not None:
                 name = tag_name(e)
                 tally[name] = tally.get(name, 0) + 1
+            if e.get("event") == "decision":
+                if decisions is not None:
+                    apply_decision(decisions, e)
+                continue
             apply(rows, e)
     return rows, torn
 
@@ -351,12 +396,19 @@ def allowed(actor, event):
         raise Refused(f"actor {actor!r} may append nothing; writers are {sorted(ACTORS)} (section 6)")
     if actor == "refresh":
         ev = event["event"]
-        if ev == "observe":
+        if ev in ("observe", "refresh-run"):
             return
         if ev == "stage" and (event.get("from"), event.get("to")) in REFRESH_MOVES:
             return
-        raise Refused("refresh may append observe events and the two factual stage moves only "
-                      "(building to in review, in review to merged); director makes every other move")
+        # LF4: one set, of blocked to empty and no other field, carrying the Desk read it came
+        # from. The fill checks that the row is blocked on the operator and that every ask:
+        # card it links is in a closing status.
+        if (ev == "set" and {k for k in ("owner", "next", "blocked", "repos") if k in event} == {"blocked"}
+                and event["blocked"] == "" and str(event.get("src", "")).startswith("desk:")):
+            return
+        raise Refused("refresh may append observe events, its run record, the two factual stage moves "
+                      "(building to in review, in review to merged) and the fill's clear of an operator block "
+                      "whose Desk card closed (LF4) only; director makes every other move")
 
 
 def check_tag(tag):
@@ -386,14 +438,22 @@ def write(actor, event, check):
     rerender()
 
 
-def write_many(actor, plan):
+def write_many(actor, plan, run_record=None):
     """Fold, then let plan(rows) return the events to append, all under one
-    lock, so the stage each move is checked against is the current one."""
+    lock, so the stage each move is checked against is the current one.
+    run_record, when given, is called with the events and returns the run's
+    own record, appended last under the same lock (the ops dashboard's check
+    that the refresh ran). It is not among the events returned, so a run that
+    changed nothing still prints and re-renders nothing."""
     with Locked():
         rows, _ = fold()
         events = [stamp(actor, e) for e in plan(rows)]
         for e in events:
             append(e)
+        # A fill launched by the board renderer (DWS_NO_RERENDER=1) is not a refresh run by director: it
+        # would move the ledger file's mtime on every render and so hide the page's "ledger Nm" age.
+        if run_record is not None and not os.environ.get("DWS_NO_RERENDER"):
+            append(stamp(actor, run_record(events)))
     if events:
         rerender()
     return events
@@ -700,7 +760,8 @@ def cmd_refresh(a):
                 events.append({"event": "observe", "ws": slug, "hints": hints, "checked_at": now()})
         return events
 
-    events = write_many("refresh", plan)
+    events = write_many("refresh", plan, lambda evs: {"event": "refresh-run", "at": now(), "rows": len(slugs),
+                                                      "links": len(observed), "warnings": len(warnings)})
     for e in events:
         if e["event"] == "stage":
             print(f"{e['ws']}: {e['from']} -> {e['to']} ({e['fact']})")
@@ -717,7 +778,8 @@ def cmd_refresh(a):
 # to a row by an id its writer recorded (relay-log --ws, a relay:R-<n> link, an ask:<card>
 # link) and never by reading message text (R-186, authority-never-in-content). Each event it
 # appends carries src, the fact it consumed; the fold keeps that set per row and the fill skips
-# any src already there, so replaying the same sources writes nothing.
+# any src already there, so replaying the same sources writes nothing. Its events are observe,
+# plus the LF4 clear of an operator block whose linked card closed.
 RELAY_LOCK_TIMEOUT = 5.0
 RELAY_HEAD = re.compile(r"^## R-([0-9]+) \((\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\) -> (.+)$")
 RELAY_OUTCOME = re.compile(r"^### R-([0-9]+) outcome \((\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\)$")
@@ -862,11 +924,13 @@ def card_status(snap, card):
 
 def desk_events(row, snap, t_now, gaps):
     events = []
+    cards = []
     for link in row["links"]:
         if not ASK.match(link):
             continue
         card = link[4:]
         st = card_status(snap, card)
+        cards.append((card, st))
         if st is None:
             gaps.append(f"{row['slug']}: card {card} is not on the Desk (snapshot read {snap['read_at']})")
             continue
@@ -876,6 +940,16 @@ def desk_events(row, snap, t_now, gaps):
         events.append({"event": "observe", "ws": row["slug"], "link": link,
                        "seen": {"kind": "desk", "state": st, "read_at": snap["read_at"]},
                        "src": src, "checked_at": t_now})
+    # LF4: the card is the one source for "blocked on the operator" (K13), so when it closes
+    # the block clears. Links only accumulate, and the row does not record which of its cards
+    # set the current block, so the clear needs every ask: card on the row in a closing status:
+    # an old closed card never clears a block a later, still open card holds (review 5644084635).
+    # A card absent from the snapshot keeps the block. Only a run that read something new for
+    # the row clears it, and the next action stays director's; the hint says so.
+    if (events and row["blocked"] == "operator"
+            and all(st is not None and st in CLOSING_STATUSES for _, st in cards)):
+        events.append({"event": "set", "ws": row["slug"], "blocked": "", "src": events[0]["src"],
+                       "hint": "; ".join(f"card {c} is {st}" for c, st in cards) + "; the next action is director's"})
     return events
 
 
@@ -910,9 +984,12 @@ def cmd_refresh_local(a):
                 events.extend(desk_events(row, snap, t_now, gaps))
         return events
 
-    events = write_many("refresh", plan)
+    events = write_many("refresh", plan, lambda evs: {"event": "refresh-run", "at": t_now, "rows": len(slugs),
+                                                      "links": 0, "warnings": len(gaps), "local": True})
     for e in events:
-        if e.get("moved_at"):
+        if e["event"] == "set":
+            print(f"{e['ws']}: operator block cleared ({e['src']}); hint: {e['hint']}")
+        elif e.get("moved_at"):
             print(f"{e['ws']}: moved {e['moved_at']} ({e['src']})")
         elif e.get("link"):
             print(f"{e['ws']}: {e['link']} is {e['seen']['state']} on the Desk"
@@ -976,12 +1053,34 @@ def cmd_unlinked(a):
     print("  ask ledger: not read (W5 is not built)")
 
 
+def last_refresh(path=LEDGER):
+    """The newest refresh-run event (the run record refresh appends last, local or not), or None.
+    The fold ignores these events for every row; only this read and `show --json` use them."""
+    best = None
+    try:
+        f = open(path, "rb")
+    except FileNotFoundError:
+        return None
+    with f:
+        for line in f:
+            if b"refresh-run" not in line:
+                continue
+            try:
+                e = json.loads(line.decode("utf-8"))
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("event") == "refresh-run" and isinstance(e.get("at"), str):
+                if best is None or e["at"] >= best["at"]:
+                    best = {k: e[k] for k in ("at", "rows", "links", "warnings", "local") if k in e}
+    return best
+
+
 def cmd_show(a):
     total = {}
     rows, torn = fold(tally=total)
     ordered = sorted_rows(rows)
     if a.json:
-        json.dump({"ledger": LEDGER, "torn": torn, "tags": total, "rows": ordered}, sys.stdout, indent=2, ensure_ascii=False)
+        json.dump({"ledger": LEDGER, "torn": torn, "tags": total, "last_refresh": last_refresh(), "rows": ordered}, sys.stdout, indent=2, ensure_ascii=False)
         print()
     else:
         cols = ("stage", "workstream", "owner", "last moved", "blocked on", "next action", "links")
@@ -991,6 +1090,329 @@ def cmd_show(a):
             print("  ".join(str(c).ljust(w) for c, w in zip(row, widths)).rstrip())
     if torn:
         print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
+
+# K19: the board's generated state section (sim/design/director-functions-redesign.md,
+# section 4, "Board"). `board-state` rewrites only the text between the two markers
+# in $DIRECTOR_STATE/board.md, from the ledger and the Desk snapshot; the authored
+# narrative around it is never touched. With no markers the block is put at the top.
+# A malformed pair is refused and nothing is written. `board-check` lists the ask: and
+# ws: ids in the prose that resolve to no record; it exits 0 (a diagnostic, SOUL
+# section 8), and an id whose store is UNREAD is "not checked", never "unresolved".
+BOARD_BEGIN = "<!-- state:begin -->"
+BOARD_END = "<!-- state:end -->"
+BOARD_TOKEN = re.compile(r"\b(ask|ws):([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
+
+
+def board_path():
+    return os.path.join(STATE, "board.md")
+
+
+def board_markers(lines):
+    """(begin, end) line indexes of the one generated block, (None, None) when there is none.
+    Anything else (a lone marker, two blocks, the end first) is refused: dws never guesses
+    which text is generated."""
+    begins = [i for i, l in enumerate(lines) if l.rstrip("\r\n") == BOARD_BEGIN]
+    ends = [i for i, l in enumerate(lines) if l.rstrip("\r\n") == BOARD_END]
+    if not begins and not ends:
+        return None, None
+    if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0]:
+        raise Refused(f"{board_path()} has {len(begins)} begin and {len(ends)} end marker(s); it needs "
+                      f"none, or exactly one {BOARD_BEGIN} followed by one {BOARD_END}. Nothing was written")
+    return begins[0], ends[0]
+
+
+def board_sources():
+    """The two stores the board reads: (rows or None, ledger source, snapshot or None, desk source)."""
+    rows, lsrc = None, {"state": "UNREAD", "why": f"no ledger at {LEDGER}"}
+    if os.path.isfile(LEDGER):
+        rows, torn = fold()
+        if not rows and (torn or ledger_has_lines()):
+            rows, lsrc = None, {"state": "UNREAD", "why": f"{LEDGER} has no readable row (torn {torn})"}
+        else:
+            lsrc = {"state": "read", "torn": torn}
+    snap, why = desk_snapshot()
+    dsrc = {"state": "read", "read_at": snap["read_at"]} if snap else {"state": "UNREAD", "why": why}
+    return rows, lsrc, snap, dsrc
+
+
+def board_block(t_now):
+    rows, lsrc, snap, dsrc = board_sources()
+    out = [BOARD_BEGIN,
+           f"## State (generated {t_now} by dws board-state; it is rewritten, so edit the text outside these markers)"]
+    ltxt = f"read {t_now}" + (f" (torn {lsrc['torn']})" if lsrc.get("torn") else "") if lsrc["state"] == "read" else f"UNREAD ({lsrc['why']})"
+    dtxt = f"read {dsrc['read_at']}" if dsrc["state"] == "read" else f"UNREAD ({dsrc['why']})"
+    out.append(f"sources: ledger {ltxt}; desk {dtxt}")
+    out.append(f"open Desk cards: {len(snap['open']) if snap else 'UNREAD'}")
+    if rows is None:
+        out.append("rows: UNREAD")
+    else:
+        by = {}
+        for r in rows.values():
+            by[r["stage"]] = by.get(r["stage"], 0) + 1
+        order = [st for st in STAGES if st in by] + sorted(st for st in by if st not in STAGES)
+        out.append(f"rows: {len(rows)}" + (" (" + ", ".join(f"{st} {by[st]}" for st in order) + ")" if by else ""))
+        for r in sorted_rows(rows):
+            asks = " ".join(l for l in r["links"] if ASK.match(l))
+            blocked = f"  blocked on {stored_form(r['blocked'])}" if r["blocked"] else ""
+            out.append(f"- {r['slug']}  {r['stage']}  {r['owner'] or 'no owner'}  moved {r['last_moved']}{blocked}" + (f"  {asks}" if asks else ""))
+    out.append(BOARD_END)
+    return out
+
+
+def cmd_board_state(a):
+    path = board_path()
+    if not os.path.isfile(path):
+        raise Refused(f"no board at {path}; the board is authored and dws never creates it")
+    with Locked(path + ".lock"):
+        with open(path, "rb") as f:
+            raw = f.read()
+        lines = raw.decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
+        begin, end = board_markers(lines)
+        # the board's own line ending: CRLF when its first line ends in one, so a board
+        # kept with CRLF is not left half converted
+        eol = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+        block = [l + eol for l in board_block(now())]
+        if begin is None:
+            new = block + [eol] + lines
+        else:
+            new = lines[:begin] + block + lines[end + 1:]
+        data = "".join(new).encode("utf-8", errors="surrogateescape")
+        if data != raw:
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".board.md.tmp")
+            try:
+                os.fchmod(fd, os.stat(path).st_mode & 0o7777)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, path)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+    print(f"dws: wrote the state block in {path}")
+
+
+def cmd_board_check(a):
+    path = board_path()
+    if not os.path.isfile(path):
+        raise Refused(f"no board at {path}")
+    with open(path, "rb") as f:
+        lines = f.read().decode("utf-8", errors="replace").splitlines()
+    try:
+        begin, end = board_markers(lines)
+        note = None
+    except Refused as err:
+        begin, end, note = None, None, str(err)
+    rows, lsrc, snap, dsrc = board_sources()
+    ids = snap.get("ids") if snap and isinstance(snap.get("ids"), dict) else None
+    unresolved, not_checked, checked = [], [], 0
+    for n, line in enumerate(lines, 1):
+        if begin is not None and begin <= n - 1 <= end:
+            continue
+        for m in BOARD_TOKEN.finditer(line):
+            kind, ident = m.group(1), m.group(2)
+            token = f"{kind}:{ident}"
+            item = {"token": token, "line": n}
+            if kind == "ask":
+                if snap is None or ids is None:
+                    not_checked.append({**item, "why": "the Desk snapshot is UNREAD"})
+                    continue
+                resolved = ident in ids
+            else:
+                if rows is None:
+                    not_checked.append({**item, "why": "the ledger is UNREAD"})
+                    continue
+                resolved = ident in rows
+            checked += 1
+            if not resolved:
+                unresolved.append(item)
+    report = {"board": path, "sources": {"ledger": lsrc, "desk": dsrc}, "checked": checked,
+              "unresolved": unresolved, "not_checked": not_checked}
+    if note:
+        report["marker_problem"] = note
+    if a.json:
+        json.dump(report, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+        return
+    if note:
+        print(f"note: {note}; the whole board was read as prose")
+    print(f"board-check: {checked} id(s) checked, {len(unresolved)} unresolved, {len(not_checked)} not checked")
+    for u in unresolved:
+        print(f"unresolved   board.md:{u['line']}  {u['token']}")
+    for u in not_checked:
+        print(f"not checked  board.md:{u['line']}  {u['token']} ({u['why']})")
+
+
+# K12: `queue`, the operator's queue with the presentation check applied (design
+# section 4, Q2 and Q5 as ruled). It reads the Desk snapshot and joins each open card
+# to the ledger rows that link it (ask:<id>). A card is hidden only when it links at
+# least one PR and every linked PR is observed draft, merged or closed (R-171, R-198;
+# Q5 c: the ask stays open until director closes it, and the queue hides it till then).
+# Every other open card is shown, and a card no row links is "unclassified, shown"
+# (Q2: no cap). The snapshot holds no card kind, text or source, so the clerical-relay
+# check (R-203), the no-source check and the grouping into merges, rulings and console
+# steps are listed as "check not run", never guessed. Read only.
+QUEUE_HIDDEN_PR = ("draft", "merged", "closed")
+QUEUE_NOT_RUN = [
+    {"check": "grouping by kind", "why": "the Desk snapshot holds no card kind"},
+    {"check": "clerical relay", "why": "the Desk snapshot holds no card text (R-203)"},
+    {"check": "claims with no source", "why": "the Desk snapshot holds no card source"},
+]
+
+
+def queue_report():
+    """The queue as data: (report, snapshot). cmd_queue prints it; the digest reads it."""
+    rows, lsrc, snap, dsrc = board_sources()
+    torn = lsrc.get("torn", 0) if lsrc["state"] == "read" else 0
+    report = {"sources": {"ledger": lsrc, "desk": dsrc}, "shown": None, "hidden": None, "counts": None,
+              "not_run": QUEUE_NOT_RUN}
+    if snap is not None:
+        shown, hidden = [], []
+        for card in sorted(snap["open"]):
+            linked = [] if rows is None else [r for r in sorted(rows.values(), key=lambda r: r["slug"])
+                                              if f"ask:{card}" in r["links"]]
+            if not linked:
+                shown.append({"card": card, "kind": "unclassified",
+                              "note": "no ledger row links it" if rows is not None else "the ledger is UNREAD"})
+                continue
+            prs, unread = [], []
+            for r in linked:
+                for l in r["links"]:
+                    if l.startswith("pr:"):
+                        o = r["observed"].get(l)
+                        st = (o.get("seen") or {}).get("state") if isinstance(o, dict) else None
+                        (prs if st else unread).append({"ws": r["slug"], "link": l, "state": st,
+                                                       "checked_at": o.get("checked_at") if isinstance(o, dict) else None})
+            first = linked[0]
+            if prs and not unread and all(p["state"] in QUEUE_HIDDEN_PR for p in prs):
+                p = prs[0]
+                if torn:
+                    # a torn ledger line may hold a PR state (a ready observation that would
+                    # have kept this card), so nothing is hidden on a ledger that is not whole
+                    shown.append({"card": card, "kind": "row", "ws": first["slug"], "stage": first["stage"],
+                                  "note": f"would be hidden ({p['state']}); shown because a torn ledger line may hold a PR state (hiding stays off until that line of workstreams.jsonl is fixed or removed)"})
+                    continue
+                hidden.append({"card": card, "ws": p["ws"], "why": {"link": p["link"], "state": p["state"], "checked_at": p["checked_at"]}})
+                continue
+            item = {"card": card, "kind": "row", "ws": first["slug"], "stage": first["stage"]}
+            if unread:
+                item["note"] = "PR state unread"
+            shown.append(item)
+        report.update({"shown": shown, "hidden": hidden,
+                       "counts": {"open": len(snap["open"]), "shown": len(shown), "hidden": len(hidden)}})
+    return report, snap
+
+
+def cmd_queue(a):
+    report, snap = queue_report()
+    lsrc, dsrc = report["sources"]["ledger"], report["sources"]["desk"]
+    if a.json:
+        json.dump(report, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+        return
+    ltxt = ("read" + (f" (torn {lsrc['torn']})" if lsrc.get("torn") else "")) if lsrc["state"] == "read" else f"UNREAD ({lsrc['why']})"
+    if snap is None:
+        print(f"queue    UNREAD ({dsrc['why']}); ledger {ltxt}")
+    else:
+        print(f"queue    desk read {dsrc['read_at']}; ledger {ltxt}")
+        c = report["counts"]
+        print(f"shown {c['shown']} of {c['open']} open card(s)")
+        for x in report["shown"]:
+            where = f"unclassified ({x['note']})" if x["kind"] == "unclassified" else f"on {x['ws']} ({x['stage']})" + (f"; {x['note']}" if x.get("note") else "")
+            print(f"  {x['card']}  {where}")
+        print(f"hidden {c['hidden']} (shown again only if a linked PR is observed ready; gone once director closes the card)")
+        for x in report["hidden"]:
+            w = x["why"]
+            print(f"  {x['card']}  on {x['ws']}: {w['link']} is {w['state']} (checked {w['checked_at']})")
+    for n in QUEUE_NOT_RUN:
+        print(f"not run  {n['check']}: {n['why']}")
+
+
+# K18: `digest`, the operator digest and the close-or-kill list, rendered on demand from the
+# reconciler and the queue (design rows 8 and 9; Q1 and Q7 as ruled). Nothing runs it on a
+# clock: a session runs it. It prints to stdout and writes the same text to
+# $DIRECTOR_STATE/digest.md and nothing else: it builds the reconciler's report in memory
+# (reconcile_report) and does not write reconcile-proposals.json. The interrupt list below is the Q1 default list
+# (b), a default for the operator to edit here: an outage; a console step or a
+# recommendation expiring before the next digest; a seat blocked on your ask. An item whose
+# source a script cannot read is "check not run", and one whose store is UNREAD says UNREAD;
+# neither is ever read as "none".
+DIGEST_INTERRUPTS = (
+    ("an outage", "no outage source a script can read"),
+    ("a console step or a recommendation expiring before the next digest",
+     "the Desk snapshot holds no card expiry and recommendations have no store"),
+    ("a seat blocked on your ask", None),
+)
+
+
+def cmd_digest(a):
+    t_now = now()
+    rec, _ = reconcile_report()
+    queue, snap = queue_report()
+    rows, lsrc, _, _ = board_sources()
+    src = rec["sources"]
+
+    def stext(v):
+        return f"read {v['read_at']}" if v["state"] == "read" else f"UNREAD ({v['why']})"
+
+    out = [f"# Digest, generated {t_now} by dws digest (on demand)", "",
+           "sources: " + "; ".join(f"{k} {stext(v)}" for k, v in sorted(src.items())), "",
+           "## Interrupts",
+           "The default list (Q1 b); the operator edits DIGEST_INTERRUPTS in dws."]
+    for item, why in DIGEST_INTERRUPTS:
+        if why is not None:
+            out.append(f"- {item}: check not run ({why})")
+        elif snap is None or rows is None:
+            out.append(f"- {item}: UNREAD ({'the Desk snapshot' if snap is None else 'the ledger'} is UNREAD)")
+        else:
+            blocked = [f"{r['slug']} (card {l[4:]})" for r in sorted_rows(rows) if operator_blocked(r["blocked"])
+                       for l in r["links"] if ASK.match(l) and l[4:] in snap["open"]]
+            out.append(f"- {item}: " + (", ".join(blocked) if blocked else "none"))
+    out += ["", "## Queue"]
+    if queue["counts"] is None:
+        out.append(f"UNREAD ({queue['sources']['desk']['why']})")
+    else:
+        c = queue["counts"]
+        out.append(f"{c['open']} open, {c['shown']} shown, {c['hidden']} hidden by the presentation check (dws queue lists them)")
+    out += ["", "## Close-or-kill"]
+    unmoved = [p for p in rec["proposals"] if p["kind"] == "unmoved"]
+    if any(n["check"] == "unmoved" for n in rec["not_run"]):
+        out.append("UNREAD (the ledger is UNREAD)")
+    elif not unmoved:
+        out.append("none")
+    for p in unmoved:
+        ev = p.get("evidence", {})
+        out.append(f"- {p['subject']}  {ev.get('stage', '')}  {p['why']}")
+    out += ["", "## Other proposals"]
+    others = [p for p in rec["proposals"] if p["kind"] != "unmoved"]
+    if not others:
+        out.append("none")
+    for p in others:
+        out.append(f"- {p['kind']}: {p['subject']}  {p['why']}")
+    out += ["", "## Not run"]
+    for n in rec["not_run"] + queue["not_run"]:
+        out.append(f"- {n['check']}: {n['why']}")
+    text = "\n".join(out) + "\n"
+    os.makedirs(STATE, exist_ok=True)
+    path = os.path.join(STATE, "digest.md")
+    fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".digest.md.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    sys.stdout.write(text)
+
 
 # K9: rulings.jsonl, the store of rulings, grants and terms (R-201, R-204, R-184).
 # The file is the one merge-guard reads for exclusions (R-153); exclusions stay
@@ -1158,6 +1580,103 @@ def cmd_records(a):
             print(f"unresolved replaces: {u['id']} -> {u['replaces']} ({u['why']})")
     if torn:
         print(f"dws: {torn} unreadable line(s) in {path} skipped, not repaired", file=sys.stderr)
+
+
+# K15: `inherit <role>`, the by-role read a successor makes (R-204). Read only.
+# Standing terms and the grants made to the role come from rulings.jsonl, the
+# open asks from the ledger rows the role owns that link a card open on the Desk.
+# A source that cannot be read is UNREAD and its section is None, never empty.
+# The role is matched as stored: the same string the term, grant or row carries.
+def grant_end(g):
+    exp = g.get("expires")
+    if not isinstance(exp, str):
+        return None
+    try:
+        end = datetime.datetime.strptime(exp, "%Y-%m-%dT%H:%M:%SZ" if "T" in exp else "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+    # A date-only expiry holds through the end of that day, as in reconcile.
+    return end if "T" in exp else end + datetime.timedelta(days=1)
+
+
+def cmd_inherit(a):
+    role = checked("role", a.role)
+    when = parse_time(now())
+    sources = {}
+    path = rulings_path()
+    terms = replaced_terms = grants = pending = expired = unchecked = None
+    if os.path.isfile(path):
+        records, rtorn, _ = fold_records(path)
+        if rtorn and not records:
+            sources["rulings"] = {"state": "UNREAD", "why": f"{path} has no readable record (torn {rtorn})"}
+        else:
+            sources["rulings"] = {"state": "read", "read_at": now(), "torn": rtorn}
+    else:
+        records = []
+        sources["rulings"] = {"state": "UNREAD", "why": f"no rulings file at {path}"}
+    if sources["rulings"]["state"] == "read":
+        terms, replaced_terms, grants, pending, expired, unchecked = [], [], [], [], [], []
+        for r in records:
+            if r.get("kind") == "term" and r.get("role") == role:
+                if r["replaced_by"]:
+                    replaced_terms.append({"id": r.get("id"), "text": r.get("text"), "replaced_by": r["replaced_by"]})
+                else:
+                    terms.append({"id": r.get("id"), "subject": r.get("subject"), "text": r.get("text"), "set_by": r.get("set_by")})
+            elif r.get("kind") == "grant" and r.get("to") == role and not r["replaced_by"]:
+                item = {"id": r.get("id"), "subject": r.get("subject"), "scope": r.get("scope"),
+                        "expires": r.get("expires"), "text": r.get("text")}
+                end = grant_end(r)
+                if r.get("state") == "draft":
+                    pending.append(item)
+                elif r.get("state") == "confirmed":
+                    if end is None and isinstance(r.get("expires"), str):
+                        # reconcile lists this grant as not run; it is not claimed to be in force
+                        item["why"] = f"the expiry {r['expires']!r} does not parse"
+                        unchecked.append(item)
+                    else:
+                        (expired if end is not None and end < when else grants).append(item)
+
+    open_asks = None
+    snap, why = desk_snapshot()
+    sources["desk"] = ({"state": "read", "read_at": snap["read_at"]} if snap else {"state": "UNREAD", "why": why})
+    if os.path.isfile(LEDGER):
+        rows, ltorn = fold()
+        if not rows and (ltorn or ledger_has_lines()):
+            sources["ledger"] = {"state": "UNREAD", "why": f"{LEDGER} has no readable row (torn {ltorn})"}
+        else:
+            sources["ledger"] = {"state": "read", "read_at": now(), "torn": ltorn}
+        if snap is not None and sources["ledger"]["state"] == "read":
+            open_asks = [{"ws": row["slug"], "card": l[4:]} for row in sorted(rows.values(), key=lambda r: r["slug"])
+                         if row.get("owner") == role for l in row["links"]
+                         if ASK.match(l) and card_status(snap, l[4:]) == "open"]
+    else:
+        sources["ledger"] = {"state": "UNREAD", "why": f"no ledger at {LEDGER}"}
+
+    out = {"role": role, "sources": sources, "terms": terms, "replaced_terms": replaced_terms, "grants": grants,
+           "pending_grants": pending, "expired_grants": expired, "unchecked_grants": unchecked,
+           "open_asks": open_asks}
+    if a.json:
+        json.dump(out, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+        return
+    for name in ("rulings", "ledger", "desk"):
+        v = sources[name]
+        print(f"{name:<8} " + (f"read {v['read_at']}" + (f" (torn {v['torn']})" if v.get("torn") else "") if v["state"] == "read" else f"UNREAD  {v['why']}"))
+
+    def section(title, items, fmt):
+        if items is None:
+            print(f"{title}: UNREAD")
+            return
+        print(f"{title}: {len(items)}")
+        for i in items:
+            print("  " + fmt(i))
+    section("standing terms", terms, lambda t: f"{t['id']}  {t['text']}")
+    section("replaced terms (not standing)", replaced_terms, lambda t: f"{t['id']}  replaced by {', '.join(map(str, t['replaced_by']))}")
+    section("grants in force", grants, lambda g: f"{g['id']}  {g['subject']}  scope: {g['scope']}  expires: {g['expires'] or 'no expiry'}")
+    section("grants pending confirmation", pending, lambda g: f"{g['id']}  {g['subject']}")
+    section("grants with an unparseable expiry (not in force, check not run)", unchecked, lambda g: f"{g['id']}  {g['subject']}  expires: {g['expires']}")
+    section("grants expired", expired, lambda g: f"{g['id']}  {g['subject']}  expired {g['expires']}")
+    section("open asks", open_asks, lambda x: f"{x['card']}  on {x['ws']}")
 
 
 # K14: rings.jsonl, keyed by seat (R-200, Q6). A ring, its first turn, its ack and
@@ -1421,7 +1940,9 @@ def reconcile_proposals_path():
     return os.path.join(STATE, "reconcile-proposals.json")
 
 
-def cmd_reconcile(a):
+def reconcile_report():
+    """The reconciler's report and the ledger's torn count, built from the stores and written nowhere.
+    cmd_reconcile writes the proposals file; the digest reads the report and writes only digest.md."""
     t_now = now()
     when = parse_time(t_now)
     sources, not_run, proposals = {}, [], []
@@ -1545,6 +2066,12 @@ def cmd_reconcile(a):
     unread = sorted(k for k, v in sources.items() if v["state"] == "UNREAD")
     queue = {"count": len(desk_open) if desk_open is not None else None, "at_least": bool(unread)}
     report = {"read_at": t_now, "sources": sources, "queue": queue, "proposals": proposals, "not_run": not_run}
+    return report, torn
+
+
+def cmd_reconcile(a):
+    report, torn = reconcile_report()
+    sources, queue, proposals, not_run = report["sources"], report["queue"], report["proposals"], report["not_run"]
 
     out = a.out or reconcile_proposals_path()
     tmp = f"{out}.{os.getpid()}.tmp"
@@ -1581,6 +2108,273 @@ def cmd_reconcile(a):
     for n in not_run:
         print(f"not run  {n['check']}  {n['why']}")
     print(f"proposals written to {out}; no record was written")
+    if torn:
+        print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
+
+
+# D1: seat decisions (sim/design/seat-decisions.md, section 3). A decision is a run of
+# events in workstreams.jsonl with "event": "decision" and an "op": add, then actual,
+# confirm, override or rework. They are folded beside the rows under the same lock, so
+# D2's wait edges can be checked against the decisions in one fold. director writes
+# every event from the seat's seat-decision@1 message; the seat stays the author of the
+# content. No move happens on a clock: a skip is no command, and the state stays.
+DECISION_FORMAT = "seat-decision@1"
+DECISION_FIELDS = ("id", "seat", "question", "options", "chosen", "test", "estimate", "undo", "changes")
+# <seat label>-<YYYYMMDD>-<n>, lower case. A seat label may carry a team prefix (team-a/builder).
+DECISION_ID = re.compile(r"^([a-z0-9][a-z0-9._/-]*)-([0-9]{8})-([0-9]+)$")
+# card 1: the eight-line test, each line ok; a failed line sends the choice to the Desk
+DECISION_TEST = re.compile(r"^" + r"[ ,;]+".join(f"{n} ok" for n in range(1, 9)) + r"$")
+# card 2: at most 4 seat-hours in total, dependent work included
+DECISION_ESTIMATE_MAX = 4
+HOURS = re.compile(r"^([0-9]+(?:\.[0-9]+)?) ?h?$")
+# The only moves (section 3): op -> (from, to). Anything else is no move, on write or on read.
+DECISION_MOVES = {"confirm": ("decided-by-seat", "confirmed"),
+                  "override": ("decided-by-seat", "overridden"),
+                  "rework": ("overridden", "reworked")}
+# card 1: a two-week trial; its start is given to --daily, never held in the ledger
+TRIAL_DAYS = 14
+
+
+def apply_decision(decisions, e):
+    """One decision event into the decisions dict. An add for an id already held
+    and a move from the wrong state are not applied: add refuses both on write,
+    and a hand-written line cannot make a move the table does not have."""
+    op, did, ts = e.get("op"), e.get("id"), e.get("ts", "")
+    if op == "add":
+        if not isinstance(did, str) or did in decisions:
+            return
+        decisions[did] = {"id": did, **{k: e.get(k) for k in ("seat", "question", "options", "chosen", "reason",
+                                                             "test", "estimate_h", "undo")},
+                          "changes": list(e.get("changes", [])), "actual_h": None, "actual_source": None,
+                          "state": "decided-by-seat", "added": ts, "moves": []}
+        return
+    d = decisions.get(did)
+    if d is None:
+        return
+    if op == "actual":
+        d["actual_h"], d["actual_source"] = e.get("hours"), e.get("source")
+    elif op in DECISION_MOVES and d["state"] == DECISION_MOVES[op][0]:
+        d["state"] = DECISION_MOVES[op][1]
+        d["moves"].append({"to": d["state"], "ts": ts,
+                           **{k: e[k] for k in ("words", "ref", "instead") if k in e}})
+
+
+def decision_block(text):
+    """The fields of one seat-decision@1 block, or Refused. A leading line naming the
+    format is allowed; every other non-blank line is 'field: value', each field once."""
+    lines = [l for l in text.splitlines() if l.strip()]
+    if lines and lines[0].strip() == DECISION_FORMAT:
+        lines = lines[1:]
+    fields = {}
+    for line in lines:
+        key, sep, value = line.partition(":")
+        key = key.strip()
+        if not sep or not key:
+            raise Refused(f"line {line.strip()!r} is not a 'field: value' line of {DECISION_FORMAT}")
+        if key not in DECISION_FIELDS:
+            raise Refused(f"unknown field {key!r}; {DECISION_FORMAT} fields are {', '.join(DECISION_FIELDS)}")
+        if key in fields:
+            raise Refused(f"field {key!r} is repeated; each field is given once")
+        fields[key] = value
+    missing = [k for k in DECISION_FIELDS if not stored_form(fields.get(k, ""))]
+    if missing:
+        raise Refused(f"field(s) missing or empty: {', '.join(missing)}")
+    return fields
+
+
+def decision_event(fields):
+    """The add event's fields from a parsed block, each through checked() so no
+    instance id is stored; Refused when the id, test, estimate or chosen line is not
+    in its form."""
+    did = checked("id", fields["id"])
+    if not DECISION_ID.match(did):
+        raise Refused(f"id {did!r} is not <seat label>-<YYYYMMDD>-<n> in lower case")
+    try:
+        datetime.datetime.strptime(DECISION_ID.match(did).group(2), "%Y%m%d")
+    except ValueError:
+        raise Refused(f"id {did!r} does not carry a real date as YYYYMMDD")
+    chosen, because, reason = checked("chosen", fields["chosen"]).partition(" because ")
+    if not because or not chosen.strip() or not reason.strip():
+        raise Refused("chosen has no ' because <reason>'; the line reads chosen: <option> because <reason>")
+    test = checked("test", fields["test"])
+    if not DECISION_TEST.match(test.lower()):
+        raise Refused(f"test {test!r} does not read 1 ok to 8 ok; a decision that fails a line of the "
+                      "eight-line test goes to the Desk, not the ledger")
+    m = HOURS.match(checked("estimate", fields["estimate"]))
+    if not m:
+        raise Refused(f"estimate {fields['estimate'].strip()!r} is not a number of seat-hours")
+    estimate = float(m.group(1))
+    if estimate > DECISION_ESTIMATE_MAX:
+        raise Refused(f"estimate {estimate:g}h is over {DECISION_ESTIMATE_MAX} seat-hours (card 2); "
+                      "a larger choice goes to the Desk")
+    changes = [decision_link(typed_link(checked("changes", x))) for x in stored_form(fields["changes"]).split(" ")]
+    return {"event": "decision", "op": "add", "id": did, "seat": checked("seat", fields["seat"]),
+            "question": checked("question", fields["question"]), "options": checked("options", fields["options"]),
+            "chosen": chosen.strip(), "reason": reason.strip(), "test": test, "estimate_h": estimate,
+            "undo": checked("undo", fields["undo"]), "changes": changes}
+
+
+DECISION_LINK_KINDS = ("pr:", "issue:", "bd:", "relay:", "msg:")
+
+
+def decision_link(link):
+    """A changes entry is one of the typed link kinds, and one that starts with pr:,
+    issue: or bd: must fully match LINK, so a comma list is not stored as one link.
+    relay: and msg: keep typed_link's checks. ask: is left out: a Desk card is not a
+    change. Row links (typed_link, dws link) are unchanged."""
+    if not link.startswith(DECISION_LINK_KINDS):
+        raise Refused(f"changes link {link!r} is not a typed link; give pr:, issue:, bd:, relay: or msg: "
+                      "links, separated by spaces")
+    if link.startswith(("pr:", "issue:", "bd:")) and not LINK.fullmatch(link):
+        raise Refused(f"changes link {link!r} is not pr:<owner>/<repo>#<n>, issue:<owner>/<repo>#<n> "
+                      "or bd:<id>; give each link once, separated by spaces")
+    return link
+
+
+def write_decision(actor, event, check):
+    """Fold, check, append under the ledger lock, as write() does for rows;
+    check(decisions) raises Refused."""
+    event = stamp(actor, event)
+    with Locked():
+        decisions = {}
+        fold(decisions=decisions)
+        check(decisions)
+        append(event)
+    rerender()
+
+
+def need_decision(decisions, did):
+    if did not in decisions:
+        raise Refused(f"no decision {did!r}; add it first with dws decision add --from FILE")
+    return decisions[did]
+
+
+def cmd_decision_add(a):
+    try:
+        with open(a.from_, encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, UnicodeDecodeError) as err:
+        raise Refused(f"cannot read {a.from_} ({type(err).__name__}); nothing written")
+    ev = decision_event(decision_block(text))
+
+    def check(decisions):
+        if ev["id"] in decisions:
+            raise Refused(f"decision {ev['id']!r} is already in the ledger; nothing written")
+    write_decision(a.actor, ev, check)
+    print(f"dws: wrote decision {ev['id']} (decided-by-seat)")
+
+
+def cmd_decision_actual(a):
+    m = HOURS.match(stored_form(a.hours))
+    if not m:
+        raise Refused(f"--hours {a.hours!r} is not a number of seat-hours")
+    ev = {"event": "decision", "op": "actual", "id": a.id, "hours": float(m.group(1)),
+          "source": checked("source", nonblank("source", a.source))}
+    write_decision(a.actor, ev, lambda decisions: need_decision(decisions, a.id))
+    print(f"dws: recorded {float(m.group(1)):g}h actual for decision {a.id}")
+
+
+def decision_move(a, op, extra=None):
+    """confirm, override or rework: Refused unless the decision is in the move's from state."""
+    frm, to = DECISION_MOVES[op]
+    ev = {"event": "decision", "op": op, "id": a.id, **(extra or {})}
+    held = {}
+
+    def check(decisions):
+        d = need_decision(decisions, a.id)
+        if d["state"] != frm:
+            why = "rework follows an override only" if op == "rework" else \
+                "a confirm or override answers an unconfirmed decision only"
+            raise Refused(f"decision {a.id!r} is {d['state']!r}, not {frm!r}; {why}")
+        held.update(d)
+    write_decision(a.actor, ev, check)
+    print(f"dws: decision {a.id} {to}")
+    return held
+
+
+def operator_words(a):
+    # The operator's words are stored as given, never normalized (R-150, R-186).
+    return {"words": nonblank("words", a.words), "ref": stored_form(nonblank("ref", a.ref))}
+
+
+def cmd_decision_confirm(a):
+    decision_move(a, "confirm", operator_words(a))
+
+
+def cmd_decision_override(a):
+    d = decision_move(a, "override", {**operator_words(a), "instead": stored_form(nonblank("instead", a.instead))})
+    # D1 prints the decision's own changes; the rows that wait on it come with D2's edges.
+    print("the decision's own changes (rows that wait on it are not tracked until D2):")
+    for link in d["changes"]:
+        print(f"  {link}")
+
+
+def cmd_decision_rework(a):
+    # State checks only in D1; D2 adds the refusal while an affected row is open.
+    decision_move(a, "rework")
+
+
+def decision_at_risk(d):
+    """The seat-hours an override would throw away: actual_h where recorded, else estimate_h."""
+    h = d.get("actual_h") if d.get("actual_h") is not None else d.get("estimate_h")
+    return h if isinstance(h, (int, float)) else 0
+
+
+def decision_view(d, t_now):
+    added = parse_ts(d.get("added"))
+    age = max(0, int((t_now - added).total_seconds() // 86400)) if added else None
+    # No wait edges exist before D2, so nothing waits on any decision yet.
+    return {**d, "age_days": age, "waiting": 0, "at_risk_h": decision_at_risk(d)}
+
+
+def decision_order(v):
+    """Card 4's order for the unconfirmed: most waiting first, then oldest, then most
+    seat-hours at risk; ties by seat label, date, then <n> as a number. A full window,
+    which sorts first, needs D2's edges."""
+    m = DECISION_ID.match(v["id"])
+    tie = (m.group(1), m.group(2), int(m.group(3))) if m else (v["id"], "", 0)
+    return (-v["waiting"], v.get("added") or "", -v["at_risk_h"]) + tie
+
+
+def cmd_decisions(a):
+    decisions = {}
+    _, torn = fold(decisions=decisions)
+    t_now = parse_time(now())
+    views = [decision_view(d, t_now) for d in decisions.values()]
+    open_ = sorted((v for v in views if v["state"] == "decided-by-seat"), key=decision_order)
+    rest = sorted((v for v in views if v["state"] != "decided-by-seat"), key=lambda v: (v.get("added") or "", v["id"]))
+    listed = open_ if a.unconfirmed else open_ + rest
+    if a.daily:
+        today = t_now.date()
+        if a.trial_start is None:
+            day = "trial day unknown (no --trial-start)"
+        else:
+            try:
+                start = datetime.datetime.strptime(a.trial_start, "%Y-%m-%d").date()
+                day = f"trial day {(today - start).days + 1} of {TRIAL_DAYS}"
+            except ValueError:
+                day = f"trial day unknown (--trial-start {a.trial_start!r} is not YYYY-MM-DD)"
+        new = sum(1 for v in views if (v.get("added") or "")[:10] == today.isoformat())
+        confirmed = sum(1 for v in views if v["state"] == "confirmed")
+        overridden = [v for v in views if v["state"] in ("overridden", "reworked")]
+        rework = sum(v["at_risk_h"] for v in overridden)
+        print(f"Seat decisions ({day}): {new} new today, {len(views)} total, {confirmed} confirmed, "
+              f"{len(overridden)} overridden, rework {rework:g} seat-hours.")
+        print("Unconfirmed, most work held first:")
+        for v in open_:
+            print(f"  {v['id']}  {v['waiting']} waiting, {v['age_days']}d old, {v['at_risk_h']:g}h at risk: {v['question']}")
+        if not open_:
+            print("  none")
+    elif a.json:
+        json.dump({"ledger": LEDGER, "torn": torn, "decisions": listed}, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        cols = ("state", "decision", "seat", "age", "estimate", "actual", "question")
+        table = [cols] + [(v["state"], v["id"], v["seat"], f"{v['age_days']}d", f"{v['estimate_h']:g}h",
+                           "" if v["actual_h"] is None else f"{v['actual_h']:g}h", v["question"]) for v in listed]
+        widths = [max(len(str(row[i])) for row in table) for i in range(len(cols))]
+        for row in table:
+            print("  ".join(str(c).ljust(w) for c, w in zip(row, widths)).rstrip())
     if torn:
         print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
 
@@ -1638,6 +2432,20 @@ def main(argv):
     ul.add_argument("--since", help="only relay entries stamped on or after YYYY-MM-DD")
     ul.set_defaults(fn=cmd_unlinked)
 
+    bs = sub.add_parser("board-state", help="rewrite the generated state block in board.md between its markers (K19)")
+    bs.set_defaults(fn=cmd_board_state)
+
+    bc = sub.add_parser("board-check", help="list the ask: and ws: ids in the board prose that resolve to no record; exits 0 (K19)")
+    bc.add_argument("--json", action="store_true")
+    bc.set_defaults(fn=cmd_board_check)
+
+    qu = sub.add_parser("queue", help="the operator's queue: open Desk cards with the presentation check applied; read only (K12)")
+    qu.add_argument("--json", action="store_true")
+    qu.set_defaults(fn=cmd_queue)
+
+    dg = sub.add_parser("digest", help="the operator digest and close-or-kill list, rendered on demand to stdout and digest.md (K18)")
+    dg.set_defaults(fn=cmd_digest)
+
     w = sub.add_parser("show")
     w.add_argument("--json", action="store_true")
     w.set_defaults(fn=cmd_show)
@@ -1673,6 +2481,11 @@ def main(argv):
     rr.add_argument("--kind", choices=RECORD_KINDS)
     rr.set_defaults(fn=cmd_records)
 
+    ih = sub.add_parser("inherit", help="what a successor inherits for a role: terms, grants, open asks (K15)")
+    ih.add_argument("role")
+    ih.add_argument("--json", action="store_true")
+    ih.set_defaults(fn=cmd_inherit)
+
     rg = sub.add_parser("ring", help="record a ring of an idle seat with mail; at most 3 an hour (K14). --idle-minutes and --mail are the caller's claims; dws cannot see either")
     rg.add_argument("seat")
     rg.add_argument("--idle-minutes", dest="idle_minutes", type=int, required=True,
@@ -1706,6 +2519,35 @@ def main(argv):
     rc2.add_argument("--json", action="store_true")
     rc2.add_argument("--out", help="the proposals file (default $DIRECTOR_STATE/reconcile-proposals.json)")
     rc2.set_defaults(fn=cmd_reconcile)
+
+    dc = sub.add_parser("decision", help="record a seat decision and its answer (D1); actor director")
+    ds = dc.add_subparsers(dest="op", required=True)
+    da = ds.add_parser("add", help="parse one seat-decision@1 block and append it as decided-by-seat")
+    da.add_argument("--from", dest="from_", required=True, metavar="FILE")
+    da.set_defaults(fn=cmd_decision_add)
+    dh = ds.add_parser("actual", help="record the actual seat-hours and where the figure came from")
+    dh.add_argument("id")
+    dh.add_argument("--hours", required=True)
+    dh.add_argument("--source", required=True)
+    dh.set_defaults(fn=cmd_decision_actual)
+    for op, fn in (("confirm", cmd_decision_confirm), ("override", cmd_decision_override)):
+        dm = ds.add_parser(op, help=f"record the operator's {op} of a decided-by-seat decision")
+        dm.add_argument("id")
+        dm.add_argument("--words", required=True, help="the operator's words, stored as given")
+        dm.add_argument("--ref", required=True, help="the relay id the answer came in")
+        if op == "override":
+            dm.add_argument("--instead", required=True, help="what the operator chose instead")
+        dm.set_defaults(fn=fn)
+    dr = ds.add_parser("rework", help="mark an overridden decision reworked")
+    dr.add_argument("id")
+    dr.set_defaults(fn=cmd_decision_rework)
+
+    dl = sub.add_parser("decisions", help="list seat decisions; --daily prints the daily line; writes nothing (D1)")
+    dl.add_argument("--json", action="store_true")
+    dl.add_argument("--unconfirmed", action="store_true", help="decided-by-seat only, in card 4's order")
+    dl.add_argument("--daily", action="store_true", help="the trial's daily line and the unconfirmed list")
+    dl.add_argument("--trial-start", dest="trial_start", metavar="YYYY-MM-DD", help="the trial's first day, for --daily")
+    dl.set_defaults(fn=cmd_decisions)
 
     a, extra = p.parse_known_args(argv)
     if extra and not (a.cmd == "record" and a.kind == "exclusion"):

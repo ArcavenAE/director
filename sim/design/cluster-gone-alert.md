@@ -1,7 +1,8 @@
 # The cluster-gone alert: lost after a bound, one parent for a hub move, one key with leaf-down
 
-Status: design for review, 2026-10-20. Owner: the architect role. Docs only;
-no code lands until this is reviewed.
+Status: design for review, 2026-10-20; section 6 amended 2026-10-20 after
+review 5586449061 on #353 (section 6, "Amended"). Owner: the architect role.
+Docs only; no code lands until this is reviewed.
 
 - Ticket: aae-orc-cashp (ticket 8 of the cluster-address party).
 - Rulings: the cluster-address party outcome, 2026-10-08 (K7, O4, O6), ruled by
@@ -155,17 +156,55 @@ The cheaper alternative, a director-only row with no marvel stamp, is option
 (provisional default 2) that were present go absent within
 `presence_hub_move_window` (provisional default 2 minutes), and those are every
 cluster that was present apart from this director's own, the watch opens one
-`hub-moved` parent instead of per-cluster absences. While it is open:
+`hub-moved` parent instead of per-cluster absences. The parent lists those
+clusters. A listed cluster is **still out** until the watch first sees it
+present on a sighted pass, by either of the two events that set a cluster
+present: `back`, or `present-after-gap` on the first pass after a watch gap
+(which is not a return, since no transition is inferred across a gap;
+section 2). It then leaves the still-out set for good. An `asleep` cluster is
+not present and stays still out. While the parent is open:
 
-- per-cluster `absent` and `lost` events are recorded in the event file,
-  marked collapsed, and left out of the notices (the flap collapse's mechanism,
-  `presencewatch.go:174-189`);
-- each cluster that returns raises `back` as usual, and the parent lists the
-  clusters still out;
-- the parent closes when every listed cluster is back, or after
-  `presence_hub_move_window` passes with none back, at which point it converts
-  into per-cluster `lost` alerts at their own bounds (so a real multi-cluster
-  loss is not hidden behind a parent).
+- the `absent` and `lost` events of a still-out listed cluster are recorded in
+  the event file, marked collapsed, and left out of the notices (the flap
+  collapse's mechanism, `presencewatch.go:174-189`). Every other cluster's
+  events, including a listed cluster that was seen present and left again,
+  are raised as usual and never collapsed;
+- the event that takes a listed cluster out of the still-out set, `back` or
+  `present-after-gap`, names the listed clusters still out, so the reader has
+  a line naming them. That one event is shown even during the cluster's flap
+  spell (it can happen at most once per listed cluster per parent, so it
+  cannot flood); any later event of that cluster follows the flap collapse as
+  usual;
+- the parent closes when no listed cluster is still out. Its closing notice
+  says every listed cluster is seen present, not that each returned, and
+  names any that were seen present only after a watch gap. A listed cluster
+  that was seen present and left again counts as seen for this parent, and
+  its new absence is its own, never converted with the stragglers. When
+  `presence_hub_move_window` has passed since the parent opened and any listed
+  cluster is still out, the parent closes and converts: each still-out cluster
+  that is absent gets its own per-cluster `lost` at its own bound, raised at
+  once if the bound has already passed (so a real loss is not hidden behind a
+  parent, whether none, some or all of the other listed clusters returned). A
+  still-out cluster that is `asleep` at conversion gets no `lost` while it
+  sleeps, since declared sleep is not loss (section 5); the conversion notice
+  names it as asleep, and it raises `lost` later only if it goes absent and
+  reaches its bound. This is a guard, not a path the watch reaches today: a
+  parent lists only clusters that are absent; an instance becomes asleep only
+  from present, and a cluster is asleep only when every instance is; and no
+  unit is ever removed. So a listed cluster reaches asleep only through a
+  present instance, which ends its still-out state first. The rule keeps a
+  state file from another version, or a later change to those paths, from
+  converting an asleep cluster into a `lost`.
+
+**Amended 2026-10-20.** As first written, the parent converted only "after
+`presence_hub_move_window` passes with none back", and the collapse covered
+every cluster's `absent` and `lost`. Review 5586449061 on #353 found that,
+built to that letter, a partial return leaves the parent open until the last
+listed cluster returns: a cluster that is really gone never pages, and neither
+does a cluster outside the parent that leaves while it is open. Section 7 made
+it worse, since a leaf-down copy for a listed cluster folds into an open
+parent. The window now bounds the parent's life from its opening, conversion
+covers the clusters still out, and the collapse covers only those clusters.
 
 Both numbers are threshold-table rows, so the probe K7 calls for sets them
 without a code change. Until a probe reports, the defaults are marked
@@ -176,6 +215,13 @@ provisional in the table's comments.
 says how many were recorded and not shown, and points at the event file.
 Nothing is dropped from the file. `back` is never capped, so a recovery always
 reaches the reader who heard the outage.
+
+The cap is one count across all clusters, not per cluster, so once the hour's
+cap is reached a first `lost` for another cluster is held back too; a
+leaf-down copy for that cluster still pages (section 7, rule 2). The cap's
+hour is wall-clock time: host sleep counts toward it, unlike the `lost` bound,
+because the cap limits how many notices the reader gets per hour of the
+reader's time.
 
 ## 7. One key with `bus.leaf.down` (O4), without suppressing the only page
 
@@ -206,8 +252,8 @@ copies the sink already holds:
    **Only a shown item is a fold target**: one whose notice reached its
    reader. Exactly two items are open and shown:
    - a per-cluster `lost` whose notice went out;
-   - an open `hub-moved` parent whose notice went out, for each cluster it
-     lists (its notice names that cluster).
+   - an open `hub-moved` parent whose notice went out, for each listed
+     cluster still out (its notice names that cluster).
 
    Not fold targets:
    - a `lost` held back by the section 6 cap ("recorded and not shown");
@@ -255,7 +301,26 @@ All in director unless named. Each starts with a one-command premise check.
    with one event; a cluster value of 720h is clamped to the maximum with one
    event; a bad `presence_lost_after` row in `thresholds.json` keeps 30m, raises
    one notice, and the watch starts.
-3. **C3. Parent and cap** (section 6), on C2.
+3. **C3. Parent and cap** (section 6), on C2. Tests beyond the plain
+   parent and cap:
+   - **partial return:** a parent lists c1, c2 and c3; c1 returns, and its
+     `back` names c2 and c3 as still out; at the window, the parent closes and
+     c2 and c3 each raise a shown `lost` at their own bounds;
+   - **outside the parent:** while a parent listing c1 and c2 is open, c4
+     goes absent; its `absent` and `lost` are shown, not collapsed;
+   - **back and gone again:** a listed cluster returns, then leaves while the
+     parent is still open; its new `absent` is shown;
+   - **cap clock:** host sleep inside the hour counts toward the cap's hour.
+   - **seen after a gap:** a listed cluster first seen present after a watch
+     gap leaves the still-out set with `present-after-gap` and no `back`; that
+     event names the clusters still out, and when it is the last, the closing
+     notice says seen present and names it;
+   - **asleep straggler (guard):** a still-out cluster asleep at conversion
+     gets no `lost`, and the conversion notice names it as asleep. No
+     sequence of passes reaches this state, so the test sets the unit's status
+     directly and says it is a guard;
+   - **back in a flap spell:** a listed cluster's `back` during its flap spell
+     is shown and names the clusters still out.
 4. **C4. The key** (section 7): `dedupe_key` on the hub-side notices, and the
    sink fold for director's own sink. Tests:
    - a copy with no open item pages;

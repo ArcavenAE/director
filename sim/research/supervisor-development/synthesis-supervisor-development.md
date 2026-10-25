@@ -162,7 +162,7 @@ The workplace lane adds the rhythm and the failure mode. Status runs upward on
 a fixed cadence and against the agreed plan and its tolerances, with the level
 above staying out until a tolerance is at risk [@prince2_exception]; the
 recurring one-on-one is the human channel for it, weekly to biweekly, tightened
-for new or struggling reports [@gallup_oneonone]. The failure mode to design
+for new or struggling reports [@gallup-great-manager-2023]. The failure mode to design
 against is watermelon reporting: green on the outside, red inside, caused not
 by dishonesty but by a culture where amber or red draws blame rather than help;
 the fix is to anchor status to observable deliverables and real data feeds that

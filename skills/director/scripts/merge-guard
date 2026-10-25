@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # merge-guard - the fail-closed read before any merge (R-152).
 #
-#   merge-guard <owner/repo> <number>
+#   merge-guard [--allow-base <branch>] <owner/repo> <number>
 #
 # Prints one line and exits:
 #   PROCEED <repo>#<n> @<head sha>: ...   exit 0. Merge with
@@ -21,7 +21,7 @@
 #
 # It proceeds only when every read succeeds and says yes: the PR is OPEN (read
 # first, since a merged PR reports an UNKNOWN merge state, R-157), not a draft
-# (R-148), its merge state is CLEAN, every reported check passed, a non-author
+# (R-148), based on the repo's default branch, its merge state is CLEAN, every reported check passed, a non-author
 # approved the current head after it reached GitHub and no reviewer's latest
 # review, on any commit, requests changes (director#159). An open PR based on
 # its head branch (stacked-pr-merge-order) does not stop it: it changes the
@@ -31,6 +31,14 @@
 # output. UNKNOWN is GitHub still computing mergeability, so it is re-read
 # MERGE_GUARD_RETRIES times (default 3), MERGE_GUARD_DELAY seconds apart
 # (default 5), and stops if it never resolves.
+#
+# The base: a PR whose baseRefName is not the repo's default branch STOPs, because a merge
+# into another branch lands the change in a parent's branch and never on the default
+# (two stacked PRs were merged that way when their bases were not retargeted). The default
+# comes from gh repo view --json defaultBranchRef with the repo named. A stacked PR may be
+# merged into its parent only when the caller passes --allow-base <that exact base name>;
+# a different name, or the default's own name for another base, does not allow it. The
+# flag waives this check alone. A default branch that cannot be read STOPs.
 #
 # An empty check list after a successful read is an answer, not a failed read:
 # the repo reports no checks, and CLEAN already covers any required ones.
@@ -55,8 +63,16 @@
 # rulings file, and never merges anything.
 set -uo pipefail
 
-[[ $# -eq 2 ]] || { sed -n '4,/^#   usage error/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
-repo="$1" num="$2"
+usage() { sed -n '4,/^#   usage error/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+allow_base=""; pos=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --allow-base) [[ $# -ge 2 && -z "$allow_base" && -n "$2" ]] || usage; allow_base="$2"; shift 2 ;;
+    *) pos+=("$1"); shift ;;
+  esac
+done
+[[ ${#pos[@]} -eq 2 ]] || usage
+repo="${pos[0]}" num="${pos[1]}"
 retries="${MERGE_GUARD_RETRIES:-3}"
 delay="${MERGE_GUARD_DELAY:-5}"
 
@@ -101,7 +117,7 @@ field() { jq -r --arg f "$1" 'if has($f) then .[$f] | tostring else "__missing__
 
 view() {
   read_json "gh pr view" pr view "$num" -R "$repo" \
-    --json state,isDraft,mergeStateStatus,headRefName,headRefOid,statusCheckRollup,author,commits,reviews,labels
+    --json state,isDraft,mergeStateStatus,baseRefName,headRefName,headRefOid,statusCheckRollup,author,commits,reviews,labels
 }
 
 view
@@ -135,6 +151,20 @@ case "$draft" in
   true) stop "it is a draft; a draft GATE is not merge-ready (R-148)" ;;
   *) stop "the view has no isDraft field; cannot tell a draft from a ready PR" ;;
 esac
+
+# The base. Read the default branch with the repo named, never from the current directory.
+base="$(field baseRefName)"
+[[ -n "$base" && "$base" != __missing__ && "$base" != null ]] || stop "the view has no base branch; cannot tell where a merge would land"
+pr_view="$json"   # read_json overwrites $json; the PR view is needed below
+read_json "gh repo view (default branch)" repo view "$repo" --json defaultBranchRef
+default_branch="$(jq -r '.defaultBranchRef.name // empty' <<<"$json" 2>/dev/null)"
+json="$pr_view"
+[[ -n "$default_branch" ]] || stop "the repo view names no default branch; cannot tell whether base $base is it"
+if [[ "$base" != "$default_branch" && "$base" != "$allow_base" ]]; then
+  stop "base is $base, not the default branch $default_branch; a merge would land in that branch, not the default. Retarget the PR to $default_branch, or pass --allow-base $base to merge it there on purpose"
+fi
+base_note="based on $base"
+[[ "$base" == "$default_branch" ]] || base_note="based on $base (allowed by --allow-base; the default is $default_branch)"
 
 ms="$(field mergeStateStatus)"
 tries=0
@@ -227,8 +257,8 @@ jq -e 'type == "array" and all(.[]; type == "object" and (.number | type) == "nu
   || stop "the stacked-child read is not a list of PRs with numbers: $(head -c 160 <<<"$json" | tr '\n' ' ')"
 children="$(jq -r '[.[].number | "#\(.)"] | join(" ")' <<<"$json")" || stop "the stacked-child read could not be turned into PR numbers"
 if [[ -n "$children" ]]; then
-  echo "PROCEED-KEEP-BRANCH $repo#$num @$head_sha: OPEN, not draft, CLEAN, $nchecks check(s) passing, approved at head by $fresh after $anchor_note; open PR(s) based on $head_ref: ${children% }. Merge with --match-head-commit $head_sha and WITHOUT --delete-branch, then confirm each child retargeted to the default branch (stacked-pr-merge-order)"
+  echo "PROCEED-KEEP-BRANCH $repo#$num @$head_sha: OPEN, not draft, $base_note, CLEAN, $nchecks check(s) passing, approved at head by $fresh after $anchor_note; open PR(s) based on $head_ref: ${children% }. Merge with --match-head-commit $head_sha and WITHOUT --delete-branch, then confirm each child retargeted to the default branch (stacked-pr-merge-order)"
   exit 0
 fi
 
-echo "PROCEED $repo#$num @$head_sha: OPEN, not draft, CLEAN, $nchecks check(s) passing, approved at head by $fresh after $anchor_note, no stacked child, $excl_note"
+echo "PROCEED $repo#$num @$head_sha: OPEN, not draft, $base_note, CLEAN, $nchecks check(s) passing, approved at head by $fresh after $anchor_note, no stacked child, $excl_note"

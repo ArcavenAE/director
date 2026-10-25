@@ -2,6 +2,9 @@
 
 - **Status:** idea (pre-hypothesis, no commitment). No ticket and no frontier
   node yet.
+- **Became:** the board workstream ledger design,
+  `sim/design/board-workstream-ledger.md`. It supersedes director#168, the
+  item ledger this idea names below as a candidate store for the cache.
 - **Date:** 2026-10-01
 - **Subject:** director. The cache is director's own record of the fleet's
   work. marvel, the bus and the seats are the sources it reads, not

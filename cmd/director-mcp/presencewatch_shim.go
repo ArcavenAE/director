@@ -493,7 +493,9 @@ func withHoldTools(tools []toolDef, on bool) []toolDef {
 		}
 	}
 	return append(tools, toolDef{
+		// readOnlyHint false: it withdraws a held send, which is then never released (aae-orc-r675b).
 		Name:        "cancel_held",
+		Annotations: &toolAnnotations{ReadOnlyHint: false},
 		Description: "Withdraw a send the presence watch is holding (status held or proposed), optionally naming the later send that replaces it. A cancelled send is never released. Offered only when the presence watch is on.",
 		InputSchema: map[string]any{
 			"type": "object",

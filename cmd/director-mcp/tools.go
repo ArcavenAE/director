@@ -1,10 +1,12 @@
 package main
 
-// The tool catalog and dispatch. Six tools: the five from the spbc ticket
-// (send_message, wait_for_message, list_roster, set_presence, broadcast) and
-// inbox_summary. Each is request/response; wait_for_message is the long-poll
-// that answers the push-vs-poll question, and its max argument drains a
-// backlog in one call (drain.go).
+// The tool catalog and dispatch. Eight tools: send_message, wait_for_message,
+// inbox_summary, list_roster, set_presence, report_status, broadcast and
+// audit_lookup. Two more are offered only in the mode that needs them:
+// mark_handled in handled mode, and cancel_held while the presence watch is
+// on (presencewatch_shim.go). Each is request/response; wait_for_message is
+// the long-poll that answers the push-vs-poll question, and its max argument
+// drains a backlog in one call (drain.go).
 
 import (
 	"context"
@@ -35,9 +37,18 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		summaryDesc += " Covers both the local inbox and this session's global inbox."
 		rosterDesc += " Rows from both tiers are merged and carry a tier column; global rows carry the cluster and role that address them."
 	}
+	// readOnlyHint (MCP 2025-06-18 tool annotations) on every tool, so a
+	// harness that lets read-only tools through plan mode lets a plan-mode cast
+	// poll the bus (aae-orc-r675b). The four that read the bus are true; the
+	// four that write (a send, a broadcast, a status, a presence row) are false.
+	// wait_for_message and inbox_summary are true although a wait acks what it
+	// returns and a cue_ack moves the cue state: what they change is this
+	// seat's own inbox, and a plan-mode cast must be able to receive.
+	readOnly := func(b bool) *toolAnnotations { return &toolAnnotations{ReadOnlyHint: b} }
 	tools := []toolDef{
 		{
 			Name:        "send_message",
+			Annotations: readOnly(false),
 			Description: sendDesc,
 			InputSchema: map[string]any{
 				"type": "object",
@@ -55,6 +66,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		},
 		{
 			Name:        "wait_for_message",
+			Annotations: readOnly(true),
 			Description: waitDesc,
 			InputSchema: map[string]any{
 				"type": "object",
@@ -66,6 +78,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		},
 		{
 			Name:        "inbox_summary",
+			Annotations: readOnly(true),
 			Description: summaryDesc,
 			InputSchema: map[string]any{
 				"type": "object",
@@ -76,11 +89,13 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		},
 		{
 			Name:        "list_roster",
+			Annotations: readOnly(true),
 			Description: rosterDesc,
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
 		{
 			Name:        "set_presence",
+			Annotations: readOnly(false),
 			Description: "Record this session's presence heartbeat (state, e.g. idle or busy). Must be repeated within the presence window or the entry expires.",
 			InputSchema: map[string]any{
 				"type":       "object",
@@ -90,6 +105,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		},
 		{
 			Name:        "report_status",
+			Annotations: readOnly(false),
 			Description: "Tell the sender of an ask that you are working on it, or blocked on someone. One INFORM signal in reply to the ask, so the ask ledger can show working and blocked-on instead of silence. Send it when you start work on a request and again if you stop on someone else.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -104,6 +120,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 		},
 		{
 			Name:        "broadcast",
+			Annotations: readOnly(false),
 			Description: "Send an INFORM to every seat live in the workspace or a team: one durable send per seat found in presence, excluding you. Returns recipients:N and refuses when N is 0. A seat that joins after the call is not included.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -113,6 +130,20 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 					"workspace": str("optional target workspace; omit to broadcast to your own"),
 				},
 				"required": []string{"text"},
+			},
+		},
+		{
+			Name:        "audit_lookup",
+			Annotations: readOnly(true),
+			Description: "Read one record of this cluster's audit log (AGENT_AUDIT) by its sequence number. Use only the number from a refusal's audit text, \"audit: recorded agent.audit seq N on cluster <name>\", never the sequence in a send result, which numbers a different stream. cluster must be this session's own cluster; a record on another cluster is read there with marvel bus audit <seq> --cluster <name>. message_id, when given, must be the record's, which binds the number to one record. A record holds the full envelope of a send, its text included, and any session on this cluster can read any record on its audit log by number. Reads only: it never publishes, acks, deletes or creates a consumer.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"cluster":    str("this session's cluster, as named in the audit text"),
+					"seq":        map[string]any{"type": "integer", "description": "the audit record's sequence number, 1 or more"},
+					"message_id": str("optional: the envelope's message_id; the record's Nats-Msg-Id must be it or it plus -refused"),
+				},
+				"required": []string{"cluster", "seq"},
 			},
 		},
 	}
@@ -144,6 +175,8 @@ func dispatchTool(ctx context.Context, bus *Bus, name string, rawArgs json.RawMe
 		return toolBroadcast(ctx, bus, rawArgs)
 	case "report_status":
 		return toolReportStatus(ctx, bus, rawArgs)
+	case "audit_lookup":
+		return toolAuditLookup(ctx, bus, rawArgs)
 	case "cancel_held":
 		if bus.watch == nil {
 			return nil, errors.New("unknown tool: " + name) // behind the watch's flag, as main answers
