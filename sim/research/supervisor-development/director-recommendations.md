@@ -209,7 +209,7 @@ modes, not as R-numbers.
 
 ## Carried flags
 
-Status as read on 2026-10-20 from the current publications. Four of the five are closed.
+Status as read on 2026-10-20 from the current publications, and on 2026-10-25 for the engagement multipliers. All five are closed.
 
 - **CLOSED.** The spot-report versus periodic-report taxonomy belongs to FM 6-99
   [@fm6-99-2021] (17 May 2021, current). The SPOTREP is report S055: "events that
@@ -225,8 +225,15 @@ Status as read on 2026-10-20 from the current publications. Four of the five are
 - **SUPERSEDED.** The 2019 edition of ADP 6-0 [@adp6-0-2019] was superseded on
   2026-07-07 by [@adp6-0-2026]. Its para 1-59 (exception reporting) is now 1-77. The
   1-77 renumbering was carried from the 2026-10-15 check and not re-read on 2026-10-20.
-- **UNCONFIRMED.** The one-on-one engagement multipliers are from secondary
-  aggregators; R-113 rests on the cadence finding, which is supported, not on the
-  multipliers. Not checked.
+- **CLOSED, with corrected wording.** The one-on-one engagement multipliers now
+  have primary Gallup sources, and neither says what the aggregators said.
+  Regular manager meetings "almost tripled" engagement from a 15% baseline
+  [@gallup-mann-darby-2014]: a 2013 panel of 8,287 U.S. adults, about regular
+  meetings rather than one-on-ones, with no cadence, and correlational. On
+  length: "Between 15 and 30 minutes is enough time for a meaningful
+  conversation, but only if it happens frequently" [@gallup-great-manager-2023],
+  which gives no multiple for one-on-ones. Quote them in that form, never as
+  "3x more engaged with regular 1:1s". R-113 still rests on the cadence
+  finding, not on the multipliers. Checked 2026-10-25.
 - finding-007 (director#66) has no standalone file yet, so R-107 is treated as
   its written form.
