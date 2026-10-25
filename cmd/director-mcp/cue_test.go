@@ -19,9 +19,26 @@ type fakeSource struct {
 	n      uint64
 	oldest *cueMeta
 	err    error
+	// tr, when set, is marked with each good read as the bus source marks the
+	// seat's tracker, stamped by clock.
+	tr    *pendingTracker
+	clock func() time.Time
+	// seq models the stream for the tracker: each message the count gains is
+	// one more on the seat's subject, kept after it is read (limits retention),
+	// so T is every message seen so far.
+	seq, lastN uint64
 }
 
-func (f *fakeSource) count(context.Context) (uint64, error)        { return f.n, f.err }
+func (f *fakeSource) count(context.Context) (uint64, error) {
+	if f.tr != nil && f.err == nil {
+		if f.n > f.lastN {
+			f.seq += f.n - f.lastN
+		}
+		f.lastN = f.n
+		f.tr.mark("local", pendingSample{unread: f.n, total: f.seq, haveTotal: f.n > 0, at: f.clock()})
+	}
+	return f.n, f.err
+}
 func (f *fakeSource) oldestMeta(context.Context) (*cueMeta, error) { return f.oldest, nil }
 
 type cueRig struct {

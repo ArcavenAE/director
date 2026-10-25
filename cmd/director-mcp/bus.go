@@ -69,8 +69,15 @@ type Bus struct {
 	// what was waiting, reported once in the next wait_for_message result.
 	resumedMu sync.Mutex
 	resumed   []string
-	// cueState reports the channel cue state for presence; nil when off.
-	cueState func() (state, reason string)
+	// cueState reports the channel cue state for presence at an age of the
+	// oldest waiting message (cue.presenceAt); nil when off.
+	cueState func(age time.Duration, known bool, unverified string) (state, reason string, stalled bool)
+	// cueSampling reports whether the cue watcher samples the pending tracker;
+	// nil when the cue is off.
+	cueSampling func() bool
+	// pending is the age of the oldest waiting message, from sampled counts
+	// (pending.go).
+	pending pendingTracker
 	// handled is the handled-mode state (K4); nil keeps ack-on-read.
 	handled *handledState
 	// watch is the presence watch (presencewatch_shim.go); nil when off.
@@ -1388,10 +1395,11 @@ func (b *Bus) setPresence(ctx context.Context, state string) (globalWarn string,
 	b.stateMu.Lock()
 	b.state = state
 	b.stateMu.Unlock()
-	if err := b.writePresence(ctx, state); err != nil {
+	view := b.presenceView(ctx)
+	if err := b.writePresenceView(ctx, state, view); err != nil {
 		return "", err
 	}
-	return b.writeGlobalPresence(ctx, state), nil
+	return b.writeGlobalPresenceView(ctx, state, view), nil
 }
 
 // writeGlobalPresence puts this session's row in GLOBAL_PRESENCE, returning a
@@ -1399,6 +1407,10 @@ func (b *Bus) setPresence(ctx context.Context, state string) (globalWarn string,
 // without it. Off (no domain configured) returns an empty warning: nothing is
 // wrong, there is simply no global row to write.
 func (b *Bus) writeGlobalPresence(ctx context.Context, state string) string {
+	return b.writeGlobalPresenceView(ctx, state, b.presenceView(ctx))
+}
+
+func (b *Bus) writeGlobalPresenceView(ctx context.Context, state string, view presenceView) string {
 	if b.globalCfg == nil {
 		return ""
 	}
@@ -1406,7 +1418,7 @@ func (b *Bus) writeGlobalPresence(ctx context.Context, state string) string {
 	if err != nil {
 		return err.Error()
 	}
-	if err := g.writePresence(ctx, b.self, b.instance, b.pid, state); err != nil {
+	if err := g.writePresenceWith(ctx, b.self, b.instance, b.pid, state, view.fields); err != nil {
 		return fmt.Sprintf("global presence write failed: %v", err)
 	}
 	return ""
@@ -1414,12 +1426,63 @@ func (b *Bus) writeGlobalPresence(ctx context.Context, state string) string {
 
 // attachCue publishes the cue's presence view beside this seat's presence row.
 // It is the one place the row's cue state is wired, so a test can cover it.
-func (b *Bus) attachCue(c *cue) { b.cueState = c.presence }
+func (b *Bus) attachCue(c *cue) {
+	c.mu.Lock()
+	c.oldest, c.pendingUnverified = b.oldestPending, b.pending.unverified
+	c.oldestUnacked = func() bool { return b.pending.oldestUnacked(time.Now()) }
+	c.mu.Unlock()
+	b.cueState, b.cueSampling = c.presenceAt, c.sampling
+}
+
+// presenceView is what both presence rows carry beside the identity: the age
+// of the oldest waiting message, and the cue state when the cue is on. It is
+// built once per beat, so a stalled seat's oldest message is peeked once per
+// beat and never under the cue lock.
+type presenceView struct {
+	oldestS   int64
+	cueOn     bool
+	cue       string
+	cueReason string
+}
+
+func (b *Bus) presenceView(ctx context.Context) presenceView {
+	age, tier := b.pending.oldest(time.Now())
+	v := presenceView{oldestS: int64(age / time.Second)}
+	if b.cueState == nil {
+		return v
+	}
+	v.cueOn = true
+	var stalled bool
+	v.cue, v.cueReason, stalled = b.cueState(age, true, b.pending.unverified())
+	if stalled {
+		id := ""
+		if m, err := (busCueSource{b}).oldestMetaOn(ctx, tier); err == nil && m != nil {
+			id = m.MessageID
+		}
+		v.cueReason = joinReason(stalledReason(id, age, b.pending.oldestUnacked(time.Now())), v.cueReason)
+	}
+	return v
+}
+
+// fields puts the view into a presence record.
+func (v presenceView) fields(rec map[string]any) {
+	rec["oldest_pending_s"] = v.oldestS
+	if v.cueOn {
+		rec["cue"] = v.cue
+		if v.cueReason != "" {
+			rec["cue_reason"] = v.cueReason
+		}
+	}
+}
 
 // writePresence puts the presence record under a per-session key
 // (presence.<team>.<id>.<instance>), so N concurrent sessions under one id show
 // as N roster entries instead of last-writer-wins collapsing them to one.
 func (b *Bus) writePresence(ctx context.Context, state string) error {
+	return b.writePresenceView(ctx, state, b.presenceView(ctx))
+}
+
+func (b *Bus) writePresenceView(ctx context.Context, state string, view presenceView) error {
 	rec := map[string]any{
 		"agent_id":  b.self.AgentID,
 		"team":      b.self.Team,
@@ -1435,15 +1498,10 @@ func (b *Bus) writePresence(ctx context.Context, state string) error {
 	if b.self.Role != "" {
 		rec["role"] = b.self.Role
 	}
-	// The P1 cue state beside presence (channel-cue.md 3.3), only on a seat
-	// that opted in, so director can list seats whose cue is not live.
-	if b.cueState != nil {
-		state, reason := b.cueState()
-		rec["cue"] = state
-		if reason != "" {
-			rec["cue_reason"] = reason
-		}
-	}
+	// The age of the oldest waiting message on every row, and the P1 cue
+	// state beside presence (channel-cue.md 3.3) only on a seat that opted in,
+	// so director can list seats whose cue is not live or that are stalled.
+	view.fields(rec)
 	body, _ := json.Marshal(rec)
 	key := "presence." + b.self.Team + "." + b.self.AgentID + "." + b.instance
 	_, err := b.kv.Put(ctx, key, body)
@@ -1472,8 +1530,14 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 			b.stateMu.Lock()
 			s := b.state
 			b.stateMu.Unlock()
-			_ = b.writePresence(ctx, s)
-			b.reportGlobalWarn(b.writeGlobalPresence(ctx, s), logf)
+			// The cue watcher samples the pending counts every poll; without
+			// it the beat does, so every row's age is at most a beat stale.
+			if b.cueSampling == nil || !b.cueSampling() {
+				b.samplePending(ctx)
+			}
+			view := b.presenceView(ctx)
+			_ = b.writePresenceView(ctx, s, view)
+			b.reportGlobalWarn(b.writeGlobalPresenceView(ctx, s, view), logf)
 			b.watchTick(ctx)
 		}
 	}
