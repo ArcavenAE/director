@@ -5,7 +5,7 @@ The probe in `_kos/probes/brief-sim-corpus-fitness.yaml` asks whether the requir
 - **Pin:** director `62b55fc`. The register there holds R-01 to R-230, one definition line each.
 - **`id-grammar.json`:** the evidence id grammar (design `sim/design/corpus-to-brief-and-spectacle.md`, section 4 item 4), committed before the parser.
 - **`locus.py`:** applies the grammar to each entry's Earned-by line. Python 3 standard library only. It prints ids, counts and loci, never the register's prose.
-- **`test_locus.py`:** its tests, against a throwaway fixture repository.
+- **`test_locus.py`:** its tests, against a throwaway fixture repository. They run in a clean HOME: the fixture's git identity comes from the environment, and signing is left as the host configures it.
 - **`projection.tsv`:** the parser's output at the pin, one row per entry. Nothing in it is written by hand.
 
 ## Columns

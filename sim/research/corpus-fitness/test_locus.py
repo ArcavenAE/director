@@ -89,8 +89,19 @@ EXPECT = {
 }
 
 
+# The fixture's identity comes from the environment, so the tests run in a
+# clean HOME. Signing is left as the host configures it.
+GIT_ENV = dict(
+    os.environ,
+    GIT_AUTHOR_NAME="t",
+    GIT_AUTHOR_EMAIL="t@example.invalid",
+    GIT_COMMITTER_NAME="t",
+    GIT_COMMITTER_EMAIL="t@example.invalid",
+)
+
+
 def sh(cwd, *args):
-    return subprocess.run(args, cwd=cwd, capture_output=True, check=True).stdout.decode()
+    return subprocess.run(args, cwd=cwd, env=GIT_ENV, capture_output=True, check=True).stdout.decode()
 
 
 class LocusTest(unittest.TestCase):
