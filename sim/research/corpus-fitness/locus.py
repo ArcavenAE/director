@@ -89,13 +89,26 @@ def resolves(tok, tree):
     return False
 
 
-def classify(eb, grammar, tree):
+SHA_TOKEN = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def sha_resolves(repo, pin, sha):
+    """A commit sha is evidence only if it names a commit in the pin's history."""
+    ok = subprocess.run(["git", "-C", repo, "rev-parse", "-q", "--verify", f"{sha}^{{commit}}"], capture_output=True)
+    if ok.returncode != 0:
+        return False
+    anc = subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", sha, pin], capture_output=True)
+    return anc.returncode == 0
+
+
+def classify(eb, grammar, tree, repo=None, pin=None):
     found = {}
     for cls, pats in grammar["token_classes"].items():
         spans = {(m.start(), m.end()) for p in pats for m in re.finditer(p, eb)}
         if cls == "tracked":
             # A path or file-name token is evidence only if it resolves at the pin.
             spans = {s for s in spans if not (is_file(eb[s[0]:s[1]]) and not resolves(eb[s[0]:s[1]], tree))}
+            spans = {s for s in spans if not (SHA_TOKEN.match(eb[s[0]:s[1]]) and not sha_resolves(repo, pin, eb[s[0]:s[1]]))}
         toks, last_end = [], -1
         for start, end in sorted(spans, key=lambda s: (s[0], -s[1])):
             if end <= last_end:
@@ -177,7 +190,7 @@ def main():
         if eb is None:
             locus, found = grammar["no_earned_by"], {c: [] for c in grammar["token_classes"]}
         else:
-            locus, found = classify(eb, grammar, tree)
+            locus, found = classify(eb, grammar, tree, repo, pin)
         if eb is not None and found["notes"]:
             cited.append((n, notes_in_line_order(eb, grammar)))
         counts = [str(len(found[c])) for c in ("tracked", "notes", "ruling", "session")]
