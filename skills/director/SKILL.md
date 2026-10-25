@@ -140,6 +140,11 @@ from the row's `owner`, `slug` and `next`, with the owner in the session slot.
 The other blocks are unchanged. With no ledger, or no CLI, build the list from
 the board and the roster as above.
 
+A script the operator must run at a host (an at-host operator script) stays on
+that list as its own line, with its path and its sha256, until it is run or
+dropped. It is never left out because it was sent earlier or a newer ask
+arrived.
+
 When the presence watch is on (`DIRECTOR_PRESENCE_WATCH=1` on the director's
 shim), `$DIRECTOR_STATE/presence-watch.json` lists each cluster the watch has seen. For each whose status
 is absent, print one line under Drafts, outside the fence above:
@@ -182,7 +187,7 @@ around it, read the Desk again.
 
 A seat writes the card for an operator decision as a file, and the card goes
 to the Desk through one parse, not by retyping. A card missing a part goes
-back to the seat that wrote it, not to the operator. The check is structural
+back to the seat that wrote it, not to the operator. The parse check is structural
 (is this card well-formed?), never whether the decision is good. A minimal
 valid card:
 
@@ -227,6 +232,14 @@ snapshot read in the last 24 hours, so a slug already on the Desk is refused.
 `--update` revises an open card that has no answer, and nothing else; a
 revision of a ruled card is a new card under a new prefix whose source names
 the old slug.
+
+Before a seat's card is posted, director also reads it against the ticket: does
+the recommendation answer the question the ticket asked? That is a judgment
+the parse cannot make, and it is director's for now; it may move to a future
+judge role. Where the recommendation does not answer the ticket's question,
+director attaches its own view to the card, labelled as director's, and posts
+both. It does not rewrite the seat's recommendation and it does not hold the
+card back for this.
 
 ## Mode: standing, additionally
 
