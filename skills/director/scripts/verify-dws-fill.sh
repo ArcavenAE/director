@@ -378,6 +378,22 @@ fresh_state; blocked_on b4 c4; desk 2026-10-19T10:00:00Z c5=closed; refresh_loca
 [[ "$(field b4 blocked)" == "operator" && "$(sets)" == 0 ]] && ok "test 11: a card absent from the snapshot clears nothing" || bad "test 11: absent card cleared" "$(field b4 blocked)"
 grep -q "card c4 is not on the Desk" "$root/out" && ok "test 11: and it is listed as not on the Desk" || bad "test 11: absent card not listed" "$(cat "$root/out")"
 
+# a block held by a card that is not closing, while another linked card is: the refresh names
+# the card that holds it, so the block does not stay silently (review 5644312313, the Low)
+held_by() {
+  printf '{"ts":"2026-10-05T10:00:00Z","actor":"director","tag":"judgment","event":"open","ws":"%s","title":"two cards","owner":"director","blocked":"operator","links":["ask:%s","ask:%s"]}\n' "$1" "$2" "$3" >>"$LEDGER"
+}
+fresh_state; held_by h1 c1 c2; desk 2026-10-19T10:00:00Z c1=yours c2=closed; refresh_local >"$root/out" 2>&1
+[[ "$(field h1 blocked)" == "operator" && "$(sets)" == 0 ]] && ok "test 11: a card in yours with another closed keeps the block" || bad "test 11: yours plus closed cleared" "$(field h1 blocked)"
+grep -q "h1: operator block held by card c1 (yours)" "$root/out" && ok "test 11: the refresh names the card in yours that holds the block" || bad "test 11: the holding card is not named" "$(cat "$root/out")"
+grep -q "dws link h1 --remove ask:c1" "$root/out" && ok "test 11: and says how to drop that link" || bad "test 11: no remove hint" "$(cat "$root/out")"
+fresh_state; held_by h2 c1 c2; desk 2026-10-19T10:00:00Z c2=closed; refresh_local >"$root/out" 2>&1
+grep -q "h2: operator block held by card c1 (not on the Desk)" "$root/out" && ok "test 11: a card absent from the snapshot is named as the holder" || bad "test 11: the absent holder is not named" "$(cat "$root/out")"
+fresh_state; blocked_on h3 c3; desk 2026-10-19T10:00:00Z c3=open; refresh_local >"$root/out" 2>&1
+! grep -q "held by card" "$root/out" && ok "test 11: a block waiting on its one open card prints no holder line" || bad "test 11: a holder line for an ordinary wait" "$(cat "$root/out")"
+fresh_state; held_by h4 c1 c2; desk 2026-10-19T10:00:00Z c1=yours c2=closed; refresh_local >/dev/null 2>&1; refresh_local >"$root/out" 2>&1
+! grep -q "held by card" "$root/out" && ok "test 11: a replay of the same snapshot prints no holder line again" || bad "test 11: holder line on replay" "$(cat "$root/out")"
+
 # a closed card on a row not blocked on the operator sets nothing
 fresh_state
 printf '{"ts":"2026-10-05T10:00:00Z","actor":"director","tag":"judgment","event":"open","ws":"b5","title":"other block","owner":"director","blocked":"waiting on CI","links":["ask:c6"]}\n' >>"$LEDGER"

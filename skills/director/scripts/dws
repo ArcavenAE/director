@@ -950,6 +950,13 @@ def desk_events(row, snap, t_now, gaps):
             and all(st is not None and st in CLOSING_STATUSES for _, st in cards)):
         events.append({"event": "set", "ws": row["slug"], "blocked": "", "src": events[0]["src"],
                        "hint": "; ".join(f"card {c} is {st}" for c, st in cards) + "; the next action is director's"})
+    elif events and row["blocked"] == "operator" and any(st in CLOSING_STATUSES for _, st in cards):
+        # Some linked card closed and another holds the block: say which, so a card stuck in
+        # yours, or gone from the Desk, does not keep the block silently (review 5644312313).
+        for c, st in cards:
+            if st not in CLOSING_STATUSES:
+                gaps.append(f"{row['slug']}: operator block held by card {c} ({st or 'not on the Desk'}); "
+                            f"if that card no longer holds it, director drops the link: dws link {row['slug']} --remove ask:{c}")
     return events
 
 
