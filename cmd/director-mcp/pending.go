@@ -15,7 +15,8 @@ import (
 // between hosts.
 //
 // The count is NumPending plus NumAckPending, the same count the cue uses, as
-// the marvel watcher design rules (section 11.5): every message not yet acked.
+// the marvel watcher design proposes (section 11.5, in the marvel#1056 draft,
+// not yet merged): every message not yet acked.
 // A message read and held ack-pending (handled mode) keeps aging, and so does
 // one Nak'd after a cancel while it waits to be delivered again; only the ack
 // takes it off. The clock stays this sample-inferred age. The reference for
