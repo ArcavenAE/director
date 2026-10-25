@@ -27,9 +27,10 @@ K13: `--blocked operator` needs `--ask <card id>`, and refuses unless that card 
 open in a Desk snapshot no older than THRESHOLD_HOURS["desk snapshot"] hours. A
 session reads the Desk and runs `desk-snapshot write`; without a usable snapshot
 dws refuses and says UNREAD, and never takes the id on faith. The card goes on the
-row as an ask: link. LF4: when a fresh snapshot shows that card in a status in
-CLOSING_STATUSES, `refresh --local` clears the block (set blocked "", as refresh)
-and leaves the next action director's.
+row as an ask: link. LF4: when a fresh snapshot shows every ask: card on the row
+in a status in CLOSING_STATUSES, `refresh --local` clears the block (set blocked "",
+as refresh) and leaves the next action director's. An old closed card never clears
+a block that a later, open card holds.
 
 K8: every new event carries "tag", set by dws from the actor and never by a caller:
 mirror for refresh (a cited outside fact), judgment for director. proposal is
@@ -400,7 +401,8 @@ def allowed(actor, event):
         if ev == "stage" and (event.get("from"), event.get("to")) in REFRESH_MOVES:
             return
         # LF4: one set, of blocked to empty and no other field, carrying the Desk read it came
-        # from. The fill checks that the row was blocked on the operator by that card.
+        # from. The fill checks that the row is blocked on the operator and that every ask:
+        # card it links is in a closing status.
         if (ev == "set" and {k for k in ("owner", "next", "blocked", "repos") if k in event} == {"blocked"}
                 and event["blocked"] == "" and str(event.get("src", "")).startswith("desk:")):
             return
@@ -922,11 +924,13 @@ def card_status(snap, card):
 
 def desk_events(row, snap, t_now, gaps):
     events = []
+    cards = []
     for link in row["links"]:
         if not ASK.match(link):
             continue
         card = link[4:]
         st = card_status(snap, card)
+        cards.append((card, st))
         if st is None:
             gaps.append(f"{row['slug']}: card {card} is not on the Desk (snapshot read {snap['read_at']})")
             continue
@@ -936,12 +940,16 @@ def desk_events(row, snap, t_now, gaps):
         events.append({"event": "observe", "ws": row["slug"], "link": link,
                        "seen": {"kind": "desk", "state": st, "read_at": snap["read_at"]},
                        "src": src, "checked_at": t_now})
-        # LF4: the card is the one source for "blocked on the operator" (K13), so when it
-        # closes the block clears. The next action stays director's; the hint says so.
-        if st in CLOSING_STATUSES and row["blocked"] == "operator":
-            events.append({"event": "set", "ws": row["slug"], "blocked": "", "src": src,
-                           "hint": f"card {card} is {st}; the next action is director's"})
-            row = {**row, "blocked": ""}
+    # LF4: the card is the one source for "blocked on the operator" (K13), so when it closes
+    # the block clears. Links only accumulate, and the row does not record which of its cards
+    # set the current block, so the clear needs every ask: card on the row in a closing status:
+    # an old closed card never clears a block a later, still open card holds (review 5644084635).
+    # A card absent from the snapshot keeps the block. Only a run that read something new for
+    # the row clears it, and the next action stays director's; the hint says so.
+    if (events and row["blocked"] == "operator"
+            and all(st is not None and st in CLOSING_STATUSES for _, st in cards)):
+        events.append({"event": "set", "ws": row["slug"], "blocked": "", "src": events[0]["src"],
+                       "hint": "; ".join(f"card {c} is {st}" for c, st in cards) + "; the next action is director's"})
     return events
 
 

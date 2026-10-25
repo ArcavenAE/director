@@ -78,12 +78,13 @@ in local or private state.
   with each source's last read time or UNREAD, and writes nothing. Honor-only:
   that director names the stream with `--ws` or links the entry; an entry
   with neither is listed and moves no row. Enforced (LF4, ruling 1 of
-  2026-10-19): when a row blocked on the operator links `ask:<card>` and a
-  fresh snapshot shows that card in a status in `CLOSING_STATUSES` (closed,
+  2026-10-19): when a row is blocked on the operator and a fresh snapshot
+  shows every `ask:<card>` it links in a status in `CLOSING_STATUSES` (closed,
   resolved, withdrawn, superseded, relayed; the operator edits the table in
   `dws`), the fill appends one `set` of `blocked` to empty as `refresh`, with
-  the card's `src` and a hint that the next action is director's; no other
-  field moves. Not built, no source file yet: the ask ledger as a source
+  a card's `src` and a hint that the next action is director's; no other
+  field moves. Links accumulate and the row does not record which card set
+  the block, so one card still open, or missing from the snapshot, keeps it. Not built, no source file yet: the ask ledger as a source
   (`msg:` links are typed and wait).
 - **Readers:** the sweep's "Blocked on you" (`dws show --json`, SKILL.md,
   Mode: sweep); `board-html`.
