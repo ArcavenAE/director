@@ -65,6 +65,12 @@ REGISTER = """# Register
 
 **R-18 (JUDGMENT) · a path relative to the register.**
 *Earned by: `specs/a.md` R5.*
+
+**R-19 (OBSERVED) · a commit that is not in this history.**
+*Earned by: the fix in deadbee.*
+
+**R-20 (OBSERVED) · a commit that is.**
+*Earned by: the fix in BASE_SHA.*
 """
 
 EXPECT = {
@@ -86,6 +92,8 @@ EXPECT = {
     "R-16": "notes-only",
     "R-17": "unresolved",
     "R-18": "tracked",
+    "R-19": "unresolved",
+    "R-20": "tracked",
 }
 
 
@@ -115,9 +123,12 @@ class LocusTest(unittest.TestCase):
         os.makedirs(os.path.join(d, "sim", "specs"))
         with open(os.path.join(d, "sim", "specs", "a.md"), "w") as f:
             f.write("# a\n")
-        with open(os.path.join(d, "sim", "requirements.md"), "w") as f:
-            f.write(REGISTER)
         sh(d, "git", "init", "-q")
+        sh(d, "git", "add", ".")
+        sh(d, "git", "commit", "-q", "-m", "base")
+        base = sh(d, "git", "rev-parse", "--short=7", "HEAD").strip()
+        with open(os.path.join(d, "sim", "requirements.md"), "w") as f:
+            f.write(REGISTER.replace("BASE_SHA", base))
         sh(d, "git", "add", ".")
         # Commits inherit the host git config, signing included; the repo is never pushed.
         sh(d, "git", "commit", "-q", "-m", "fixture")
@@ -152,8 +163,8 @@ class LocusTest(unittest.TestCase):
     def test_summary_counts(self):
         rc, out, _ = self.run_locus("--summary")
         self.assertEqual(rc, 0)
-        self.assertIn("entries\t18", out)
-        self.assertIn("tracked\t4", out)
+        self.assertIn("entries\t20", out)
+        self.assertIn("tracked\t5", out)
         self.assertIn("notes-only\t6", out)
 
     def test_overlapping_ids_count_once(self):
