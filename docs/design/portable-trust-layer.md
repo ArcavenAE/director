@@ -151,7 +151,7 @@ An adapter takes the generator's output (trust chain + resolved role intent + in
 
 | harness | version read | allow surface | deny surface | environment prose | how settings reach it |
 |---|---|---|---|---|---|
-| Claude Code | 2.1.304 | `permissions.allow`; `autoMode.allow` | `permissions.deny`; `autoMode.soft_deny`; `autoMode.hard_deny` | `autoMode.environment` | `--settings <file>` (marvel does this today) |
+| Claude Code | 2.1.304 | `permissions.allow`; `autoMode.allow` | `permissions.deny`; `autoMode.soft_deny`; `autoMode.hard_deny` | `autoMode.environment` | `--settings <file>` (marvel does this today); pattern rules also as launch args (`--allowedTools`, `--disallowedTools`) |
 | codex | 0.154.0 | sandbox mode (`-s`), approval policy (`-a`) | `-s read-only`; no per-command deny seen | none seen | launch args and `-c key=value` overrides |
 | opencode | 1.18.31 | `permission.<tool>: allow` | `permission.<tool>: deny` or `ask` | none seen | `OPENCODE_CONFIG_CONTENT` |
 | crush | 0.95.0 | `permissions.allowed_tools`; `--yolo` | none seen | none seen | its config file (path unverified), kept where the agent cannot write |
@@ -165,6 +165,8 @@ An adapter takes the generator's output (trust chain + resolved role intent + in
 | `soft_deny` | the role's **ask** list, plus writes to any `production_target` |
 | `hard_deny` | the deployment's `protected` list plus the role's **never** list |
 | `permissions.deny` | the parts of `protected` and **never** that are exact command patterns (for example `Bash(git push --force:*)`), because a pattern rule does not depend on the classifier |
+
+Settings are not the only channel. Deployments already give a seat pattern rules as launch arguments, for example to scope a seat's issue writes to one org. A pattern allow scoped by a flag, such as `Bash(gh issue create -R acme/*)`, needs a matching deny for the same flag given twice or in its long form (`Bash(gh issue create*-R*-R*)`, `Bash(gh issue create*--repo*)`), or a second flag moves the command outside the scope. The adapter emits each such deny with its allow.
 
 **codex.** The adapter maps a role whose **never** list includes writing to `-s read-only`, and a role with no human at the pane to `-a never`. In 0.154.0's help I found no per-command allow or deny surface, so the protected class reaches codex only as coarsely as the sandbox can express it, and the adapter says so in its `ProjectionFor` report. marvel finding-049 measured that a codex-trusted project stays writable by codex's own edit tool regardless of `-s`, so the adapter must also keep the role's private codex home from trusting the target. Unverified: whether codex has a rules file that would give a finer deny surface.
 
