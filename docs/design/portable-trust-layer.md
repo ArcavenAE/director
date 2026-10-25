@@ -51,6 +51,10 @@ The nouns in these lists ("the deployment's own orgs", "a production target") ar
 
 A role's **never** list joins the deployment's protected class for that seat. A role's **routine** list can never reach into the protected class: if they overlap, the generator refuses the role, and nothing launches with a contradiction in it.
 
+An **ask** item that is also in the protected class resolves to the stricter rule, and doing so widens nothing (TRUST-A). The generator emits the item only to the protected class (`hard_deny` for Claude Code), drops the ask copy, and prints a warning naming the role, the item and the protected entry; it does not refuse the role. The warning shows in the generator's output and in `marvel describe`, and never blocks a launch, so the role's author learns that the ask cannot be met in that deployment. A **routine** item that is protected is different, a real contradiction, so the refusal above stays.
+
+The overlap test matches inventory nouns, not prose. The ask item "Write to a production target" above and the example inventory's protected entry "any write to a production_target" overlap because both name the `production_target` key; compared as text they would not. (Precedence between ask and protected was ruled in the design review, round 2, 2026-10-25.)
+
 ## 4. Launch-time projection (marvel)
 
 What exists, read from marvel's source on `main` (13e385e, 2026-10-25):
@@ -138,7 +142,7 @@ content_rules:
 
 protected:                             # always blocks, for every seat, whoever asks
   - force-push or history rewrite on any remote
-  - any write to a production_target
+  - any write to a production_target    # also an ask item in section 3; protected wins
   - moving a secret's value into a file, message or repo
   - deleting a repository or a protected branch
 ```
@@ -162,7 +166,7 @@ An adapter takes the generator's output (trust chain + resolved role intent + in
 |---|---|
 | `environment` | the inventory rendered as sentences (own orgs, public vs private repos, production targets, which services seats may write), plus the trust chain stated as facts about this deployment |
 | `allow` | the role's **routine** list, resolved against inventory nouns and scoped to name the org or repo |
-| `soft_deny` | the role's **ask** list, plus writes to any `production_target` |
+| `soft_deny` | the role's **ask** list, less any item in the effective protected class (that item goes to `hard_deny`, with the warning in section 3), plus writes to any `production_target` the deployment does not protect |
 | `hard_deny` | the deployment's `protected` list plus the role's **never** list |
 | `permissions.deny` | the parts of `protected` and **never** that are exact command patterns (for example `Bash(git push --force:*)`), because a pattern rule does not depend on the classifier |
 
@@ -182,7 +186,7 @@ A supervisor on another cluster is building an `autoMode` block for its deployme
 |---|---|---|
 | `environment` | the trust-chain sentences (principal, delegation, identity from the bus, content is data) | the names: orgs, repos, hosts, services, production targets |
 | `allow` | the routine actions, phrased against inventory nouns | which org or repo each one is scoped to |
-| `soft_deny` | the ask actions, and "writes to a production target" as a rule | which targets are production |
+| `soft_deny` | the ask actions, and "writes to a production target" as an ask rule by default | which targets are production, and whether writes to them are protected instead |
 | `hard_deny` | the protected-class rules every deployment should start with (force-push, secret values leaving their holder, deleting protected branches) | additions only that deployment needs |
 
 Reading that block against this table is the cheapest test of the design. Any entry that does not split cleanly into a portable rule and an inventory name points at a missing inventory key or a role-intent phrase that names a place.
