@@ -29,7 +29,10 @@ check() { # check "name" cmd...   passes when the command succeeds
   if "$@" >/dev/null 2>&1; then ok "$name"; else bad "$name"; fi
 }
 
-root="$(mktemp -d "${TMPDIR:-/private/tmp}/dgv.XXXXXX")"
+# The helper's control socket path has a hard length limit, so a long TMPDIR
+# (the harness sets one) would fail the helper tests for the wrong reason.
+tbase="${TMPDIR:-/private/tmp}"; if [[ ${#tbase} -gt 30 ]]; then tbase=/private/tmp; fi
+root="$(mktemp -d "$tbase/dgv.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 cd "$root"
 repo="$(cd "$here/../.." && pwd)"
@@ -104,6 +107,12 @@ c2b="$root/c2b"
 mkcheck "$c2b" A A2b scratch $'positive\nnegative' 'if [[ "$cs" == positive ]]; then exit 2; else exit 0; fi'
 run "$c2b" --gate A
 [[ "$(result_of A A2b negative)" == INSTRUMENT ]] && ok "a negative beside a skipped positive is INSTRUMENT too" || bad "pair rule, skipped positive"
+
+# The pair rule does not depend on the order the header lists the cases in.
+c2c="$root/c2c"
+mkcheck "$c2c" A A2c scratch $'negative\npositive' 'if [[ "$cs" == positive ]]; then echo "positive broke"; exit 1; else echo "refused"; exit 0; fi'
+run "$c2c" --gate A
+[[ "$(result_of A A2c negative)" == INSTRUMENT && "$(result_of A A2c positive)" == FAIL ]] && ok "the pair rule holds when the header lists the negative first" || bad "pair rule, reversed header" "$(result_of A A2c negative) $(result_of A A2c positive)"
 
 # --- 4. both pass: gate-ready; exit codes map -------------------------------------
 c3="$root/c3"
@@ -210,8 +219,9 @@ echo "${args[*]}" >> "$home/stub.calls"
 case "${args[0]:-}" in
   daemon)
     mkdir -p "$home/state"; : > "$home/state/seats"
-    exec python3 -c 'import socket,sys,os,time
+    exec python3 -c 'import socket,sys,os,time,signal
 p=sys.argv[1]
+if os.environ.get("DIAG_STUB_IGNORE_TERM"): signal.signal(signal.SIGTERM, signal.SIG_IGN)
 s=socket.socket(socket.AF_UNIX); s.bind(p); s.listen(1)
 time.sleep(600)' "$sock" ;;
   get) printf 'WORKSPACE TEAM ROLE STATE\n'; cat "$home/state/seats" 2>/dev/null ;;
@@ -282,6 +292,36 @@ missing_test() (
 if mout="$(missing_test 2>&1)" && has "$mout" missing-ok; then ok "helper: a missing marvel or simulator binary returns 3 (INSTRUMENT), not 1"; else bad "helper missing binaries" "$mout"; fi
 
 # --- 13. the real gate 0, against stubs and loopback listeners ----------------------------
+# A default run touches nothing live: no connect to the broker or hub address,
+# no gh call. A listener on a kernel-picked port counts connects, a gh stub
+# leaves a marker when called; the same run under --live shows both fire, so
+# the silence above means something.
+nl="$root/nl"; mkdir -p "$nl/bin" "$root/none"
+printf '#!/usr/bin/env bash\ntouch "%s/gh.called"\necho 5000\n' "$nl" > "$nl/bin/gh"; chmod +x "$nl/bin/gh"
+python3 -c 'import socket,sys,time
+s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(5)
+print(s.getsockname()[1], flush=True)
+n=0; s.settimeout(0.2); end=time.time()+90
+while time.time()<end:
+    try: c,_=s.accept(); c.close(); n+=1; open(sys.argv[1],"w").write(str(n))
+    except socket.timeout: pass' "$nl/accepts" > "$nl/port" & nlpid=$!
+i=0; while [[ ! -s "$nl/port" && $i -lt 40 ]]; do sleep 0.25; i=$((i+1)); done
+nport="$(<"$nl/port")"
+live_run() { PATH="$nl/bin:$PATH" DIAG_TMP="$root" DIAG_MARVEL="$stubs/marvel" DIAG_SIMULATOR="$stubs/simulator" \
+  DIAG_BROKER_ADDR="127.0.0.1:$nport" DIAG_HUB_ADDR="127.0.0.1:$nport" \
+  "$DIAG" run --gate 0 --checks "$root/none" --report-root "$root/reports" "$@" 2>&1 || true; }
+out="$(live_run)"
+rdir="$(find "$root/reports" -name report.jsonl -print0 | xargs -0 ls -t | head -n 1 | xargs dirname)"
+[[ "$(result_of 0 G0 broker)" == SKIP && "$(result_of 0 G0 hub)" == SKIP && "$(result_of 0 G0 gh)" == SKIP ]] && ok "a default run skips the broker, hub and gh cases" || bad "default skips live" "$(result_of 0 G0 broker) $(result_of 0 G0 hub) $(result_of 0 G0 gh)"
+[[ "$(result_of 0 G0 daemon)" == PASS && "$(result_of 0 G0 seat)" == PASS ]] && ok "a default run still runs gate 0's offline cases" || bad "default runs offline" "$(result_of 0 G0 daemon) $(result_of 0 G0 seat)"
+sleep 0.5
+[[ ! -e "$nl/accepts" && ! -e "$nl/gh.called" ]] && ok "a default run makes no connect and no gh call" || bad "default run touched a live thing" "accepts=$(cat "$nl/accepts" 2>/dev/null) gh=$(ls "$nl/gh.called" 2>/dev/null)"
+has "$out" "gate 0: not gate-ready" && ok "a default run's gate 0 is not gate-ready, because live cases did not run" || bad "default gate 0 line" "$out"
+out="$(live_run --live)"
+sleep 0.5
+[[ -s "$nl/accepts" && -e "$nl/gh.called" ]] && ok "control: --live does connect and call gh" || bad "live control" "accepts=$(cat "$nl/accepts" 2>/dev/null)"
+kill "$nlpid" 2>/dev/null || true
+
 lport="$root/lport"
 python3 -c 'import socket,sys,time
 s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(5)
@@ -289,10 +329,9 @@ print(s.getsockname()[1], flush=True); time.sleep(60)' > "$lport" & lpid=$!
 i=0; while [[ ! -s "$lport" && $i -lt 40 ]]; do sleep 0.25; i=$((i+1)); done
 bport="$(<"$lport")"
 rc=0
-mkdir -p "$root/none"
 out="$(PATH="$stubs:$PATH" DIAG_TMP="$root" DIAG_MARVEL="$stubs/marvel" DIAG_SIMULATOR="$stubs/simulator" \
   DIAG_BROKER_ADDR="127.0.0.1:$bport" DIAG_HUB_ADDR="127.0.0.1:$bport" \
-  "$DIAG" run --gate 0 --checks "$root/none" --report-root "$root/reports" 2>&1)" || rc=$?
+  "$DIAG" run --gate 0 --live --checks "$root/none" --report-root "$root/reports" 2>&1)" || rc=$?
 rdir="$(find "$root/reports" -name report.jsonl -print0 | xargs -0 ls -t | head -n 1 | xargs dirname)"
 all5=1; for c in daemon seat broker hub gh; do [[ "$(result_of 0 G0 $c)" == PASS ]] || { all5=0; echo "  gate 0 case $c: $(result_of 0 G0 $c)"; }; done
 [[ $all5 -eq 1 && $rc -eq 0 ]] && ok "gate 0: daemon, seat, broker, hub and gh all PASS against stubs" || bad "gate 0 against stubs" "$out"
@@ -302,18 +341,37 @@ has "$out" "gate 0: gate-ready" && ok "gate 0 reads gate-ready" || bad "gate 0 g
 kill "$lpid" 2>/dev/null || true; sleep 0.5
 out="$(PATH="$stubs:$PATH" DIAG_TMP="$root" DIAG_MARVEL="$stubs/marvel" DIAG_SIMULATOR="$stubs/simulator" \
   DIAG_BROKER_ADDR="127.0.0.1:$bport" DIAG_HUB_ADDR="127.0.0.1:$bport" \
-  "$DIAG" run --gate 0 --checks "$root/none" --report-root "$root/reports" 2>&1)" || true
+  "$DIAG" run --gate 0 --live --checks "$root/none" --report-root "$root/reports" 2>&1)" || true
 rdir="$(find "$root/reports" -name report.jsonl -print0 | xargs -0 ls -t | head -n 1 | xargs dirname)"
 [[ "$(result_of 0 G0 broker)" == FAIL && "$(result_of 0 G0 hub)" == FAIL ]] && ok "gate 0 control: a closed port reads FAIL for the broker and the hub" || bad "closed port control" "$(result_of 0 G0 broker) $(result_of 0 G0 hub)"
 out="$(PATH="$stubs:$PATH" DIAG_TMP="$root" DIAG_MARVEL="$stubs/marvel" DIAG_SIMULATOR="$stubs/simulator" \
   DIAG_BROKER_ADDR="127.0.0.1:$bport" \
-  "$DIAG" run --gate 0 --checks "$root/none" --report-root "$root/reports" 2>&1)" || true
+  "$DIAG" run --gate 0 --live --checks "$root/none" --report-root "$root/reports" 2>&1)" || true
 rdir="$(find "$root/reports" -name report.jsonl -print0 | xargs -0 ls -t | head -n 1 | xargs dirname)"
 [[ "$(result_of 0 G0 hub)" == SKIP ]] && ok "gate 0: no DIAG_HUB_ADDR means the hub case is SKIP, not PASS" || bad "hub skip" "$(result_of 0 G0 hub)"
 out="$(PATH="$stubs:$PATH" DIAG_TMP="$root" DIAG_MARVEL="$root/nope" DIAG_SIMULATOR="$root/nope" DIAG_BROKER_ADDR="127.0.0.1:$bport" \
-  "$DIAG" run --gate 0 --checks "$root/none" --report-root "$root/reports" 2>&1)" || true
+  "$DIAG" run --gate 0 --live --checks "$root/none" --report-root "$root/reports" 2>&1)" || true
 rdir="$(find "$root/reports" -name report.jsonl -print0 | xargs -0 ls -t | head -n 1 | xargs dirname)"
 [[ "$(obs_of 0 G0 daemon)" == instrument && "$(obs_of 0 G0 seat)" == instrument ]] && ok "gate 0: a missing marvel binary is INSTRUMENT for the scratch cases" || bad "missing marvel" "$(obs_of 0 G0 daemon) $(obs_of 0 G0 seat)"
+
+# A daemon that will not stop must not hide behind a PASS: the daemon case reads
+# INSTRUMENT and the evidence says teardown failed. The stub ignores TERM, so
+# the helper waits its ten seconds and keeps the root; the test stops that one
+# pid itself, by the pid the helper recorded.
+out="$(DIAG_STUB_IGNORE_TERM=1 PATH="$stubs:$PATH" DIAG_TMP="$root" DIAG_MARVEL="$stubs/marvel" DIAG_SIMULATOR="$stubs/simulator" \
+  "$DIAG" run --gate 0 --checks "$root/none" --report-root "$root/reports" 2>&1)" || true
+rdir="$(find "$root/reports" -name report.jsonl -print0 | xargs -0 ls -t | head -n 1 | xargs dirname)"
+[[ "$(result_of 0 G0 daemon)" == INSTRUMENT ]] && ok "gate 0: a daemon that did not stop makes the daemon case INSTRUMENT, not PASS" || bad "teardown failure" "$(result_of 0 G0 daemon)"
+check "the evidence says teardown failed" grep -q 'teardown failed' "$rdir/evidence/0.G0.daemon.txt"
+for f in "$root"/dg.*/daemon.pid.mine; do
+  if [[ -f "$f" ]]; then
+    d="$(dirname "$f")"; kill -KILL "$(<"$f")" 2>/dev/null || true
+    for sk in "$d"/t/tmux-*/*; do
+      if [[ -S "$sk" ]]; then TMUX_TMPDIR="$d/t" tmux -L "$(basename "$sk")" kill-server >/dev/null 2>&1 || true; fi
+    done
+    rm -rf "$d"
+  fi
+done
 
 echo
 echo "$pass passed, $fail failed"
