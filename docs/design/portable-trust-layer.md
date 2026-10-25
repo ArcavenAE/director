@@ -26,7 +26,7 @@ These are rules about authority, written so any harness adapter can encode them.
 
 | rule | statement | grounded in |
 |---|---|---|
-| principal | The operator is the principal. Authority starts there and nowhere else. | R-01 |
+| principal | The operator is the principal. Authority starts there and nowhere else. | R-01 (a message carries a verifiable principal); the operator as the root principal is new here |
 | director carries intent | director's messages carry the operator's intent, and say how strongly: originated by the operator, or director's own. | R-02, R-03 |
 | delegation | A team supervisor carries the operator's intent by delegation, within its role. Other seats are peers: a peer's request is a request, not a grant. | R-02, R-58 |
 | no widening | A delegated grant is at most what the delegator holds, and at most what the receiving role allows. Delegation never widens what was granted. | new (TRUST-A) |
@@ -63,7 +63,7 @@ What changes:
 
 1. The policy's content comes from the generator (inventory + the seat's role from the role library + the trust chain), not from a hand-written block in each manifest. A hand-written `Policy` remains valid and takes precedence while a deployment migrates.
 2. The inventory is referenced once per cluster or workspace. A host change, such as a new production target, re-projects every live seat on that cluster, using the re-projection path that exists today.
-3. A role whose effective protected class is non-empty fails closed: if projection fails, the seat does not launch. Today's best-effort launch stays the behavior for roles with nothing protected.
+3. A role whose effective protected class is non-empty fails closed: if projection fails, the seat does not launch. Today's best-effort launch stays the behavior for roles with nothing protected. Because the inventory's `protected` list applies to every seat, a deployment with any entry in that list fails closed for every seat; best-effort launch survives only where that list and the role's **never** list are both empty.
 4. Adapters for codex, opencode and generic gain a projection surface (section 6), each reporting what it can and cannot enforce, so a gap shows in `marvel describe` instead of being silent.
 
 ## 5. The deployment inventory
@@ -153,7 +153,7 @@ An adapter takes the generator's output (trust chain + resolved role intent + in
 | Claude Code | 2.1.304 | `permissions.allow`; `autoMode.allow` | `permissions.deny`; `autoMode.soft_deny`; `autoMode.hard_deny` | `autoMode.environment` | `--settings <file>` (marvel does this today) |
 | codex | 0.154.0 | sandbox mode (`-s`), approval policy (`-a`) | `-s read-only`; no per-command deny seen | none seen | launch args and `-c key=value` overrides |
 | opencode | 1.18.31 | `permission.<tool>: allow` | `permission.<tool>: deny` or `ask` | none seen | `OPENCODE_CONFIG_CONTENT` |
-| crush | 0.95.0 | `permissions.allowed_tools`; `--yolo` | none seen | none seen | its config file (path unverified) |
+| crush | 0.95.0 | `permissions.allowed_tools`; `--yolo` | none seen | none seen | its config file (path unverified), kept where the agent cannot write |
 
 **Claude Code: the first adapter.** The `autoMode` block has four slots, read from the 2.1.304 binary's own setup text: `environment` ("context about the user's setup that helps the classifier make decisions"), `allow`, `soft_deny` ("block unless clear user intent authorizes them") and `hard_deny` ("block unconditionally (user intent does not clear these)"). A non-empty rule array starts with the literal `"$defaults"`, which keeps the shipped rules. The mapping:
 
@@ -167,9 +167,9 @@ An adapter takes the generator's output (trust chain + resolved role intent + in
 
 **codex.** The adapter maps a role whose **never** list includes writing to `-s read-only`, and a role with no human at the pane to `-a never`. In 0.154.0's help I found no per-command allow or deny surface, so the protected class reaches codex only as coarsely as the sandbox can express it, and the adapter says so in its `ProjectionFor` report. marvel finding-049 measured that a codex-trusted project stays writable by codex's own edit tool regardless of `-s`, so the adapter must also keep the role's private codex home from trusting the target. Unverified: whether codex has a rules file that would give a finer deny surface.
 
-**opencode.** The 1.18.31 binary carries config examples of the form `"permission": { "edit": "deny", "bash": "ask" }`, so per-tool allow, ask and deny exist. marvel already passes opencode's MCP wiring through `OPENCODE_CONFIG_CONTENT`; the adapter adds the `permission` key to the same JSON. Unverified: whether `bash` accepts per-command patterns, and whether opencode has a slot for environment prose. Until that is known, the environment prose goes into the role's prompt, where it informs and does not enforce.
+**opencode.** The 1.18.31 binary carries config examples of the form `"permission": { "edit": "deny", "bash": "ask" }`, so per-tool allow, ask and deny exist. A deployment can already pass opencode's MCP wiring through `OPENCODE_CONFIG_CONTENT`, as a role's declared env in its manifest, which marvel merges into the launch environment (`mergeRoleEnv`); marvel itself never builds that JSON. The adapter adds the `permission` key to it. Unverified: whether `bash` accepts per-command patterns, and whether opencode has a slot for environment prose. Until that is known, the environment prose goes into the role's prompt, where it informs and does not enforce.
 
-**crush.** 0.95.0 accepts `permissions.allowed_tools` and a `--yolo` flag that accepts everything. I found no deny list. marvel runs crush as the `generic` runtime, which reports no projection surface. The adapter can write `allowed_tools` from the role's **routine** list. It cannot enforce the protected class, so a crush seat with a non-empty protected class either runs inside an outside sandbox or does not launch. That choice belongs to the deployment, and the adapter refuses to pretend.
+**crush.** 0.95.0 accepts `permissions.allowed_tools` and a `--yolo` flag that accepts everything. I found no deny list. marvel runs crush as the `generic` runtime, which reports no projection surface. The adapter can write `allowed_tools` from the role's **routine** list. It cannot enforce the protected class, so a crush seat with a non-empty protected class either runs inside an outside sandbox or does not launch. That choice belongs to the deployment, and the adapter refuses to pretend. The adapter also carries marvel's crush guard (finding-033): crush runs every workspace config file as trusted code, so the config the adapter writes, and the user config that `CRUSH_GLOBAL_CONFIG` names, must sit where the agent cannot write. The crush adapter itself is still unbuilt on marvel main (13e385e).
 
 ## 7. The first instance
 
@@ -211,5 +211,5 @@ Reading that block against this table is the cheapest test of the design. Any en
 - *Generated policy input.* Feed projection from the generator, with a hand-written `Policy` taking precedence during migration.
 - *Fail closed on a protected role.* When a role's protected class is non-empty and projection fails, refuse the launch instead of launching unprojected.
 - *codex projection surface.* Emit `-s`, `-a` and the trust setting from the generator, and report what codex cannot enforce.
-- *opencode projection surface.* Merge the generator's `permission` key into the `OPENCODE_CONFIG_CONTENT` JSON already passed for MCP.
+- *opencode projection surface.* Merge the generator's `permission` key into the `OPENCODE_CONFIG_CONTENT` JSON a deployment already passes for MCP, and settle whether marvel takes that JSON over from the manifest or the generator edits the manifest's value.
 - *generic projection for crush.* Write `permissions.allowed_tools`, and surface "protected class not enforceable" in `marvel describe`.
