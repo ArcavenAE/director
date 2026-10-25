@@ -84,8 +84,12 @@ in local or private state.
   `dws`), the fill appends one `set` of `blocked` to empty as `refresh`, with
   a card's `src` and a hint that the next action is director's; no other
   field moves. Links accumulate and the row does not record which card set
-  the block, so one card still open, or missing from the snapshot, keeps it. Not built, no source file yet: the ask ledger as a source
-  (`msg:` links are typed and wait).
+  the block, so one card still open, or missing from the snapshot, keeps it.
+  When another linked card is closing, the refresh names that holding card
+  on stderr (a card stuck in `yours`, say). If it no longer holds the block,
+  director drops its link with `dws link <slug> --remove ask:<card>`, and the
+  next fresh snapshot clears the block. Not built, no source file yet: the
+  ask ledger as a source (`msg:` links are typed and wait).
 - **Readers:** the sweep's "Blocked on you" (`dws show --json`, SKILL.md,
   Mode: sweep); `board-html`.
 
