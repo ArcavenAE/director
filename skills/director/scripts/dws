@@ -2184,10 +2184,17 @@ def decision_event(fields):
             "undo": checked("undo", fields["undo"]), "changes": changes}
 
 
+DECISION_LINK_KINDS = ("pr:", "issue:", "bd:", "relay:", "msg:")
+
+
 def decision_link(link):
-    """A changes entry that starts with pr:, issue: or bd: must fully match LINK, so
-    a comma list is not stored as one link. Row links (typed_link, dws link) are
-    unchanged."""
+    """A changes entry is one of the typed link kinds, and one that starts with pr:,
+    issue: or bd: must fully match LINK, so a comma list is not stored as one link.
+    relay: and msg: keep typed_link's checks. ask: is left out: a Desk card is not a
+    change. Row links (typed_link, dws link) are unchanged."""
+    if not link.startswith(DECISION_LINK_KINDS):
+        raise Refused(f"changes link {link!r} is not a typed link; give pr:, issue:, bd:, relay: or msg: "
+                      "links, separated by spaces")
     if link.startswith(("pr:", "issue:", "bd:")) and not LINK.fullmatch(link):
         raise Refused(f"changes link {link!r} is not pr:<owner>/<repo>#<n>, issue:<owner>/<repo>#<n> "
                       "or bd:<id>; give each link once, separated by spaces")
