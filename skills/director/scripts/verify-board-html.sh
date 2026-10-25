@@ -264,5 +264,70 @@ DWS_NOW=2099-01-01T00:00:00Z "$root/bh/board-html" >/dev/null 2>"$root/err" && [
 grep -qi 'fill' "$root/err" && ok "and the failure is said on stderr" || bad "the failure is said on stderr" "$(cat "$root/err")"
 export DIRECTOR_STATE="$main_state"
 
+# ---- the Seat decisions section (D3, sim/design/seat-decisions.md section 7) -------------------
+# An empty ledger of decisions says so and shows nothing else.
+fresh seatnone
+printf '# director board\n' >"$DIRECTOR_STATE/board.md"
+open_at 2026-10-20T08:00:00Z sd0 --title "a row" --stage building --owner supervisor --next n
+DWS_NOW=2026-10-22T08:00:00Z "$BOARD_HTML" >/dev/null 2>"$root/err" || bad "board-html renders with no decisions" "$(cat "$root/err")"
+cp "$DIRECTOR_STATE/board.html" "$root/page.html"
+sec() { python3 - "$root/page.html" <<'PY'
+import re, sys
+t = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r'<section id="seat-decisions">.*?</section>', t, re.S)
+print(m.group(0) if m else "")
+PY
+}
+sec_text() { sec | python3 -c "import html,re,sys; print(html.unescape(re.sub(r'<[^>]+>', '\n', sys.stdin.read())))" | sed '/^[[:space:]]*$/d'; }
+[[ "$(sec_text | tr '\n' '|')" == "Seat decisions|No seat decisions recorded|" ]] && ok "a ledger with no decision events says 'No seat decisions recorded' and nothing else" || bad "the empty ledger line" "$(sec_text | tr '\n' '|')"
+python3 - "$root/page.html" <<'PY' && ok "the section sits after the ledger table and before history" || bad "the section sits after the ledger table and before history"
+import sys
+t = open(sys.argv[1], encoding="utf-8").read()
+pos = [t.find('id="%s"' % i) for i in ("ledger-table", "seat-decisions", "history")]
+sys.exit(0 if all(p >= 0 for p in pos) and pos == sorted(pos) else 1)
+PY
+
+# Decisions: two unconfirmed (one with three dependents, a full window), one confirmed recently,
+# one confirmed long ago, one overridden recently.
+fresh seatdec
+printf '# director board\n' >"$DIRECTOR_STATE/board.md"
+blk() { printf 'seat-decision@1\nid: %s\nseat: team-a/builder\nquestion: %s\noptions: a) one; b) two\nchosen: b) two because cheaper\ntest: 1 ok 2 ok 3 ok 4 ok 5 ok 6 ok 7 ok 8 ok\nestimate: %s\nundo: revert it\nchanges: pr:ArcavenAE/director#900\n' "$1" "$2" "$3" >"$root/blk"; DWS_NOW="$4" "$DWS" decision add --from "$root/blk" >/dev/null 2>"$root/err" || bad "add decision $1" "$(cat "$root/err")"; }
+for r in da db dc dd; do open_at 2026-10-01T08:00:00Z "$r" --title "row $r" --stage building --owner supervisor --next n; done
+DWS_NOW=2026-10-01T08:00:00Z "$DWS" link da pr:ArcavenAE/director#901 >/dev/null 2>&1
+blk team-a/builder-20261001-1 "Old and answered long ago?" 1 2026-10-01T08:00:00Z
+DWS_NOW=2026-10-02T08:00:00Z "$DWS" decision confirm team-a/builder-20261001-1 --words yes --ref relay:R-1 >/dev/null 2>&1 || bad "confirm the old one"
+blk team-a/builder-20261020-2 "Smaller one with one dependent <b>x</b>?" 1 2026-10-20T08:00:00Z
+blk team-a/builder-20261020-3 "Full window?" 2 2026-10-20T09:00:00Z
+blk team-a/builder-20261020-4 "Confirmed lately?" 1 2026-10-20T10:00:00Z
+blk team-a/builder-20261020-5 "Overridden lately?" 1 2026-10-20T11:00:00Z
+DWS_NOW=2026-10-21T08:00:00Z "$DWS" set dd --waits decision:team-a/builder-20261020-2 >/dev/null 2>&1 || bad "edge dd"
+for r in da db dc; do DWS_NOW=2026-10-21T08:00:00Z "$DWS" set "$r" --waits decision:team-a/builder-20261020-3 >/dev/null 2>&1 || bad "edge $r"; done
+DWS_NOW=2026-10-21T09:00:00Z "$DWS" decision confirm team-a/builder-20261020-4 --words yes --ref relay:R-2 >/dev/null 2>&1 || bad "confirm lately"
+DWS_NOW=2026-10-21T10:00:00Z "$DWS" decision override team-a/builder-20261020-5 --words no --ref relay:R-3 --instead other >/dev/null 2>&1 || bad "override lately"
+DWS_NOW=2026-10-22T08:00:00Z "$BOARD_HTML" >/dev/null 2>"$root/err" || bad "board-html renders with decisions" "$(cat "$root/err")"
+cp "$DIRECTOR_STATE/board.html" "$root/page.html"
+
+page_ids() { sec | python3 -c "import re,sys; print(' '.join(re.findall(r'<li data-decision=\"([^\"]+)\">', sys.stdin.read().split('seat-decisions-answered')[0])))"; }
+want="$(DWS_NOW=2026-10-22T08:00:00Z "$DWS" decisions --unconfirmed --json | python3 -c "import json,sys; print(' '.join(x['id'] for x in json.load(sys.stdin)['decisions']))")"
+[[ -n "$want" && "$(page_ids)" == "$want" ]] && ok "the unconfirmed blocks are in the order of dws decisions --unconfirmed" || bad "order matches dws decisions --unconfirmed" "page: $(page_ids) / dws: $want"
+[[ "$(page_ids | awk '{print $1}')" == "team-a/builder-20261020-3" ]] && ok "the full window is first" || bad "the full window is first" "$(page_ids)"
+t="$(sec_text)"
+grep -qF 'team-a/builder-20261020-3 | team-a/builder | decided-by-seat | 1d old | 3 waiting | 2h at risk | window full' <<<"$t" && ok "a block carries id, seat, state, age, dependents waiting and hours at risk as text" || bad "block fields as text" "$t"
+grep -qF 'window full' <<<"$t" && [[ "$(grep -c 'window full' <<<"$t")" == 1 ]] && ok "'window full' is said in words, for the full window only" || bad "window full in words"
+grep -qF 'da | building | pr:ArcavenAE/director#901' <<<"$t" && ok "a dependent row shows its stage and its PR link" || bad "dependent row with stage and PR" "$t"
+grep -qF 'Smaller one with one dependent <b>x</b>?' <<<"$t" && ! sec | grep -qF '<b>x</b>' && ok "the question is escaped" || bad "the question is escaped"
+a="$(sed -n '/Answered in the last 14 days/,$p' <<<"$t")"
+grep -qF 'team-a/builder-20261020-4 | confirmed | 2026-10-21 | Confirmed lately?' <<<"$a" && ok "a decision confirmed in the last 14 days is one line" || bad "recent confirmed line" "$a"
+grep -qF 'team-a/builder-20261020-5 | overridden | 2026-10-21 | Overridden lately?' <<<"$a" && ok "a decision overridden in the last 14 days is one line" || bad "recent overridden line" "$a"
+! grep -qF 'team-a/builder-20261001-1' <<<"$a" && ok "an answer older than 14 days is not listed" || bad "old answer listed"
+# no colour alone, no red, no alarm sort, no gate: the state is a word, and the section carries no
+# colour class or inline style
+s_html="$(sec)"
+if grep -qE 'class="[^"]*(bad|warn|good|info|unmoved)|style=|var\(--(bad|warn)' <<<"$s_html"; then bad "the section has no colour class or inline style"; else ok "the section has no colour class or inline style"; fi
+if sed -n '/#seat-decisions/p' "$root/page.html" | grep -qE 'var\(--(bad|warn|good)|color:#'; then bad "the section's CSS uses no state colour"; else ok "the section's CSS uses no state colour"; fi
+for st in decided-by-seat confirmed overridden; do grep -qF "$st" <<<"$t" && ok "the state $st is text" || bad "the state $st is text"; done
+
+export DIRECTOR_STATE="$main_state"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
