@@ -1,5 +1,7 @@
 # Card ingest: one parse from a seat's card file to a Desk write
 
+Closed 2026-10-25: realized, card-ingest in use
+
 Status: design for review, 2026-10-19. Owner: the architect role. Docs only;
 no code lands until this is reviewed.
 

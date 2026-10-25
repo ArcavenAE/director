@@ -1,5 +1,7 @@
 # The board as a workstream ledger
 
+Closed 2026-10-25: realized as dws
+
 Status: design for review, 2026-10-02. Owner: the architect role. Commission:
 the operator's dispatch of 2026-10-02 ("the improvements to director board
 we discussed"), through the team supervisor. Design only; builders follow

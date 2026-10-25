@@ -1,5 +1,7 @@
 # The presence watch: absence and return per cluster, and held mail released on return
 
+Closed 2026-10-25: realized, presence watch on the shim
+
 Status: design for review, 2026-10-19. Owner: the architect role. Docs only;
 no code lands until this is reviewed.
 
