@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# diag: the operational diagnostics battery runner (design: sim/design/ops-diagnostics-battery.md).
+#
+# Each batch gate asks whether a change did what it claimed on the fleet in use
+# and whether it broke the thing next to it. This runs the checks that answer it
+# and writes a report director reads before calling the gate. The runner is a
+# diagnostic: a run that started always exits 0, whatever the cases found. The
+# battery is never wired into CI, branch protection or a hook (diagnostic-not-gate).
+#
+# Usage: diag run [--gate 0|A|B|C|D|all] [--host NAME] [--live-only]
+#                 [--accept ID.CASE]... [--checks DIR] [--report-root DIR]
+#        diag --help
+# A bad command line exits 2 and starts no run.
+#
+# Per-case exit codes of a check:  0 pass, 1 fail, 2 skip, 3 instrument.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(cd "$here/../.." && pwd)"
+
+usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
+
+[[ $# -ge 1 ]] || { usage >&2; exit 2; }
+case "$1" in
+  --help|-h) usage; exit 0 ;;
+  run) shift ;;
+  *) echo "diag: unknown command: $1" >&2; usage >&2; exit 2 ;;
+esac
+
+need() { if [[ $# -lt 2 || -z "$2" ]]; then echo "diag: $1 needs a value" >&2; exit 2; fi; }
+gate_sel="all"; host=""; live_only=0; checks_dir="$here/checks"
+report_root="${DIAG_REPORT_ROOT:-${DIRECTOR_HOME:-$HOME/.director}/state/diag}"
+accepts=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --gate) need "$@"; gate_sel="$2"; shift 2 ;;
+    --host) need "$@"; host="$2"; shift 2 ;;
+    --live-only) live_only=1; shift ;;
+    --accept) need "$@"; accepts="$accepts $2 "; shift 2 ;;
+    --checks) need "$@"; checks_dir="$2"; shift 2 ;;
+    --report-root) need "$@"; report_root="$2"; shift 2 ;;
+    *) echo "diag: unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+case "$gate_sel" in 0|A|B|C|D|all) ;; *) echo "diag: --gate takes 0, A, B, C, D or all" >&2; exit 2 ;; esac
+command -v jq >/dev/null || { echo "diag: jq is required" >&2; exit 2; }
+[[ -d "$checks_dir" ]] || { echo "diag: no checks directory at $checks_dir" >&2; exit 2; }
+
+local_host="$(hostname -s 2>/dev/null || echo unknown)"
+[[ -n "$host" ]] || host="$local_host"
+run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+out="$report_root/$(date -u +%Y-%m-%d)/$run_id"
+mkdir -p "$out/evidence"
+jsonl="$out/report.jsonl"; : > "$jsonl"
+subject_sha="${DIAG_SUBJECT_SHA:-$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo none)}"
+case_timeout="${DIAG_CASE_TIMEOUT:-180}"
+
+# The environment a check sees: the names below and every DIAG_* name, plus any
+# name listed in DIAG_PASS_ENV. Values are never printed by the runner, and a
+# check reads names only (battery rule 5).
+pass_names="PATH HOME LANG TMPDIR USER LOGNAME ${DIAG_PASS_ENV:-}"
+
+names_seen=""   # "gate id case result" rows, tab separated, for the summary
+rows="$out/.rows"; : > "$rows"
+fails_gate0=""
+
+record() { # gate id case expected observed result evidence
+  jq -nc --arg run "$run_id" --arg host "$host" --arg gate "$1" --arg id "$2" \
+    --arg case "$3" --arg expected "$4" --arg observed "$5" --arg result "$6" \
+    --arg evidence "${7:-}" --arg sha "$subject_sha" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{run:$run,host:$host,gate:$gate,id:$id,case:$case,expected:$expected,observed:$observed,result:$result,evidence:$evidence,subject_sha:$sha,ts:$ts}' >> "$jsonl"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" >> "$rows"
+}
+
+code_name() { case "$1" in 0) echo pass ;; 1) echo fail ;; 2) echo skip ;; *) echo instrument ;; esac; }
+
+# header FILE KEY: every "# diag-KEY: value" line, value only.
+header() { sed -n "s/^# diag-$2: *//p" "$1" | head -n 50; }
+
+run_one_case() { # file gate id case ; sets obs_code, ev_path
+  local f="$1" gate="$2" id="$3" cs="$4" envargs=() n
+  ev_path="$out/evidence/$gate.$id.$cs.txt"
+  for n in $pass_names; do
+    if [[ -n "${!n+x}" ]]; then envargs+=("$n=${!n}"); fi
+  done
+  while IFS='=' read -r n _; do
+    if [[ "$n" == DIAG_* ]]; then envargs+=("$n=${!n}"); fi
+  done < <(env)
+  envargs+=("DIAG_RUN=$run_id" "DIAG_HOST=$host" "DIAG_GATE=$gate" "DIAG_ID=$id" "DIAG_CASE=$cs"
+            "DIAG_OUT=$out" "DIAG_LIB=$here/lib" "DIAG_REPO=$repo")
+  obs_code=0
+  # Byte for byte: stdout and stderr go to one file; nothing is filtered.
+  env -i "${envargs[@]}" perl -e 'alarm shift; exec @ARGV or die "exec $ARGV[0]: $!\n"' \
+    "$case_timeout" bash "$f" "$cs" > "$ev_path" 2>&1 || obs_code=$?
+  case "$obs_code" in 0|1|2|3) ;; 142|124) { echo; echo "diag: case timed out after ${case_timeout}s"; } >> "$ev_path"; obs_code=3 ;; *) { echo; echo "diag: check exited $obs_code, which is not a case code"; } >> "$ev_path"; obs_code=3 ;; esac
+}
+
+run_check() { # file gate
+  local f="$1" gate="$2" id mode subject line cs exp cmode obs
+  id="$(header "$f" id | head -n 1)"; mode="$(header "$f" mode | head -n 1)"; subject="$(header "$f" subject | head -n 1)"
+  if [[ -z "$id" ]]; then
+    record "$gate" "$(basename "$f" .sh)" header pass instrument INSTRUMENT "no diag-id header in $f"; return
+  fi
+  local cases=() exps=() cmodes=() pos_obs=""
+  while IFS= read -r line; do
+    cs="${line%% *}"; exp="pass"; cmode="${mode:-scratch}"
+    if [[ "$line" == *"expect="* ]]; then exp="${line##*expect=}"; exp="${exp%% *}"; fi
+    if [[ "$line" == *"mode="* ]]; then cmode="${line##*mode=}"; cmode="${cmode%% *}"; fi
+    cases+=("$cs"); exps+=("$exp"); cmodes+=("$cmode")
+  done < <(header "$f" case)
+  if [[ ${#cases[@]} -eq 0 ]]; then
+    record "$gate" "$id" none pass instrument INSTRUMENT "no diag-case header in $f"; return
+  fi
+  local i obs res ev
+  for i in "${!cases[@]}"; do
+    cs="${cases[$i]}"; exp="${exps[$i]}"; cmode="${cmodes[$i]}"
+    ev="evidence/$gate.$id.$cs.txt"
+    if [[ "$cmode" == interventional ]]; then
+      echo "interventional: proposed; not run until the principal who holds that authority ratifies it" > "$out/$ev"
+      obs=skip; res=SKIP
+    elif [[ "$gate" != 0 && -n "$gate0_block" ]]; then
+      echo "gate 0 did not pass ($gate0_block); the instrument is not trusted, so this case was not run" > "$out/$ev"
+      obs=instrument; res=INSTRUMENT
+    elif [[ $live_only -eq 1 && "$cmode" != live ]]; then
+      echo "skipped under --live-only: mode is $cmode" > "$out/$ev"
+      obs=skip; res=SKIP
+    elif [[ "$cmode" == live && "$host" != "$local_host" ]]; then
+      echo "skipped: a live read runs on its own host; this run is on $local_host and --host says $host" > "$out/$ev"
+      obs=skip; res=SKIP
+    else
+      run_one_case "$f" "$gate" "$id" "$cs"
+      obs="$(code_name "$obs_code")"; res="$(echo "$obs" | tr a-z A-Z)"
+    fi
+    # The pair rule: a negative that passes beside a positive that did not is
+    # an instrument fault, not a pass. A refusal proves nothing when the
+    # instrument refuses everything.
+    if [[ "$cs" == negative && "$obs" == pass && -n "$pos_obs" && "$pos_obs" != pass ]]; then
+      { echo; echo "diag: reported INSTRUMENT, not PASS: the positive case of $id was $pos_obs, so this refusal proves nothing"; } >> "$out/$ev"
+      res=INSTRUMENT
+    fi
+    if [[ "$cs" == positive ]]; then pos_obs="$obs"; fi
+    record "$gate" "$id" "$cs" "$exp" "$obs" "$res" "$ev"
+  done
+}
+
+gate0_block=""
+gates=(0 A B C D)
+if [[ "$gate_sel" != all ]]; then
+  if [[ "$gate_sel" == 0 ]]; then gates=(0); else gates=(0 "$gate_sel"); fi
+fi
+
+for g in "${gates[@]}"; do
+  d="$checks_dir/$g"
+  files=()
+  if [[ "$g" == 0 ]]; then
+    if [[ -f "$here/gate0.sh" ]]; then files=("$here/gate0.sh"); fi
+    if [[ -n "${DIAG_GATE0:-}" ]]; then files=("$DIAG_GATE0"); fi
+  elif [[ -d "$d" ]]; then
+    while IFS= read -r x; do files+=("$x"); done < <(find "$d" -maxdepth 1 -name '*.sh' -type f | LC_ALL=C sort)
+  fi
+  if [[ ${#files[@]} -eq 0 ]]; then
+    record "$g" none none none skip "NONE-REGISTERED"
+    continue
+  fi
+  for f in "${files[@]}"; do run_check "$f" "$g"; done
+  if [[ "$g" == 0 ]]; then
+    # A skip does not block (a scratch case under --live-only); a fail or an
+    # instrument fault in the control does.
+    bad="$(awk -F'\t' '$1=="0" && ($5=="fail"||$5=="instrument"){printf "%s.%s ", $2, $3}' "$rows")"
+    if [[ -n "$bad" ]]; then gate0_block="$bad"; fi
+  fi
+done
+
+# --- the rendered table and the gate lines ------------------------------------
+{
+  echo "diag run $run_id on $host (subject $subject_sha)"
+  echo "report: $out"
+  echo
+  printf '%-5s %-10s %-14s %-11s %-11s %-11s\n' GATE ID CASE EXPECTED OBSERVED RESULT
+  while IFS=$'\t' read -r g id cs exp obs res; do
+    if [[ "$res" == NONE-REGISTERED ]]; then
+      printf '%-5s %-10s %s\n' "$g" "-" "no checks registered for this gate"; continue
+    fi
+    flag=""; [[ "$obs" != "$exp" ]] && flag="  <- not as registered"
+    printf '%-5s %-10s %-14s %-11s %-11s %-11s%s\n' "$g" "$id" "$cs" "$exp" "$obs" "$res" "$flag"
+  done < "$rows"
+  echo
+  for g in "${gates[@]}"; do
+    if awk -F'\t' -v g="$g" '$1==g && $6=="NONE-REGISTERED"{f=1} END{exit !f}' "$rows"; then
+      echo "gate $g: no checks registered; this is not a pass"; continue
+    fi
+    notready="$(awk -F'\t' -v g="$g" -v acc="$accepts" '
+      $1==g && $6!="PASS" {
+        key=$2 "." $3
+        if ($6=="FAIL" && $4=="fail" && index(acc, " " key " ")) next
+        printf "%s ", key
+      }' "$rows")"
+    if [[ -z "$notready" ]]; then echo "gate $g: gate-ready"; else echo "gate $g: not gate-ready: $notready"; fi
+  done
+  echo
+  echo "The gate call is director's, taken after reading this report. This runner exits 0."
+} | tee "$out/report.txt"
+rm -f "$rows"
+exit 0
