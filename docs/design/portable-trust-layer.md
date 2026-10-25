@@ -53,17 +53,18 @@ A role's **never** list joins the deployment's protected class for that seat. A 
 
 ## 4. Launch-time projection (marvel)
 
-What exists, read from marvel's source on `main` (cfe0a01, 2026-10-19):
+What exists, read from marvel's source on `main` (13e385e, 2026-10-25):
 
 - A role may reference a `Policy`. At spawn, and again on every live re-projection, the session manager writes that policy's settings to a per-session file and passes it to the harness (`--settings` for claude and forestage).
 - Each runtime adapter answers `ProjectionFor`. claude and forestage report a surface. codex, opencode, generic and the simulator report none, so a policy on those roles is logged as advisory.
-- Projection is best-effort: if the write fails, the session launches unprojected.
+- Projection of inline settings is best-effort: if the write fails, the session launches unprojected.
+- A policy may instead name a `settings_file`, which marvel reads verbatim at each projection and re-reads on each reconcile. If that file cannot be read, marvel holds the spawn rather than launch the seat without the rules the file carries (marvel#1061).
 
 What changes:
 
-1. The policy's content comes from the generator (inventory + the seat's role from the role library + the trust chain), not from a hand-written block in each manifest. A hand-written `Policy` remains valid and takes precedence while a deployment migrates.
+1. The policy's content comes from the generator (inventory + the seat's role from the role library + the trust chain), not from a hand-written block in each manifest. The generator writes a `settings_file`, so a generated policy inherits the held spawn above. A hand-written `Policy` remains valid and takes precedence while a deployment migrates.
 2. The inventory is referenced once per cluster or workspace. A host change, such as a new production target, re-projects every live seat on that cluster, using the re-projection path that exists today.
-3. A role whose effective protected class is non-empty fails closed: if projection fails, the seat does not launch. Today's best-effort launch stays the behavior for roles with nothing protected. Because the inventory's `protected` list applies to every seat, a deployment with any entry in that list fails closed for every seat; best-effort launch survives only where that list and the role's **never** list are both empty.
+3. A role whose effective protected class is non-empty fails closed: if projection fails, the seat does not launch. A file-backed policy already behaves this way when its file cannot be read; what remains is a protected role whose policy is inline or missing. Today's best-effort launch stays the behavior for roles with nothing protected. Because the inventory's `protected` list applies to every seat, a deployment with any entry in that list fails closed for every seat; best-effort launch survives only where that list and the role's **never** list are both empty.
 4. Adapters for codex, opencode and generic gain a projection surface (section 6), each reporting what it can and cannot enforce, so a gap shows in `marvel describe` instead of being silent.
 
 ## 5. The deployment inventory
@@ -208,8 +209,8 @@ Reading that block against this table is the cheapest test of the design. Any en
 **marvel**
 
 - *Inventory reference on the cluster.* Let a cluster or workspace name its inventory file, and re-project live seats when it changes.
-- *Generated policy input.* Feed projection from the generator, with a hand-written `Policy` taking precedence during migration.
-- *Fail closed on a protected role.* When a role's protected class is non-empty and projection fails, refuse the launch instead of launching unprojected.
+- *Generated policy input.* Feed projection from the generator through a policy's `settings_file`, which marvel already reads and re-reads (marvel#1061), with a hand-written `Policy` taking precedence during migration.
+- *Fail closed on a protected role.* A file-backed policy already holds the spawn when its file cannot be read (marvel#1061). Extend that to a role whose protected class is non-empty and whose policy is inline or missing.
 - *codex projection surface.* Emit `-s`, `-a` and the trust setting from the generator, and report what codex cannot enforce.
 - *opencode projection surface.* Merge the generator's `permission` key into the `OPENCODE_CONFIG_CONTENT` JSON a deployment already passes for MCP, and settle whether marvel takes that JSON over from the manifest or the generator edits the manifest's value.
 - *generic projection for crush.* Write `permissions.allowed_tools`, and surface "protected class not enforceable" in `marvel describe`.
