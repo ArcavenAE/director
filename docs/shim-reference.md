@@ -476,6 +476,56 @@ each returned as the tool's error text:
 the broker cannot tell apart. A broker refusal is reported as it came back
 and is not retried.
 
+### `cancel_held` (presence watch only)
+
+Withdraws a send the presence watch is holding, optionally naming the later
+send that replaces it. A cancelled send is never released. The tool is
+offered only when the presence watch is on (`DIRECTOR_PRESENCE_WATCH=1`);
+with the watch off it is not in the catalog, and a call to it is answered
+`unknown tool: cancel_held`. It is not read-only (`readOnlyHint` false).
+
+With the watch on, a send to a global address that presence refuses is held
+rather than refused, unless the send passed `fail_fast`. That send's result
+carries `status` `held, not delivered`, its `message_id`, a `hold_id`, `to`,
+`reason`, `sell_by` and a `note`. The hold id is the envelope's
+`message_id`.
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `id` | yes | the hold id the `send_message` result gave |
+| `replacement` | no | the hold id of the later send that supersedes this one |
+
+Only a send whose current state is `held` or `proposed` can be cancelled.
+The cancel is recorded as a new line in the held store with state
+`cancelled`, and `superseded_by` set to the replacement when one is named.
+
+Result:
+
+```json
+{
+  "status": "cancelled",
+  "id": "01M2K9Q2Q3WTRB0D6FRWAS0R0J",
+  "superseded_by": "",
+  "note": "it will not be sent"
+}
+```
+
+`superseded_by` is the `replacement` argument as given, or empty.
+
+Refusals, each returned as the tool's error text:
+
+| Case | Text |
+|---|---|
+| the session has no held store (the watch is on but its store is not open) | `cancel_held: the presence watch is off for this session (DIRECTOR_PRESENCE_WATCH is not 1), so nothing is held` |
+| `id` missing, empty, or the arguments do not parse | `cancel_held: give the id of the held send` |
+| no record has that id | `cancel_held: no held send has the id <id>` |
+| the record is not `held` or `proposed` | `cancel_held: <id> is <state>, and only a held or proposed send can be cancelled` |
+| `replacement` names no record in the held store | `cancel_held: the replacement <replacement> is not a held send` |
+
+An error reading or writing the held store is returned as it came. The
+`replacement` check finds a record by id in any state; it does not require
+that send to be `held`.
+
 ### `mark_handled` (handled mode only)
 
 | Argument | Required | Meaning |
