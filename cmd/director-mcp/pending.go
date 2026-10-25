@@ -35,7 +35,12 @@ import (
 // Each tier keeps a FIFO of (how many, first seen). Arrivals, max(0, T -
 // T_prev), are pushed stamped at the PREVIOUS sample, the latest moment they
 // were known not to be there. Each batch also keeps the stream's last
-// sequence at the sample that counted it, an upper bound on its messages.
+// sequence at the sample that counted it, an upper bound on its messages. The
+// inbox streams are shared, so that bound is normally above this seat's own
+// mail; on a sample with nothing undelivered it drops to Delivered.Stream.
+// While some mail is undelivered the bound stays where it was, and an acked
+// batch then pops once the ack floor passes it, which on nats-server happens
+// at the ack, since the broker moves the floor past other seats' sequences.
 // Then the batches reconcile to the count. With nothing held ack-pending,
 // every counted message is undelivered, and those leave in stream order, so
 // the front is popped while the total is above the count. With mail held, a
@@ -127,13 +132,23 @@ func (p *pendingTracker) mark(tier string, s pendingSample) {
 	if prev.IsZero() {
 		prev = s.at // a first sample is stamped at its own time
 	}
+	// hi is the stream-wide last sequence, and the inbox streams are shared, so
+	// it is normally above this seat's own mail. With nothing undelivered every
+	// counted message is at or below Delivered.Stream, so hi drops to it. The
+	// broker also moves the ack floor past other seats' sequences, so this
+	// guards the pop rather than being the only thing that makes it work.
+	allDelivered := s.unread > 0 && s.unread == s.ackPending && s.delivered > 0
+	hi := s.lastSeq
+	if allDelivered && (hi == 0 || hi > s.delivered) {
+		hi = s.delivered
+	}
 	push := func(n uint64) {
 		if k := len(t.batches); k > 0 && t.batches[k-1].seen.Equal(prev) {
 			t.batches[k-1].n += n
-			t.batches[k-1].hi = max(t.batches[k-1].hi, s.lastSeq)
+			t.batches[k-1].hi = max(t.batches[k-1].hi, hi)
 			return
 		}
-		t.batches = append(t.batches, pendingBatch{n: n, seen: prev, hi: s.lastSeq})
+		t.batches = append(t.batches, pendingBatch{n: n, seen: prev, hi: hi})
 	}
 	if t.haveTotal && s.haveTotal && s.total > t.total {
 		push(s.total - t.total)
@@ -147,6 +162,13 @@ func (p *pendingTracker) mark(tier string, s pendingSample) {
 	// floor has passed are gone then, and the rest stay, so the age reads high
 	// rather than low. With nothing held, every counted message is undelivered,
 	// and those leave in stream order, so the front is popped by count.
+	if allDelivered {
+		for i := range t.batches {
+			if t.batches[i].hi == 0 || t.batches[i].hi > s.delivered {
+				t.batches[i].hi = s.delivered
+			}
+		}
+	}
 	for s.ackPending > 0 && len(t.batches) > 0 && t.batches[0].hi > 0 && t.batches[0].hi <= s.ackFloor {
 		sum -= t.batches[0].n
 		t.batches = t.batches[1:]
@@ -280,7 +302,7 @@ func (b *Bus) readTier(ctx context.Context, tier string, js jetstream.JetStream,
 // unacked mail all arrived after it. A failed or timed-out read marks the
 // sample failed.
 func sampleOf(ctx context.Context, js jetstream.JetStream, stream string, info *jetstream.ConsumerInfo, at time.Time) pendingSample {
-	s := pendingSample{unread: info.NumPending + uint64(info.NumAckPending), ackPending: uint64(info.NumAckPending), ackFloor: info.AckFloor.Stream, at: at}
+	s := pendingSample{unread: info.NumPending + uint64(info.NumAckPending), ackPending: uint64(info.NumAckPending), ackFloor: info.AckFloor.Stream, delivered: info.Delivered.Stream, at: at}
 	if s.unread == 0 {
 		return s
 	}
