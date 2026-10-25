@@ -225,6 +225,13 @@ Separately, the one-on-one engagement multipliers often quoted with the cadence
 finding are UNCONFIRMED (secondary aggregators only); the cadence itself
 (weekly to biweekly) is supported, the multipliers are not.
 
+Note (2026-10-25): a review of director#423 found that the primary page cited
+for the one-on-one cadence (`gallup-great-manager-2023`, lines 164 and 165)
+supports a weekly cadence only. The biweekly bound and the tightening for new
+or struggling reports are therefore unconfirmed, and so is "(weekly to
+biweekly) is supported" above. The 2026-09-23 sentence is left as written; cite
+a source for those two parts before any downstream use.
+
 ---
 
 ## Question 3: Escalation discipline. Decide versus elevate
