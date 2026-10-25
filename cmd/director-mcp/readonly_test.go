@@ -12,8 +12,9 @@ import (
 
 // Each tool declares readOnlyHint, so a harness that lets read-only tools
 // through plan mode can let a plan-mode cast poll the bus (aae-orc-r675b).
-// The three that only read the bus are true; the four that write are false.
+// The four that only read the bus are true; the four that write are false.
 var wantReadOnly = map[string]bool{
+	"audit_lookup":     true,
 	"wait_for_message": true,
 	"inbox_summary":    true,
 	"list_roster":      true,
@@ -72,7 +73,7 @@ func TestEveryToolDeclaresReadOnlyHint(t *testing.T) {
 					name := fmt.Sprintf("global=%v cue=%v handled=%v watch=%v", gcfg != nil, cueOn, handledOn, watchOn)
 					t.Run(name, func(t *testing.T) {
 						tools := servedTools(t, gcfg, cueOn, handledOn, watchOn)
-						want := 7
+						want := 8
 						if handledOn {
 							want++
 						}
@@ -107,7 +108,7 @@ func TestEveryToolDeclaresReadOnlyHint(t *testing.T) {
 }
 
 // The exact tools/list result the server serves, with everything off, and with
-// handled mode and the presence watch on (all nine tools). Run with
+// handled mode and the presence watch on (all ten tools). Run with
 // DIRECTOR_UPDATE_GOLDEN=1 to rewrite them after an intended change.
 func TestToolsListMatchesTheGolden(t *testing.T) {
 	for _, c := range []struct {

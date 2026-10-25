@@ -179,6 +179,34 @@
       }
     },
     {
+      "name": "audit_lookup",
+      "description": "Read one record of this cluster's audit log (AGENT_AUDIT) by its sequence number. Use only the number from a refusal's audit text, \"audit: recorded agent.audit seq N on cluster \u003cname\u003e\", never the sequence in a send result, which numbers a different stream. cluster must be this session's own cluster; a record on another cluster is read there with marvel bus audit \u003cseq\u003e --cluster \u003cname\u003e. message_id, when given, must be the record's, which binds the number to one record. A record holds the full envelope of a send, its text included, and any session on this cluster can read any record on its audit log by number. Reads only: it never publishes, acks, deletes or creates a consumer.",
+      "inputSchema": {
+        "properties": {
+          "cluster": {
+            "description": "this session's cluster, as named in the audit text",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "optional: the envelope's message_id; the record's Nats-Msg-Id must be it or it plus -refused",
+            "type": "string"
+          },
+          "seq": {
+            "description": "the audit record's sequence number, 1 or more",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cluster",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
       "name": "mark_handled",
       "description": "Record what you did with a message you read, then ack it. The record is written first and the ack second. handled: you acted. forwarded: you passed it on (give the forward's message_id). parked: it waits (give a one-line reason); a parked message is acked and stays visible through the ledger. Offered only when the handled mode is on.",
       "inputSchema": {
