@@ -33,22 +33,33 @@ import (
 //
 // Each tier keeps a FIFO of (how many, first seen). Arrivals, max(0, T -
 // T_prev), are pushed stamped at the PREVIOUS sample, the latest moment they
-// were known not to be there. Then the batches reconcile to NumPending: the
-// front is popped while the total is above it, since a consumer delivers in
-// stream order, and any shortfall is pushed at the previous sample. A message
-// that leaves while another arrives inside one sample therefore cannot pass its
-// age on, and a redelivery moves neither T nor NumPending. A message aging out
-// by the stream's limits while another arrives makes T undercount arrivals;
-// the shortfall push stamps the newcomer at the previous sample, so the age
-// does not read low. A drop with no delivery (an age-out or a delete) keeps
-// older batches, so the age reads high.
+// were known not to be there. Each batch also keeps the stream's last
+// sequence at the sample that counted it, an upper bound on its messages.
+// Then the batches reconcile to the count. With nothing held ack-pending,
+// every counted message is undelivered, and those leave in stream order, so
+// the front is popped while the total is above the count. With mail held, a
+// fall in the count can be an ack out of stream order (mark_handled acks the
+// message the seat names, and a Nak'd message stays while later ones are
+// acked), so only batches the consumer's AckFloor.Stream has passed are
+// popped. Either way any shortfall is pushed at the previous sample. A
+// message that leaves while another arrives inside one sample therefore
+// cannot pass its age on, and a redelivery moves neither T nor the count. A
+// message aging out by the stream's limits while another arrives makes T
+// undercount arrivals; the shortfall push stamps the newcomer at the previous
+// sample, so the age does not read low. A drop with no delivery (an age-out or
+// a delete) keeps older batches, so the age reads high.
 //
-// From the second sample on the age never reads low, and it reads high by at
-// most one sample: 2 s while the cue watcher samples, 30 s on the heartbeat
-// when it does not. A tier's first sample has nothing before it, so a backlog
-// present at start is stamped at that sample's own time and reads young. With
-// NumPending 0 on the sample before, every message unread now arrived after
-// it, so T is not read on an empty sample.
+// From the second sample on the age does not read low: an ack out of order
+// pops nothing the ack floor has not passed. It reads high by at most one
+// sample (2 s while the cue watcher samples, 30 s on the heartbeat when it
+// does not) while nothing is held. While mail is held it can read high for
+// longer: a batch stays whole until the floor passes all of it, so a message
+// acked first can leave a later one in its batch with the batch's older
+// stamp, and an age-out of undelivered mail pops nothing. A tier's first
+// sample has nothing before it, so a backlog present at start is stamped at
+// that sample's own time and reads young. With a count of 0 on the sample
+// before, every message unacked now arrived after it, so T is not read on an
+// empty sample.
 //
 // A sample stamped before the last one applied is dropped. A stream read that
 // fails or times out marks the tier unverified until its next good sample: its
@@ -72,6 +83,9 @@ type tierPending struct {
 type pendingBatch struct {
 	n    uint64
 	seen time.Time
+	// hi is the stream's last sequence at the sample that counted the batch,
+	// so every message in it is at or below hi; 0 when it was not read.
+	hi uint64
 }
 
 // pendingSample is one tier's state, read after at. failed, when set, is why
@@ -81,6 +95,8 @@ type pendingSample struct {
 	ackPending uint64 // NumAckPending
 	total      uint64 // T, valid when haveTotal
 	haveTotal  bool
+	lastSeq    uint64 // the stream's last sequence, read with T; 0 when not read
+	ackFloor   uint64 // the consumer's AckFloor.Stream
 	failed     string
 	at         time.Time
 }
@@ -112,9 +128,10 @@ func (p *pendingTracker) mark(tier string, s pendingSample) {
 	push := func(n uint64) {
 		if k := len(t.batches); k > 0 && t.batches[k-1].seen.Equal(prev) {
 			t.batches[k-1].n += n
+			t.batches[k-1].hi = max(t.batches[k-1].hi, s.lastSeq)
 			return
 		}
-		t.batches = append(t.batches, pendingBatch{n: n, seen: prev})
+		t.batches = append(t.batches, pendingBatch{n: n, seen: prev, hi: s.lastSeq})
 	}
 	if t.haveTotal && s.haveTotal && s.total > t.total {
 		push(s.total - t.total)
@@ -123,7 +140,16 @@ func (p *pendingTracker) mark(tier string, s pendingSample) {
 	for _, b := range t.batches {
 		sum += b.n
 	}
-	for sum > s.unread && len(t.batches) > 0 {
+	// With mail held ack-pending, a fall in the count can be an ack out of
+	// stream order, which says nothing about the front. Only batches the ack
+	// floor has passed are gone then, and the rest stay, so the age reads high
+	// rather than low. With nothing held, every counted message is undelivered,
+	// and those leave in stream order, so the front is popped by count.
+	for s.ackPending > 0 && len(t.batches) > 0 && t.batches[0].hi > 0 && t.batches[0].hi <= s.ackFloor {
+		sum -= t.batches[0].n
+		t.batches = t.batches[1:]
+	}
+	for s.ackPending == 0 && sum > s.unread && len(t.batches) > 0 {
 		drop := min(sum-s.unread, t.batches[0].n)
 		t.batches[0].n -= drop
 		sum -= drop
@@ -252,7 +278,7 @@ func (b *Bus) readTier(ctx context.Context, tier string, js jetstream.JetStream,
 // unacked mail all arrived after it. A failed or timed-out read marks the
 // sample failed.
 func sampleOf(ctx context.Context, js jetstream.JetStream, stream string, info *jetstream.ConsumerInfo, at time.Time) pendingSample {
-	s := pendingSample{unread: info.NumPending + uint64(info.NumAckPending), ackPending: uint64(info.NumAckPending), at: at}
+	s := pendingSample{unread: info.NumPending + uint64(info.NumAckPending), ackPending: uint64(info.NumAckPending), ackFloor: info.AckFloor.Stream, at: at}
 	if s.unread == 0 {
 		return s
 	}
@@ -272,6 +298,7 @@ func sampleOf(ctx context.Context, js jetstream.JetStream, stream string, info *
 			return s
 		}
 		s.total += si.State.Subjects[subj]
+		s.lastSeq = max(s.lastSeq, si.State.LastSeq)
 	}
 	s.haveTotal = true
 	return s

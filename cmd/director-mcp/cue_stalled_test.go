@@ -197,6 +197,45 @@ func smp(unread, total uint64, s int) pendingSample {
 	return pendingSample{unread: unread, total: total, haveTotal: unread > 0, at: atS(s)}
 }
 
+// held is a sample with mail held ack-pending: the count, how many of it are
+// ack-pending, T (with the stream holding only this consumer's subjects, its
+// last sequence is T too), the ack floor and the second.
+func held(unread, ackPending, total, floor uint64, s int) pendingSample {
+	return pendingSample{unread: unread, ackPending: ackPending, total: total, haveTotal: true,
+		lastSeq: total, ackFloor: floor, at: atS(s)}
+}
+
+// Review 5640723021, its samples: A is held from 0; B arrives at 2900 and is
+// acked at 3000 while A is still held. The ack floor has not passed A, so A
+// keeps its age; once A is acked nothing waits.
+func TestTrackerAnOutOfOrderAckPopsNothingTheFloorHasNotPassed(t *testing.T) {
+	var p pendingTracker
+	p.mark("local", held(1, 1, 1, 0, 0))
+	p.mark("local", held(1, 1, 1, 0, 2800))
+	p.mark("local", held(2, 2, 2, 0, 2900))
+	p.mark("local", held(1, 1, 2, 0, 3000)) // B acked, A held
+	if got := p.age(atS(3000)); got != 3000*time.Second {
+		t.Fatalf("A has waited since 0: want 3000s, got %s", got)
+	}
+	p.mark("local", held(0, 0, 2, 2, 3100)) // A acked
+	if got := p.age(atS(3100)); got != 0 {
+		t.Fatalf("both acked: want 0, got %s", got)
+	}
+}
+
+// The in-order case: A is acked first, so the floor passes A's batch and B,
+// still held, ages from its own batch.
+func TestTrackerAnInOrderAckPopsTheBatchTheFloorPassed(t *testing.T) {
+	var p pendingTracker
+	p.mark("local", held(1, 1, 1, 0, 0))
+	p.mark("local", held(1, 1, 1, 0, 2800))
+	p.mark("local", held(2, 2, 2, 0, 2900)) // B seen at 2800
+	p.mark("local", held(1, 1, 2, 1, 3000)) // A acked, B held
+	if got := p.age(atS(3000)); got != 200*time.Second {
+		t.Fatalf("B was seen at 2800: want 200s, got %s", got)
+	}
+}
+
 // Review 5638952074: A leaves and B arrives inside one sample, so the count
 // stays 1. T rises by one, so B is pushed and A popped: B must not inherit A's
 // first-seen time.
