@@ -52,7 +52,8 @@ its custody comes from reading the CUSTODY store. The note only helps a human
 or a successor orient faster.
 
 Marvel prior art: marvel owns the handoff schema, the departing agent owns the
-content. Director keeps that split but does not require marvel. Without marvel,
+content. (For the shift-change split as ruled on 2026-10-25, see section 5; where
+it differs for custody content, section 5 governs.) Director keeps that split but does not require marvel. Without marvel,
 director writes its own note into the CUSTODY store under a schema director
 defines; the departing session supplies the content.
 
@@ -183,6 +184,8 @@ currently ends at R-48).
 - The boundary between director's CUSTODY store and marvel's handoff artifact.
   Does director's store subsume marvel's, or complement it, when both are
   present? Marvel owns the shift schema; director must degrade without marvel.
+  Section 5 rules the split for a shift change; what stays open is how the
+  CUSTODY store and the handoff file relate when both are present.
 - Write-through cost at high ask volume. Every transition is a KV write plus a
   journal append. Does volume force batching, and does batching reopen the gap
   window CUST-E closes? Name the tension; do not resolve it here.
@@ -196,3 +199,49 @@ currently ends at R-48).
 - Cross-host succession (future, past the physical-access phase): custody in a
   KV on one broker, a successor on another host. How does custody replicate?
   Deferred; the physical-access phase is single-broker.
+
+## 5. Handoffs and shift changes: who owns what
+
+Operator ruling, 2026-10-25, relayed by director, "yes pass it on", accepting
+this split between marvel and director.
+
+**marvel's side, in one line.** marvel owns the mechanics of a shift: the
+triggers, the handoff request, the waiting period, the "handoff complete"
+check, starting the successor and stopping the old seat, and it keeps a handoff
+check of its own that does not depend on director (component independence). The
+marvel design is in the marvel repository,
+`_kos/ideas/shift-change-succession-protocol.md` and
+`docs/design/shift-trigger-list.md`; this section does not restate it.
+
+**What director owns: custody.** Two things.
+
+1. **What a handoff must contain.** A seat's handoff names the pointers to every
+   record the seat holds, what is in flight, what it ruled out and why, what it
+   is dropping, and every ask it holds by ask id. The ask ids are pointers: the
+   asks themselves stay in the CUSTODY view (CUST-A, CUST-B), so a handoff that
+   omits one does not lose it, and the post-shift check below finds the gap.
+2. **The check after a shift that the successor holds every ask the old seat
+   held.** When a shift completes, director lists the live asks in the CUSTODY
+   view whose owner is the old seat and checks each is now held by the
+   successor (owner reassigned, or acknowledged by the successor). An ask the
+   successor does not hold is reported by ask id as a named class, not dropped
+   and not re-routed silently (CUST-F). The check reads custody and the handoff
+   file; it does not delay marvel's start of the successor or stop of the old
+   seat, which are marvel's steps.
+
+**The handoff file is director-side content.** Its content is defined here and
+by the role's handoff rule, not by marvel. marvel only checks the path the seat
+config gives it, which on every cluster is
+`~/.director/state/{session}/handoff.md`, and the completion marker the
+manifest declares. marvel does not read the file for meaning, and director does
+not take part in marvel's "handoff complete" decision. This is the same
+orientation-note status as section 1.3: the file is a convenience layered on
+the CUSTODY store, never the source of truth for a successor's custody
+(CUST-B).
+
+Where this differs from the earlier idea that marvel owns the handoff schema
+and the departing agent owns the content (section 1.3), the split above is the
+ruled one for custody content. How "handoff complete" should be judged is
+director's open question in `_kos/ideas/shift-change-handoff-complete.md`, which
+this section does not settle: it settles who owns which half, not what
+complete means.
