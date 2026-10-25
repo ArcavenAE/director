@@ -2539,9 +2539,13 @@ def cmd_merge_hold(a):
     want = f"pr:{m.group(1).lower()}#{m.group(2)}"
     decisions = {}
     try:
-        rows, _ = fold(decisions=decisions)
+        rows, torn = fold(decisions=decisions)
     except OSError as err:
         print(f"dws: the ledger cannot be read ({type(err).__name__})", file=sys.stderr)
+        sys.exit(2)
+    if torn:
+        # A torn line may be the wait event that holds this PR; skipping it would let the PR through.
+        print(f"dws: {torn} unreadable line(s) in {LEDGER}; cannot tell whether a row waits on {a.pr}, so the merge is held", file=sys.stderr)
         sys.exit(2)
     held = []
     for r in sorted(rows.values(), key=lambda r: r["slug"]):

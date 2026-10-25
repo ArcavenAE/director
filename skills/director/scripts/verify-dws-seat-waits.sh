@@ -224,5 +224,21 @@ accepts "merge-hold ignores the case of the repo" "$DWS" merge-hold arcavenae/di
 "$DWS" decision confirm $D1 --words yes --ref relay:R-9 >/dev/null 2>&1
 accepts "merge-hold lets the PR through once the decision is confirmed" "$DWS" merge-hold ArcavenAE/director#901
 
+# A torn ledger line may be the very wait event that holds this PR, so merge-hold cannot call it clean.
+fresh s10; at 2026-10-20T12:00:00Z
+row ra; row rb; dec $D1
+"$DWS" link ra pr:ArcavenAE/director#902 >/dev/null 2>&1; "$DWS" set ra --waits "decision:$D1" >/dev/null 2>&1
+python3 - "$LEDGER" <<'P'
+import sys
+p = sys.argv[1]
+b = open(p, "rb").read().rstrip(b"\n")
+cut = b.rfind(b"\n") + 1
+last = b[cut:]
+open(p, "wb").write(b[:cut] + last[: len(last) // 2] + b"\n")  # the last event (the wait) cut in half
+P
+rc=0; "$DWS" merge-hold ArcavenAE/director#902 >"$root/o" 2>"$root/e" || rc=$?
+if [[ $rc -eq 2 ]] && grep -qE '1 unreadable line' "$root/e"; then ok "merge-hold exits 2 and names the torn count when a ledger line is cut"
+else bad "merge-hold exits 2 and names the torn count when a ledger line is cut" "rc=$rc $(cat "$root/e")"; fi
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

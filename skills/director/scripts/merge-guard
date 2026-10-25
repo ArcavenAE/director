@@ -114,7 +114,7 @@ fi
 # Seat decisions: nothing waiting on an unconfirmed decision merges (seat-decide-window).
 ledger="${DIRECTOR_STATE:-$HOME/.director/state}/workstreams.jsonl"
 dws="${MERGE_GUARD_DWS:-$(dirname -- "$0")/dws}"
-[[ -e "$ledger" ]] || stop "no workstream ledger at $ledger; the guard cannot tell a PR that waits on a seat decision from one that does not (seat-decide-window)"
+[[ -e "$ledger" ]] || stop "no workstream ledger at $ledger; the guard cannot tell a PR that waits on a seat decision from one that does not (seat-decide-window); an empty ledger file says no row waits, and creating one is the remedy"
 [[ -f "$ledger" ]] || stop "the ledger path $ledger exists and is not a file; cannot read the seat decisions"
 [[ -x "$dws" ]] || stop "dws not found at $dws; cannot read the seat decisions (seat-decide-window)"
 hold_rc=0
