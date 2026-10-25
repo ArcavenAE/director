@@ -7,10 +7,12 @@
 # diagnostic: a run that started always exits 0, whatever the cases found. The
 # battery is never wired into CI, branch protection or a hook (diagnostic-not-gate).
 #
-# Usage: diag run [--gate 0|A|B|C|D|all] [--host NAME] [--live-only]
+# Usage: diag run [--gate 0|A|B|C|D|all] [--host NAME] [--live] [--live-only]
 #                 [--accept ID.CASE]... [--checks DIR] [--report-root DIR]
 #        diag --help
 # A bad command line exits 2 and starts no run.
+# A default run touches nothing live: a live case (a connect to a broker or hub,
+# a gh call) runs only under --live or --live-only, and is SKIP otherwise.
 #
 # Per-case exit codes of a check:  0 pass, 1 fail, 2 skip, 3 instrument.
 set -euo pipefail
@@ -28,14 +30,15 @@ case "$1" in
 esac
 
 need() { if [[ $# -lt 2 || -z "$2" ]]; then echo "diag: $1 needs a value" >&2; exit 2; fi; }
-gate_sel="all"; host=""; live_only=0; checks_dir="$here/checks"
+gate_sel="all"; host=""; live_only=0; live_ok=0; checks_dir="$here/checks"
 report_root="${DIAG_REPORT_ROOT:-${DIRECTOR_HOME:-$HOME/.director}/state/diag}"
 accepts=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --gate) need "$@"; gate_sel="$2"; shift 2 ;;
     --host) need "$@"; host="$2"; shift 2 ;;
-    --live-only) live_only=1; shift ;;
+    --live) live_ok=1; shift ;;
+    --live-only) live_only=1; live_ok=1; shift ;;
     --accept) need "$@"; accepts="$accepts $2 "; shift 2 ;;
     --checks) need "$@"; checks_dir="$2"; shift 2 ;;
     --report-root) need "$@"; report_root="$2"; shift 2 ;;
@@ -111,8 +114,12 @@ run_check() { # file gate
   if [[ ${#cases[@]} -eq 0 ]]; then
     record "$gate" "$id" none pass instrument INSTRUMENT "no diag-case header in $f"; return
   fi
-  local i obs res ev
-  for i in "${!cases[@]}"; do
+  local i obs res ev order=()
+  # The positive case runs first, whatever order the header lists them in, so
+  # the pair rule below sees it before the negative.
+  for i in "${!cases[@]}"; do if [[ "${cases[$i]}" == positive ]]; then order+=("$i"); fi; done
+  for i in "${!cases[@]}"; do if [[ "${cases[$i]}" != positive ]]; then order+=("$i"); fi; done
+  for i in "${order[@]}"; do
     cs="${cases[$i]}"; exp="${exps[$i]}"; cmode="${cmodes[$i]}"
     ev="evidence/$gate.$id.$cs.txt"
     if [[ "$cmode" == interventional ]]; then
@@ -123,6 +130,9 @@ run_check() { # file gate
       obs=instrument; res=INSTRUMENT
     elif [[ $live_only -eq 1 && "$cmode" != live ]]; then
       echo "skipped under --live-only: mode is $cmode" > "$out/$ev"
+      obs=skip; res=SKIP
+    elif [[ "$cmode" == live && $live_ok -eq 0 ]]; then
+      echo "skipped: a live case connects to or calls something outside this run; pass --live or --live-only to run it" > "$out/$ev"
       obs=skip; res=SKIP
     elif [[ "$cmode" == live && "$host" != "$local_host" ]]; then
       echo "skipped: a live read runs on its own host; this run is on $local_host and --host says $host" > "$out/$ev"

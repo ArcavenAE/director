@@ -15,7 +15,8 @@
 # gh answers. If any case here fails, every later case reports INSTRUMENT, never
 # FAIL, so a broken instrument cannot read as a broken subject.
 #
-# The two live cases only connect and read. Nothing here publishes to a bus,
+# The live cases (broker, hub, gh) run only under `diag run --live` or
+# `--live-only`; a default run skips them. They only connect and read. Nothing here publishes to a bus,
 # changes a daemon or reads a credential.
 #
 #   DIAG_BROKER_ADDR  host:port of the local broker (default 127.0.0.1:4222)
@@ -38,21 +39,32 @@ tcp_up() { # host:port -> 0 reachable, 1 refused or unreachable
   (exec 3<>"/dev/tcp/$h/$p") 2>/dev/null
 }
 
+# Stop what the case started and fold teardown into the result: a daemon that
+# did not stop is an instrument fault, so a PASS never hides it.
+finish() { # finish CASE_RC
+  local rc="$1" down=0
+  trap - EXIT
+  diag_scratch_down || down=$?
+  if [[ $down -ne 0 ]]; then echo "teardown failed (rc=$down); the scratch root may be kept for a person to read"; [[ $rc -eq 0 ]] && rc=3; fi
+  exit "$rc"
+}
+trap 'diag_scratch_down >/dev/null 2>&1 || true' EXIT
+
 case "$case_name" in
   daemon)
-    trap 'diag_scratch_down' EXIT
     diag_scratch_new || exit 3
     diag_scratch_daemon_up; rc=$?
     [[ $rc -eq 0 ]] && echo "scratch daemon answered on its own socket"
-    exit "$rc"
+    finish "$rc"
     ;;
   seat)
-    trap 'diag_scratch_down' EXIT
     diag_scratch_new || exit 3
-    diag_scratch_daemon_up || exit $?
-    diag_scratch_seat_up gate0-seat; rc=$?
-    [[ $rc -eq 0 ]] && echo "simulator seat reached running"
-    exit "$rc"
+    diag_scratch_daemon_up; rc=$?
+    if [[ $rc -eq 0 ]]; then
+      diag_scratch_seat_up gate0-seat; rc=$?
+      [[ $rc -eq 0 ]] && echo "simulator seat reached running"
+    fi
+    finish "$rc"
     ;;
   broker)
     addr="${DIAG_BROKER_ADDR:-127.0.0.1:4222}"

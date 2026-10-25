@@ -7,9 +7,10 @@ the report format and the scratch-daemon helper. The checks for gates A to D
 are separate tickets and land as files under `checks/<gate>/`.
 
 ```sh
-scripts/diag/diag run                     # gate 0, then every registered gate
+scripts/diag/diag run                     # gate 0 (offline cases), then every registered gate
 scripts/diag/diag run --gate A            # gate 0, then gate A
-scripts/diag/diag run --live-only         # read-only live checks only
+scripts/diag/diag run --live              # also run the live cases (read-only connects and calls)
+scripts/diag/diag run --live-only         # the live cases only
 scripts/diag/diag run --gate A --accept A3b.negative
 scripts/diag/verify-diag.sh               # the runner's own proof; no live fleet
 ```
@@ -36,6 +37,11 @@ scripts/diag/verify-diag.sh               # the runner's own proof; no live flee
 - **gate-ready** means every case of the gate is PASS, or each non-PASS case is
   a FAIL registered as `expect=fail` and named by `--accept ID.CASE`. The gate
   call stays with director.
+- **A default run touches nothing live.** A case whose mode is `live` (a
+  connect to the broker or hub, a `gh` call) runs only under `--live` or
+  `--live-only`, and is SKIP otherwise. A skipped gate 0 case keeps gate 0 from
+  reading gate-ready, so a default run never calls a gate on cases it did not
+  run.
 - **Interventional cases never run.** A case whose mode is `interventional` is
   reported SKIP with a note that it awaits the principal who holds that
   authority.
@@ -86,8 +92,10 @@ A check is `checks/<gate>/<id>.sh`, run as `bash <file> <case>`. Its header:
 ```
 
 A case line may add `mode=` to override the check's mode (gate 0 does this).
-`live` is a read only; it runs on its own host and is skipped when `--host`
-names another. Source `lib/scratch.sh` for anything that would change state:
+`live` is a read only; it needs `--live` or `--live-only`, runs on its own host
+and is skipped when `--host` names another. The positive case of a check runs
+first whatever order the header lists them in, so the pair rule never depends on
+header order. Source `lib/scratch.sh` for anything that would change state:
 
 | function | does |
 |---|---|
@@ -108,12 +116,15 @@ set `DIAG_SIMULATOR` or put it on `PATH`.
 own socket), `seat` (a simulator seat reaches running), `broker` (the local
 broker accepts a connection; `DIAG_BROKER_ADDR`, default `127.0.0.1:4222`),
 `hub` (`DIAG_HUB_ADDR`; unset means SKIP, because a hub address is a fact of the
-cluster) and `gh` (the rate-limit endpoint answers). The two live cases connect
-and read; they publish nothing.
+cluster) and `gh` (the rate-limit endpoint answers). `daemon` and `seat` run in a
+default run. `broker`, `hub` and `gh` are live and run only under `--live` or
+`--live-only`; they connect and read, and publish nothing. A scratch daemon that
+does not stop makes its case INSTRUMENT, never PASS.
 
 ## Home
 
 The design places the runner at the orchestrator (`tools/diag/`). It is here,
 in director, because director has no `tools/` directory and `scripts/` already
-holds `director-install` and its verifier. A component may ship its own checks;
+holds `director-install` and its verifier. This recommendation is valid until
+2026-11-01; the builder re-checks it then. A component may ship its own checks;
 no component depends on the battery.
