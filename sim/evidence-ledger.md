@@ -1,6 +1,6 @@
 # Evidence ledger
 
-Public ids for the evidence `sim/requirements.md` cites from the gitignored `sim/notes/`, after `sim/design/corpus-to-brief-and-spectacle.md` section 4 item 5. A row holds only its EV id, the date its first citing entry entered the register, the R ids that cite it, its status and a disposition label. No row carries a note's text or its native id; the crosswalk from EV id to native id is kept outside this repository.
+Public ids for the evidence `sim/requirements.md` cites from the gitignored `sim/notes/`, after section 4 item 5 of the design merged in director#288. A row holds only its EV id, the date its first citing entry entered the register, the R ids that cite it, its status and a disposition label. No row carries a note's text or its native id; the crosswalk from EV id to native id is kept outside this repository.
 
 - **Allocation:** by `sim/research/corpus-fitness/locus.py --ledger`, at director `62b55fc`: dense, in first-citation order, append-only, never reused. This first allocation covers the corpus-fitness probe's 20 sampled entries, which yield 9 rows from 6 entries; the other 14 cite no notes and take no row.
 - **Status:** every row is `withheld`. A row changes only when a seat that holds the note writes its text in its own scanned commit.

@@ -1,6 +1,6 @@
 # Judged columns for the corpus-fitness sample
 
-The judged half of the projection (`sim/design/corpus-to-brief-and-spectacle.md`, section 4 item 3), for the probe's 20 sampled entries only, joined to `projection.tsv` on R id. No parser writes these columns. They are the research team's reading on 2026-10-25, one reader, against director `62b55fc`; valid until 2026-11-08.
+The judged half of the projection (the design merged in director#288, section 4 item 3), for the probe's 20 sampled entries only, joined to `projection.tsv` on R id. No parser writes these columns. They are the research team's reading on 2026-10-25, one reader, against director `62b55fc`; valid until 2026-11-08.
 
 - **Admission** uses the ruled test, "would a working director fix this?", as `skills/director/SKILL.md` states it at the pin (lines 477 to 489; the design's 219 to 232 has drifted). Product mechanism and role contract both count as product.
 - **Layer** applies to product rows only: transport (the message bus, where the shim and its tests exist) or application (not built). The practice row takes none.

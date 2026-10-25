@@ -1,5 +1,5 @@
 {
-  "about": "Evidence id grammar for the sim/requirements.md Earned-by line, after sim/design/corpus-to-brief-and-spectacle.md section 4 item 4. Each pattern is a Python regular expression. A token class decides an entry's evidence locus by the precedence in locus_order. An entry with no Earned-by line is 'none'; one whose Earned-by line holds no token the grammar recognizes is 'unresolved'. A file-name or path token counts as tracked only when it resolves as written: a :line suffix is dropped and the rest must be an exact tracked path at the pin; a bare name that exists only deeper in the tree does not resolve.",
+  "about": "Evidence id grammar for the sim/requirements.md Earned-by line, after section 4 item 4 of the design merged in director#288. Each pattern is a Python regular expression. A token class decides an entry's evidence locus by the precedence in locus_order. An entry with no Earned-by line is 'none'; one whose Earned-by line holds no token the grammar recognizes is 'unresolved'. A file-name or path token counts as tracked only when it resolves as written: a :line suffix is dropped and the rest must be an exact tracked path at the pin; a bare name that exists only deeper in the tree does not resolve.",
   "earned_by": "Earned by:?",
   "token_classes": {
     "tracked": [
