@@ -4,7 +4,7 @@
 - **Status:** spec for review. Nothing is built by this document. Every default marked "proposed" is a recommendation, not a ruling.
 - **Owner:** the architect role writes it; a builder builds it in the core's own repository once the operator names that repository.
 - **Source:** `gh-ingress.md` sections 2 to 4. Where this spec and that design differ, the design wins and this spec is wrong.
-- **Ticket:** to be added.
+- **Ticket:** aae-orc-p3npo. Refs: aae-orc-bstdv, aae-orc-i4im0, aae-orc-kht67.
 
 The operator agreed on 2026-10-26 to start the Rust status core. Build 1 gives the fleet one process that reads GitHub on a fixed query set and a local view that any seat or display reads without calling GitHub. It publishes nowhere, so nothing in the broker's authorization work gates it (`gh-ingress.md` section 7, item 1).
 
