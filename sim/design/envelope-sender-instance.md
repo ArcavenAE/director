@@ -1,5 +1,7 @@
 # The envelope's sender.instance field
 
+Closed 2026-10-25: realized, sender.instance is on every envelope
+
 Status: design for review, 2026-10-02. Owner: the architect role. Unblocks
 director#190 (review 5393494558) and amends the merged unread slice M design
 (`sim/design/unread-slice-m.md`, director#185). Design only; builds route

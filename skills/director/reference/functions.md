@@ -59,8 +59,8 @@ in local or private state.
 - **Writers:** `dws` (`skills/director/scripts/dws`). Enforced: one `flock`
   around fold, check and append, a stage move that names a stale `--from`
   is refused, and the writer table allows `director` every event and
-  `refresh` only `observe` and two factual stage moves
-  (`board-workstream-ledger.md` section 6). Honor-only: the actor itself.
+  `refresh` only `observe`, two factual stage moves
+  (`board-workstream-ledger.md` section 6) and the LF4 clear below. Honor-only: the actor itself.
   The table is an allowlist over `--actor`, and a caller that passes
   `--actor refresh` is believed (`board-workstream-ledger.md:194-196`).
   Enforced (K13): `--blocked operator` needs `--ask <card id>` and is
@@ -69,17 +69,27 @@ in local or private state.
   refuses and says UNREAD; until a session writes one, every operator-blocked
   row is refused. The card goes on the row as an `ask:` link.
   Enforced (ledger fill, #321): `dws refresh --local` moves rows from the
-  relay log and the Desk snapshot, as `refresh`, appending `observe` events
-  only, each carrying the `src` it consumed, so replaying the same sources
+  relay log and the Desk snapshot, as `refresh`, appending `observe` events,
+  each carrying the `src` it consumed, so replaying the same sources
   writes nothing; it reads no network, holds one lock at a time and
   reads a relay entry only by an id its writer recorded (`relay-log --ws` or a
   `relay:R-<n>` link), never from message text. A director `set` moves last
   moved (R-197). `dws unlinked` lists what the fill could not tie to a row,
   with each source's last read time or UNREAD, and writes nothing. Honor-only:
   that director names the stream with `--ws` or links the entry; an entry
-  with neither is listed and moves no row. Not built, awaiting a ruling:
-  clearing an operator block when the linked card closes. Not built, no source
-  file yet: the ask ledger as a source (`msg:` links are typed and wait).
+  with neither is listed and moves no row. Enforced (LF4, ruling 1 of
+  2026-10-19): when a row is blocked on the operator and a fresh snapshot
+  shows every `ask:<card>` it links in a status in `CLOSING_STATUSES` (closed,
+  resolved, withdrawn, superseded, relayed; the operator edits the table in
+  `dws`), the fill appends one `set` of `blocked` to empty as `refresh`, with
+  a card's `src` and a hint that the next action is director's; no other
+  field moves. Links accumulate and the row does not record which card set
+  the block, so one card still open, or missing from the snapshot, keeps it.
+  When another linked card is closing, the refresh names that holding card
+  on stderr (a card stuck in `yours`, say). If it no longer holds the block,
+  director drops its link with `dws link <slug> --remove ask:<card>`, and the
+  next fresh snapshot clears the block. Not built, no source file yet: the
+  ask ledger as a source (`msg:` links are typed and wait).
 - **Readers:** the sweep's "Blocked on you" (`dws show --json`, SKILL.md,
   Mode: sweep); `board-html`.
 

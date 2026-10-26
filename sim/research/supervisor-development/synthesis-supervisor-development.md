@@ -162,7 +162,7 @@ The workplace lane adds the rhythm and the failure mode. Status runs upward on
 a fixed cadence and against the agreed plan and its tolerances, with the level
 above staying out until a tolerance is at risk [@prince2_exception]; the
 recurring one-on-one is the human channel for it, weekly to biweekly, tightened
-for new or struggling reports [@gallup_oneonone]. The failure mode to design
+for new or struggling reports [@gallup-great-manager-2023]. The failure mode to design
 against is watermelon reporting: green on the outside, red inside, caused not
 by dishonesty but by a culture where amber or red draws blame rather than help;
 the fix is to anchor status to observable deliverables and real data feeds that
@@ -224,6 +224,13 @@ FM 6-99 before any downstream use, and never attributed to ADP 6-0 or ADP 6-22.
 Separately, the one-on-one engagement multipliers often quoted with the cadence
 finding are UNCONFIRMED (secondary aggregators only); the cadence itself
 (weekly to biweekly) is supported, the multipliers are not.
+
+Note (2026-10-25): a review of director#423 found that the primary page cited
+for the one-on-one cadence (`gallup-great-manager-2023`, lines 164 and 165)
+supports a weekly cadence only. The biweekly bound and the tightening for new
+or struggling reports are therefore unconfirmed, and so is "(weekly to
+biweekly) is supported" above. The 2026-09-23 sentence is left as written; cite
+a source for those two parts before any downstream use.
 
 ---
 

@@ -449,6 +449,17 @@ dwsrun decision confirm team-a/builder-20261020-1 --words yes --ref relay:R-2
 expect_proceed "once the decision is confirmed the PR proceeds"
 fixture; view OPEN false CLEAN > "$fx/view.json"; decision_block; dwsrun open w1 --title Row --owner team-a/builder; dwsrun decision add --from "$fx/blk"; dwsrun link w1 pr:org/repo#9; dwsrun set w1 --waits decision:team-a/builder-20261020-1
 expect_proceed "a PR the ledger does not link is not stopped by this read"
+fixture; view OPEN false CLEAN > "$fx/view.json"; waiting_pr
+python3 - "$fx/state/workstreams.jsonl" <<'P'
+import sys
+p = sys.argv[1]
+b = open(p, "rb").read().rstrip(b"\n")
+cut = b.rfind(b"\n") + 1
+last = b[cut:]
+open(p, "wb").write(b[:cut] + last[: len(last) // 2] + b"\n")  # the wait event cut in half
+P
+expect_stop "a torn wait line is not read as no wait: STOP, naming the torn count" "1 unreadable line"
+[[ ! -e "$fx/view.calls" ]] && ok "the torn-ledger STOP comes before any gh call" || bad "the torn-ledger STOP comes before any gh call" "view.calls=$(cat "$fx/view.calls")"
 fixture; view OPEN false CLEAN > "$fx/view.json"; rm -f "$fx/state/workstreams.jsonl"
 expect_stop "a missing ledger STOPs" "no workstream ledger"
 fixture; view OPEN false CLEAN > "$fx/view.json"; chmod 000 "$fx/state/workstreams.jsonl"

@@ -217,21 +217,24 @@ marvel design is in the marvel repository,
 
 1. **What a handoff must contain.** A seat's handoff names the pointers to every
    record the seat holds, what is in flight, what it ruled out and why, what it
-   is dropping, and every ask it holds by ask id. The ask ids are pointers: the
-   asks themselves stay in the CUSTODY view (CUST-A, CUST-B), so a handoff that
-   omits one does not lose it, and the post-shift check below finds the gap.
+   is dropping, and every ask it holds by ask id. The first four are the role's
+   existing handoff contents; the ask ids are director's addition under the
+   ruling. The ask ids are pointers: the asks themselves stay in the CUSTODY
+   view (CUST-A, CUST-B), so a handoff that omits one does not lose it, and the
+   post-shift check below finds the gap.
 2. **The check after a shift that the successor holds every ask the old seat
    held.** When a shift completes, director lists the live asks in the CUSTODY
    view whose owner is the old seat and checks each is now held by the
    successor (owner reassigned, or acknowledged by the successor). An ask the
-   successor does not hold is reported by ask id as a named class, not dropped
-   and not re-routed silently (CUST-F). The check reads custody and the handoff
-   file; it does not delay marvel's start of the successor or stop of the old
-   seat, which are marvel's steps.
+   successor does not hold is reported by ask id as a named class, and it is
+   not dropped (CUST-F). It is also not re-routed silently: the check only
+   reports. The check reads custody and the handoff file; it does not delay
+   marvel's start of the successor or stop of the old seat, which are marvel's
+   steps.
 
 **The handoff file is director-side content.** Its content is defined here and
 by the role's handoff rule, not by marvel. marvel only checks the path the seat
-config gives it, which on every cluster is
+config gives it, which today is
 `~/.director/state/{session}/handoff.md`, and the completion marker the
 manifest declares. marvel does not read the file for meaning, and director does
 not take part in marvel's "handoff complete" decision. This is the same
