@@ -23,10 +23,10 @@
 #                  other-dialog. Only a running seat that is quiet (ACTIVE% 0 or -) and has no such
 #                  cell is captured: marvel capture SESSION --cluster NAME -e, matched in memory.
 #                  The flags --repaint and --composer are never used, since both resize the pane
-#     mail         the roster file the director session writes from its list_roster tool
-#                  ($FREEBUSY_PRESENCE, default $DIRECTOR_STATE/presence-roster.json): a JSON object
-#                  {"generated_at": ISO time, "present": [list_roster rows]}. No command here reads
-#                  presence, and this script never dials the bus
+#     mail         director-mcp unread --json --older-than 300s, the reader's own read-only mode. It
+#                  works from each seat durable's ack floor, creates no consumer, acks nothing and
+#                  writes no presence row; a row with over_threshold true is a live seat holding mail
+#                  older than the 300 s receipt window. This script never opens a bus connection itself
 #     versions     marvel version (client line), marvel version --cluster NAME (the daemon line),
 #                  and the version line of the tap's Formula/marvel.rb as the local checkout
 #                  $FREEBUSY_TAP_FORMULA names it (no default; no network, no gh)
@@ -67,7 +67,7 @@
 # FREEBUSY_LOCK_STALE_MIN (a positive integer: minutes before a lock with no usable pid is taken over, default 2),
 # FREEBUSY_CAPTURE_MAX (most seats captured per run, default 40; the rest print GAP health: capture cap),
 # FREEBUSY_CAPTURE_TIMEOUT (seconds for the capture and version reads together, default 60),
-# FREEBUSY_PRESENCE and FREEBUSY_TAP_FORMULA (the two local files named above),
+# FREEBUSY_TAP_FORMULA (the local file named above),
 # FREEBUSY_DIRECTOR_MCP (default director-mcp on PATH, else
 # ${DIRECTOR_HOME:-$HOME/.director}/bin/director-mcp). FREEBUSY_TEST_CLOCK=1 with
 # FREEBUSY_NOW (epoch seconds) fixes the clock for tests.
@@ -84,7 +84,6 @@ call_timeout="${FREEBUSY_CALL_TIMEOUT:-20}"
 max_age="${FREEBUSY_ASKS_MAX_AGE:-900}"
 capture_max="${FREEBUSY_CAPTURE_MAX:-40}"
 capture_timeout="${FREEBUSY_CAPTURE_TIMEOUT:-60}"
-presence_file="${FREEBUSY_PRESENCE:-$state/presence-roster.json}"
 tap_formula="${FREEBUSY_TAP_FORMULA:-}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mail_window=300
@@ -545,6 +544,16 @@ set -m
 ) &
 pids+=("$!")
 set +m
+if [[ -x "$mcp" ]]; then
+  set -m
+  (
+    set +e
+    "$mcp" unread --json --older-than "${mail_window}s" </dev/null >"$tmp/unread.out" 2>"$tmp/unread.err"
+    echo $? >"$tmp/unread.rc"
+  ) &
+  pids+=("$!")
+  set +m
+fi
 if [[ ${#pids[@]} -gt 0 ]]; then wait_jobs "${pids[@]}"; fi
 unset wait_limit
 
@@ -586,34 +595,35 @@ jq -n -c --arg at "$at" --slurpfile prev "$tmp/prev.json" --argjson ok "$ok_json
       | {kind: "cluster", at: $at, cluster: $c, state: "not_reached", last_reached: ($o.last_reached // null),
          first_failed: (if ($o.state == "not_reached" and $o.first_failed != null) then $o.first_failed else $at end)})' >>"$tmp/health.new"
 
-# mail episodes: opened on the first sweep over the receipt window, closed on the first under it
+# mail episodes: opened on a live seat's first over_threshold row, closed on the first sweep without it
 eps="$dir/health-episodes.jsonl"
-if [[ ! -f "$presence_file" ]]; then
-  gap "presence: no roster file, so no mail episode was opened or closed"
-elif ! jq -e '(.present | type) == "array"' "$presence_file" >/dev/null 2>&1; then
-  gap "presence: the roster file is not a list_roster object"
+mail_ok=0
+if [[ ! -x "$mcp" ]]; then
+  gap "mail: director-mcp not found at $mcp, so no mail episode was opened or closed"
+elif [[ ! -f "$tmp/unread.rc" ]]; then
+  gap "mail: director-mcp unread gave no answer within ${capture_timeout}s, so no mail episode was changed"
+elif [[ "$(cat "$tmp/unread.rc")" != 0 ]]; then
+  gap "mail: director-mcp unread exited $(cat "$tmp/unread.rc") ($(head -c 120 "$tmp/unread.err" | tr '\n' ' ')), so no mail episode was changed"
+elif ! jq -e '(.durables | type) == "array"' "$tmp/unread.out" >/dev/null 2>&1; then
+  # the reader exits 0 even when it could not connect, so an empty or unreadable answer is the signal
+  gap "mail: director-mcp unread printed no report ($(first_line "$tmp/unread.err")), so no mail episode was changed"
 else
-  page="$(jq -r --argjson now "$now" 'try ($now - (.generated_at | fromdateiso8601)) catch "bad"' "$presence_file")"
-  if [[ "$page" == bad ]]; then
-    gap "presence: the roster has no readable generated_at"
-  elif [[ "$page" -gt "$max_age" ]]; then
-    gap "presence: the roster is ${page}s old (limit ${max_age}s), so no mail episode was changed"
+  mail_ok=1
+  jq -c '[.durables[] | select(.over_threshold == true and (.agent_id | type) == "string")]
+    | group_by(.agent_id) | map({key: .[0].agent_id, oldest_pending_s: (map(.oldest_unread_age_seconds // 0) | max | floor)}) | .[]' "$tmp/unread.out" >"$tmp/over.jsonl"
+  if [[ -s "$eps" ]]; then
+    jq -s -c 'group_by(.key) | map(last) | map(select(.event == "open") | .key)' "$eps" >"$tmp/open.json"
   else
-    jq -c '.present[] | select((.oldest_pending_s | type) == "number" and .oldest_pending_s > '"$mail_window"') | {key: (.workspace + "/" + .agent_id), oldest_pending_s: .oldest_pending_s}' "$presence_file" >"$tmp/over.jsonl"
-    if [[ -s "$eps" ]]; then
-      jq -s -c 'group_by(.key) | map(last) | map(select(.event == "open") | .key)' "$eps" >"$tmp/open.json"
-    else
-      echo '[]' >"$tmp/open.json"
-    fi
-    jq -n -c --arg at "$at" --slurpfile open "$tmp/open.json" --slurpfile over "$tmp/over.jsonl" '
-      ($open[0]) as $o
-      | ($over | map(.key)) as $ok
-      | ($over[] | select(.key as $k | $o | index($k) | not) | {at: $at, event: "open", kind: "mail", key: .key, oldest_pending_s: .oldest_pending_s}),
-        ($o[] | select(. as $k | $ok | index($k) | not) | {at: $at, event: "close", kind: "mail", key: .})' >"$tmp/episodes.new"
-    if [[ -s "$tmp/episodes.new" ]]; then
-      cat "$tmp/episodes.new" >>"$eps"
-      chmod 600 "$eps"
-    fi
+    echo '[]' >"$tmp/open.json"
+  fi
+  jq -n -c --arg at "$at" --slurpfile open "$tmp/open.json" --slurpfile over "$tmp/over.jsonl" '
+    ($open[0]) as $o
+    | ($over | map(.key)) as $ok
+    | ($over[] | select(.key as $k | $o | index($k) | not) | {at: $at, event: "open", kind: "mail", key: .key, oldest_pending_s: .oldest_pending_s}),
+      ($o[] | select(. as $k | $ok | index($k) | not) | {at: $at, event: "close", kind: "mail", key: .})' >"$tmp/episodes.new"
+  if [[ -s "$tmp/episodes.new" ]]; then
+    cat "$tmp/episodes.new" >>"$eps"
+    chmod 600 "$eps"
   fi
 fi
 if [[ -s "$eps" ]]; then

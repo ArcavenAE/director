@@ -513,7 +513,7 @@ hrec '{"kind":"cluster","at":"2026-10-20T17:50:00Z","cluster":"beta","state":"no
 hrec '{"kind":"seat","at":"2026-10-20T17:50:00Z","cluster":"alpha","workspace":"wsa","seat":"crew-qa-3","class":"auth-expired","source":"marvel","since":"2026-10-20T11:00:00Z"}'
 hrec '{"kind":"seat","at":"2026-10-20T17:50:00Z","cluster":"alpha","workspace":"wsa","seat":"crew-qa-2","class":"other-dialog","reason":"trust","source":"marvel","since":"2026-10-20T13:00:00Z"}'
 hrec '{"kind":"seat","at":"2026-10-20T17:50:00Z","cluster":"alpha","workspace":"wsa","seat":"arcaven-bartholomew-g5-9","class":"auth-expired","source":"marvel","since":"2026-10-20T14:00:00Z"}'
-hrec '{"kind":"mail","at":"2026-10-20T17:50:00Z","seat":"wsa/crew-builder-1","oldest_pending_s":900,"since":"2026-10-20T16:00:00Z"}'
+hrec '{"kind":"mail","at":"2026-10-20T17:50:00Z","seat":"crew-builder-1","oldest_pending_s":900,"since":"2026-10-20T16:00:00Z"}'
 hrec '{"kind":"version","at":"2026-10-20T17:50:00Z","host":"client","version":"0.1.0-alpha.1","source":"marvel version"}'
 hrec '{"kind":"version","at":"2026-10-20T17:50:00Z","host":"beta","version":"0.1.0-alpha.2","source":"marvel version --cluster"}'
 runout run
@@ -530,7 +530,7 @@ grep -qi bartholomew "$root/out.json" && bad "health withheld name in the batch"
 # levels: amber from mail or drift alone, green from neither
 : >"$hfile"
 hrec '{"kind":"cluster","at":"2026-10-20T17:50:00Z","cluster":"alpha","state":"reached","last_reached":"2026-10-20T17:50:00Z","first_failed":null}'
-hrec '{"kind":"mail","at":"2026-10-20T17:50:00Z","seat":"wsa/crew-builder-1","oldest_pending_s":900,"since":"2026-10-20T16:00:00Z"}'
+hrec '{"kind":"mail","at":"2026-10-20T17:50:00Z","seat":"crew-builder-1","oldest_pending_s":900,"since":"2026-10-20T16:00:00Z"}'
 runout run
 hpanel 'assert P["counts"]["level"]=="amber" and P["counts"]["blocked"]==0, P["counts"]' && ok "an open mail episode alone reads amber" || bad "amber mail"
 : >"$hfile"

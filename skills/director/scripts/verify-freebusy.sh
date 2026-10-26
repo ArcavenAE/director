@@ -85,6 +85,12 @@ S
 cat >"$root/bin/director-mcp" <<'S'
 #!/usr/bin/env bash
 echo "$*" >>"$FB_FIX/mcp.log"
+if [[ "$*" == "unread --json --older-than 300s" ]]; then
+  if [[ -e "$FB_FIX/unread.down" ]]; then echo "director-mcp unread: connect nats://127.0.0.1:1: nats: no servers available for connection" >&2; exit 0; fi
+  if [[ -e "$FB_FIX/unread.fail" ]]; then echo "director-mcp: unknown mode unread" >&2; exit 2; fi
+  if [[ -e "$FB_FIX/unread.junk" ]]; then echo "not json at all"; exit 0; fi
+  cat "$FB_FIX/unread.json"; exit 0
+fi
 if [[ "$*" != "asks --json" ]]; then echo "stub director-mcp: unexpected $*" >&2; exit 2; fi
 if [[ -e "$FB_FIX/asks.old" ]]; then echo "director-mcp: unknown mode asks" >&2; exit 2; fi
 cat "$FB_FIX/asks.json"
@@ -110,7 +116,7 @@ teams() { # teams FILE LINES...
   { echo 'WORKSPACE  TEAM  ROLE  REPLICAS  RUNTIME'; printf '%s\n' "$@"; } >"$f"
 }
 fixtures() {
-  rm -f "$FIX"/config.list* "$FIX"/*.exclude "$FIX"/marvel.env "$FIX"/forbidden.log "$FIX"/*.slept "$FIX"/*.teamsfail "$FIX"/*.down "$FIX"/*.slow "$FIX"/*.noturn "$FIX"/*.turn "$FIX"/asks.old "$FIX"/*.log "$FIX/slow.pids" "$FIX"/*.version "$FIX"/marvel.rb "$FIX"/presence-roster.json; rm -rf "$FIX/cap"; mkdir -p "$FIX/cap"
+  rm -f "$FIX"/config.list* "$FIX"/*.exclude "$FIX"/marvel.env "$FIX"/forbidden.log "$FIX"/*.slept "$FIX"/*.teamsfail "$FIX"/*.down "$FIX"/*.slow "$FIX"/*.noturn "$FIX"/*.turn "$FIX"/asks.old "$FIX"/*.log "$FIX/slow.pids" "$FIX"/*.version "$FIX"/marvel.rb "$FIX"/unread.*; rm -rf "$FIX/cap"; mkdir -p "$FIX/cap"
   sess alpha.sessions \
     'wsa crew builder crew-builder-1 6s* 100%* running healthy' \
     'wsa crew builder crew-builder-2 4m 0% running healthy' \
@@ -142,10 +148,12 @@ fixtures() {
     printf '%s\n' 'marvel 0.1.0-alpha.1 (alpha)' 'daemon  0.1.0-alpha.1 (alpha) commit abc123 pid 11 started 2026-10-20T00:00:00Z' >"$FIX/$c.version"
   done
   printf '%s\n' 'class Marvel < Formula' '  version "0.1.0-alpha.1"' 'end' >"$FIX/marvel.rb"
-  roster '[]'
+  unread '[]'
 }
-roster() { # roster JSON-ARRAY: the session's list_roster output, wrapped with the time it was read
-  jq -n -c --argjson t "$NOW" --argjson p "$1" '{generated_at: ($t | todate), present: $p}' >"$FIX/presence-roster.json"
+unread() { # unread ROWS: the durables director-mcp unread reports; each row is {agent_id, state, age, over}
+  jq -n -c --argjson r "$1" '{stream: "AGENT_INBOX", read_at: "2026-10-21T00:05:00Z", older_than: "5m0s",
+    durables: ($r | map({durable: ("mcp_" + .agent_id + "_01X"), agent_id: .agent_id, instance: "01X", live: true, state: .state,
+      oldest_unread_seq: 5, oldest_unread_age_seconds: .age, over_threshold: .over}))}' >"$FIX/unread.json"
 }
 
 # Run the script the way a sweep does: scrubbed environment, scratch home and
@@ -157,7 +165,7 @@ run() { # run [VAR=value ...]
   set +e
   env -i HOME="$root/home" PATH="$root/bin:/usr/bin:/bin:/opt/homebrew/bin" LANG=C TMPDIR="$root" \
     DIRECTOR_STATE="$state" FB_FIX="$FIX" FREEBUSY_TEST_CLOCK=1 FREEBUSY_NOW="$NOW" \
-    FREEBUSY_TAP_FORMULA="$FIX/marvel.rb" FREEBUSY_PRESENCE="$FIX/presence-roster.json" \
+    FREEBUSY_TAP_FORMULA="$FIX/marvel.rb" \
     FREEBUSY_ASKS_MAX_AGE=900 FREEBUSY_CALL_TIMEOUT=4 "$@" "$b" "$FB" 2>"$root/err"
   echo $? >"$root/rc"
   set -e
@@ -281,7 +289,7 @@ case_no_writes() {
   [[ "$(grep -c '^get ' "$FIX/marvel.log")" == "$(grep -c '^get .*--cluster ' "$FIX/marvel.log")" ]] && ok "7  every get names its cluster" || bad "7  a get without --cluster"
   grep -q -- '--socket' "$FIX/marvel.log" && bad "7  a call carried --socket" || ok "7  no call carries --socket"
   [[ "$(sort -u "$FIX/marvel.env")" == "MARVEL_SOCKET=unset MARVEL_HOME=unset" ]] && ok "7  marvel saw no MARVEL_SOCKET or MARVEL_HOME that the script set" || bad "7  marvel env" "$(sort -u "$FIX/marvel.env")"
-  [[ "$(sort -u "$FIX/mcp.log")" == "asks --json" ]] && ok "7  director-mcp was only asked for asks --json" || bad "7  mcp" "$(cat "$FIX/mcp.log")"
+  [[ "$(sort -u "$FIX/mcp.log")" == "$(printf '%s\n' 'asks --json' 'unread --json --older-than 300s')" ]] && ok "7  director-mcp was only asked for asks --json and unread --json --older-than 300s" || bad "7  mcp" "$(cat "$FIX/mcp.log")"
   if grep -vE '^[[:space:]]*#' "$FB" | grep -qE 'MARVEL_SOCKET|MARVEL_HOME|--socket'; then bad "7  the script text sets or names MARVEL_SOCKET, MARVEL_HOME or --socket"; else ok "7  the script text never sets MARVEL_SOCKET, MARVEL_HOME or --socket"; fi
   # the script text: no bus send, inject, bd write or gh call (comments excluded)
   local code hits
@@ -595,32 +603,36 @@ case_health() {
   run "${base[@]}" FREEBUSY_NOW=$((NOW + 300)) >/dev/null
   [[ "$(hval cluster '.cluster=="gamma"' .state)" == reached && "$(hval cluster '.cluster=="gamma"' '.first_failed // "none"')" == none ]] && ok "H6 the first good run clears it" || bad "H6 cleared" "$(hrows cluster)"
 
-  # mail: one episode per stretch over the 300 s receipt window
+  # mail: one episode per stretch over the 300 s receipt window, from director-mcp unread
   fixtures; new_state; conf3
-  roster '[{"agent_id":"crew-builder-1","workspace":"wsa","team":"crew","oldest_pending_s":301}]'
+  unread '[{"agent_id":"crew-builder-1","state":"behind","age":301,"over":true},{"agent_id":"crew-builder-2","state":"reading","age":900,"over":false}]'
   run "${base[@]}" >/dev/null
   local eps="$state/freebusy/health-episodes.jsonl" i
-  [[ "$(wc -l <"$eps" | tr -d ' ')" == 1 && "$(jq -r .event "$eps")" == open ]] && ok "H7 oldest_pending_s of 301 opens one episode" || bad "H7 open" "$(cat "$eps" 2>&1)"
+  [[ "$(wc -l <"$eps" | tr -d ' ')" == 1 && "$(jq -r .event "$eps")" == open && "$(jq -r .key "$eps")" == crew-builder-1 ]] && ok "H7 a live seat's first over_threshold row opens one episode, and a row not over threshold opens none" || bad "H7 open" "$(cat "$eps" 2>&1)"
   for i in 1 2 3; do
-    roster '[{"agent_id":"crew-builder-1","workspace":"wsa","team":"crew","oldest_pending_s":900}]'
+    unread '[{"agent_id":"crew-builder-1","state":"behind","age":900,"over":true}]'
     run "${base[@]}" FREEBUSY_NOW=$((NOW + i * 60)) >/dev/null
   done
   [[ "$(wc -l <"$eps" | tr -d ' ')" == 1 ]] && ok "H7 three more sweeps over the window append nothing" || bad "H7 no append" "$(cat "$eps")"
-  [[ "$(hval mail 'true' .seat)" == wsa/crew-builder-1 && "$(hval mail 'true' .since)" == "$at_now" ]] && ok "H7 the open episode is in health.jsonl with its opening time" || bad "H7 mail row" "$(hrows mail)"
-  roster '[{"agent_id":"crew-builder-1","workspace":"wsa","team":"crew","oldest_pending_s":100}]'
+  [[ "$(hval mail 'true' .seat)" == crew-builder-1 && "$(hval mail 'true' .since)" == "$at_now" ]] && ok "H7 the open episode is in health.jsonl with its opening time" || bad "H7 mail row" "$(hrows mail)"
+  grep -q '^unread --json --older-than 300s$' "$FIX/mcp.log" && ok "H7 the reader is called with --json --older-than 300s" || bad "H7 args" "$(cat "$FIX/mcp.log")"
+  unread '[{"agent_id":"crew-builder-1","state":"reading","age":10,"over":false}]'
   run "${base[@]}" FREEBUSY_NOW=$((NOW + 400)) >/dev/null
-  [[ "$(wc -l <"$eps" | tr -d ' ')" == 2 && "$(tail -n 1 "$eps" | jq -r .event)" == close ]] && ok "H7 one sweep under the window appends the close" || bad "H7 close" "$(cat "$eps")"
+  [[ "$(wc -l <"$eps" | tr -d ' ')" == 2 && "$(tail -n 1 "$eps" | jq -r .event)" == close ]] && ok "H7 the first sweep without the over_threshold row appends the close" || bad "H7 close" "$(cat "$eps")"
   [[ -z "$(hrows mail)" ]] && ok "H7 and the closed episode is not in health.jsonl" || bad "H7 mail closed"
-  # a roster that is missing or old closes nothing and says so
-  roster '[{"agent_id":"crew-builder-1","workspace":"wsa","team":"crew","oldest_pending_s":500}]'
+  # a reader that cannot answer closes nothing and says so
+  unread '[{"agent_id":"crew-builder-1","state":"behind","age":500,"over":true}]'
   run "${base[@]}" FREEBUSY_NOW=$((NOW + 500)) >/dev/null
-  rm -f "$FIX/presence-roster.json"
-  out="$(run "${base[@]}" FREEBUSY_NOW=$((NOW + 600)))"
-  grep -q 'GAP presence' <<<"$out" && ok "H7 no roster file prints GAP presence" || bad "H7 gap" "$out"
-  [[ "$(wc -l <"$eps" | tr -d ' ')" == 3 ]] && ok "H7 and the open episode is left open, not closed on a reading it could not take" || bad "H7 left open" "$(cat "$eps")"
-  roster '[]'
-  out="$(run "${base[@]}" FREEBUSY_NOW=$((NOW + 5000)))"
-  grep -q 'GAP presence: the roster is' <<<"$out" && ok "H7 a roster older than the ask limit prints GAP presence" || bad "H7 old roster" "$out"
+  local v
+  for v in down fail junk; do
+    touch "$FIX/unread.$v"
+    out="$(run "${base[@]}" FREEBUSY_NOW=$((NOW + 600)))"
+    grep -q 'GAP mail:' <<<"$out" && ok "H7 [$v] prints GAP mail" || bad "H7 [$v] gap" "$out"
+    [[ "$(wc -l <"$eps" | tr -d ' ')" == 3 ]] && ok "H7 [$v] the open episode is left open, not closed on a reading it could not take" || bad "H7 [$v] left open" "$(cat "$eps")"
+    rm -f "$FIX/unread.$v"
+  done
+  out="$(run FREEBUSY_DIRECTOR_MCP="$root/nowhere/director-mcp" FREEBUSY_NOW=$((NOW + 600)))"
+  grep -q 'GAP mail: director-mcp not found' <<<"$out" && ok "H7 a missing binary prints GAP mail" || bad "H7 missing" "$out"
 
   # versions: the client, each daemon, and the tap's formula, from local reads only
   fixtures; new_state; conf3

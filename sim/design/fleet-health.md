@@ -32,10 +32,11 @@ Four questions, each with a since-time:
    dev-channels consent dialog at startup), `automode-menu` (the "Teach auto
    mode about your environment?" menu), and `other-dialog` (a marvel watchdog
    `parked` verdict with its reason).
-3. **Which seats have mail they have not taken?** Per seat: presence
-   `oldest_pending_s` above the cue receipt window (300 s,
+3. **Which seats have mail they have not taken?** Per seat: the oldest unread
+   age from the durable's ack floor above the cue receipt window (300 s,
    `cmd/director-mcp/cue.go:59`), recorded once per episode. An episode opens
-   on the first sweep over the window and closes on the first sweep under it.
+   on a live seat's first `over_threshold` row and closes on the first sweep
+   without it.
 4. **Do versions drift?** Per host: the marvel client build, each daemon's
    build, and the version the tap's `Formula/marvel.rb` names.
 
@@ -72,10 +73,12 @@ Reads, each read-only and bounded by `FREEBUSY_CALL_TIMEOUT`:
   drew. The script's own match is temporary. When marvel's
   watchdog covers a class (marvel#1079 for `auth-expired`), the script stops
   matching that class and reads `harness_state` alone.
-- **Mail:** presence `oldest_pending_s`, from a roster file the director
-  session writes with its `list_roster` tool, because no command a script can
-  run reads presence (section 6). `cue.unanswered` events are not read in this
-  build.
+- **Mail:** `director-mcp unread --json --older-than 300s`, the reader's own
+  read-only mode. It works from each seat durable's ack floor, creates no
+  consumer, acks nothing and writes no presence row, so a seat that is gone
+  still shows the mail waiting for it. A row with `over_threshold` true is a
+  live seat holding mail older than the 300 s window. `cue.unanswered` events
+  are not read in this build.
 - **Versions:** `marvel version` here (its first line), `marvel version
   --cluster C` for each daemon (its `daemon` line), and the `version` line of
   `Formula/marvel.rb` in a local checkout of the tap, the path set in
@@ -142,8 +145,10 @@ If the operator wants the Dashboard anyway, it should be built as a view over
   for that seat. A `(parked: trust)` cell reads `other-dialog` with its reason.
 - A cluster whose read times out is `not_reached` with its first-failed time.
   A second failed run keeps that time, and the first good run clears it.
-- `oldest_pending_s` of 301 opens one episode. Three more sweeps over the
-  window append nothing, and one under it appends the close.
+- An `over_threshold` row for a live seat opens one episode. Three more sweeps
+  over the window append nothing, and one without the row appends the close.
+  A row that is not over the threshold opens nothing. A reader that is missing,
+  exits nonzero or prints no report is a `GAP`, and leaves an open episode open.
 - A capture cap of 2 with 3 eligible seats gives the third `GAP: capture cap`.
 - No row in either file holds captured text, a token or a message body. This
   is checked against a fixture whose pane carries a secret-shaped string.
@@ -173,13 +178,16 @@ its main) with no live session read. Results:
 - `marvel version` prints the client line and then a `daemon` line, and
   `--cluster C` selects the daemon, so both honour `--cluster`.
 - `marvel capture` honours `--cluster`. Of its flags only `-e` is used here.
-- No script-callable source reads presence: `director-mcp` has `asks`,
-  `ask-reader`, `unread`, `dossier` and `version` modes, and presence is the
-  `list_roster` tool or the bus. Mail episodes therefore read a roster file the
-  director session writes before the sweep (`$DIRECTOR_STATE/presence-roster.json`,
-  `{"generated_at": ..., "present": [...]}`), and a missing or old file is
-  `GAP presence`, with no episode opened or closed on a reading it could not
-  take.
+- `director-mcp unread` is the mail source. On the installed build (a7ce948)
+  the flags `--json`, `--older-than` and `--global` parse, and the row fields
+  `oldest_unread_age_seconds`, `live` and `over_threshold` are in `unread.go`
+  at main. `--older-than` takes a Go duration, so the window is `300s`; a bare
+  `300` is refused with exit 2. Run against a closed port, the reader prints one
+  stderr line and nothing on stdout, and still exits 0, so the script treats an
+  empty or non-JSON answer as the failure signal, not the exit code. The check
+  was not run against a live or scratch broker with real durables; the tests
+  use a stub on PATH that prints the reader's JSON shape, and a first sweep on
+  the real host is the remaining proof.
 - The capture fixtures in `verify-freebusy.sh` are written from the screen
   names in section 1, not copied from a live pane. The expired-login match
   looks at the last three non-empty lines of the capture, so the same text

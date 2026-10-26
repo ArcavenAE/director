@@ -458,7 +458,7 @@ def health_rows(t_now, withhold, refusal):
             rows.append({"kind": "unreached", "id": cluster, "class": "not_reached", "since": since, "cluster": cluster})
         elif kind == "mail":
             seat, since = r.get("seat"), r.get("since")
-            why = None if isinstance(seat, str) and re.fullmatch(r"[a-z0-9.-]{1,64}/[a-z0-9.-]{1,80}", seat) else "charset"
+            why = None if isinstance(seat, str) and ID_RE.fullmatch(seat) else "charset"
             why = why or free_text_reason(seat, withhold)
             if why:
                 refusal.add("id", why)
@@ -467,7 +467,7 @@ def health_rows(t_now, withhold, refusal):
                 refusal.add("class", "grammar")
                 continue
             mail += 1
-            rows.append({"kind": "mail", "id": seat.split("/", 1)[1], "class": "unacked-mail", "since": since, "cluster": ""})
+            rows.append({"kind": "mail", "id": seat, "class": "unacked-mail", "since": since, "cluster": ""})
         elif kind == "version" and isinstance(r.get("version"), str) and re.fullmatch(r"[A-Za-z0-9._+-]{1,80}", r["version"]):
             versions.add(r["version"])
     drift = 1 if len(versions) > 1 else 0
