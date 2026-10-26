@@ -45,6 +45,12 @@ LEDGER_CSS = """<style>
 #ledger ul{padding-left:22px;margin:6px 0}
 #ledger .unmoved{color:var(--warn);font-weight:650}
 #ledger .none{color:var(--muted)}
+#seat-decisions{max-width:1280px;margin:0 auto;padding:4px 16px 10px}
+#seat-decisions h2{font-size:15px;margin:16px 0 6px}
+#seat-decisions h3{font-size:13.5px;margin:12px 0 4px}
+#seat-decisions ul{padding-left:22px;margin:6px 0}
+#seat-decisions .none{color:var(--muted)}
+#seat-decisions .q{display:block;overflow-wrap:anywhere}
 #history{max-width:1280px;margin:8px auto}
 #history>summary{cursor:pointer;padding:6px 16px;font-weight:650}
 </style>"""
@@ -124,7 +130,68 @@ def minutes_since_file(path: pathlib.Path, now: datetime.datetime) -> int:
     return max(0, int((now - m).total_seconds() // 60))
 
 
-def ledger_html(data: dict, board_text: str) -> str:
+def load_decisions():
+    """The seat decisions from dws decisions --json, in dws's order: the unconfirmed first, in card 4's
+    order, then the answered. A decisions read that fails is an error, as for the rows."""
+    r = subprocess.run([sys.executable, str(DWS), "decisions", "--json"], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"board-html: dws decisions failed: {r.stderr.strip() or r.returncode}")
+    return json.loads(r.stdout)["decisions"]
+
+
+SEAT_OPEN_STATES = ("decided-by-seat", "paths-open")
+SEAT_RECENT_DAYS = 14
+
+
+def seat_decisions_html(decisions: list, now: datetime.datetime) -> str:
+    """D3 (sim/design/seat-decisions.md, section 7). One block per unconfirmed decision in dws's order,
+    each with its dependent rows; below, the decisions answered in the last 14 days, one line each. The
+    state, the age, the dependents and the hours at risk are text; nothing here is coloured, sorted by
+    alarm or gated on."""
+    e = htmlmod.escape
+    out = ['<section id="seat-decisions">', "<h2>Seat decisions</h2>"]
+    if not decisions:
+        out.append('<p class="none">No seat decisions recorded</p>')
+        out.append("</section>")
+        return "\n".join(out) + "\n"
+    out.append('<h3>Unconfirmed, most work held first</h3><ul id="seat-decisions-open">')
+    open_ = [d for d in decisions if d["state"] in SEAT_OPEN_STATES]
+    for d in open_:
+        full = " | window full" if d.get("window_full") else ""
+        age = "age unknown" if d.get("age_days") is None else f"{d['age_days']}d old"
+        out.append(f'<li data-decision="{e(d["id"], quote=True)}">{e(d["id"])} | {e(str(d.get("seat", "")))} | {e(d["state"])} | {age} | '
+                   f'{d["waiting"]} waiting | {d["at_risk_h"]:g}h at risk{full}<span class="q">{e(str(d.get("question", "")))}</span>')
+        rows = d.get("affected", [])
+        if rows:
+            out.append("<ul>")
+            for x in rows:
+                out.append(f"<li>{e(x['slug'])} | {e(x['stage'])}" + "".join(f" | {e(p)}" for p in x.get("prs", [])) + "</li>")
+            out.append("</ul>")
+        out.append("</li>")
+    if not open_:
+        out.append('<li class="none">none</li>')
+    out.append("</ul>")
+    out.append(f'<h3>Answered in the last {SEAT_RECENT_DAYS} days</h3><ul id="seat-decisions-answered">')
+    recent = []
+    for d in decisions:
+        if d["state"] in SEAT_OPEN_STATES or not d.get("moves"):
+            continue
+        ts = d["moves"][-1].get("ts", "")
+        try:
+            age_h = hours_since(ts, now)
+        except ValueError:
+            continue
+        if 0 <= age_h <= SEAT_RECENT_DAYS * 24:
+            recent.append((ts, d))
+    for ts, d in sorted(recent, key=lambda x: (x[0], x[1]["id"]), reverse=True):
+        out.append(f'<li data-decision="{e(d["id"], quote=True)}">{e(d["id"])} | {e(d["state"])} | {e(ts[:10])} | {e(str(d.get("question", "")))}</li>')
+    if not recent:
+        out.append('<li class="none">none</li>')
+    out.append("</ul></section>")
+    return "\n".join(out) + "\n"
+
+
+def ledger_html(data: dict, board_text: str, decisions=None) -> str:
     """Sections 1 to 4 of the page (design section 4), from the ledger rows
     and never from prose, except the Uncaptured lines board.md carries."""
     e = htmlmod.escape
@@ -160,6 +227,8 @@ def ledger_html(data: dict, board_text: str) -> str:
         out.append(f'<tr data-slug="{e(r["slug"], quote=True)}"><td>{e(r["stage"])}</td><td>{e(r["slug"])}</td><td>{e(r["owner"])}</td>'
                    f'<td>{moved}</td><td>{e(r["blocked"])}</td><td>{e(r["next"])}</td><td>{e(" ".join(r.get("links", [])))}</td></tr>')
     out.append("</tbody></table></div></section>")
+    if decisions is not None:
+        out.append(seat_decisions_html(decisions, now))
     out.append("<script>(function(){var el=document.getElementById('page-age');if(!el)return;"
                "var a=Number(el.dataset.at)*1000;"
                "function tick(){el.textContent=Math.max(0,Math.floor((Date.now()-a)/60000))+'m';}"
@@ -630,7 +699,7 @@ def main() -> None:
     ledger = load_ledger()
     head, tail = "", ""
     if ledger is not None:
-        head = ledger_html(ledger, text) + '<details id="history"><summary>History (board.md)</summary>\n'
+        head = ledger_html(ledger, text, load_decisions()) + '<details id="history"><summary>History (board.md)</summary>\n'
         tail = "\n</details>"
     # One pass over the template, so text a placeholder is replaced with (a
     # ledger row, board.md) is never scanned for placeholders again.
