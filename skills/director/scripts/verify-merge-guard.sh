@@ -83,11 +83,13 @@ fixture() {
   suites 2026-09-28T10:00:05Z > "$fx/suites.json"
   echo '{"defaultBranchRef":{"name":"main"}}' > "$fx/repo.json"
   : > "$fx/rulings.jsonl" # a present, empty rulings file: no exclusions declared
+  mkdir -p "$fx/state"; : > "$fx/state/workstreams.jsonl" # a present, empty ledger: no row waits on a decision
 }
 guard() {
   env PATH="$root/bin:/usr/bin:/bin" GH_FIXTURE="$fx" \
       MERGE_GUARD_RETRIES="${RETRIES:-2}" MERGE_GUARD_DELAY=0 \
       MERGE_GUARD_RULINGS="${RULINGS:-$fx/rulings.jsonl}" \
+      DIRECTOR_STATE="${STATE_DIR:-$fx/state}" DWS_TEST_CLOCK=1 DWS_NO_RERENDER=1 PYTHONDONTWRITEBYTECODE=1 \
       "$GUARD" "$@" >"$fx/out" 2>&1
 }
 expect_proceed() { # name
@@ -419,6 +421,52 @@ grep -qx 'repo view org/repo --json defaultBranchRef' "$fx/repo.args" && ok "the
   || bad "repo named on the default-branch read" "$(cat "$fx/repo.args" 2>/dev/null)"
 fixture; rc=0; guard --allow-base >/dev/null 2>&1 || rc=$?; [[ $rc -eq 2 ]] && ok "--allow-base with no value is a usage error" || bad "allow-base no value" "rc=$rc"
 fixture; rc=0; guard --allow-base a --allow-base b org/repo 7 >/dev/null 2>&1 || rc=$?; [[ $rc -eq 2 ]] && ok "--allow-base twice is a usage error" || bad "allow-base twice" "rc=$rc"
+
+# --- seat decisions (seat-decide-window, D2) ---------------------------------------
+# A row that links the PR and waits on a decision that is not confirmed stops the merge, before gh is asked anything.
+DWS_BIN="$here/dws"
+dwsrun() { DIRECTOR_STATE="$fx/state" DWS_TEST_CLOCK=1 DWS_NO_RERENDER=1 DWS_NOW=2026-10-20T12:00:00Z PYTHONDONTWRITEBYTECODE=1 "$DWS_BIN" "$@" >/dev/null 2>"$fx/dws.err" || { bad "dws $*" "$(cat "$fx/dws.err")"; }; }
+decision_block() { printf 'seat-decision@1\nid: team-a/builder-20261020-1\nseat: team-a/builder\nquestion: Which way?\noptions: a) one; b) two\nchosen: b) two because it is cheaper\ntest: 1 ok 2 ok 3 ok 4 ok 5 ok 6 ok 7 ok 8 ok\nestimate: 1\nundo: revert it\nchanges: pr:org/repo#7\n' > "$fx/blk"; }
+waiting_pr() { # a row that links org/repo#7 and waits on the decision
+  decision_block; dwsrun open w1 --title "Row" --owner team-a/builder
+  dwsrun decision add --from "$fx/blk"; dwsrun link w1 pr:org/repo#7; dwsrun set w1 --waits decision:team-a/builder-20261020-1
+}
+fixture; view OPEN false CLEAN > "$fx/view.json"; waiting_pr
+expect_stop "a PR that waits on an unconfirmed decision: STOP" "waits on seat decision team-a/builder-20261020-1, not confirmed (seat-decide-window)"
+[[ ! -e "$fx/view.calls" ]] && ok "the decision read comes before any gh call" || bad "the decision read comes before any gh call" "view.calls=$(cat "$fx/view.calls")"
+fixture; view OPEN false CLEAN > "$fx/view.json"
+OK8="1 ok 2 ok 3 ok 4 ok 5 ok 6 ok 7 ok 8 ok"
+dwsrun open p1 --title "Path row" --owner team-a/builder; dwsrun open p2 --title "Other path" --owner team-a/builder
+printf '{"read_at":"2026-10-20T11:00:00Z","open":["card-1"]}' > "$fx/state/desk-snapshot.json"
+dwsrun link p1 pr:org/repo#7
+dwsrun decision paths team-a/architect-20261020-5 --card card-1 --evidence e --why-waiting w --row-a p1 --estimate-a 1 --test-a "$OK8" --row-b p2 --estimate-b 1 --test-b "$OK8"
+expect_stop "a PR on a paths-open row: STOP" "waits on seat decision team-a/architect-20261020-5, not confirmed"
+fixture; view OPEN false CLEAN > "$fx/view.json"; waiting_pr
+dwsrun decision override team-a/builder-20261020-1 --words no --ref relay:R-1 --instead other
+expect_stop "a PR that waits on an overridden decision: STOP" "not confirmed"
+fixture; view OPEN false CLEAN > "$fx/view.json"; waiting_pr
+dwsrun decision confirm team-a/builder-20261020-1 --words yes --ref relay:R-2
+expect_proceed "once the decision is confirmed the PR proceeds"
+fixture; view OPEN false CLEAN > "$fx/view.json"; decision_block; dwsrun open w1 --title Row --owner team-a/builder; dwsrun decision add --from "$fx/blk"; dwsrun link w1 pr:org/repo#9; dwsrun set w1 --waits decision:team-a/builder-20261020-1
+expect_proceed "a PR the ledger does not link is not stopped by this read"
+fixture; view OPEN false CLEAN > "$fx/view.json"; waiting_pr
+python3 - "$fx/state/workstreams.jsonl" <<'P'
+import sys
+p = sys.argv[1]
+b = open(p, "rb").read().rstrip(b"\n")
+cut = b.rfind(b"\n") + 1
+last = b[cut:]
+open(p, "wb").write(b[:cut] + last[: len(last) // 2] + b"\n")  # the wait event cut in half
+P
+expect_stop "a torn wait line is not read as no wait: STOP, naming the torn count" "1 unreadable line"
+[[ ! -e "$fx/view.calls" ]] && ok "the torn-ledger STOP comes before any gh call" || bad "the torn-ledger STOP comes before any gh call" "view.calls=$(cat "$fx/view.calls")"
+fixture; view OPEN false CLEAN > "$fx/view.json"; rm -f "$fx/state/workstreams.jsonl"
+expect_stop "a missing ledger STOPs" "no workstream ledger"
+fixture; view OPEN false CLEAN > "$fx/view.json"; chmod 000 "$fx/state/workstreams.jsonl"
+if [[ -r "$fx/state/workstreams.jsonl" ]]; then ok "(skipped: the ledger stays readable to this user)"; else expect_stop "an unreadable ledger STOPs" "ledger read failed"; fi
+chmod 600 "$fx/state/workstreams.jsonl" 2>/dev/null || true
+fixture; view OPEN false CLEAN > "$fx/view.json"
+MERGE_GUARD_DWS="$root/no-such-dws" expect_stop "a dws that cannot be run STOPs" "dws not found"
 
 # --- usage --------------------------------------------------------------------------
 fixture

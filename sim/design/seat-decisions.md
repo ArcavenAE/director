@@ -201,8 +201,13 @@ is not `confirmed`, it prints
 STOP <repo>#<n>: waits on seat decision <id>, not confirmed (seat-decide-window)
 ```
 
-and exits 1. A ledger it cannot read stops too, as every other read in
-`merge-guard` does. A PR the ledger does not link is not stopped by this
+and exits 1. A decision the operator overrode is not `confirmed`, so a PR
+waiting on it stays held until its row drops the edge with `--unwait`. A ledger
+it cannot read stops too, as every other read in `merge-guard` does, and so does
+one with a torn line: `dws merge-hold` exits 2 and names the torn count, because
+the cut line may be the very event that holds the PR. A missing ledger stops
+as well; an empty ledger file is the remedy, since an empty file says no row
+waits on any decision. A PR the ledger does not link is not stopped by this
 read; that is the same limit as section 4, and the stacked-PR rule still
 governs the order of the ready PRs. The read also covers only merges made
 through `merge-guard`: a merge typed past it, by any session, is not stopped,
