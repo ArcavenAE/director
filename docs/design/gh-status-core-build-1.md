@@ -31,11 +31,11 @@ The set is compiled in and read-only. The only input to any query is a repo from
 | membership | `GET /repos/{owner}/{repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`, with `If-None-Match` from the last ETag | every cycle, per allowlisted repo | section 2, row 1 |
 | state: open PRs | the open-PR view: `search(type: ISSUE, query: "is:pr is:open org:<owner>", first: 100)`, paginated, with `number`, `mergeable`, `headRefOid`, the last commit's `statusCheckRollup { state }`, and `rateLimit { cost }` | every cycle, per owner | section 2, "The query shapes" |
 | state: default branch | the default-branch view: one aliased `repository(owner, name)` per allowlisted repo, with `defaultBranchRef.target` on `Commit` (`statusCheckRollup { state }`, `checkSuites(last: 10)` with `workflowRun`), `deployments(last: 1) { nodes { latestStatus { state } } }`, and `rateLimit` | every cycle | section 2, "The query shapes" |
-| live read: PR | one PR by number on an allowlisted repo: `mergeable`, `headRefOid`, the last commit's rollup | a head SHA changed, or `mergeable` was UNKNOWN last cycle | section 2, rows 3 and rule 2 |
-| live read: base | `GET /repos/{owner}/{repo}/branches/{branch}` with `If-None-Match`, for each distinct base of an open PR | every cycle; a moved base triggers live reads of the open PRs on it | section 2, row 4 |
+| live read: PR | one PR by number on an allowlisted repo: `mergeable`, `headRefOid`, the last commit's rollup | a head SHA changed this cycle | section 2, row 3 |
+| live read: base | `GET /repos/{owner}/{repo}/branches/{branch}` with `If-None-Match`, for each distinct base of an open PR | every cycle; a moved base triggers live reads of the open PRs on it | section 2, row 4; the path is this spec's (Q2) |
 | busy signal | `GET /rate_limit` | every cycle, and on backoff | section 2, "Busy signal" |
 
-The membership row's path and parameters are this spec's reading of "REST lists by `updated_at`". The design names no path, so that row is **Q2**.
+The membership and base rows' paths are this spec's reading of "REST lists by `updated_at`" and "ETag'd branch reads". The design names no path for either, so both are **Q2**. A PR whose `mergeable` was UNKNOWN is re-read by the next cycle's open-PR view, as section 2 rule 2 says; it adds no live read.
 
 Collection rules carried over unchanged: opened, closed and merged come only from the membership list; a `mergeable` of UNKNOWN is re-read and never published, and after 3 cycles is a health warning naming the PR; only check suites with a workflow run count as running; pagination past 100 is built now, and more than 100 open PRs is a health warning; each class has an owner-set pacing ceiling per reset window (section 2, "Rules").
 
@@ -51,10 +51,11 @@ Collection rules carried over unchanged: opened, closed and merged come only fro
 version = 1
 repos = ["ArcavenAE/marvel", "ArcavenAE/director"]
 
-[ceilings]            # per reset window, per call class
-graphql_points = 300
-rest_calls = 1500
+[ceilings]            # calls per reset window, per call class (section 2, "Pacing ceilings")
+membership = 1500
+state = 300
 live_reads = 200
+quota = 120
 ```
 
 The ceilings sit in the same file so one owner check covers both. Their numbers are placeholders until collection test 11 and the first week of samples.
@@ -103,7 +104,6 @@ One JSON object on stdout:
           "state": "open",
           "mergeable": "MERGEABLE",
           "head_sha": "<40 hex>",
-          "base": "main",
           "ci": "running",
           "author_association": "OWNER",
           "updated_at": "2026-10-26T18:31:12Z"
@@ -118,7 +118,7 @@ One JSON object on stdout:
 - `mergeable` is `MERGEABLE`, `CONFLICTING` or `null`. UNKNOWN never appears (section 2, rule 2).
 - `access` is `read`, `public`, `none` or `unknown:<reason>` (section 4).
 - `generated_at` is the last successful cycle, never refreshed on a failure. `stale` is true once it is older than 3 cycles, and every `ci` then reads `unknown` (section 3, "Staleness"). `generated_at` is `null` before the first good cycle.
-- The view holds no title, body, branch description, check name, status description, login, token or scope string (section 3, "Derived fields only"). `base` is a branch name, the one free-text field. It is kept because section 2 reads PRs by base, has its control characters stripped, and is cut at 255 bytes.
+- The view holds no title, body, branch name, check name, status or deployment description, login, token or scope string (section 3, "Derived fields only"; section 6, "nothing sensitive leaves"). The collector keeps each open PR's base branch in memory to group the base reads of section 2, and never writes it to the view (**Q11**).
 
 ### `watch --json`, schema `gh-status-change/1` (proposed, Q6)
 
@@ -146,7 +146,7 @@ A stale view is data, not a failure. This follows the display contract, where ev
 ## 5. The interim credential, in report mode
 
 The core uses gh's own login and never holds a token (section 4, "The interim").
-- Every forge call is `gh api graphql` with a compiled document, or `gh api -X GET` on a path built from an allowlisted repo, plus `GET /rate_limit`. Nothing else is spawned. This is the argv the recording-shim test allows (section 6, "no write call").
+- Every forge call is `gh api graphql` with a compiled document, or `gh api -X GET` on a path built from an allowlisted repo, plus `gh api -X GET /rate_limit`. Nothing else is spawned. The `/rate_limit` path is an addition to the argv set of section 6, "no write call", which names only allowlisted paths; section 2's busy signal needs it, so it is part of **Q9**.
 - The core sets no `GH_TOKEN`, `GITHUB_TOKEN` or `GH_ENTERPRISE_TOKEN` for `gh`, and clears them from the child environment if its own environment carries them. It never runs `gh auth token`, `gh auth status --show-token` or any `gh auth` verb. It never reads gh's `hosts.yml` or the keychain.
 - **Report mode.** At start, the core prints one line to stderr naming the credential source `gh-login` and the word `interim`, with the login's scopes. It does not refuse on a write scope. The scopes are proposed to come from the `X-OAuth-Scopes` header of the `GET /rate_limit` response, which is already in the fixed set (**Q9**). The scopes appear in that start line only: never in the view, a change line or any other log line, since the design keeps them in a private record (section 4).
 - The view's `credential` field says `gh-login` and `interim`, so gh-ingress's publishing refusal (section 4, last paragraph) has something to read.
@@ -165,13 +165,13 @@ Any answer that differs from what section 2 needs becomes a note on this spec an
 Every test runs against a fake GitHub server and a recording `gh` shim on `PATH`, never against github.com, with a scratch `HOME`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME`.
 
 Collection, from `gh-ingress.md` section 2 (same numbers):
-1. A PR missing from a search result, with no REST change, publishes nothing.
+1. A PR missing from a search result, with no REST change, changes nothing: the view still lists it, and `watch --json` prints no change line for it.
 2. Opened, closed and merged come from the REST list fixture, once each.
 3. UNKNOWN is re-read next cycle, never in the view, and after 3 cycles raises one health warning.
 4. A QUEUED suite with no workflow run is not running; one with a run is.
 5. A base that moves with no PR head change triggers a live read of the open PRs on it, a stacked PR's parent included.
 6. 101 open PRs are read across two pages, and a health warning is raised.
-7. A 403, a secondary limit or a 429 backs off from a 1 minute floor to the cap, honours `Retry-After`, and leaves `generated_at` where it was.
+7. A 403, a secondary limit or a 429 backs off exponentially from a 1 minute floor to the cap, and leaves `generated_at` where it was. With no `Retry-After`, the first retry reaches the fake server no sooner than 1 minute after the failure. With `Retry-After`, no request reaches the fake server before it elapses.
 8. A failed cycle leaves `generated_at` unchanged, and `list --json` shows `stale: true` and every `ci` as `unknown` after 3 cycles.
 9. A class at its ceiling makes no request in the fake server's log until the window rolls over, and the health record names the class.
 10. A fast poll on a run that stays IN_PROGRESS past the ceiling drops back to the 60 s cycle.
@@ -189,8 +189,8 @@ Guarantees, from section 6 rows that build 1 reaches:
 - **No write call:** the fake server fails the test on any method other than GET, or POST to `/graphql` with a compiled document; the shim fails it on any argv other than the set in section 5; a source check for `mutation` stays as a second line.
 - **A URL:** a URL passed through each input is refused, with no request to it.
 - **No stranger widens the list:** an injected `stat` result with another owner uid and mode 0644 is refused at start and on reload.
-- **Nothing sensitive leaves:** canaries in fixture titles, bodies, branch descriptions, check names, status and deployment descriptions never appear in the view, change lines, logs or stdout. A positive control proves the scan finds a planted canary.
-- **The token stays out:** with a canary in the parent's `GH_TOKEN`, no child's argv or environment carries it, and `ps -E -o command= -p <pid>` on the core shows no canary.
+- **Nothing sensitive leaves:** canaries in fixture titles, bodies, branch names (head and base), check names, commit status descriptions and deployment descriptions never appear in the view, change lines, logs or stdout. A positive control proves the scan finds a planted canary.
+- **The token stays out:** with a canary token in the credential source (the fake `gh` login in a scratch `GH_CONFIG_DIR`) and none in the core's environment, a recording spawner shows no child's argv or environment carrying it, and `ps -E -o command= -p <pid>` on the core shows no canary (section 6, "the token stays out of env and argv"). A second case starts the core with a canary in `GH_TOKEN` and checks only the children: none carries it. It does not check the core with `ps -E`, which shows the environment the process was started with, whatever the process later removes (measured 2026-10-26).
 - **Report mode:** with the gh login as source and a fake `X-OAuth-Scopes: repo, workflow`, start-up prints `gh-login`, `interim` and the scopes to stderr and runs; the scopes string appears nowhere else.
 - **Viewing never calls the forge:** `list` and `watch` run 100 times leave the fake log unchanged.
 - **No listener:** `lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN` and `-iUDP` print nothing for the collector.
@@ -202,21 +202,22 @@ New in this spec:
 - **Symlink:** an allowlist path that is a symlink to a valid file owned by the core's uid is refused.
 - **Search scope (Q1 default):** an `org:` search result for an unlisted repo never reaches the view, and the drop count rises by one.
 - **No gh auth verb:** the shim fails the test if any `gh auth` argv is spawned.
-- **Base field:** a branch name carrying control characters and 300 bytes is stored stripped and cut at 255 bytes.
+- **No branch name in the view:** a PR whose base and head branch names are canaries leaves neither canary in the view or a change line, and its base read still happens.
 
 ## 7. Open questions, each with a recommended default
 
 | | question | recommended default |
 |---|---|---|
 | Q1 | The open-PR search is org-wide; the allowlist is per repo. | Keep `org:`, drop unlisted results before the view, count the drops (section 3). |
-| Q2 | Which REST list carries membership. | `GET /repos/{o}/{r}/pulls?state=all&sort=updated&direction=desc` with `If-None-Match`; PRs only in build 1, issues later. |
+| Q2 | Which REST paths carry membership and the base reads. | `GET /repos/{o}/{r}/pulls?state=all&sort=updated&direction=desc` and `GET /repos/{o}/{r}/branches/{branch}`, each with `If-None-Match`; PRs only in build 1, issues later. |
 | Q3 | The fast-poll interval and its ceiling. | 15 s, dropping back after 30 minutes. |
 | Q4 | The allowlist's format, path, and where the ceilings live. | TOML at `$XDG_CONFIG_HOME/<core>/watch.toml`, ceilings in the same file. |
 | Q5 | The view as a file or a socket. | A 0600 file by atomic rename in build 1; a socket waits for a reader that needs push. |
 | Q6 | The `list` and `watch` schemas. | `gh-status-view/1` and `gh-status-change/1` as in section 4. |
 | Q7 | The exit codes. | The table in section 4: a stale view is 0, refused start-up is 78. |
 | Q8 | How the collector stays up. | `<core> run` in the foreground under launchd on its host. |
-| Q9 | Where the interim reads the login's scopes. | The `X-OAuth-Scopes` header of the `GET /rate_limit` read already in the fixed set. |
+| Q9 | Where the interim reads the login's scopes, and whether `/rate_limit` joins the shim's allowed argv. | The `X-OAuth-Scopes` header of the `GET /rate_limit` read, which the busy signal makes anyway; the shim allows that one path beside the allowlisted ones. |
 | Q10 | Whether the provider seam ships in build 1. | Define the provider trait in build 1; defer the fake second provider test to the build that adds a second forge. |
+| Q11 | Whether the view carries a PR's base branch name. | No. The collector keeps it in memory for the base reads; the view and change lines never carry a branch name, as section 6 requires. |
 
 These recommendations are valid until 2026-11-09. The architect role re-checks them then, or when the operator names the repository, whichever comes first.
