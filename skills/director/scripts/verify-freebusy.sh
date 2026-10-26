@@ -51,6 +51,7 @@ for a in "$@"; do
   if [[ "$prev" == --cluster ]]; then h="$a"; fi
   prev="$a"
 done
+if [[ "$1" == version && -z "$h" ]]; then cat "$FB_FIX/client.version" 2>/dev/null || echo "marvel unknown (alpha)"; exit 0; fi
 [[ -n "$h" ]] || { echo "stub marvel: no --cluster in: $*" >&2; exit 2; }
 if [[ -e "$FB_FIX/$h.down" ]]; then echo "Error: dial mrvl://$h: connection refused" >&2; usage17; exit 1; fi
 if [[ -e "$FB_FIX/$h.slow" && ! -e "$FB_FIX/$h.slept" ]]; then
@@ -65,6 +66,16 @@ if [[ "$1 $2" == "get sessions" ]]; then
   fi
   cat "$FB_FIX/$h.sessions"; exit 0
 fi
+if [[ "$1" == version ]]; then
+  if [[ -e "$FB_FIX/$h.version" ]]; then cat "$FB_FIX/$h.version"; exit 0; fi
+  echo "Error: no daemon build" >&2; exit 1
+fi
+if [[ "$1" == capture ]]; then
+  f="$FB_FIX/cap/${2#*/}"
+  if [[ -e "$f.fail" ]]; then echo "Error: cannot capture" >&2; exit 1; fi
+  if [[ -e "$f" ]]; then cat "$f"; else echo "some output"; fi
+  exit 0
+fi
 if [[ "$1 $2" == "get teams" ]]; then
   if [[ -e "$FB_FIX/$h.teamsfail" ]]; then echo 'Error: daemon busy' >&2; exit 1; fi
   cat "$FB_FIX/$h.teams"; exit 0
@@ -74,6 +85,12 @@ S
 cat >"$root/bin/director-mcp" <<'S'
 #!/usr/bin/env bash
 echo "$*" >>"$FB_FIX/mcp.log"
+if [[ "$*" == "unread --json --older-than 300s" ]]; then
+  if [[ -e "$FB_FIX/unread.down" ]]; then echo "director-mcp unread: connect nats://127.0.0.1:1: nats: no servers available for connection" >&2; exit 0; fi
+  if [[ -e "$FB_FIX/unread.fail" ]]; then echo "director-mcp: unknown mode unread" >&2; exit 2; fi
+  if [[ -e "$FB_FIX/unread.junk" ]]; then echo "not json at all"; exit 0; fi
+  cat "$FB_FIX/unread.json"; exit 0
+fi
 if [[ "$*" != "asks --json" ]]; then echo "stub director-mcp: unexpected $*" >&2; exit 2; fi
 if [[ -e "$FB_FIX/asks.old" ]]; then echo "director-mcp: unknown mode asks" >&2; exit 2; fi
 cat "$FB_FIX/asks.json"
@@ -99,7 +116,7 @@ teams() { # teams FILE LINES...
   { echo 'WORKSPACE  TEAM  ROLE  REPLICAS  RUNTIME'; printf '%s\n' "$@"; } >"$f"
 }
 fixtures() {
-  rm -f "$FIX"/config.list* "$FIX"/*.exclude "$FIX"/marvel.env "$FIX"/forbidden.log "$FIX"/*.slept "$FIX"/*.teamsfail "$FIX"/*.down "$FIX"/*.slow "$FIX"/*.noturn "$FIX"/*.turn "$FIX"/asks.old "$FIX"/*.log "$FIX/slow.pids"
+  rm -f "$FIX"/config.list* "$FIX"/*.exclude "$FIX"/marvel.env "$FIX"/forbidden.log "$FIX"/*.slept "$FIX"/*.teamsfail "$FIX"/*.down "$FIX"/*.slow "$FIX"/*.noturn "$FIX"/*.turn "$FIX"/asks.old "$FIX"/*.log "$FIX/slow.pids" "$FIX"/*.version "$FIX"/marvel.rb "$FIX"/unread.*; rm -rf "$FIX/cap"; mkdir -p "$FIX/cap"
   sess alpha.sessions \
     'wsa crew builder crew-builder-1 6s* 100%* running healthy' \
     'wsa crew builder crew-builder-2 4m 0% running healthy' \
@@ -124,6 +141,19 @@ fixtures() {
   printf '%s\n' \
     "{\"generated_at\":\"2026-10-21T00:00:00Z\",\"partial\":false,\"rollup_by_owner\":[{\"key\":\"crew/architect\",\"open\":0,\"unacked\":0,\"blocked\":0,\"oldest_open_seconds\":0}],\"rollup_by_asker\":[],\"gaps\":{\"streams_not_read\":[],\"reader_down\":[]}}" \
     >"$FIX/asks.json"
+  # versions, one build everywhere; the tap formula and the presence roster the session writes
+  echo 'marvel 0.1.0-alpha.1 (alpha)' >"$FIX/client.version"
+  local c
+  for c in alpha beta gamma; do
+    printf '%s\n' 'marvel 0.1.0-alpha.1 (alpha)' 'daemon  0.1.0-alpha.1 (alpha) commit abc123 pid 11 started 2026-10-20T00:00:00Z' >"$FIX/$c.version"
+  done
+  printf '%s\n' 'class Marvel < Formula' '  version "0.1.0-alpha.1"' 'end' >"$FIX/marvel.rb"
+  unread '[]'
+}
+unread() { # unread ROWS: the durables director-mcp unread reports; each row is {agent_id, state, age, over}
+  jq -n -c --argjson r "$1" '{stream: "AGENT_INBOX", read_at: "2026-10-21T00:05:00Z", older_than: "5m0s",
+    durables: ($r | map({durable: ("mcp_" + .agent_id + "_01X"), agent_id: .agent_id, instance: "01X", live: true, state: .state,
+      oldest_unread_seq: 5, oldest_unread_age_seconds: .age, over_threshold: .over}))}' >"$FIX/unread.json"
 }
 
 # Run the script the way a sweep does: scrubbed environment, scratch home and
@@ -135,6 +165,7 @@ run() { # run [VAR=value ...]
   set +e
   env -i HOME="$root/home" PATH="$root/bin:/usr/bin:/bin:/opt/homebrew/bin" LANG=C TMPDIR="$root" \
     DIRECTOR_STATE="$state" FB_FIX="$FIX" FREEBUSY_TEST_CLOCK=1 FREEBUSY_NOW="$NOW" \
+    FREEBUSY_TAP_FORMULA="$FIX/marvel.rb" \
     FREEBUSY_ASKS_MAX_AGE=900 FREEBUSY_CALL_TIMEOUT=4 "$@" "$b" "$FB" 2>"$root/err"
   echo $? >"$root/rc"
   set -e
@@ -232,10 +263,10 @@ case_modes() {
   run FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp" >/dev/null
   local d="$state/freebusy" f
   [[ "$(mode_of "$d")" == 700 ]] && ok "6  directory is mode 700" || bad "6  dir mode" "$(mode_of "$d")"
-  for f in seats.jsonl lanes.jsonl flow.jsonl; do
+  for f in seats.jsonl lanes.jsonl flow.jsonl health.jsonl; do
     [[ -f "$d/$f" && "$(mode_of "$d/$f")" == 600 ]] && ok "6  $f is mode 600" || bad "6  $f mode" "$(mode_of "$d/$f" 2>&1)"
   done
-  [[ -z "$(find "$d" -mindepth 1 ! -name seats.jsonl ! -name lanes.jsonl ! -name flow.jsonl)" ]] \
+  [[ -z "$(find "$d" -mindepth 1 ! -name seats.jsonl ! -name lanes.jsonl ! -name flow.jsonl ! -name health.jsonl)" ]] \
     && ok "6  nothing else is left in the directory (lock and temp files gone)" || bad "6  leftovers" "$(ls -A "$d")"
   git -C "$state" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     && bad "6  scratch state is inside a checkout" || ok "6  scratch state is outside any checkout"
@@ -254,11 +285,11 @@ case_no_writes() {
   fixtures; new_state; conf3
   run FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp" >/dev/null
   [[ ! -e "$FIX/forbidden.log" ]] && ok "7  no bd, gh or ssh call was made" || bad "7  forbidden call" "$(cat "$FIX/forbidden.log")"
-  if grep -qvE '^(config list$|get (sessions|teams) --cluster (alpha|beta|gamma)( |$))' "$FIX/marvel.log"; then bad "7  marvel used for more than config list and get --cluster" "$(cat "$FIX/marvel.log")"; else ok "7  marvel was only asked config list and get --cluster NAME"; fi
+  if grep -qvE '^(config list$|version$|version --cluster (alpha|beta|gamma)$|capture [a-z0-9]+/[A-Za-z0-9._-]+ --cluster (alpha|beta|gamma) -e$|get (sessions|teams) --cluster (alpha|beta|gamma)( |$))' "$FIX/marvel.log"; then bad "7  marvel used for more than config list, version, capture -e and get --cluster" "$(cat "$FIX/marvel.log")"; else ok "7  marvel was only asked config list, version, capture -e and get --cluster NAME"; fi
   [[ "$(grep -c '^get ' "$FIX/marvel.log")" == "$(grep -c '^get .*--cluster ' "$FIX/marvel.log")" ]] && ok "7  every get names its cluster" || bad "7  a get without --cluster"
   grep -q -- '--socket' "$FIX/marvel.log" && bad "7  a call carried --socket" || ok "7  no call carries --socket"
   [[ "$(sort -u "$FIX/marvel.env")" == "MARVEL_SOCKET=unset MARVEL_HOME=unset" ]] && ok "7  marvel saw no MARVEL_SOCKET or MARVEL_HOME that the script set" || bad "7  marvel env" "$(sort -u "$FIX/marvel.env")"
-  [[ "$(sort -u "$FIX/mcp.log")" == "asks --json" ]] && ok "7  director-mcp was only asked for asks --json" || bad "7  mcp" "$(cat "$FIX/mcp.log")"
+  [[ "$(sort -u "$FIX/mcp.log")" == "$(printf '%s\n' 'asks --json' 'unread --json --older-than 300s')" ]] && ok "7  director-mcp was only asked for asks --json and unread --json --older-than 300s" || bad "7  mcp" "$(cat "$FIX/mcp.log")"
   if grep -vE '^[[:space:]]*#' "$FB" | grep -qE 'MARVEL_SOCKET|MARVEL_HOME|--socket'; then bad "7  the script text sets or names MARVEL_SOCKET, MARVEL_HOME or --socket"; else ok "7  the script text never sets MARVEL_SOCKET, MARVEL_HOME or --socket"; fi
   # the script text: no bus send, inject, bd write or gh call (comments excluded)
   local code hits
@@ -473,12 +504,159 @@ case_lock_min() {
   { grep -q 'clusters: 3 of 3 read' <<<"$out" && ! grep -q 'GAP lock-stale' <<<"$out"; } && ok "16 1 minute: a 5 minute old lock is taken over, no GAP" || bad "16 1 minute" "$out"
 }
 
+# --- fleet health (aae-orc-g974y, sim/design/fleet-health.md) ---------------------------------
+at_now="$(jq -nr --argjson t "$NOW" '$t | todate')"
+hrows() { jq -c "select(.kind==\"$1\")" "$state/freebusy/health.jsonl" 2>/dev/null || true; }
+hval() { jq -r "select(.kind==\"$1\" and ($2)) | $3" "$state/freebusy/health.jsonl" 2>/dev/null || true; }
+E=$'\033'
+RULE="$(for _ in $(seq 1 20); do printf '\xe2\x94\x80'; done)"
+DRAWN="${E}[39m${E}[38;5;244m${RULE}"
+MARK=$'\xe2\x9d\xaf'
+TOOL=$'\xe2\x8e\xbf'
+expired_pane() { printf '%s\n' 'earlier output' "  ${TOOL}  Login expired $(printf '\xc2\xb7') Please run /login"; }
+quoted_pane() { printf '%s\n' "  ${TOOL}  Login expired $(printf '\xc2\xb7') Please run /login" 'the reply went on for a while' "$DRAWN" "${MARK} " "$DRAWN" '  status line'; }
+consent_pane() { printf '%s\n' 'WARNING: Loading development channels' '' ' 1. I am using this for local development' ' 2. Exit'; }
+menu_pane() { printf '%s\n' "$DRAWN" "${MARK} " "$DRAWN" 'Teach auto mode about your environment?' ' 1. Yes' ' 2. Not now'; }
+quiet_seats() { # a cluster of quiet running seats: NAME...
+  local n
+  : >"$FIX/alpha.sessions.extra"
+  for n in "$@"; do echo "wsa crew qa $n 9m 0% running healthy" >>"$FIX/alpha.sessions.extra"; done
+  cat "$FIX/alpha.sessions.extra" >>"$FIX/alpha.sessions"
+}
+
+case_health() {
+  local base=(FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp") out v
+  fixtures; new_state; conf3
+  # a seat the watchdog marked, read from the HEALTH column with no capture taken for it
+  printf '%s\n' \
+    'wsa crew qa crew-qa-3 1m 30% running unhealthy (logged-out)' \
+    'wsa crew qa crew-qa-2 5m 0% running healthy (parked: trust)' >>"$FIX/alpha.sessions"
+  out="$(run "${base[@]}")"
+  [[ "$(cat "$root/rc")" == 0 ]] && ok "H1 exits 0" || bad "H1 exits 0"
+  [[ "$(hval seat '.seat=="crew-qa-3"' .class)" == auth-expired ]] && ok "H1 a (logged-out) HEALTH reads auth-expired" || bad "H1 logged-out" "$(hrows seat)"
+  [[ "$(hval seat '.seat=="crew-qa-3"' .source)" == marvel ]] && ok "H1 and its source is marvel" || bad "H1 source"
+  [[ "$(hval seat '.seat=="crew-qa-2"' .class)" == other-dialog && "$(hval seat '.seat=="crew-qa-2"' .reason)" == trust ]] && ok "H1 a (parked: trust) HEALTH reads other-dialog with its reason" || bad "H1 parked" "$(hrows seat)"
+  ! grep -q 'capture wsa/crew-qa-3\|capture wsa/crew-qa-2' "$FIX/marvel.log" && ok "H1 no capture is taken for a seat marvel already classified" || bad "H1 capture taken"
+  [[ "$(hval seat '.seat=="crew-qa-3"' .since)" == "$at_now" ]] && ok "H1 since is the first sweep that saw it" || bad "H1 since" "$(hrows seat)"
+  local later=$((NOW + 600))
+  out="$(run "${base[@]}" FREEBUSY_NOW="$later")"
+  [[ "$(hval seat '.seat=="crew-qa-3"' .since)" == "$at_now" ]] && ok "H1 a later sweep keeps the first since" || bad "H1 since kept" "$(hrows seat)"
+  [[ "$(jq -s 'map(select(.kind=="seat" and .seat=="crew-qa-3")) | length' "$state/freebusy/health.jsonl")" == 1 ]] && ok "H1 health.jsonl is replaced each run, one row per seat" || bad "H1 replaced"
+  [[ "$(mode_of "$state/freebusy/health.jsonl")" == 600 ]] && ok "H1 health.jsonl is mode 600" || bad "H1 mode" "$(mode_of "$state/freebusy/health.jsonl")"
+
+  # capture fallback: expired screen, the same text quoted in a transcript, consent dialog, auto-mode menu
+  fixtures; new_state; conf3
+  quiet_seats q-expired q-quoted q-consent q-menu q-clean
+  expired_pane >"$FIX/cap/q-expired"; quoted_pane >"$FIX/cap/q-quoted"; consent_pane >"$FIX/cap/q-consent"; menu_pane >"$FIX/cap/q-menu"
+  out="$(run "${base[@]}")"
+  [[ "$(hval seat '.seat=="q-expired"' .class)" == auth-expired && "$(hval seat '.seat=="q-expired"' .source)" == capture ]] && ok "H2 an expired-login capture reads auth-expired" || bad "H2 expired" "$(hrows seat)"
+  [[ -z "$(hval seat '.seat=="q-quoted"' .class)" ]] && ok "H2 the same text quoted above the composer reads nothing" || bad "H2 quoted" "$(hrows seat)"
+  [[ "$(hval seat '.seat=="q-consent"' .class)" == consent-dialog ]] && ok "H2 a consent-dialog capture reads consent-dialog" || bad "H2 consent" "$(hrows seat)"
+  [[ "$(hval seat '.seat=="q-menu"' .class)" == automode-menu ]] && ok "H2 an auto-mode menu capture reads automode-menu through composer-check" || bad "H2 menu" "$(hrows seat)"
+  [[ -z "$(hval seat '.seat=="q-clean"' .class)" ]] && ok "H2 an ordinary pane reads nothing" || bad "H2 clean" "$(hrows seat)"
+  grep -q 'capture wsa/q-expired --cluster alpha -e' "$FIX/marvel.log" && ok "H2 a capture is taken with -e and --cluster" || bad "H2 capture call" "$(grep capture "$FIX/marvel.log" | head -3)"
+  ! grep -q 'capture wsa/crew-builder-1' "$FIX/marvel.log" && ok "H2 a seat that is not quiet is not captured" || bad "H2 busy captured"
+  ! grep -qE -- '--repaint|--composer' "$FIX/marvel.log" && ok "H2 no call carries --repaint or --composer, which resize the pane" || bad "H2 resize flag"
+  [[ ! -e "$FIX/forbidden.log" ]] && ok "H2 no bd, gh or ssh call" || bad "H2 forbidden"
+
+  # nothing captured is stored: a pane holding a secret-shaped string
+  fixtures; new_state; conf3
+  quiet_seats q-secret
+  { echo 'token sk-ABCDEF0123456789ABCDEF0123456789 here'; expired_pane; } >"$FIX/cap/q-secret"
+  out="$(run "${base[@]}")"
+  [[ "$(hval seat '.seat=="q-secret"' .class)" == auth-expired ]] && ok "H3 the secret-bearing pane is still classified" || bad "H3 classified" "$(hrows seat)"
+  if grep -rq 'sk-ABCDEF' "$state" 2>/dev/null || grep -q 'sk-ABCDEF' "$root/err" || grep -q 'sk-ABCDEF' <<<"$out"; then bad "H3 captured text reached a file or the output"; else ok "H3 no captured text reaches the state files or the output"; fi
+  [[ -z "$(jq -r 'keys[]' "$state/freebusy/health.jsonl" | sort -u | grep -vxE 'at|kind|cluster|workspace|seat|class|reason|since|source|state|last_reached|first_failed|host|version|oldest_pending_s|count|key|why' || true)" ]] && ok "H3 every health field is on the allowed list" || bad "H3 fields" "$(jq -r 'keys[]' "$state/freebusy/health.jsonl" | sort -u | tr '\n' ' ')"
+
+  # capture cap: 2 with 3 eligible gives the third a GAP
+  fixtures; new_state; conf3
+  sess alpha.sessions 'wsa crew qa q-busy 1s 80% running healthy'
+  sess beta.sessions 'wsb desk builder desk-builder-1 3s 60% running healthy'
+  sess gamma.sessions 'wsc ops supervisor ops-supervisor-1 1m 12% running healthy'
+  quiet_seats q-a q-b q-c
+  expired_pane >"$FIX/cap/q-a"; expired_pane >"$FIX/cap/q-b"; expired_pane >"$FIX/cap/q-c"
+  out="$(run "${base[@]}" FREEBUSY_CAPTURE_MAX=2)"
+  [[ "$(grep -c '^capture ' "$FIX/marvel.log" || true)" == 2 ]] && ok "H4 a cap of 2 takes two captures" || bad "H4 two captures" "$(grep capture "$FIX/marvel.log")"
+  grep -q 'GAP health: capture cap' <<<"$out" && ok "H4 the rest print GAP: capture cap" || bad "H4 gap" "$out"
+  [[ "$(hval gap 'true' .count)" == 1 ]] && ok "H4 the gap row counts the one seat not captured" || bad "H4 gap row" "$(hrows gap)"
+
+  # a failed capture is a GAP, never a clean seat
+  fixtures; new_state; conf3
+  quiet_seats q-x
+  touch "$FIX/cap/q-x.fail"
+  out="$(run "${base[@]}")"
+  grep -q 'GAP health: 1 capture' <<<"$out" && ok "H5 a capture that fails prints a GAP" || bad "H5 gap" "$out"
+  [[ -z "$(hval seat '.seat=="q-x"' .class)" ]] && ok "H5 and gives the seat no class" || bad "H5 class"
+
+  # reach: a cluster that cannot be read keeps its first-failed time
+  fixtures; new_state; conf3
+  run "${base[@]}" >/dev/null
+  [[ "$(hval cluster '.cluster=="gamma"' .state)" == reached ]] && ok "H6 a read cluster is reached" || bad "H6 reached" "$(hrows cluster)"
+  touch "$FIX/gamma.down"
+  run "${base[@]}" FREEBUSY_NOW=$((NOW + 100)) >/dev/null
+  local t1; t1="$(jq -nr --argjson t $((NOW + 100)) '$t | todate')"
+  [[ "$(hval cluster '.cluster=="gamma"' .state)" == not_reached && "$(hval cluster '.cluster=="gamma"' .first_failed)" == "$t1" ]] && ok "H6 an unread cluster is not_reached with its first failed time" || bad "H6 not reached" "$(hrows cluster)"
+  [[ "$(hval cluster '.cluster=="gamma"' .last_reached)" == "$at_now" ]] && ok "H6 and the last time it was reached" || bad "H6 last reached" "$(hrows cluster)"
+  run "${base[@]}" FREEBUSY_NOW=$((NOW + 200)) >/dev/null
+  [[ "$(hval cluster '.cluster=="gamma"' .first_failed)" == "$t1" ]] && ok "H6 a second failed run keeps the first failed time" || bad "H6 kept" "$(hrows cluster)"
+  rm -f "$FIX/gamma.down"
+  run "${base[@]}" FREEBUSY_NOW=$((NOW + 300)) >/dev/null
+  [[ "$(hval cluster '.cluster=="gamma"' .state)" == reached && "$(hval cluster '.cluster=="gamma"' '.first_failed // "none"')" == none ]] && ok "H6 the first good run clears it" || bad "H6 cleared" "$(hrows cluster)"
+
+  # mail: one episode per stretch over the 300 s receipt window, from director-mcp unread
+  fixtures; new_state; conf3
+  unread '[{"agent_id":"crew-builder-1","state":"behind","age":301,"over":true},{"agent_id":"crew-builder-2","state":"reading","age":900,"over":false}]'
+  run "${base[@]}" >/dev/null
+  local eps="$state/freebusy/health-episodes.jsonl" i
+  [[ "$(wc -l <"$eps" | tr -d ' ')" == 1 && "$(jq -r .event "$eps")" == open && "$(jq -r .key "$eps")" == crew-builder-1 ]] && ok "H7 a live seat's first over_threshold row opens one episode, and a row not over threshold opens none" || bad "H7 open" "$(cat "$eps" 2>&1)"
+  for i in 1 2 3; do
+    unread '[{"agent_id":"crew-builder-1","state":"behind","age":900,"over":true}]'
+    run "${base[@]}" FREEBUSY_NOW=$((NOW + i * 60)) >/dev/null
+  done
+  [[ "$(wc -l <"$eps" | tr -d ' ')" == 1 ]] && ok "H7 three more sweeps over the window append nothing" || bad "H7 no append" "$(cat "$eps")"
+  [[ "$(hval mail 'true' .seat)" == crew-builder-1 && "$(hval mail 'true' .since)" == "$at_now" ]] && ok "H7 the open episode is in health.jsonl with its opening time" || bad "H7 mail row" "$(hrows mail)"
+  grep -q '^unread --json --older-than 300s$' "$FIX/mcp.log" && ok "H7 the reader is called with --json --older-than 300s" || bad "H7 args" "$(cat "$FIX/mcp.log")"
+  unread '[{"agent_id":"crew-builder-1","state":"reading","age":10,"over":false}]'
+  run "${base[@]}" FREEBUSY_NOW=$((NOW + 400)) >/dev/null
+  [[ "$(wc -l <"$eps" | tr -d ' ')" == 2 && "$(tail -n 1 "$eps" | jq -r .event)" == close ]] && ok "H7 the first sweep without the over_threshold row appends the close" || bad "H7 close" "$(cat "$eps")"
+  [[ -z "$(hrows mail)" ]] && ok "H7 and the closed episode is not in health.jsonl" || bad "H7 mail closed"
+  # a reader that cannot answer closes nothing and says so
+  unread '[{"agent_id":"crew-builder-1","state":"behind","age":500,"over":true}]'
+  run "${base[@]}" FREEBUSY_NOW=$((NOW + 500)) >/dev/null
+  local v
+  for v in down fail junk; do
+    touch "$FIX/unread.$v"
+    out="$(run "${base[@]}" FREEBUSY_NOW=$((NOW + 600)))"
+    grep -q 'GAP mail:' <<<"$out" && ok "H7 [$v] prints GAP mail" || bad "H7 [$v] gap" "$out"
+    [[ "$(wc -l <"$eps" | tr -d ' ')" == 3 ]] && ok "H7 [$v] the open episode is left open, not closed on a reading it could not take" || bad "H7 [$v] left open" "$(cat "$eps")"
+    rm -f "$FIX/unread.$v"
+  done
+  out="$(run FREEBUSY_DIRECTOR_MCP="$root/nowhere/director-mcp" FREEBUSY_NOW=$((NOW + 600)))"
+  grep -q 'GAP mail: director-mcp not found' <<<"$out" && ok "H7 a missing binary prints GAP mail" || bad "H7 missing" "$out"
+
+  # versions: the client, each daemon, and the tap's formula, from local reads only
+  fixtures; new_state; conf3
+  out="$(run "${base[@]}")"
+  [[ "$(hval version '.host=="client"' .version)" == 0.1.0-alpha.1 && "$(hval version '.host=="alpha"' .version)" == 0.1.0-alpha.1 && "$(hval version '.host=="tap"' .version)" == 0.1.0-alpha.1 ]] && ok "V1 the client, a daemon and the tap formula versions are recorded" || bad "V1 versions" "$(hrows version)"
+  echo 'marvel 0.1.0-alpha.1 (alpha)
+daemon  0.1.0-alpha.2 (alpha) commit def456 pid 11 started 2026-10-20T00:00:00Z' >"$FIX/beta.version"
+  run "${base[@]}" >/dev/null
+  [[ "$(hval version '.host=="beta"' .version)" == 0.1.0-alpha.2 ]] && ok "V1 a daemon on another build shows its own version" || bad "V1 drift" "$(hrows version)"
+  rm -f "$FIX/marvel.rb"
+  out="$(run "${base[@]}")"
+  grep -q 'GAP version: tap formula' <<<"$out" && ok "V1 an unreadable tap formula prints a GAP" || bad "V1 tap gap" "$out"
+  [[ -z "$(hval version '.host=="tap"' .version)" ]] && ok "V1 and records no tap version" || bad "V1 tap row"
+  rm -f "$FIX/gamma.version"
+  out="$(run "${base[@]}")"
+  grep -q 'GAP version: cluster gamma' <<<"$out" && ok "V1 a cluster whose daemon build cannot be read prints a GAP" || bad "V1 daemon gap" "$out"
+}
+
 for FB_BASH in $BASHES; do
   export FB_BASH
   echo "== $FB_BASH =="
   if ! "$FB_BASH" -n "$FB"; then bad "0  bash -n ($FB_BASH)"; else ok "0  bash -n passes ($FB_BASH)"; fi
   case_all_read; case_parked; case_cluster_down; case_asks; case_modes
-  case_no_writes; case_concurrent; case_hung_read; case_flow_and_turn; case_conf; case_formats; case_lock_age; case_empty_list; case_discovery; case_lock_min
+  case_no_writes; case_health; case_concurrent; case_hung_read; case_flow_and_turn; case_conf; case_formats; case_lock_age; case_empty_list; case_discovery; case_lock_min
 done
 
 echo "$pass passed, $fail failed"

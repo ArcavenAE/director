@@ -172,15 +172,15 @@ setclusters() { # names...: marvel's config as a LIST, and the table `marvel con
 }
 setclusters alpha
 pyc() { python3 -c "$1" "$root/out.json"; }
-# The documents that exist: the four panels and the meta, and every daily doc from 09-20 to 10-19 (not today's, which a
+# The documents that exist: the five panels and the meta, and every daily doc from 09-20 to 10-19 (not today's, which a
 # run creates), at the versions a `list` would show. A run that is not about the map gets this one.
 mkvers() { python3 - "$root/vers.json" <<'PY'
 import datetime, json, sys
-m = {"dash_panels/" + p: 3 for p in ("waiting", "where-work-sits", "in-flight", "sessions")}
+m = {"dash_panels/" + p: 3 for p in ("waiting", "where-work-sits", "in-flight", "sessions", "health")}
 m["dash_meta/writer"] = 7
 d0 = datetime.date(2026, 9, 20)
 for i in range(30):
-    for p in ("waiting", "where-work-sits", "in-flight", "sessions"):
+    for p in ("waiting", "where-work-sits", "in-flight", "sessions", "health"):
         m["dash_daily/%s-%s" % (p, (d0 + datetime.timedelta(days=i)).isoformat())] = 1
 json.dump(m, open(sys.argv[1], "w"))
 PY
@@ -203,7 +203,7 @@ assert len(w) <= 50, len(w)
 cols = {x["collection"] for x in w}
 assert cols == {"dash_panels", "dash_daily", "dash_meta"}, cols
 ids = sorted(x["doc_id"] for x in w if x["collection"] == "dash_panels")
-assert ids == ["in-flight", "sessions", "waiting", "where-work-sits"], ids
+assert ids == ["health", "in-flight", "sessions", "waiting", "where-work-sits"], ids
 for x in w:
     if x["op"] == "delete":
         assert set(x) - {"if_version"} == {"op", "collection", "doc_id"}, x
@@ -455,9 +455,9 @@ d=json.load(open(sys.argv[1])); w=d["writes"]
 m=[x for x in w if x["collection"]=="dash_meta"][0]["data"]
 assert m["last_run"]=="2026-10-20T18:00:00Z" and m["runs"]==1 and isinstance(m["reader"],str), m
 day=[x for x in w if x["collection"]=="dash_daily" and x["op"]=="set"]
-assert sorted(x["doc_id"] for x in day)==["in-flight-2026-10-20","sessions-2026-10-20","waiting-2026-10-20","where-work-sits-2026-10-20"], [x["doc_id"] for x in day]
+assert sorted(x["doc_id"] for x in day)==["health-2026-10-20","in-flight-2026-10-20","sessions-2026-10-20","waiting-2026-10-20","where-work-sits-2026-10-20"], [x["doc_id"] for x in day]
 dele=sorted(x["doc_id"] for x in w if x["op"]=="delete")
-assert dele==["in-flight-2026-10-06","sessions-2026-10-06","waiting-2026-10-06","where-work-sits-2026-10-06"], dele
+assert dele==["health-2026-10-06","in-flight-2026-10-06","sessions-2026-10-06","waiting-2026-10-06","where-work-sits-2026-10-06"], dele
 assert all(set(x["data"])=={"panel","day","counts"} for x in day)' && ok "dash_meta carries last_run, runs and reader; daily counts are set for today and the day 14 days back is deleted" || bad "meta and daily"
 before="$(cat "$state/workstreams.jsonl" "$state/desk-snapshot.json" | shasum -a 256)"
 runout run
@@ -472,7 +472,7 @@ PY
 runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); dele=sorted(x["doc_id"] for x in d["writes"] if x["op"]=="delete")
-want=sorted("%s-2026-10-%s" % (p, dd) for p in ("waiting","where-work-sits","in-flight","sessions") for dd in ("02","04","06"))
+want=sorted("%s-2026-10-%s" % (p, dd) for p in ("waiting","where-work-sits","in-flight","sessions","health") for dd in ("02","04","06"))
 assert dele==want, dele' && ok "daily docs older than 14 days are all deleted (days on record plus the one 14 back), the newer ones kept" || bad "stale daily delete"
 python3 - "$state/dash-writer.json" <<'PY'
 import json, sys, datetime
@@ -483,11 +483,11 @@ PY
 runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); w=d["writes"]; dele=sorted(x["doc_id"] for x in w if x["op"]=="delete")
-assert "refused" not in d and len(w)==49, (len(w), d.get("refused"))
-assert len(dele)==40, dele
-assert not [x for x in dele if x.endswith("-2026-09-30") or x.endswith("-2026-10-06")], "the oldest ten days go first, the rest wait"' && ok "a long backlog is cut to the oldest ten days: 49 writes, never over 50, never refused" || bad "backlog cap"
+assert "refused" not in d and len(w)==46, (len(w), d.get("refused"))
+assert len(dele)==35, dele
+assert not [x for x in dele if x.endswith("-2026-09-30") or x.endswith("-2026-10-06")], "the oldest seven days go first, the rest wait"' && ok "a long backlog is cut to the oldest seven days (five panels, 11 writes plus 5 per day): 46 writes, never over 50, never refused" || bad "backlog cap"
 ackrun >/dev/null 2>&1
-python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["days"]==["2026-09-30","2026-10-01","2026-10-02","2026-10-03","2026-10-04","2026-10-05","2026-10-06","2026-10-19","2026-10-20"], d["days"]' "$state/dash-writer.json" && ok "ack drops from its record only the days it was told to delete, and adds today" || bad "ack days" "$(cat "$state/dash-writer.json")"
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["days"]==["2026-09-27","2026-09-28","2026-09-29","2026-09-30","2026-10-01","2026-10-02","2026-10-03","2026-10-04","2026-10-05","2026-10-06","2026-10-19","2026-10-20"], d["days"]' "$state/dash-writer.json" && ok "ack drops from its record only the days it was told to delete, and adds today" || bad "ack days" "$(cat "$state/dash-writer.json")"
 rm -f "$state/dash-writer.json"
 runout run
 ackrun >/dev/null 2>&1
@@ -500,12 +500,71 @@ NOW_OVERRIDE="2026-10-20T18:31:00Z" run run --versions "$root/vers.json" >"$root
 pyc 'import json,sys;d=json.load(open(sys.argv[1]));m=[x["data"] for x in d["writes"] if x["collection"]=="dash_meta"][0];assert m["runs"]==2 and m["last_run"]=="2026-10-20T18:31:00Z", m' && ok "after the floor it runs again and the count moves to 2" || bad "after the floor"
 rm -f "$state/dash-writer.json"
 
+# ---------------------------------------------------------------- the health panel (aae-orc-g974y)
+hfile="$state/freebusy/health.jsonl"
+mkdir -p "$state/freebusy"
+hrec() { printf '%s\n' "$1" >>"$hfile"; }
+hpanel() { pyc 'import json,sys
+d=json.load(open(sys.argv[1])); P=[x["data"] for x in d["writes"] if x["collection"]=="dash_panels" and x["doc_id"]=="health"][0]
+'"$1"; }
+: >"$hfile"; chmod 600 "$hfile"
+hrec '{"kind":"cluster","at":"2026-10-20T17:50:00Z","cluster":"alpha","state":"reached","last_reached":"2026-10-20T17:50:00Z","first_failed":null}'
+hrec '{"kind":"cluster","at":"2026-10-20T17:50:00Z","cluster":"beta","state":"not_reached","last_reached":"2026-10-20T10:00:00Z","first_failed":"2026-10-20T12:00:00Z"}'
+hrec '{"kind":"seat","at":"2026-10-20T17:50:00Z","cluster":"alpha","workspace":"wsa","seat":"crew-qa-3","class":"auth-expired","source":"marvel","since":"2026-10-20T11:00:00Z"}'
+hrec '{"kind":"seat","at":"2026-10-20T17:50:00Z","cluster":"alpha","workspace":"wsa","seat":"crew-qa-2","class":"other-dialog","reason":"trust","source":"marvel","since":"2026-10-20T13:00:00Z"}'
+hrec '{"kind":"seat","at":"2026-10-20T17:50:00Z","cluster":"alpha","workspace":"wsa","seat":"arcaven-bartholomew-g5-9","class":"auth-expired","source":"marvel","since":"2026-10-20T14:00:00Z"}'
+hrec '{"kind":"mail","at":"2026-10-20T17:50:00Z","seat":"crew-builder-1","oldest_pending_s":900,"since":"2026-10-20T16:00:00Z"}'
+hrec '{"kind":"version","at":"2026-10-20T17:50:00Z","host":"client","version":"0.1.0-alpha.1","source":"marvel version"}'
+hrec '{"kind":"version","at":"2026-10-20T17:50:00Z","host":"beta","version":"0.1.0-alpha.2","source":"marvel version --cluster"}'
+runout run
+hpanel 'assert P["panel"]=="health" and P["writer"]=="director", P
+assert P["counts"]=={"blocked":2,"not_reached":1,"mail_open":1,"versions":2,"drift":1,"level":"red"}, P["counts"]
+ids=[(r["kind"],r["id"],r["class"]) for r in P["rows"]]
+assert ("blocked","crew-qa-3","auth-expired") in ids and ("blocked","crew-qa-2","other-dialog") in ids, ids
+assert ("unreached","beta","not_reached") in ids and ("mail","crew-builder-1","unacked-mail") in ids, ids' && ok "the health panel holds a row per blocked seat, unreached cluster and open mail episode, and counts with a level" || bad "health rows" "$(cat "$root/out.json" | head -c 600)"
+hpanel 'assert all(set(r)=={"kind","id","class","since","cluster"} for r in P["rows"]), P["rows"]
+assert "reason" not in json.dumps(P) and "source" not in json.dumps(P) and "workspace" not in json.dumps(P), P' && ok "a health row holds only kind, id, class, since and cluster" || bad "health fields"
+hpanel 'assert not any("bartholomew" in json.dumps(r).lower() for r in P["rows"]), P["rows"]
+assert P["refusal"].get("id:withheld-name")==1, P["refusal"]' && ok "a withheld seat name never reaches the panel and is counted in the refusal" || bad "health withhold"
+grep -qi bartholomew "$root/out.json" && bad "health withheld name in the batch" || ok "the withheld name is nowhere in the batch"
+# levels: amber from mail or drift alone, green from neither
+: >"$hfile"
+hrec '{"kind":"cluster","at":"2026-10-20T17:50:00Z","cluster":"alpha","state":"reached","last_reached":"2026-10-20T17:50:00Z","first_failed":null}'
+hrec '{"kind":"mail","at":"2026-10-20T17:50:00Z","seat":"crew-builder-1","oldest_pending_s":900,"since":"2026-10-20T16:00:00Z"}'
+runout run
+hpanel 'assert P["counts"]["level"]=="amber" and P["counts"]["blocked"]==0, P["counts"]' && ok "an open mail episode alone reads amber" || bad "amber mail"
+: >"$hfile"
+hrec '{"kind":"version","at":"2026-10-20T17:50:00Z","host":"client","version":"0.1.0-alpha.1","source":"marvel version"}'
+hrec '{"kind":"version","at":"2026-10-20T17:50:00Z","host":"tap","version":"0.1.0-alpha.3","source":"tap formula"}'
+runout run
+hpanel 'assert P["counts"]["level"]=="amber" and P["counts"]["drift"]==1, P["counts"]' && ok "version drift alone reads amber" || bad "amber drift"
+: >"$hfile"
+hrec '{"kind":"version","at":"2026-10-20T17:50:00Z","host":"client","version":"0.1.0-alpha.1","source":"marvel version"}'
+runout run
+hpanel 'assert P["counts"]["level"]=="green" and P["rows"]==[], P' && ok "no block, no unreached cluster, no mail and one version reads green" || bad "green"
+# a record that cannot be read or is old is a refusal, never green
+rm -f "$hfile"; runout run
+hpanel 'assert P["counts"]=={} and P["rows"]==[] and P["refusal"].get("health:unread")==1, P' && ok "no health record refuses the panel (health:unread), no level" || bad "health absent"
+printf 'not json\n' >"$hfile"; runout run
+hpanel 'assert P["counts"]=={} and P["refusal"].get("health:unread")==1, P' && ok "an unparseable health record refuses the panel" || bad "health torn"
+: >"$hfile"
+hrec '{"kind":"version","at":"2026-10-20T15:00:00Z","host":"client","version":"0.1.0-alpha.1","source":"marvel version"}'
+runout run
+hpanel 'assert P["counts"]=={} and P["refusal"].get("health:stale")==1, P' && ok "a health record more than an hour old refuses the panel (health:stale)" || bad "health stale"
+# a class or time outside the grammar is refused, not drawn
+: >"$hfile"
+hrec '{"kind":"seat","at":"2026-10-20T17:50:00Z","cluster":"alpha","workspace":"wsa","seat":"crew-qa-3","class":"sk-ABCDEF0123456789ABCDEF0123456789","source":"capture","since":"2026-10-20T11:00:00Z"}'
+runout run
+hpanel 'assert P["rows"]==[] and P["refusal"].get("class:grammar")==1, P' && ok "a class outside the four known words is refused and not drawn" || bad "health class"
+grep -q 'sk-ABCDEF' "$root/out.json" && bad "a value from a bad class reached the batch" || ok "the refused value is nowhere in the batch"
+rm -rf "$state/freebusy"
+
 # ---------------------------------------------------------------- the withhold file and the size cap
 # a withhold file that cannot be trusted refuses every panel that carries a title, an id or a session name
-refused3() { # $1 reason: the three filtered panels hold no rows and one withhold-file refusal; where-work-sits still draws
+refused3() { # $1 reason: the four filtered panels hold no rows and one withhold-file refusal; where-work-sits still draws
   pyc 'import json,sys
 d=json.load(open(sys.argv[1])); P={x["doc_id"]:x["data"] for x in d["writes"] if x["collection"]=="dash_panels"}
-for n in ("waiting","in-flight","sessions"):
+for n in ("waiting","in-flight","sessions","health"):
     assert P[n]["rows"]==[] and P[n]["refusal"].get("withhold-file:'"$1"'")==1 and P[n]["counts"]=={}, (n, P[n]["rows"][:1], P[n]["refusal"], P[n]["counts"])
 assert P["where-work-sits"]["counts"]["building"]>0, P["where-work-sits"]["counts"]'
 }
@@ -585,14 +644,14 @@ runout run
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); w=d["writes"]
 pan=[x for x in w if x["collection"]=="dash_panels"]
-assert len(pan)==4 and all(x["if_version"]==3 for x in pan), pan
+assert len(pan)==5 and all(x["if_version"]==3 for x in pan), pan
 meta=[x for x in w if x["collection"]=="dash_meta"][0]; assert meta["if_version"]==7, meta
 dele=[x for x in w if x["op"]=="delete"]; assert dele and all(x["if_version"]==1 for x in dele), dele' \
   && ok "every document the map lists is pinned: if_version is its listed version on each set and each delete" || bad "pinned set"
 pyc 'import json,sys
 d=json.load(open(sys.argv[1])); w=d["writes"]
 new=[x for x in w if x["collection"]=="dash_daily" and x["op"]=="set"]
-assert len(new)==4 and all("if_version" not in x for x in new), new' \
+assert len(new)==5 and all("if_version" not in x for x in new), new' \
   && ok "a document the map does not list (today's daily docs) is written with no if_version" || bad "new set unpinned"
 # a delete of a document that is not in the map is dropped, and ack.deleted names only what is deleted
 python3 - "$root/vers.json" "$root/vpart.json" <<'PY'
