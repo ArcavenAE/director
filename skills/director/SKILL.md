@@ -68,10 +68,15 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    `idea-roots.conf`): do not run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat`, since the hook would then report a scan that
    never ran as "0h ago", and print `Stalled ideas: not run (<its stderr line>)`, never an empty block. A scan
    that did not run is not "none".
+   Before it, call `list_roster` and write its result to `$DIRECTOR_STATE/presence-roster.json` (mode 600) as
+   `{"generated_at": <now, ISO UTC>, "present": <the list_roster rows>}`: freebusy reads it for unacked-mail episodes,
+   since no command it can run reads presence, and prints `GAP presence` when the file is missing or older than 15 minutes.
    Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/freebusy` (read only: no bus send, no inject, no bd write, no gh call).
    It reads each cluster that `marvel config list` names (less any name in `$DIRECTOR_STATE/freebusy-clusters.exclude`,
    one per line, for an alias) with `marvel get ... --cluster <name>`, and the asks rollup, and writes
-   `$DIRECTOR_STATE/freebusy/` (seats, lanes and a flow line). Print its `- GAP` lines and its one count line
+   `$DIRECTOR_STATE/freebusy/` (seats, lanes, a flow line, and the fleet-health record `health.jsonl` with its
+   `health-episodes.jsonl`: which seats sit at a prompt and since when, which clusters are unreached, mail unacked past 300 s,
+   version drift; `sim/design/fleet-health.md`). Print its `- GAP` lines and its one count line
    (`freebusy: clusters: N of M read; ...`) in the sweep reply under Drafts, outside the fence above, as the Away line
    is: they are not appended to `board.md`, and the fence is unchanged. If `marvel config list` fails or names no cluster it prints `GAP clusters`;
    show that line, never skip the step silently. NOTE lines (an excluded cluster, an exclude name marvel does not

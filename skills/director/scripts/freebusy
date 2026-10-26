@@ -16,12 +16,30 @@
 #                           and LAST-TURN where the cluster's marvel has the column
 #     marvel get teams      a role at REPLICAS 0 is parked
 #   the asks rollup: director-mcp asks --json, on this host
+#   the fleet-health record (sim/design/fleet-health.md, aae-orc-g974y), all read-only:
+#     reach        the outcome of the cluster reads above, with the time since a cluster failed
+#     blocked      first the HEALTH cell of marvel get sessions, which marvel derives from the
+#                  seat's harness_state: "(logged-out)" reads auth-expired and "(parked: R)" reads
+#                  other-dialog. Only a running seat that is quiet (ACTIVE% 0 or -) and has no such
+#                  cell is captured: marvel capture SESSION --cluster NAME -e, matched in memory.
+#                  The flags --repaint and --composer are never used, since both resize the pane
+#     mail         the roster file the director session writes from its list_roster tool
+#                  ($FREEBUSY_PRESENCE, default $DIRECTOR_STATE/presence-roster.json): a JSON object
+#                  {"generated_at": ISO time, "present": [list_roster rows]}. No command here reads
+#                  presence, and this script never dials the bus
+#     versions     marvel version (client line), marvel version --cluster NAME (the daemon line),
+#                  and the version line of the tap's Formula/marvel.rb as the local checkout
+#                  $FREEBUSY_TAP_FORMULA names it (no default; no network, no gh)
 #
 # Writes, under $DIRECTOR_STATE/freebusy/ (directory mode 700, files mode 600, and
 # the state directory must be outside any checkout):
 #   seats.jsonl   one row per seat, replaced on each run
 #   lanes.jsonl   one row per lane (team/role), replaced on each run
 #   flow.jsonl    one line per run, append-only
+#   health.jsonl  one row per cluster, blocked seat, open mail episode and version, replaced each run
+#   health-episodes.jsonl  one line per opened or closed mail episode, append-only
+# No captured pane text, token or message body reaches any file: a capture is classified in
+# memory and only the class word, the seat and the times are kept.
 # It sends nothing on the bus, injects nothing, writes no bd record and calls no gh.
 #
 # States: free, busy, waiting, unknown. A seat is busy when its ACTIVE% is above 0,
@@ -47,6 +65,9 @@
 # (seconds for the cluster list, for each cluster read and for the asks read, default 20),
 # FREEBUSY_ASKS_MAX_AGE (seconds an asks ledger may be old, default 900),
 # FREEBUSY_LOCK_STALE_MIN (a positive integer: minutes before a lock with no usable pid is taken over, default 2),
+# FREEBUSY_CAPTURE_MAX (most seats captured per run, default 40; the rest print GAP health: capture cap),
+# FREEBUSY_CAPTURE_TIMEOUT (seconds for the capture and version reads together, default 60),
+# FREEBUSY_PRESENCE and FREEBUSY_TAP_FORMULA (the two local files named above),
 # FREEBUSY_DIRECTOR_MCP (default director-mcp on PATH, else
 # ${DIRECTOR_HOME:-$HOME/.director}/bin/director-mcp). FREEBUSY_TEST_CLOCK=1 with
 # FREEBUSY_NOW (epoch seconds) fixes the clock for tests.
@@ -61,6 +82,12 @@ legacy_conf="$state/freebusy-clusters.conf"
 exclude_file="$state/freebusy-clusters.exclude"
 call_timeout="${FREEBUSY_CALL_TIMEOUT:-20}"
 max_age="${FREEBUSY_ASKS_MAX_AGE:-900}"
+capture_max="${FREEBUSY_CAPTURE_MAX:-40}"
+capture_timeout="${FREEBUSY_CAPTURE_TIMEOUT:-60}"
+presence_file="${FREEBUSY_PRESENCE:-$state/presence-roster.json}"
+tap_formula="${FREEBUSY_TAP_FORMULA:-}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+mail_window=300
 
 # FREEBUSY_LOCK_STALE_MIN must be a positive integer. Anything else (abc, 1.5, -5, 0, empty)
 # would make find error and silently turn the takeover off, or take over a young lock, so it
@@ -72,6 +99,15 @@ if [[ -n "${FREEBUSY_LOCK_STALE_MIN+x}" ]]; then
   else
     echo "- GAP lock-stale: FREEBUSY_LOCK_STALE_MIN '${FREEBUSY_LOCK_STALE_MIN:0:20}' is not a positive integer; using 2"
   fi
+fi
+
+if [[ ! "$capture_max" =~ ^[0-9]+$ ]]; then
+  echo "- GAP health: FREEBUSY_CAPTURE_MAX '${capture_max:0:20}' is not a number; using 40"
+  capture_max=40
+fi
+if [[ ! "$capture_timeout" =~ ^[1-9][0-9]*$ ]]; then
+  echo "- GAP health: FREEBUSY_CAPTURE_TIMEOUT '${capture_timeout:0:20}' is not a positive integer; using 60"
+  capture_timeout=60
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -174,7 +210,7 @@ wait_jobs() {
       if kill -0 "$pid" 2>/dev/null; then alive=1; fi
     done
     if [[ "$alive" == 0 ]]; then break; fi
-    if [[ $((SECONDS - start)) -ge "$call_timeout" ]]; then
+    if [[ $((SECONDS - start)) -ge "${wait_limit:-$call_timeout}" ]]; then
       for pid in "$@"; do
         if kill -0 "$pid" 2>/dev/null; then kill_tree "$pid"; fi
       done
@@ -282,6 +318,8 @@ if [[ ${#pids[@]} -gt 0 ]]; then wait_jobs "${pids[@]}"; fi
 
 seats_new="$tmp/seats.new"
 : >"$seats_new"
+: >"$tmp/reached"
+: >"$tmp/failed"
 read_ok=0
 unlisted=""
 i=0
@@ -291,6 +329,7 @@ while [[ $i -lt ${#names[@]} ]]; do
   if [[ -f "$tmp/$n.rc" && "$(cat "$tmp/$n.rc")" == 0 ]] && grep -q '^@@teams$' "$tmp/$n.out"; then good=1; fi
   if [[ "$good" == 1 ]]; then
     read_ok=$((read_ok + 1))
+    echo "$n" >>"$tmp/reached"
     # sessions section: the @@cols line, the header, then one seat per row
     sed '/^@@teams$/,$d' "$tmp/$n.out" | awk -v c="$n" 'NR == 1 { turn = ($2 == "turn"); next }
       NR == 2 { next }
@@ -327,6 +366,7 @@ while [[ $i -lt ${#names[@]} ]]; do
     why="$(first_line "$tmp/$n.err")"
     if [[ ! -f "$tmp/$n.rc" ]]; then why="no answer within ${call_timeout}s"; fi
     gap "cluster $n: not read ($why)"
+    echo "$n" >>"$tmp/failed"
     carried=0
     if [[ -f "$dir/seats.jsonl" ]]; then
       jq -c --arg c "$n" --arg at "$at" 'select(.cluster == $c) | .at = $at | .state = "unknown" | .reason = "cluster not read"
@@ -401,6 +441,201 @@ jq -s -c --arg at "$at" --argjson asks "$asks_json" '
      asks_unacked: (if $a == null then "GAP" else $a.unacked end),
      asks_oldest_s: (if $a == null then "GAP" else $a.oldest_open_seconds end)}' "$seats_new" >"$lanes_new"
 
+# --- fleet health -----------------------------------------------------------
+# The blocked class of each running seat. marvel puts the watchdog verdict in the HEALTH cell, so
+# that is read first; a quiet running seat with no such cell is captured, within the cap.
+if [[ -s "$dir/health.jsonl" ]]; then jq -s -c . "$dir/health.jsonl" >"$tmp/prev.json" 2>/dev/null || echo '[]' >"$tmp/prev.json"; else echo '[]' >"$tmp/prev.json"; fi
+: >"$tmp/seat.tsv"
+: >"$tmp/health.new"
+capture_skipped=0
+capture_taken=0
+while IFS= read -r n; do
+  [[ -n "$n" ]] || continue
+  sed '/^@@teams$/,$d' "$tmp/$n.out" | awk 'NR == 1 { turn = ($2 == "turn"); next }
+    NR == 2 { next }
+    {
+      p = turn ? 7 : 6
+      if (NF < p + 2) next
+      ws = $1; name = $4; ac = $6
+      i = p + 1; st = $i; i++
+      if ($i ~ /^\(/) { while (i <= NF && $i !~ /\)$/) i++; i++ }
+      rest = ""
+      for (k = i + 1; k <= NF; k++) rest = rest (k > i + 1 ? " " : "") $k
+      cls = ""; why = ""
+      if (st == "running") {
+        if (index(rest, "(logged-out)") > 0) cls = "auth-expired"
+        else if (match(rest, /\(parked(: [^)]*)?\)/)) {
+          cls = "other-dialog"; t = substr(rest, RSTART, RLENGTH); sub(/^\(parked: ?/, "", t); sub(/\)$/, "", t); why = t
+        }
+      }
+      a = ac; gsub(/[*%]/, "", a)
+      quiet = (a == "-" || a == "" || (a ~ /^[0-9.]+$/ && a + 0 == 0)) ? 1 : 0
+      printf "%s\t%s\t%s\t%s\t%s\t%d\n", ws, name, st, cls, why, quiet
+    }' >"$tmp/$n.blk"
+  awk -F'\t' -v c="$n" '$3 == "running" && $4 != "" { printf "%s\t%s\t%s\t%s\t%s\tmarvel\n", c, $1, $2, $4, $5 }' "$tmp/$n.blk" >>"$tmp/seat.tsv"
+  : >"$tmp/$n.elig"
+  while IFS=$'\t' read -r ws nm; do
+    if [[ "$capture_taken" -lt "$capture_max" ]]; then
+      printf '%s\t%s\n' "$ws" "$nm" >>"$tmp/$n.elig"
+      capture_taken=$((capture_taken + 1))
+    else
+      capture_skipped=$((capture_skipped + 1))
+    fi
+  done < <(awk -F'\t' '$3 == "running" && $4 == "" && $6 == 1 { printf "%s\t%s\n", $1, $2 }' "$tmp/$n.blk")
+done <"$tmp/reached"
+
+# The capture classifier: the pane is read from stdin and only a class word is printed. It looks at
+# the last lines only, so the expired-login text quoted higher in a transcript reads nothing.
+classify_pane() {
+  awk '{
+      line = $0
+      gsub(/\033\[[0-9;:?]*[A-Za-z]/, "", line)
+      sub(/^[[:space:]]+/, "", line); sub(/[[:space:]]+$/, "", line)
+      if (line != "") L[++n] = line
+    }
+    END {
+      for (i = (n > 3 ? n - 2 : 1); i <= n; i++)
+        if (tolower(L[i]) ~ /login expired/ && L[i] ~ /\/login/) { print "auth-expired"; exit }
+      for (i = (n > 15 ? n - 14 : 1); i <= n; i++)
+        if (tolower(L[i]) ~ /development channels/) {
+          for (j = i + 1; j <= n && j <= i + 10; j++)
+            if (L[j] ~ /^[^A-Za-z0-9]*1\./) { print "consent-dialog"; exit }
+        }
+    }'
+}
+
+# One background job per cluster takes that cluster's captures one after another; the version
+# reads run beside them. Each job prints only a class word per seat.
+wait_limit="$capture_timeout"
+pids=()
+if [[ ! -x "$here/composer-check" ]]; then gap "health: composer-check not found next to freebusy, so auto-mode menus were not looked for"; fi
+while IFS= read -r n; do
+  [[ -n "$n" ]] || continue
+  set -m
+  (
+    set +e
+    while IFS=$'\t' read -r ws nm; do
+      cap="$(marvel capture "$ws/$nm" --cluster "$n" -e </dev/null 2>/dev/null)"
+      if [[ $? -ne 0 ]]; then printf '%s\t%s\tERR\n' "$ws" "$nm"; continue; fi
+      cls="$(printf '%s\n' "$cap" | classify_pane)"
+      if [[ -z "$cls" ]]; then
+        verdict="$("$here/composer-check" --file <(printf '%s\n' "$cap") 2>/dev/null)"
+        if [[ "$verdict" == MENU ]]; then cls=automode-menu; fi
+      fi
+      printf '%s\t%s\t%s\n' "$ws" "$nm" "${cls:-none}"
+    done <"$tmp/$n.elig" >"$tmp/$n.caps"
+    echo done >"$tmp/$n.capdone"
+  ) &
+  pids+=("$!")
+  set +m
+  set -m
+  (
+    set +e
+    marvel version --cluster "$n" </dev/null >"$tmp/ver.$n" 2>/dev/null
+    echo $? >"$tmp/ver.$n.rc"
+  ) &
+  pids+=("$!")
+  set +m
+done <"$tmp/reached"
+set -m
+(
+  set +e
+  marvel version </dev/null >"$tmp/ver.client" 2>/dev/null
+  echo $? >"$tmp/ver.client.rc"
+) &
+pids+=("$!")
+set +m
+if [[ ${#pids[@]} -gt 0 ]]; then wait_jobs "${pids[@]}"; fi
+unset wait_limit
+
+capture_failed=0
+capture_unfinished=0
+while IFS= read -r n; do
+  [[ -n "$n" ]] || continue
+  want="$(wc -l <"$tmp/$n.elig" | tr -d ' ')"
+  got=0
+  if [[ -f "$tmp/$n.caps" ]]; then got="$(wc -l <"$tmp/$n.caps" | tr -d ' ')"; fi
+  if [[ "$got" -lt "$want" ]]; then capture_unfinished=$((capture_unfinished + want - got)); fi
+  if [[ -f "$tmp/$n.caps" ]]; then
+    capture_failed=$((capture_failed + $(awk -F'\t' '$3 == "ERR"' "$tmp/$n.caps" | wc -l | tr -d ' ')))
+    awk -F'\t' -v c="$n" '$3 != "ERR" && $3 != "none" { printf "%s\t%s\t%s\t%s\t\tcapture\n", c, $1, $2, $3 }' "$tmp/$n.caps" >>"$tmp/seat.tsv"
+  fi
+done <"$tmp/reached"
+if [[ "$capture_skipped" -gt 0 ]]; then gap "health: capture cap, $capture_skipped seat(s) not captured (the cap is $capture_max)"; fi
+if [[ "$capture_failed" -gt 0 ]]; then gap "health: $capture_failed capture(s) could not be taken"; fi
+if [[ "$capture_unfinished" -gt 0 ]]; then gap "health: $capture_unfinished seat(s) not captured within ${capture_timeout}s"; fi
+
+jq -R -c --arg at "$at" --slurpfile prev "$tmp/prev.json" '
+  split("\t") as $f
+  | {kind: "seat", at: $at, cluster: $f[0], workspace: $f[1], seat: $f[2], class: $f[3], source: $f[5]}
+    + (if $f[4] != "" then {reason: ($f[4] | gsub("[^A-Za-z0-9 ._-]"; "") | .[0:40])} else {} end)
+  | . as $r
+  | .since = ((($prev[0] // []) | map(select(.kind == "seat" and .cluster == $r.cluster and .workspace == $r.workspace and .seat == $r.seat and .class == $r.class)) | first | .since) // $at)' \
+  "$tmp/seat.tsv" >>"$tmp/health.new"
+if [[ "$capture_skipped" -gt 0 ]]; then
+  jq -n -c --arg at "$at" --argjson n "$capture_skipped" '{kind: "gap", at: $at, reason: "capture cap", count: $n}' >>"$tmp/health.new"
+fi
+
+# reach, with the time the current outage began
+ok_json="$(jq -R -s -c 'split("\n") | map(select(. != ""))' "$tmp/reached")"
+bad_json="$(jq -R -s -c 'split("\n") | map(select(. != ""))' "$tmp/failed")"
+jq -n -c --arg at "$at" --slurpfile prev "$tmp/prev.json" --argjson ok "$ok_json" --argjson bad "$bad_json" '
+  ($prev[0] // []) as $p
+  | ($ok[] | {kind: "cluster", at: $at, cluster: ., state: "reached", last_reached: $at, first_failed: null}),
+    ($bad[] | . as $c | ($p | map(select(.kind == "cluster" and .cluster == $c)) | first) as $o
+      | {kind: "cluster", at: $at, cluster: $c, state: "not_reached", last_reached: ($o.last_reached // null),
+         first_failed: (if ($o.state == "not_reached" and $o.first_failed != null) then $o.first_failed else $at end)})' >>"$tmp/health.new"
+
+# mail episodes: opened on the first sweep over the receipt window, closed on the first under it
+eps="$dir/health-episodes.jsonl"
+if [[ ! -f "$presence_file" ]]; then
+  gap "presence: no roster file, so no mail episode was opened or closed"
+elif ! jq -e '(.present | type) == "array"' "$presence_file" >/dev/null 2>&1; then
+  gap "presence: the roster file is not a list_roster object"
+else
+  page="$(jq -r --argjson now "$now" 'try ($now - (.generated_at | fromdateiso8601)) catch "bad"' "$presence_file")"
+  if [[ "$page" == bad ]]; then
+    gap "presence: the roster has no readable generated_at"
+  elif [[ "$page" -gt "$max_age" ]]; then
+    gap "presence: the roster is ${page}s old (limit ${max_age}s), so no mail episode was changed"
+  else
+    jq -c '.present[] | select((.oldest_pending_s | type) == "number" and .oldest_pending_s > '"$mail_window"') | {key: (.workspace + "/" + .agent_id), oldest_pending_s: .oldest_pending_s}' "$presence_file" >"$tmp/over.jsonl"
+    if [[ -s "$eps" ]]; then
+      jq -s -c 'group_by(.key) | map(last) | map(select(.event == "open") | .key)' "$eps" >"$tmp/open.json"
+    else
+      echo '[]' >"$tmp/open.json"
+    fi
+    jq -n -c --arg at "$at" --slurpfile open "$tmp/open.json" --slurpfile over "$tmp/over.jsonl" '
+      ($open[0]) as $o
+      | ($over | map(.key)) as $ok
+      | ($over[] | select(.key as $k | $o | index($k) | not) | {at: $at, event: "open", kind: "mail", key: .key, oldest_pending_s: .oldest_pending_s}),
+        ($o[] | select(. as $k | $ok | index($k) | not) | {at: $at, event: "close", kind: "mail", key: .})' >"$tmp/episodes.new"
+    if [[ -s "$tmp/episodes.new" ]]; then
+      cat "$tmp/episodes.new" >>"$eps"
+      chmod 600 "$eps"
+    fi
+  fi
+fi
+if [[ -s "$eps" ]]; then
+  jq -s -c --arg at "$at" 'group_by(.key) | map(last) | .[] | select(.event == "open") | {kind: "mail", at: $at, seat: .key, oldest_pending_s: .oldest_pending_s, since: .at}' "$eps" >>"$tmp/health.new"
+fi
+
+# versions: the client, each daemon and the tap formula
+vrow() { jq -n -c --arg at "$at" --arg h "$1" --arg v "$2" --arg s "$3" '{kind: "version", at: $at, host: $h, version: $v, source: $s}'; }
+vok() { [[ "$1" =~ ^[A-Za-z0-9._+-]{1,80}$ ]]; }
+v="$(awk 'NR == 1 && $1 == "marvel" { print $2; exit }' "$tmp/ver.client" 2>/dev/null || true)"
+if vok "$v"; then vrow client "$v" "marvel version" >>"$tmp/health.new"; else gap "version: the marvel client build could not be read"; fi
+while IFS= read -r n; do
+  [[ -n "$n" ]] || continue
+  v="$(awk '$1 == "daemon" { print $2; exit }' "$tmp/ver.$n" 2>/dev/null || true)"
+  if vok "$v"; then vrow "$n" "$v" "marvel version --cluster" >>"$tmp/health.new"; else gap "version: cluster $n daemon build could not be read"; fi
+done <"$tmp/reached"
+v=""
+if [[ -n "$tap_formula" && -r "$tap_formula" ]]; then v="$(sed -n 's/^[[:space:]]*version "\(.*\)"[[:space:]]*$/\1/p' "$tap_formula" | head -n 1)"; fi
+if vok "$v"; then vrow tap "$v" "tap formula" >>"$tmp/health.new"; else gap "version: tap formula has no readable version line (set FREEBUSY_TAP_FORMULA to the Formula/marvel.rb of a local tap checkout; no network is used)"; fi
+
+health_counts="$(jq -s -r '"\(map(select(.kind == "seat")) | length) blocked, \(map(select(.kind == "cluster" and .state == "not_reached")) | length) unreached, \(map(select(.kind == "mail")) | length) mail, drift \(if (map(select(.kind == "version") | .version) | unique | length) > 1 then "yes" else "no" end)"' "$tmp/health.new")"
+
 # --- write and report -------------------------------------------------------
 seat_counts="$(jq -s -r '[.[].state] | "\(map(select(. == "free")) | length) free, \(map(select(. == "busy")) | length) busy, \(map(select(. == "waiting")) | length) waiting, \(map(select(. == "unknown")) | length) unknown"' "$seats_new")"
 lane_counts="$(jq -s -r '[.[].state] | "\(map(select(. == "free")) | length) free, \(map(select(. == "busy")) | length) busy, \(map(select(. == "waiting")) | length) waiting, \(map(select(. == "unknown")) | length) unknown"' "$lanes_new")"
@@ -409,7 +644,8 @@ if [[ -n "$asks_json" && "$asks_json" != null ]]; then asks_note="read"; else as
 
 mv "$seats_new" "$dir/seats.jsonl"
 mv "$lanes_new" "$dir/lanes.jsonl"
-chmod 600 "$dir/seats.jsonl" "$dir/lanes.jsonl"
+mv "$tmp/health.new" "$dir/health.jsonl"
+chmod 600 "$dir/seats.jsonl" "$dir/lanes.jsonl" "$dir/health.jsonl"
 jq -n -c --arg at "$at" --argjson read "$read_ok" --argjson total "$total" --arg unlisted "$unlisted" --arg asks "$asks_note" \
   --arg seats "$seat_counts" --arg lanes "$lane_counts" \
   '{at: $at, clusters_read: $read, clusters_total: $total, clusters_not_listed: ($unlisted | split(",") | map(select(. != ""))),
@@ -418,7 +654,7 @@ chmod 600 "$dir/flow.jsonl"
 
 cat "$gaps"
 cat "$notes"
-line="freebusy: clusters: $read_ok of $total read; seats: $seat_counts; lanes: $lane_counts; asks: $asks_note"
+line="freebusy: clusters: $read_ok of $total read; seats: $seat_counts; lanes: $lane_counts; asks: $asks_note; health: $health_counts"
 if [[ -n "$unlisted" ]]; then line="$line; not listed: $unlisted"; fi
 echo "$line"
 exit 0

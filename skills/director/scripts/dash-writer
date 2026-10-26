@@ -14,6 +14,13 @@ prints the batch, and the session applies it with one ArtifactData batch of at m
                                count); T and D are the run's own `ack` field, so the clock at ack time never matters
   dash-writer --help
 
+The fifth panel, `health`, is the fleet-health record (sim/design/fleet-health.md): it reads
+$DIRECTOR_STATE/freebusy/health.jsonl, which freebusy writes, and keeps counts, never captured text. Its counts
+are {blocked, not_reached, mail_open, versions, drift, level}, where level is red (a blocked seat or an unreached
+cluster), amber (an open mail episode or version drift) or green, and the Fleet health row of the director's
+Fleet Metrics page reads exactly this counts object from dash_panels/health. A record that is absent, unreadable
+or more than an hour old refuses the panel (health:unread, health:stale) and shows no level, never green.
+
 Sources, read only: `dws show --json` (the ledger folded by dws's own fold, so the page cannot fold
 differently), `marvel --cluster C get sessions --columns team,role,name,state,health,last-active`
 once for each cluster `marvel config list` names (command: $DASH_MARVEL, default marvel, waited for DASH_MARVEL_TIMEOUT seconds, 1 to 60, default 20), and
@@ -34,10 +41,11 @@ Two local files, one entry per line, because no canonical source holds them: the
 It writes exactly the fields of section 3 and nothing else:
   dash_panels/<panel>  panel, as_of, writer, rows, counts, refusal
   dash_daily/<panel>-<day>  panel, day, counts   (kept 14 days: the batch deletes every recorded day 14 or more
-                       days back, and the day exactly 14 back; a batch is 9 writes plus 4 per day deleted, at most 50)
+                       days back, and the day exactly 14 back; a batch is 2 writes per panel plus the meta write,
+                       11 with the five panels, plus 5 per day deleted, at most 50)
   dash_meta/writer     last_run, runs, reader, checks
-A row holds only id, stage, age_h, area, title (ledger rows) or id, stage, health, last_active,
-cluster (session rows). Never a token, key, socket path, settings value, message body, note text,
+A row holds only id, stage, age_h, area, title (ledger rows), id, stage, health, last_active,
+cluster (session rows) or kind, id, class, since, cluster (health rows). Never a token, key, socket path, settings value, message body, note text,
 `next`, `repos`, or a person's name. Every failure is counted in the panel's `refusal` by field and
 reason, never by value; a placeholder is a fixed word, so nothing from a failed value reaches a document.
 
@@ -65,8 +73,10 @@ KEEP_DAYS = 14
 TITLE_MAX = 120
 COLUMNS = "team,role,name,state,health,last-active"
 HEADER = ["TEAM", "ROLE", "AGENT NAME", "STATE", "HEALTH", "LAST-ACTIVE"]
-PANELS = ("waiting", "where-work-sits", "in-flight", "sessions")
-READER = "dws show --json; marvel get sessions"
+PANELS = ("waiting", "where-work-sits", "in-flight", "sessions", "health")
+HEALTH_CLASSES = ("auth-expired", "consent-dialog", "automode-menu", "other-dialog")
+HEALTH_MAX_AGE_S = 3600
+READER = "dws show --json; marvel get sessions; freebusy health.jsonl"
 
 ID_RE = re.compile(r"[a-z0-9.-]{1,80}")
 STATE_RE = re.compile(r"(pending|running|limited|succeeded|failed|crashloop-backoff|crashed)(?: \((.*)\))?", re.S)
@@ -401,6 +411,71 @@ def session_rows(clusters, withhold, refusal, t_text):
     return rows, counts, not_reached
 
 
+def health_rows(t_now, withhold, refusal):
+    """(rows, counts) from freebusy's health.jsonl, or ([], {}) with a fixed-word refusal. Only the class, the seat,
+    the cluster and the times are read from it; nothing else in a row is carried into the document."""
+    path = os.path.join(STATE, "freebusy", "health.jsonl")
+    try:
+        with open(path, encoding="utf-8") as f:
+            recs = [json.loads(l) for l in f if l.strip()]
+    except (OSError, ValueError, UnicodeDecodeError):
+        refusal.add("health", "unread")
+        return [], {}
+    stamps = [parse_ts(r.get("at")) for r in recs if isinstance(r, dict)]
+    stamps = [t for t in stamps if t is not None]
+    if not recs or not stamps or any(not isinstance(r, dict) for r in recs):
+        refusal.add("health", "unread")
+        return [], {}
+    if (t_now - min(stamps)).total_seconds() > HEALTH_MAX_AGE_S:
+        refusal.add("health", "stale")
+        return [], {}
+    rows = []
+    blocked = unreached = mail = 0
+    versions = set()
+    for r in recs:
+        kind = r.get("kind")
+        if kind == "seat":
+            seat, cluster, cls, since = r.get("seat"), r.get("cluster"), r.get("class"), r.get("since")
+            why = None if isinstance(seat, str) and ID_RE.fullmatch(seat) else "charset"
+            why = why or free_text_reason(seat, withhold)
+            if why:
+                refusal.add("id", why)
+                continue
+            if not isinstance(cluster, str) or not CLUSTER_RE.fullmatch(cluster):
+                refusal.add("cluster", "charset")
+                continue
+            if cls not in HEALTH_CLASSES or parse_ts(since) is None:
+                refusal.add("class", "grammar")
+                continue
+            blocked += 1
+            rows.append({"kind": "blocked", "id": seat, "class": cls, "since": since, "cluster": cluster})
+        elif kind == "cluster" and r.get("state") == "not_reached":
+            cluster, since = r.get("cluster"), r.get("first_failed")
+            if not isinstance(cluster, str) or not CLUSTER_RE.fullmatch(cluster) or parse_ts(since) is None:
+                refusal.add("cluster", "charset")
+                continue
+            unreached += 1
+            rows.append({"kind": "unreached", "id": cluster, "class": "not_reached", "since": since, "cluster": cluster})
+        elif kind == "mail":
+            seat, since = r.get("seat"), r.get("since")
+            why = None if isinstance(seat, str) and re.fullmatch(r"[a-z0-9.-]{1,64}/[a-z0-9.-]{1,80}", seat) else "charset"
+            why = why or free_text_reason(seat, withhold)
+            if why:
+                refusal.add("id", why)
+                continue
+            if parse_ts(since) is None:
+                refusal.add("class", "grammar")
+                continue
+            mail += 1
+            rows.append({"kind": "mail", "id": seat.split("/", 1)[1], "class": "unacked-mail", "since": since, "cluster": ""})
+        elif kind == "version" and isinstance(r.get("version"), str) and re.fullmatch(r"[A-Za-z0-9._+-]{1,80}", r["version"]):
+            versions.add(r["version"])
+    drift = 1 if len(versions) > 1 else 0
+    level = "red" if blocked or unreached else ("amber" if mail or drift else "green")
+    rows.sort(key=lambda x: (x["since"], x["id"]))
+    return rows, {"blocked": blocked, "not_reached": unreached, "mail_open": mail, "versions": len(versions), "drift": drift, "level": level}
+
+
 def build(t_text, t_now):
     withhold, wwhy = load_withhold()
     areas = snapshot_areas()
@@ -462,9 +537,11 @@ def build(t_text, t_now):
         rows, counts, nr = session_rows(clusters, wl, sref, t_text)
         panels["sessions"]["rows"] = rows
         panels["sessions"]["counts"] = dict(counts, not_reached=nr)
+    if not wwhy:
+        panels["health"]["rows"], panels["health"]["counts"] = health_rows(t_now, wl, panels["health"]["refusal"])
     if wwhy:
         # the list cannot be trusted: no title, id or session name goes out from any panel it filters
-        for name in ("waiting", "in-flight", "sessions"):
+        for name in ("waiting", "in-flight", "sessions", "health"):
             panels[name] = {"rows": [], "counts": {}, "refusal": Refusals()}
             panels[name]["refusal"].add("withhold-file", wwhy)
     return panels, data
@@ -511,20 +588,26 @@ def read_state():
 
 def expired_days(st, t_now):
     """The days whose daily docs are to be deleted in this batch: every recorded day 14 or more days back, and
-    the day exactly 14 back (the only one a state with no record can name), oldest first. The batch is 9 writes
-    and 4 per expired day, so at most (MAX_WRITES - 9) // 4 days go in one batch and the rest wait."""
+    the day exactly 14 back (the only one a state with no record can name), oldest first. The batch is a panel
+    write and a daily write for each panel plus the meta write, and one delete per panel for each expired day,
+    so at most (MAX_WRITES - base_writes()) // len(PANELS) days go in one batch and the rest wait."""
     cutoff = (t_now - datetime.timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")
     days = {d for d in st.get("days", []) if isinstance(d, str) and re.fullmatch(r"\d{4}-\d\d-\d\d", d) and d <= cutoff}
     days.add(cutoff)
     return sorted(days)
 
 
+def base_writes():
+    """Writes in a batch that deletes nothing: a panel and a daily document per panel, and the meta document."""
+    return 2 * len(PANELS) + 1
+
+
 def batch_days(st, t_now, versions):
     """The expired days this batch deletes: oldest first, only days with a document in the map (a delete of a
-    document that is not there has nothing to remove), at most (MAX_WRITES - 9) // 4 of them."""
+    document that is not there has nothing to remove), at most (MAX_WRITES - base_writes()) // len(PANELS) of them."""
     live = [d for d in expired_days(st, t_now)
             if any(f"dash_daily/{name}-{d}" in versions for name in PANELS)]
-    return live[:(MAX_WRITES - 9) // 4]
+    return live[:(MAX_WRITES - base_writes()) // len(PANELS)]
 
 
 def load_versions(path):
