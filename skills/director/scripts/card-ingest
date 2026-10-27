@@ -5,14 +5,17 @@ a card that is missing a part.
 Design: sim/design/card-ingest.md (issue #320). A script cannot write the Desk
 (finding-director-glst), so the split is:
 
-  card-ingest parse FILE --area A --owner O --prefix P [--update]
+  card-ingest parse FILE --area A --owner O --prefix P [--update] [--intake I-<n>]
       Validates every card in FILE and, only if all pass, writes
       $DIRECTOR_STATE/card-ingest/<prefix>-<sha8>.json:
         {"made_at", "file_sha256", "writes": [{"op": "set"|"update",
          "collection": "decisions", "doc_id": slug, "data": {...}}]}
       and appends one line per card to $DIRECTOR_STATE/card-ingest.jsonl under one
       flock on $DIRECTOR_STATE/card-ingest.lock. The session passes the writes to the
-      Desk tool's batch write, one approval for the file.
+      Desk tool's batch write, one approval for the file. --intake names the operator ask
+      the cards come from (the id `dws intake` minted, shape I-<n>, checked for shape only):
+      it is written into each card's data as "intake" and into each log line, so desk-snapshot
+      can keep it per card and `dws asks` can join it to the answer.
 
   card-ingest check --batch B --read FILE
       FILE is what the session read back from the decisions collection after the
@@ -52,7 +55,7 @@ LOG = os.path.join(STATE, "card-ingest.jsonl")
 LOCK = os.path.join(STATE, "card-ingest.lock")
 THRESHOLD_HOURS = 24  # THRESHOLD_HOURS["desk snapshot"] in dws
 
-CONTENT_FIELDS = ("title", "question", "context", "options", "rec", "rec_key", "expiry", "source", "kind")
+CONTENT_FIELDS = ("title", "question", "context", "options", "rec", "rec_key", "expiry", "source", "kind", "intake")
 SILENCE = ("absent a ruling", "takes effect", "if no answer", "default holds")
 CANON = {"in short": "IN SHORT", "problem": "Problem", "terms": "Terms", "options": "Options",
          "recommendation": "Recommendation", "valid until": "Valid until", "source": "Source", "kind": "Kind"}
@@ -412,6 +415,8 @@ def cmd_parse(a):
     for n in sorted(set(nums)):
         if nums.count(n) > 1:
             problems.append((None, "two cards number %d" % n))
+    if a.intake is not None and not re.match(r"^I-[0-9]+$", a.intake):
+        problems.append((None, "--intake %r is not an intake id (I-<n>)" % a.intake))
     snap, sproblem = snapshot_state(today)
     if sproblem:
         problems.append((None, sproblem))
@@ -436,6 +441,8 @@ def cmd_parse(a):
     lines = []
     for w in writes:
         data = dict(w["data"])
+        if a.intake:
+            data["intake"] = a.intake
         if a.update:
             op = "update"
         else:
@@ -444,6 +451,8 @@ def cmd_parse(a):
         batch["writes"].append({"op": op, "collection": "decisions", "doc_id": w["slug"], "data": data})
         dsha = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         lines.append({"at": today, "slug": w["slug"], "op": op, "data_sha256": dsha, "file_sha256": file_sha, "card": w["num"] if w["num"] is not None else 1})
+        if a.intake:
+            lines[-1]["intake"] = a.intake
     path = os.path.join(BATCHDIR, f"{a.prefix}-{file_sha[:8]}.json")
     os.makedirs(STATE, exist_ok=True)
     with open(LOCK, "a") as lk:
@@ -588,6 +597,7 @@ def main(argv):
     w.add_argument("--owner", required=True)
     w.add_argument("--prefix", required=True)
     w.add_argument("--update", action="store_true")
+    w.add_argument("--intake", help="the intake id (I-<n>) of the operator ask these cards come from")
     w.set_defaults(fn=cmd_parse)
     b = sub.add_parser("backfill")
     b.add_argument("--docs", required=True, help="directory of <slug>.json decision docs, or one JSON file of {slug: doc}")

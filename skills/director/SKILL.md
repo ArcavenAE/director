@@ -167,6 +167,12 @@ release, revise or cancel (the cancel_held tool).
    `board-html` runs on every render) moves that row from the entry, with no
    network. When a fresh Desk snapshot shows every card a row links closed, the
    same fill clears that row's operator block; the next action stays yours.
+   When the operator gives an ask, record it first with
+   `${DIRECTOR_HOME:-$HOME/.director}/bin/dws intake --text-file -`, which prints an ask id (I-<n>) stamped from
+   the clock. Carry the id: `relay-log append ... --ask I-<n> --kind relay|ruling|build|research|question`,
+   `card-ingest parse ... --intake I-<n>`, and `dws link <slug> intake:I-<n>` on the row. `dws asks` then joins
+   each ask to its card, the answer's time, the relay entry and the row, with "none" for a blank. Pass `--answers`
+   to `desk-snapshot write` so each read also adds one row to `desk-reads.jsonl`.
    For an entry already written, link it afterwards with
    `dws link <slug> relay:R-<n>`. Nothing is matched from message text. Read
    `${DIRECTOR_HOME:-$HOME/.director}/bin/dws unlinked` for what the fill

@@ -25,6 +25,14 @@ and ask:<id>. refresh (W2) reads the first three; ask ids wait for W5, and an
 untyped link is shown but never read. refresh names every link it does not
 read on stderr, so nothing is skipped silently.
 
+Intake: `dws intake --text-file <path|-> [--source S]` records an operator ask in
+$DIRECTOR_STATE/asks.jsonl, stamped from the clock under one flock, and prints its id, I-<n>.
+The id then travels: relay-log append --ask I-<n> [--kind K], card-ingest parse --intake I-<n>
+(desk-snapshot keeps it per card), and an intake:I-<n> link on a row (a typed link, set with
+`link` or `open --link`; the name differs from ask:, which is a Desk card id). `dws asks
+[--json]` joins them, one row per ask: ask, received_at, card, answered_at, relay, row. A
+blank is "none"; the join writes nothing and gives the same bytes for the same files.
+
 K13: `--blocked operator` needs `--ask <card id>`, and refuses unless that card is
 open in a Desk snapshot no older than THRESHOLD_HOURS["desk snapshot"] hours. A
 session reads the Desk and runs `desk-snapshot write`; without a usable snapshot
@@ -530,6 +538,8 @@ def cmd_open(a):
         ev["blocked"] = "operator"
     for link in a.link or []:
         decision_link_refused(link)
+        if link.startswith("intake:"):
+            typed_link(link)
     if a.link or ask_link:
         ev["links"] = list(a.link or []) + ([ask_link] if ask_link and ask_link not in (a.link or []) else [])
 
@@ -628,6 +638,8 @@ def cmd_set(a):
 
 RELAY_LINK = re.compile(r"^relay:R-[0-9]+$")
 MSG_LINK = re.compile(r"^msg:[A-Za-z0-9][A-Za-z0-9._:-]*$")
+INTAKE_ID = re.compile(r"^I-[0-9]+$")
+INTAKE_LINK = re.compile(r"^intake:I-[0-9]+$")
 
 
 def typed_link(link):
@@ -637,6 +649,8 @@ def typed_link(link):
         raise Refused(f"link {link!r} is not relay:R-<n>")
     if link.startswith("msg:") and not MSG_LINK.match(link):
         raise Refused(f"link {link!r} is not msg:<message id>")
+    if link.startswith("intake:") and not INTAKE_LINK.match(link):
+        raise Refused(f"link {link!r} is not intake:I-<n>")
     return link
 
 
@@ -867,6 +881,7 @@ RELAY_LOCK_TIMEOUT = 5.0
 RELAY_HEAD = re.compile(r"^## R-([0-9]+) \((\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\) -> (.+)$")
 RELAY_OUTCOME = re.compile(r"^### R-([0-9]+) outcome \((\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\)$")
 WS_FIELD = re.compile(r"^\*\*Workstream:\*\* (.+)$")
+INTAKE_FIELD = re.compile(r"^\*\*Intake:\*\* (I-[0-9]+)$")
 
 
 def relay_path():
@@ -932,7 +947,15 @@ def read_relay():
             fm = WS_FIELD.match(lines[i + 1]) if i + 1 < len(lines) else None
             if fm:
                 ws = [w for w in (x.strip() for x in fm.group(1).split(",")) if SLUG.match(w)]
-            out["entries"].setdefault(int(m.group(1)), []).append({"n": int(m.group(1)), "stamp": m.group(2), "to": m.group(3).strip(), "ws": ws})
+            intake = None
+            for nxt in lines[i + 1:i + 4]:
+                im = INTAKE_FIELD.match(nxt)
+                if im:
+                    intake = im.group(1)
+                    break
+                if nxt.startswith("**Text, verbatim:**"):
+                    break
+            out["entries"].setdefault(int(m.group(1)), []).append({"n": int(m.group(1)), "stamp": m.group(2), "to": m.group(3).strip(), "ws": ws, "intake": intake})
             if out["newest"] is None or m.group(2) > out["newest"]:
                 out["newest"] = m.group(2)
             continue
@@ -1168,6 +1191,109 @@ def last_refresh(path=LEDGER):
 def waits_state(state):
     """D2: a decision edge as the reader sees it. A confirm meets it; a withdrawn record ends it."""
     return {"confirmed": "met", "withdrawn": "ended", None: "unknown"}.get(state, "waiting" if state in DECISION_OPEN else state)
+
+
+# ---- intake: one ask id from the moment an operator ask arrives -------------------------------
+# `intake` mints the id and records the ask; relay-log --ask, card-ingest --intake and a row's
+# intake:I-<n> link carry it onward, and `asks` joins them. The record is
+# $DIRECTOR_STATE/asks.jsonl, one line {ask_id, received_at, text, source}, appended under one
+# flock like relay-log's. The time is the clock's; there is no argument to set it.
+ASKS = os.path.join(STATE, "asks.jsonl")
+ASKS_LOCK = os.path.join(STATE, "asks.lock")
+NONE = "none"
+
+
+def read_asks(path=None):
+    """The ask records in file order, torn or malformed lines skipped."""
+    out = []
+    try:
+        f = open(path or ASKS, "rb")
+    except FileNotFoundError:
+        return out
+    with f:
+        for line in f:
+            try:
+                e = json.loads(line.decode("utf-8"))
+            except ValueError:
+                continue
+            if isinstance(e, dict) and isinstance(e.get("ask_id"), str) and INTAKE_ID.match(e["ask_id"]):
+                out.append(e)
+    return out
+
+
+def cmd_intake(a):
+    if a.text_file == "-":
+        text = sys.stdin.read()
+    else:
+        try:
+            with open(a.text_file, encoding="utf-8") as f:
+                text = f.read()
+        except (OSError, UnicodeDecodeError) as err:
+            raise Refused(f"cannot read {a.text_file}: {getattr(err, 'strerror', None) or err}")
+    if not text.strip():
+        raise Refused("the ask text is empty; nothing written")
+    if not SLUG.match(a.source):
+        raise Refused(f"--source {a.source!r} must be lower case letters, digits, '.', '_' or '-'")
+    os.makedirs(STATE, exist_ok=True)
+    fd = os.open(ASKS_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        nums = [int(e["ask_id"][2:]) for e in read_asks()]
+        ask_id = f"I-{(max(nums) if nums else 0) + 1}"
+        append({"ask_id": ask_id, "received_at": now(), "text": text.rstrip("\n"), "source": a.source}, ASKS)
+    finally:
+        os.close(fd)
+    print(ask_id)
+
+
+def cmd_asks(a):
+    """One row per ask: id, received_at, card, answer time, relay, row. A blank is 'none'; several
+    values join with a comma in sorted order, so the same inputs give the same bytes."""
+    try:
+        with open(SNAPSHOT, encoding="utf-8") as f:
+            snap = json.load(f)
+        if not isinstance(snap, dict):
+            snap = {}
+    except (OSError, ValueError):
+        snap = {}
+    cards_of, answered_at = {}, snap.get("answered_at") if isinstance(snap.get("answered_at"), dict) else {}
+    intake_map = snap.get("intake") if isinstance(snap.get("intake"), dict) else {}
+    for card, ask in intake_map.items():
+        cards_of.setdefault(ask, []).append(card)
+    relay = read_relay()
+    relays_of = {}
+    for n, es in relay["entries"].items():
+        for e in es:
+            if e.get("intake"):
+                relays_of.setdefault(e["intake"], []).append(n)
+    rows, _ = fold()
+    rows_of = {}
+    for r in rows.values():
+        for link in r["links"]:
+            if INTAKE_LINK.match(link):
+                rows_of.setdefault(link[len("intake:"):], []).append(r["slug"])
+
+    def join(values):
+        return ",".join(values) if values else NONE
+    out = []
+    for e in sorted(read_asks(), key=lambda e: int(e["ask_id"][2:])):
+        i = e["ask_id"]
+        cards = sorted(cards_of.get(i, []))
+        times = sorted(answered_at[c] for c in cards if isinstance(answered_at.get(c), str))
+        out.append({"ask_id": i, "received_at": e.get("received_at") or NONE, "card": join(cards),
+                    "answered_at": ",".join(times) if times else NONE,
+                    "relay": join([f"R-{n}" for n in sorted(set(relays_of.get(i, [])))]),
+                    "row": join(sorted(rows_of.get(i, [])))})
+    if a.json:
+        json.dump(out, sys.stdout, indent=2, ensure_ascii=False, sort_keys=True)
+        print()
+        return
+    cols = ("ask", "received_at", "card", "answered_at", "relay", "row")
+    keys = ("ask_id", "received_at", "card", "answered_at", "relay", "row")
+    table = [cols] + [tuple(r[k] for k in keys) for r in out]
+    widths = [max(len(c[i]) for c in table) for i in range(len(cols))]
+    for row in table:
+        print("  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip())
 
 
 def cmd_show(a):
@@ -3094,6 +3220,15 @@ def main(argv):
     t.add_argument("--waits", action="append", metavar="decision:ID|ask:CARD", help="the row waits on a seat decision (D2, held to the window) or an open Desk card (K13)")
     t.add_argument("--unwait", action="append", metavar="decision:ID", help="drop a decision edge; refused before the decision is answered (D2)")
     t.set_defaults(fn=cmd_set)
+
+    ik = sub.add_parser("intake", help="record an operator ask and print its ask id (I-<n>)")
+    ik.add_argument("--text-file", required=True, help="the ask text, verbatim: a path, or - for stdin")
+    ik.add_argument("--source", default="operator", help="where the ask came from (a slug word)")
+    ik.set_defaults(fn=cmd_intake)
+
+    sk = sub.add_parser("asks", help="join each ask to its card, answer time, relay entry and row; writes nothing")
+    sk.add_argument("--json", action="store_true")
+    sk.set_defaults(fn=cmd_asks)
 
     n = sub.add_parser("link")
     n.add_argument("slug")
