@@ -136,5 +136,38 @@ rm -f "$GH_DIR/3.json"; cp "$PRS" "$root/prs.before"
 PATH="$root/bin:$PATH" "$DWS" waiting write >"$root/w.out" 2>&1 && bad "an unreadable PR is refused" || ok "a PR gh cannot read makes the write refuse"
 cmp -s "$PRS" "$root/prs.before" && grep -q 'o/r#3' "$root/w.out" && ok "the old cache is untouched and the PR is named" || bad "refused write changed the cache" "$(cat "$root/w.out")"
 
+# --- an approval counts only at the current head, by a non-author, when GitHub gives no decision ---------
+cp "$root/prs.before" "$PRS"
+printf '{"state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","reviews":[]}' >"$GH_DIR/3.json"
+"$DWS" open ws-c --title c --stage building --link pr:o/r#6 pr:o/r#7 pr:o/r#8 pr:o/r#9 >/dev/null
+rev() {  # LOGIN COMMIT AGE_H
+  printf '{"state":"APPROVED","author":{"login":"%s"},"commit":{"oid":"%s"},"submittedAt":"%s"}' "$1" "$2" "$(stamp "$3")"
+}
+pr() {  # AUTHOR REVIEW_JSON...
+  local a="$1"; shift; local IFS=,
+  printf '{"state":"OPEN","isDraft":false,"reviewDecision":"","author":{"login":"%s"},"headRefOid":"head2","reviews":[%s]}' "$a" "$*"
+}
+pr alice "$(rev alice head2 3)" >"$GH_DIR/6.json"                 # the author's own approval
+pr alice "$(rev bob head1 3)" >"$GH_DIR/7.json"                   # a non-author approval of an older commit
+pr alice "$(rev bob head2 5)" "$(rev carol head2 2)" >"$GH_DIR/8.json"   # two approvals at the head
+printf '{"state":"OPEN","isDraft":false,"reviewDecision":"","author":{"login":"alice"},"headRefOid":"head2","reviews":[{"state":"COMMENTED","author":{"login":"bob"},"commit":{"oid":"head2"},"submittedAt":"%s"}]}' "$(stamp 1)" >"$GH_DIR/9.json"
+"$DWS" open ws-d --title d --stage building --link pr:o/r#10 pr:o/r#11 pr:o/r#12 pr:o/r#13 pr:o/r#14 >/dev/null
+rv() {  # LOGIN STATE AGE_H [COMMIT]
+  printf '{"state":"%s","author":{"login":"%s"},"commit":{"oid":"%s"},"submittedAt":"%s"}' "$2" "$1" "${4:-head2}" "$(stamp "$3")"
+}
+pr alice "$(rv bob APPROVED 5)" "$(rv bob CHANGES_REQUESTED 2)" >"$GH_DIR/10.json"   # a later change request cancels the approval
+pr alice "$(rv bob APPROVED 5)" "$(rv bob DISMISSED 2)" >"$GH_DIR/11.json"           # a later dismissal cancels it
+pr alice "$(rv bob APPROVED 5)" "$(rv bob COMMENTED 2)" >"$GH_DIR/12.json"           # a later comment does not
+pr alice "$(rv bob CHANGES_REQUESTED 5)" "$(rv bob APPROVED 2)" "$(rv carol CHANGES_REQUESTED 1)" >"$GH_DIR/13.json"   # bob re-approved but carol's change request at the head blocks the PR
+pr alice "$(rv bob CHANGES_REQUESTED 5 head1)" "$(rv bob APPROVED 2)" >"$GH_DIR/14.json"   # an older commit's change request, then an approval at the head: counts
+PATH="$root/bin:$PATH" "$DWS" waiting write >"$root/w.out" 2>&1 && ok "waiting write succeeds with the review cases" || bad "waiting write" "$(cat "$root/w.out")"
+python3 - "$PRS" <<'P' && ok "an own approval, an older commit's, a comment, an approval followed by a change request or a dismissal, and an approval beside another reviewer's change request do not count; a non-author approval at the head does, after an older commit's change request too" || bad "approval rule" "$(cat "$PRS")"
+import json, sys
+c = json.load(open(sys.argv[1]))
+got = {p["pr"]: p["approved_at"] for p in c["approved_not_merged"]}
+assert sorted(got) == ["o/r#1", "o/r#12", "o/r#14", "o/r#8"], c
+assert c["checked"] == 13, c
+P
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
