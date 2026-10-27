@@ -51,7 +51,7 @@ echo "garbage" >"$DIRECTOR_STATE/last-drain"
 out="$("$H")"
 [[ "$(printf '%s\n' "$out" | sed -n 2p)" == "Before you answer:" ]] && ok "the checklist follows the age line" || bad "the checklist follows the age line"
 [[ "$(printf '%s\n' "$out" | grep -c '^[123]\. ')" == 3 ]] && ok "the checklist has three numbered lines" || bad "the checklist has three numbered lines"
-printf '%s\n' "$out" | grep -q '^1\. Drained, and answered Desk cards read, since my last answer' && ok "line 1 is the drain-and-cards check" || bad "line 1 wording"
+printf '%s\n' "$out" | grep -q '^1\. Drained, and answered Desk cards and page picks read, since my last answer' && ok "line 1 is the drain, cards and page picks check" || bad "line 1 wording"
 
 if "$H" beat 2000-01-01T00:00:00Z >/dev/null 2>&1; then bad "beat refuses a time argument"; else ok "beat refuses a time argument"; fi
 if "$H" bogus >/dev/null 2>&1; then bad "an unknown subcommand is refused"; else ok "an unknown subcommand is refused"; fi

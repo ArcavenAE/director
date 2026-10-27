@@ -38,7 +38,7 @@ The hook never types into a pane and never reads the hub; it reads one file.
 import datetime, json, os, sys, tempfile
 
 CHECKLIST = """Before you answer:
-1. Drained, and answered Desk cards read, since my last answer? If not, do both first.
+1. Drained, and answered Desk cards and page picks read, since my last answer? If not, do them first.
 2. Does this answer or relay touch a standing ruling, or claim authority? Quote the ruling.
 3. Where does this text land, and does that file or seat own it?"""
 
