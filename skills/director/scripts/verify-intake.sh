@@ -130,7 +130,7 @@ if DWS_NOW=2026-10-19T12:00:00Z "$CI" parse "$root/card.md" --area ops --owner x
 
 # --- desk-snapshot keeps the id and the answer time; one read row per answered write ----------------
 printf '{"%s": {"status": "open", "data": {"intake": "I-1"}}, "other": {"status": "open"}}' "$slug" >"$root/c1.json"
-printf '[{"card": "%s", "answered_at": "2026-10-19T11:30:00Z"}]' "$slug" >"$root/a1.json"
+printf '[{"card": "%s", "choice": "1", "note": "", "ready": true, "at": "2026-10-19T11:30:00Z"}]' "$slug" >"$root/a1.json"
 r0="$(nlines "$READS")"
 DWS_NOW=2026-10-19T13:00:00Z "$SNAP" write --cards "$root/c1.json" --reported 2 --answers "$root/a1.json" --answers-reported 1 >/dev/null
 python3 - "$DIRECTOR_STATE/desk-snapshot.json" "$slug" <<'P' && ok "the snapshot keeps the card's intake id and the answer's time" || bad "the snapshot keeps intake and answer time"

@@ -4,8 +4,8 @@
 #   - nothing waiting prints no line; answers waiting, PRs waiting and both print their clauses, with
 #     the Desk read age last on the line;
 #   - a missing, unreadable, future or too-old input prints `waiting: UNKNOWN (reason)`;
-#   - the line is the last line of output in every case it appears, and the hook output is unchanged
-#     in a state directory that has neither input;
+#   - the line is the last line of output in every case it appears; with neither input present it
+#     reads UNKNOWN naming both, and every other line is what the hook printed before;
 #   - the hook never calls gh (a stub gh on PATH records every call), and finishes inside a second;
 #   - `dws waiting write` is the step that calls gh: it writes the approved, unmerged PRs of the
 #     ledger's rows, skips a parked row, and on a PR it cannot read writes nothing.
@@ -41,9 +41,11 @@ prs_file() {  # WRITTEN_AGE_H PRS_JSON
 last() { "$H" | tail -n 1; }
 count() { "$H" | grep -c '^waiting: ' || true; }
 
-# --- no input at all: the hook prints what it printed before ---------------------------------------
-before="$("$H")"
-[[ "$(printf '%s\n' "$before" | tail -n 1)" == "stalled ideas: "* && "$(count)" == 0 ]] && ok "with neither input the hook prints no waiting line" || bad "no inputs, no line" "$before"
+# --- no input at all: UNKNOWN naming both, the other lines as they were ------------------------------
+full="$("$H")"
+before="$(printf '%s\n' "$full" | sed '$d')"
+[[ "$(printf '%s\n' "$full" | tail -n 1)" == "waiting: UNKNOWN (desk-reads.jsonl missing"*"; waiting-prs.json missing"* && "$(count)" == 1 ]] && ok "with neither input the hook prints UNKNOWN naming both" || bad "no inputs" "$full"
+[[ "$(printf '%s\n' "$before" | tail -n 1)" == "stalled ideas: "* ]] && ok "and the stalled-ideas line is the last of the rest" || bad "the rest" "$before"
 
 # --- nothing waiting ----------------------------------------------------------------------------------
 reads_row 1 '[]'; prs_file 1 '[]'

@@ -43,9 +43,7 @@ unreadable, in the future or older than DIRECTOR_WAITING_MAX_HOURS (default 24),
 `waiting: UNKNOWN (<reason>)` naming the age of what it read, so a dead signal reads as dead. The
 answers come from the newest row of $DIRECTOR_STATE/desk-reads.jsonl (desk-snapshot write --answers); the
 PRs come from $DIRECTOR_STATE/waiting-prs.json, which `dws waiting write` writes in the sweep and which
-is the only step that may call gh. If neither file exists the line is not printed at all: that is a state
-directory the feature was never set up on, so an old setup keeps the output it had. Once either exists, a
-missing other one is UNKNOWN.
+is the only step that may call gh. A missing file is UNKNOWN, including when neither exists.
 
 The hook never types into a pane and never reads the hub or the network; it reads files: the heartbeat,
 the dash and scan stamps, and the two inputs above. The waiting line widens the contract the earlier
@@ -193,8 +191,6 @@ def whole(path):
 def waiting_line():
     reads_path = os.path.join(state_dir(), "desk-reads.jsonl")
     prs_path = os.path.join(state_dir(), "waiting-prs.json")
-    if not os.path.exists(reads_path) and not os.path.exists(prs_path):
-        return None
     reads, read_age, why_reads = read_input("desk-reads.jsonl", "read_at", last_row)
     prs, _, why_prs = read_input("waiting-prs.json", "written_at", whole)
     why = []
