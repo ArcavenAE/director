@@ -39,7 +39,7 @@ NOW="2026-10-20T18:44:00Z"
 state="$root/state"
 conf="$root/c.conf"
 
-genv() { env -i HOME="$root/home" PATH="$BASEPATH" LANG=en_US.UTF-8 GIT_CONFIG_NOSYSTEM=1 "$@"; }
+genv() { env -i HOME="$root/home" PATH="$BASEPATH" LANG=en_US.UTF-8 TMPDIR="$root/t" GIT_CONFIG_NOSYSTEM=1 "$@"; }
 run()  { env -i HOME="$root/home" PATH="$FIXPATH" LANG=en_US.UTF-8 TMPDIR="$root/t" DIRECTOR_STATE="$state" INTROSPECT_NOW="${NOW_OVERRIDE:-$NOW}" python3 -I "$S" "$@"; }
 
 # ---------------------------------------------------------------- fixture generator
@@ -93,8 +93,21 @@ PY
 mk() { python3 "$root/mkfix.py" "$@"; }
 
 # git fixtures: a checkout whose origin/main is ahead of main by commits that touch code, and by a
-# docs-only and a test-only commit that must not count
-gcommit() { genv git -C "$1" -c user.name=t -c user.email=t@t.invalid commit -q --allow-empty-message -m "$2"; }
+# docs-only and a test-only commit that must not count. Every fixture commit is signed with a throwaway
+# key made in the scratch root, never a host key or config, and is checked for its signature.
+fixkey="$root/fixture-key"
+genv ssh-keygen -q -t ed25519 -N '' -C fixture -f "$fixkey" || { echo "FAIL fixture key: ssh-keygen failed"; exit 1; }
+gcommit() {
+  genv git -C "$1" -c user.name=t -c user.email=t@t.invalid -c gpg.format=ssh -c gpg.ssh.program=ssh-keygen -c user.signingkey="$fixkey" -c commit.gpgsign=true commit -q --allow-empty-message -m "$2" || { echo "FAIL fixture commit in $1"; exit 1; }
+  genv git -C "$1" cat-file commit HEAD >"$root/obj" && grep -q '^gpgsig ' "$root/obj" || { echo "FAIL fixture commit in $1 is not signed"; exit 1; }
+}
+# A guard over this file: the one git commit is gcommit's, with the signing config, and nothing here
+# writes a commit object another way. The patterns are bracketed so they cannot match their own lines.
+self="$here/$(basename "${BASH_SOURCE[0]}")"
+gl="$(grep -nE 'git .* c[o]mmit -q' "$self")"
+[[ "$(printf '%s\n' "$gl" | grep -c .)" == 1 && "$gl" == *'commit.gpgsign=true'* && "$gl" == *'user.signingkey="$fixkey"'* ]] && ok "guard: one fixture commit site, signed with the fixture key" || bad "guard: fixture commit sites" "$gl"
+gx="$(grep -nE 'gpgsign=[f]alse|--no-gpg-[s]ign|commit-[t]ree|fast-[i]mport|mk[t]ag|-t [c]ommit' "$self")"
+[[ -z "$gx" ]] && ok "guard: no other way of writing a commit object" || bad "guard: another commit writer" "$gx"
 mkco() { # $1 dir, $2 code commits ahead
   d="$1"; mkdir -p "$d/cmd/director-mcp" "$d/docs"; genv git -C "$d" init -q -b main
   echo a >"$d/cmd/director-mcp/a.go"; genv git -C "$d" add -A; gcommit "$d" c1

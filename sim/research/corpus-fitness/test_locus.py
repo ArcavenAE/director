@@ -98,18 +98,50 @@ EXPECT = {
 
 
 # The fixture's identity comes from the environment, so the tests run in a
-# clean HOME. Signing is left as the host configures it.
+# clean HOME. Every fixture commit is signed with a throwaway key made for the
+# run in its own temp dir, outside the fixture repo, and no host config or key
+# is read.
+KEYDIR = tempfile.TemporaryDirectory()
+KEY = os.path.join(KEYDIR.name, "fixture-key")
+SIGNING = {
+    "gpg.format": "ssh",
+    "gpg.ssh.program": "ssh-keygen",
+    "user.signingkey": KEY,
+    "commit.gpgsign": "true",
+}
 GIT_ENV = dict(
     os.environ,
     GIT_AUTHOR_NAME="t",
     GIT_AUTHOR_EMAIL="t@example.invalid",
     GIT_COMMITTER_NAME="t",
     GIT_COMMITTER_EMAIL="t@example.invalid",
+    GIT_CONFIG_GLOBAL=os.devnull,
+    GIT_CONFIG_NOSYSTEM="1",
+    GIT_CONFIG_COUNT=str(len(SIGNING)),
 )
+for i, (k, v) in enumerate(SIGNING.items()):
+    GIT_ENV[f"GIT_CONFIG_KEY_{i}"] = k
+    GIT_ENV[f"GIT_CONFIG_VALUE_{i}"] = v
+
+
+def setUpModule():
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "fixture", "-f", KEY], check=True)
+
+
+def tearDownModule():
+    KEYDIR.cleanup()
 
 
 def sh(cwd, *args):
     return subprocess.run(args, cwd=cwd, env=GIT_ENV, capture_output=True, check=True).stdout.decode()
+
+
+def commit(cwd, *args):
+    """The one fixture commit site: commit, then check the commit is signed."""
+    sh(cwd, "git", "commit", *args)
+    obj = sh(cwd, "git", "cat-file", "commit", "HEAD")
+    if not any(line.startswith("gpgsig ") for line in obj.splitlines()):
+        raise AssertionError("fixture commit is not signed:\n" + obj)
 
 
 class LocusTest(unittest.TestCase):
@@ -125,13 +157,12 @@ class LocusTest(unittest.TestCase):
             f.write("# a\n")
         sh(d, "git", "init", "-q")
         sh(d, "git", "add", ".")
-        sh(d, "git", "commit", "-q", "-m", "base")
+        commit(d, "-q", "-m", "base")
         base = sh(d, "git", "rev-parse", "--short=7", "HEAD").strip()
         with open(os.path.join(d, "sim", "requirements.md"), "w") as f:
             f.write(REGISTER.replace("BASE_SHA", base))
         sh(d, "git", "add", ".")
-        # Commits inherit the host git config, signing included; the repo is never pushed.
-        sh(d, "git", "commit", "-q", "-m", "fixture")
+        commit(d, "-q", "-m", "fixture")
         self.repo = d
         self.pin = sh(d, "git", "rev-parse", "HEAD").strip()
 
@@ -207,7 +238,7 @@ class LocusTest(unittest.TestCase):
         path = os.path.join(self.repo, "sim", "requirements.md")
         with open(path, "a") as f:
             f.write("\n**R-01 (OBSERVED) · a second definition.**\n")
-        sh(self.repo, "git", "commit", "-q", "-am", "dup")
+        commit(self.repo, "-q", "-am", "dup")
         self.pin = sh(self.repo, "git", "rev-parse", "HEAD").strip()
         rc, _, err = self.run_locus()
         self.assertNotEqual(rc, 0)
@@ -218,6 +249,23 @@ class LocusTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         for word in ("roundtable", "zombie", "sitting", "idle-seats", "replay-pilot"):
             self.assertNotIn(word, out)
+
+
+class FixtureGuardTest(unittest.TestCase):
+    """A guard over this file: the one git commit is commit()'s, with the signing
+    config, and nothing here writes a commit object another way. The patterns are
+    bracketed so they cannot match their own lines."""
+
+    def test_one_signed_commit_site(self):
+        import re
+        with open(os.path.abspath(__file__)) as f:
+            src = f.read()
+        sites = re.findall(r'"git", "c[o]mmit"', src)
+        self.assertEqual(len(sites), 1, sites)
+        for want in (r'"commit\.gpgsign": "[t]rue"', r'"user\.signingkey": K[E]Y'):
+            self.assertTrue(re.search(want, src), "the signing config lacks " + want)
+        for banned in (r"gpgsign=[f]alse", r"--no-gpg-[s]ign", r"commit-[t]ree", r"fast-[i]mport", r"mk[t]ag", r'"-t", "[c]ommit"'):
+            self.assertFalse(re.search(banned, src), "this file holds " + banned)
 
 
 if __name__ == "__main__":

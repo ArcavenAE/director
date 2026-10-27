@@ -4,10 +4,9 @@
 # closed pointers, successors and cycles, parked and resolved ideas, the quiet
 # threshold, never-read roots, an unreachable bd named instead of read as "no
 # pointer", read-by-ref from the default branch, no fetch, no prompt, and the
-# pool deadline. The fixtures are built with git fast-import, which writes
-# unsigned commit objects into scratch repos under a temp directory that is never
-# pushed; whether the signing rules cover such objects is an open question for the
-# operator. bd and gh are stubs first on PATH.
+# pool deadline. The fixture commits are signed with a throwaway key made in the
+# temp directory, never a host key or config, and a guard below checks that no other
+# commit writer is in this file. bd and gh are stubs first on PATH.
 #
 # Usage: skills/director/scripts/verify-dbi.sh   Exit nonzero on any miss.
 set -euo pipefail
@@ -18,7 +17,7 @@ pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 
-root="$(mktemp -d)"
+root="$(mktemp -d "${TMPDIR:-/tmp}/dbi.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 export PYTHONDONTWRITEBYTECODE=1 GIT_TERMINAL_PROMPT=0
 export DIRECTOR_STATE="$root/state"
@@ -48,27 +47,50 @@ chmod +x "$root/bin/bd" "$root/bin/gh"
 export DBI_FIX="$root/fix"; mkdir -p "$DBI_FIX"
 echo '[]' >"$DBI_FIX/bd.json"; : >"$DBI_FIX/gh.tsv"
 
-# --- fixture builder: bare remote by fast-import, clone as the checkout ------------
+# --- fixture builder: bare remote by signed commits, clone as the checkout ----------
+# Each commit is built through a scratch index and signed with a throwaway key made in the scratch
+# root, never a host key or config, at the committer date the case needs; fx checks the signature.
+ssh-keygen -q -t ed25519 -N '' -C fixture -f "$root/fixture-key" || { echo "FAIL fixture key: ssh-keygen failed"; exit 1; }
 cat >"$root/fx.py" <<'P'
-import subprocess, sys
-def sh(*a, **k): return subprocess.run(a, check=True, capture_output=True, text=True, **k)
+import os, subprocess, sys
+KEY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixture-key")
+SIGN = ["-c", "gpg.format=ssh", "-c", "gpg.ssh.program=ssh-keygen", "-c", "user.signingkey=" + KEY, "-c", "commit.gpgsign=true"]
+def sh(*a, env=None, inp=None):
+    return subprocess.run(a, check=True, capture_output=True, env=env, input=inp).stdout.decode().strip()
 def init(bare):
     sh("git", "init", "-q", "--bare", "-b", "main", bare)
 def commit(bare, epoch, files):
     have = subprocess.run(["git", "-C", bare, "rev-parse", "-q", "--verify", "refs/heads/main"], capture_output=True).returncode == 0
-    out = f"commit refs/heads/main\ncommitter T <t@example.invalid> {epoch} +0000\ndata 3\nfx\n"
-    if have: out += "from refs/heads/main^0\n"
+    env = dict(os.environ, GIT_INDEX_FILE=os.path.join(bare, "fx-index"), GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+               GIT_AUTHOR_NAME="T", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_AUTHOR_DATE=f"{epoch} +0000",
+               GIT_COMMITTER_NAME="T", GIT_COMMITTER_EMAIL="t@example.invalid", GIT_COMMITTER_DATE=f"{epoch} +0000")
+    if have: sh("git", "-C", bare, "read-tree", "refs/heads/main", env=env)
+    else: sh("git", "-C", bare, "read-tree", "--empty", env=env)
     for path, body in files:
-        b = body.encode()
-        if body == "\0delete": out += f"D {path}\n"; continue
-        out += f"M 644 inline {path}\ndata {len(b)}\n" + body + "\n"
-    subprocess.run(["git", "-C", bare, "fast-import", "--quiet"], input=out.encode(), check=True)
+        if body == "\0delete": sh("git", "-C", bare, "update-index", "--force-remove", path, env=env); continue
+        blob = sh("git", "-C", bare, "hash-object", "-w", "--stdin", env=env, inp=body.encode())
+        sh("git", "-C", bare, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=env)
+    tree = sh("git", "-C", bare, "write-tree", env=env)
+    parent = ["-p", "refs/heads/main"] if have else []
+    new = sh("git", "-C", bare, *SIGN, "commit-tree", "-S", tree, *parent, "-m", "fx", env=env)
+    obj = sh("git", "-C", bare, "cat-file", "commit", new, env=env)
+    if not any(l.startswith("gpgsig ") for l in obj.splitlines()): sys.exit(f"FAIL fixture commit {new} is not signed")
+    sh("git", "-C", bare, "update-ref", "refs/heads/main", new, env=env)
+    os.unlink(env["GIT_INDEX_FILE"])
 if __name__ == "__main__":
     cmd, bare = sys.argv[1], sys.argv[2]
     if cmd == "init": init(bare)
     else: commit(bare, sys.argv[3], [tuple(a.split("=", 1)) for a in sys.argv[4:]])
 P
 fx() { python3 "$root/fx.py" "$@"; }
+# A guard over this file: the one commit writer is the signed call in fx, and
+# nothing here writes a commit object another way. The patterns are bracketed so they cannot match
+# their own lines.
+self="$here/$(basename "${BASH_SOURCE[0]}")"
+gl="$(grep -nE 'c[o]mmit-tree|git[^#]* c[o]mmit -' "$self")"
+[[ "$(printf '%s\n' "$gl" | grep -c .)" == 1 && "$gl" == *'*SIGN, "commit''-tree"'* ]] && grep -q 'commit\.gpgsign=[t]rue' "$self" && ok "guard: one fixture commit site, signed with the fixture key" || bad "guard: fixture commit sites" "$gl"
+gx="$(grep -nE 'gpgsign=[f]alse|--no-gpg-[s]ign|fast-[i]mport|mk[t]ag|-t [c]ommit' "$self")"
+[[ -z "$gx" ]] && ok "guard: no other way of writing a commit object" || bad "guard: another commit writer" "$gx"
 # newrepo NAME  ->  $root/remotes/NAME.git and, once seeded, $root/orc/NAME
 newrepo() { fx init "$root/remotes/$1.git"; }
 checkout() { git clone -q "$root/remotes/$1.git" "$root/orc/$1" 2>/dev/null; }
