@@ -32,22 +32,27 @@ export PATH="$root/bin:$PATH"
 has_sig() { awk '/^$/ { exit } /^gpgsig / { f = 1; exit } END { exit f ? 0 : 1 }' "$1"; }
 # unsigned_in DIR: print each commit any ref in DIR reaches that has no signature, however it was made
 unsigned_in() {
-  local c
-  for c in $(git -C "$1" rev-list --all); do
+  local c list
+  list="$(git -C "$1" rev-list --all 2>/dev/null)" || return 2
+  for c in $list; do
     git -C "$1" cat-file commit "$c" >"$root/obj"; has_sig "$root/obj" || echo "$c"
   done
 }
 # guard_violations FILE: print each way FILE breaks these rules. The one commit writer is the signed
 # tree commit in fx; signing is set on the SIGN line only, in any case and with any value; git runs by
-# name, never through a variable, except the REALGIT pass-through for the read-failure cases; nothing
-# writes a commit object another way. The patterns are bracketed so they cannot match their own lines.
-re_var="=[[:space:]]*[\"']?g[i]t([\"'[:space:];),]|\$)|command -v g[i]t"
+# name, never through a variable or a looked-up path (any assignment of git, which, whereis, command -v,
+# type -p/-P/-a or hash -t of it, or a path whose last part is the git binary), except the REALGIT pass-through and its
+# gitfail stub for the read-failure cases; nothing writes a commit object another way. The patterns are
+# bracketed so they cannot match their own lines.
+re_var="=[[:space:]]*[\"']?g[i]t([\"'[:space:];),]|\$)"
+re_var="$re_var|(which|whereis|command +-[vV]|type +-[A-Za-z]*[pPa][A-Za-z]*|hash +-t) +[\"']?g[i]t([^[:alnum:]_.-]|\$)"
+re_var="$re_var|/g[i]t([\"'[:space:];),]|\$)"
 guard_violations() {
   local gl
   gl="$(grep -nE 'c[o]mmit-tree|git[^#]* c[o]mmit -' "$1" || true)"
   [[ "$(printf '%s\n' "$gl" | grep -c . || true)" == 1 && "$gl" == *'*SIGN, "commit''-tree", "-S", tree,'* ]] || echo "commit sites: $gl"
   grep -inE 'gpg[s]ign' "$1" | grep -vE '^[0-9]+:SIGN = \[.*"commit\.gpg[s]ign=[t]rue"\]$' || true
-  grep -nE "$re_var" "$1" | grep -vE '^[0-9]+:mkdir -p "\$root/gitfail"; REALGIT="\$\(command -v g[i]t\)"$' || true
+  grep -nE "$re_var" "$1" | grep -vE '^[0-9]+:(mkdir -p "\$root/gitfail"; REALGIT="\$\(command -v g[i]t\)"|cat >"\$root/gitfail/g[i]t" <<S|chmod \+x "\$root/gitfail/g[i]t")$' || true
   grep -nE -- '--no-gpg-[s]ign|fast-[i]mport|mk[t]ag|-t [c]ommit' "$1" || true
 }
 self="$here/$(basename "${BASH_SOURCE[0]}")"
@@ -55,7 +60,8 @@ gv="$(guard_violations "$self")"
 [[ -z "$gv" ]] && ok "guard: one fixture commit site, signed with the fixture key, and no other commit writer" || bad "guard: this file" "$gv"
 # The guard against crafted mutants (director#439 review): text only, never run.
 m=0
-for line in '    new = sh("git", "-C", bare, *SIGN, "-c", "commit.gpg''Sign=0", "merge", "x")' 'prog = "g''it"' 'g=g''it; "$g" -C x merge -q y'; do
+for line in '    new = sh("git", "-C", bare, *SIGN, "-c", "commit.gpg''Sign=0", "merge", "x")' 'prog = "g''it"' 'g=g''it; "$g" -C x merge -q y' \
+  'G=/usr/bin/g''it' 'x=$(whi''ch g''it)' 'x=$(type -P g''it)' 'x=$(comma''nd -v g''it)' 'hash -t g''it' 'x=$(where''is g''it)'; do
   m=$((m+1)); { cat "$self"; printf '%s\n' "$line"; } >"$root/mutant$m"
   [[ -n "$(guard_violations "$root/mutant$m")" ]] && ok "guard: crafted mutant $m is caught" || bad "guard: crafted mutant $m passed" "$line"
 done
@@ -354,12 +360,17 @@ run >"$root/j" 2>/dev/null
 [[ "$(q "any(r['path'].startswith('lg/') for r in d['rows'])" <"$root/j")" == "True" ]] && ok "a checkout under a parent named run, named by the root's fixed prefix, is read" || bad "legit run parent" "$(q "[d['rows'],d['skipped']]" <"$root/j")"
 cfg
 
-# Every commit in every fixture repo is signed, however it was made.
-for r in "$root"/remotes/*.git "$root"/orc/*/ "$root"/orc/run/*/*/ "$root"/legit/run/*/; do
-  [[ -e "$r" ]] || continue
-  u="$(unsigned_in "$r")"
+# Every repo the run made under the scratch root, swept at the end, so a commit made by any route is
+# still checked. A path git does not read as a repository is skipped.
+nrepo=0
+while IFS= read -r g; do
+  case "$g" in */.git) r="${g%/.git}" ;; *) r="$g" ;; esac
+  rc=0; u="$(unsigned_in "$r")" || rc=$?
+  [[ $rc -eq 2 ]] && continue
+  nrepo=$((nrepo+1))
   if [[ -z "$u" ]]; then ok "every commit in ${r#$root/} is signed"; else bad "unsigned commits in ${r#$root/}" "$u"; fi
-done
+done < <(find "$root" \( -name .git -o -type d -name '*.git' \) -prune -print 2>/dev/null)
+if [[ $nrepo -gt 0 ]]; then ok "end sweep read $nrepo repositories"; else bad "end sweep found no repository under the scratch root"; fi
 
 echo "dbi: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

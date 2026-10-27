@@ -105,16 +105,22 @@ gcommit() {
 }
 # unsigned_in DIR: print each commit any ref in DIR reaches that has no signature, however it was made
 unsigned_in() {
-  local c
-  for c in $(genv git -C "$1" rev-list --all); do
+  local c list
+  list="$(genv git -C "$1" rev-list --all 2>/dev/null)" || return 2
+  for c in $list; do
     genv git -C "$1" cat-file commit "$c" >"$root/obj"; has_sig "$root/obj" || echo "$c"
   done
 }
 # guard_violations FILE: print each way FILE breaks these rules. The one git commit is gcommit's, with
 # the signing config; signing is set on that line only, in any case and with any value; git runs by
-# name, never through a variable, and the env wrapper runs only git and ssh-keygen; nothing writes a
-# commit object another way. The patterns are bracketed so they cannot match their own lines.
-re_var="=[[:space:]]*[\"']?g[i]t([\"'[:space:];)]|\$)|gen[v] +[^gs]"
+# name, never through a variable or a looked-up path (any assignment of git, which, whereis, command -v,
+# type -p/-P/-a or hash -t of it, or a path whose last part is the git binary), and the env wrapper runs only git and
+# ssh-keygen; nothing writes a commit object another way. The patterns are bracketed so they cannot
+# match their own lines.
+re_var="=[[:space:]]*[\"']?g[i]t([\"'[:space:];),]|\$)"
+re_var="$re_var|(which|whereis|command +-[vV]|type +-[A-Za-z]*[pPa][A-Za-z]*|hash +-t) +[\"']?g[i]t([^[:alnum:]_.-]|\$)"
+re_var="$re_var|/g[i]t([\"'[:space:];),]|\$)"
+re_var="$re_var|gen[v] +[^gs]"
 guard_violations() {
   local gl
   gl="$(grep -nE 'git .* c[o]mmit -q' "$1")"
@@ -128,7 +134,8 @@ gv="$(guard_violations "$self")"
 [[ -z "$gv" ]] && ok "guard: one fixture commit site, signed with the fixture key, and no other commit writer" || bad "guard: this file" "$gv"
 # The guard against two crafted mutants (director#439 review): text only, never run.
 m=0
-for line in 'genv git -C "$d" -c commit.gpg''Sign=0 merge -q x' 'g=g''it; gen''v "$g" -C "$d" com''mit -q -m x'; do
+for line in 'genv git -C "$d" -c commit.gpg''Sign=0 merge -q x' 'g=g''it; gen''v "$g" -C "$d" com''mit -q -m x' \
+  'G=/usr/bin/g''it' 'x=$(whi''ch g''it)' 'x=$(type -P g''it)' 'x=$(comma''nd -v g''it)' 'hash -t g''it' 'x=$(where''is g''it)'; do
   m=$((m+1)); { cat "$self"; printf '%s\n' "$line"; } >"$root/mutant$m"
   [[ -n "$(guard_violations "$root/mutant$m")" ]] && ok "guard: crafted mutant $m is caught" || bad "guard: crafted mutant $m passed" "$line"
 done
@@ -879,6 +886,18 @@ grep -q '^Introspect:' "$sk" && ok "the reply shape has an Introspect block" || 
 grep -q 'never an R-entry\|never an R-entry, a rule' "$sk" && ok "the skill says a count is cited under harvest step 6 only and never becomes an R-entry" || bad "M1 sentence"
 grep -q 'introspect' "$repo/install.sh" && ok "install.sh installs introspect into the bin home" || bad "install line"
 [[ -z "$(git -C "$repo" grep -l introspect HEAD -- sim/requirements.md 2>/dev/null || true)" ]] && ok "M1 no count or script is cited in sim/requirements.md" || bad "M1 requirements"
+
+# Every repo the run made under the scratch root, swept at the end, so a commit made after the fixtures
+# by any route is still checked. A path git does not read as a repository is skipped.
+nrepo=0
+while IFS= read -r g; do
+  case "$g" in */.git) r="${g%/.git}" ;; *) r="$g" ;; esac
+  u="$(unsigned_in "$r")"; rc=$?
+  [[ $rc -eq 2 ]] && continue
+  nrepo=$((nrepo+1))
+  if [[ -z "$u" ]]; then ok "end sweep: every commit in ${r#$root/} is signed"; else bad "end sweep: unsigned commits in ${r#$root/}" "$u"; fi
+done < <(find "$root" \( -name .git -o -type d -name '*.git' \) -prune -print 2>/dev/null)
+[[ $nrepo -gt 0 ]] && ok "end sweep read $nrepo repositories" || bad "end sweep found no repository under the scratch root"
 
 echo "$pass passed, $fail failed, $skip skipped"
 [[ $fail -eq 0 ]]
