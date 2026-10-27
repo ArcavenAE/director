@@ -265,6 +265,21 @@ else
   bad "claude-reviewer cast" "$(cat "$root/out/stderr")"
 fi
 
+# --- the headless retrospector is cast as role/retrospector -------------------
+# The manifest row is retrospector-run (the scheduled headless role), and the
+# role library has no role by that name. Without the mapping the slice lookup
+# asks for role/retrospector-run and the seat gets no role text.
+if cast retrospector-run; then
+  miss=""
+  grep -qx "stub slice for retrospector" "$root/out/claude.args" || miss+=" slice"
+  grep -q "role/retrospector for the manifest role retrospector-run" "$root/out/claude.args" || miss+=" cast-line"
+  grep -q "Your scope" "$root/out/claude.args" && miss+=" unexpected-scope"
+  [[ -z "$miss" ]] && ok "retrospector-run: cast as role/retrospector with the retrospector slice and no scope" \
+                   || bad "retrospector-run mapping" "missing:$miss"
+else
+  bad "retrospector-run cast" "$(cat "$root/out/stderr")"
+fi
+
 # --- the general builder's scope matches the wrapper's (director#161) ---------
 # A seat launched without the cast wrapper reads its scope from this script, so
 # the list must match the wrapper's row, director included.

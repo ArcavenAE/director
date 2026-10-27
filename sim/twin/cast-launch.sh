@@ -62,6 +62,7 @@ case "$MARVEL_ROLE" in
   sideshow-builder)  WROLE=builder; SCOPE="sideshow and sideshow-packs";;
   infra-builder)     WROLE=builder; SCOPE="the infra checkout and its MCP, as named in the private seat file; production is read-only";;
   claude-reviewer)   WROLE=reviewer; SCOPE="";;
+  retrospector-run)  WROLE=retrospector; SCOPE="";;
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
 esac
 [[ -n "${CAST_SCOPE:-}" ]] && SCOPE="$CAST_SCOPE"
