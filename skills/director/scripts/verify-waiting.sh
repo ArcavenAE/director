@@ -151,12 +151,21 @@ pr alice "$(rev alice head2 3)" >"$GH_DIR/6.json"                 # the author's
 pr alice "$(rev bob head1 3)" >"$GH_DIR/7.json"                   # a non-author approval of an older commit
 pr alice "$(rev bob head2 5)" "$(rev carol head2 2)" >"$GH_DIR/8.json"   # two approvals at the head
 printf '{"state":"OPEN","isDraft":false,"reviewDecision":"","author":{"login":"alice"},"headRefOid":"head2","reviews":[{"state":"COMMENTED","author":{"login":"bob"},"commit":{"oid":"head2"},"submittedAt":"%s"}]}' "$(stamp 1)" >"$GH_DIR/9.json"
+"$DWS" open ws-d --title d --stage building --link pr:o/r#10 pr:o/r#11 pr:o/r#12 pr:o/r#13 >/dev/null
+rv() {  # LOGIN STATE AGE_H
+  printf '{"state":"%s","author":{"login":"%s"},"commit":{"oid":"head2"},"submittedAt":"%s"}' "$2" "$1" "$(stamp "$3")"
+}
+pr alice "$(rv bob APPROVED 5)" "$(rv bob CHANGES_REQUESTED 2)" >"$GH_DIR/10.json"   # a later change request cancels the approval
+pr alice "$(rv bob APPROVED 5)" "$(rv bob DISMISSED 2)" >"$GH_DIR/11.json"           # a later dismissal cancels it
+pr alice "$(rv bob APPROVED 5)" "$(rv bob COMMENTED 2)" >"$GH_DIR/12.json"           # a later comment does not
+pr alice "$(rv bob CHANGES_REQUESTED 5)" "$(rv bob APPROVED 2)" "$(rv carol CHANGES_REQUESTED 1)" >"$GH_DIR/13.json"   # bob re-approved, carol blocks: bob's counts
 PATH="$root/bin:$PATH" "$DWS" waiting write >"$root/w.out" 2>&1 && ok "waiting write succeeds with the review cases" || bad "waiting write" "$(cat "$root/w.out")"
-python3 - "$PRS" <<'P' && ok "an author's own approval, an older commit's and a comment do not count; a non-author approval at the head does, dated by the latest" || bad "approval rule" "$(cat "$PRS")"
+python3 - "$PRS" <<'P' && ok "an own approval, an older commit's, a comment, and an approval followed by a change request or a dismissal do not count; a non-author approval at the head does" || bad "approval rule" "$(cat "$PRS")"
 import json, sys
 c = json.load(open(sys.argv[1]))
-assert sorted(p["pr"] for p in c["approved_not_merged"]) == ["o/r#1", "o/r#8"], c
-assert c["checked"] == 8, c
+got = {p["pr"]: p["approved_at"] for p in c["approved_not_merged"]}
+assert sorted(got) == ["o/r#1", "o/r#12", "o/r#13", "o/r#8"], c
+assert c["checked"] == 12, c
 P
 
 echo "$pass passed, $fail failed"

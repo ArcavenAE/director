@@ -1319,11 +1319,20 @@ def approved_at(d):
     author = (d.get("author") or {}).get("login")
     head = d.get("headRefOid")
     reviews = [r for r in d.get("reviews") or [] if isinstance(r, dict)]
-    times = sorted(r["submittedAt"] for r in reviews
-                   if r.get("state") == "APPROVED" and isinstance(r.get("submittedAt"), str)
-                   and head and (r.get("commit") or {}).get("oid") == head
-                   and (r.get("author") or {}).get("login") not in (None, author))
+    # Each non-author reviewer counts by their latest APPROVED, CHANGES_REQUESTED or DISMISSED review at
+    # the head: a later change request or dismissal cancels their approval, a comment does not.
+    latest = {}
+    for r in sorted(reviews, key=lambda r: r.get("submittedAt") or ""):
+        who = (r.get("author") or {}).get("login")
+        if (head and (r.get("commit") or {}).get("oid") == head and who not in (None, author)
+                and r.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
+                and isinstance(r.get("submittedAt"), str)):
+            latest[who] = (r["state"], r["submittedAt"])
+    times = sorted(t for st, t in latest.values() if st == "APPROVED")
     decision = d.get("reviewDecision")
+    # GitHub's own APPROVED is trusted as is: it already folds in required reviewers, dismissed and stale
+    # reviews, and branch rules, which the review list here does not carry. The head and author check
+    # above is for a repo that gives no decision.
     if decision == "APPROVED" or (not decision and times):
         return times[-1] if times else NONE
     return None
