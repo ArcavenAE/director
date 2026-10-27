@@ -18,6 +18,8 @@ export DWS_TEST_CLOCK=1 DWS_NOW=2026-10-27T12:00:00Z DWS_NO_RERENDER=1 PYTHONDON
 export DIRECTOR_STATE="$root/st"; mkdir -p "$DIRECTOR_STATE"; L="$DIRECTOR_STATE/workstreams.jsonl"
 q() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 blocked_of() { "$DWS" show --json | q "[r['blocked'] for r in d['rows'] if r['slug']=='$1'][0]"; }
+tags_of() { "$DWS" show --json | q "sorted([r['tags'] for r in d['rows'] if r['slug']=='$1'][0].items())"; }
+ledger_tags() { "$DWS" show --json 2>/dev/null | q "sorted(d['tags'].items())"; }
 moved_of() { "$DWS" show --json | q "[r['last_moved'] for r in d['rows'] if r['slug']=='$1'][0]"; }
 
 # --- the write mapping -------------------------------------------------------------------------------------------
@@ -46,12 +48,16 @@ w '{"ts":"2026-10-04T09:00:00Z","actor":"director","tag":"judgment","event":"ope
 w '{"ts":"2026-10-05T09:00:00Z","actor":"director","tag":"judgment","event":"open","ws":"x1","title":"X1","stage":"building","blocked":"operator"}'
 printf '{"torn' >>"$L"; printf '\n' >>"$L"
 cp "$L" "$root/before"; "$DWS" show --json >"$root/show-before" 2>/dev/null
+ledger_before="$(ledger_tags)"
+tags_n1="$(tags_of n1 2>/dev/null)"; tags_n2="$(tags_of n2 2>/dev/null)"; tags_s1="$(tags_of s1 2>/dev/null)"
 "$DWS" migrate-blocked-none --dry-run >"$root/o" 2>&1 && cmp -s "$L" "$root/before" && ok "--dry-run writes nothing" || bad "dry run wrote" "$(cat "$root/o")"
 grep -q 'would clear blocked none on 2 row' "$root/o" && grep -q '^  n1$' "$root/o" && grep -q '^  n2$' "$root/o" && ok "--dry-run names the two rows" || bad "dry run names" "$(cat "$root/o")"
 "$DWS" migrate-blocked-none >"$root/o" 2>&1 && grep -q 'cleared blocked none on 2 row' "$root/o" && ok "migrate-blocked-none clears two rows" || bad "migrate" "$(cat "$root/o")"
 [[ "$(blocked_of n1)" == "" && "$(blocked_of n2)" == "" ]] && ok "both rows read not blocked" || bad "cleared"
 [[ "$(blocked_of s1)" == "seat" && "$(blocked_of x1)" == "operator" && "$(blocked_of e1)" == "" ]] && ok "a seat block, an operator block and an empty one are untouched" || bad "others untouched"
 [[ "$(moved_of n1)" == "2026-10-01T09:00:00Z" && "$(moved_of n2)" == "2026-10-02T09:00:00Z" ]] && ok "the migration does not move last moved" || bad "last moved moved" "$(moved_of n1) $(moved_of n2)"
+[[ "$tags_n1" == "[('judgment', 1)]" && "$(tags_of n1 2>/dev/null)" == "$tags_n1" && "$(tags_of n2 2>/dev/null)" == "$tags_n2" && "$(tags_of s1 2>/dev/null)" == "$tags_s1" ]] && ok "the migration leaves each row's tag tally as it was" || bad "tag tally moved" "$tags_n1 -> $(tags_of n1 2>/dev/null)"
+[[ "$ledger_before" == "[('judgment', 5)]" && "$(ledger_tags)" == "$ledger_before" ]] && ok "the migration leaves the ledger-wide tag count as it was" || bad "ledger-wide count moved" "$ledger_before -> $(ledger_tags)"
 [[ "$(wc -l <"$L" | tr -d ' ')" == "$(( $(wc -l <"$root/before" | tr -d ' ') + 2 ))" ]] && head -n "$(wc -l <"$root/before" | tr -d ' ')" "$L" | cmp -s - "$root/before" && ok "it appended two lines and left every earlier byte, the torn line included" || bad "append only"
 tail -n 2 "$L" | grep -c '"migrate":"blocked-none"' | grep -qx 2 && ok "each appended line carries the migrate marker" || bad "marker" "$(tail -n 2 "$L")"
 "$DWS" migrate-blocked-none >"$root/o" 2>&1; cp "$L" "$root/after1"

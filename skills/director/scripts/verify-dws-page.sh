@@ -100,6 +100,7 @@ page = open(sys.argv[1], encoding="utf-8").read()
 d = dict(re.findall(r'<section id="s-([a-z]+)"><h2>[^<]*</h2><p class="desc">(.*?)</p>', page))
 assert sorted(d) == ["adhoc", "blocked", "done", "motion", "quiet", "waiting"], sorted(d)
 assert d["motion"] == "Open work moved in the last 7 days.", d["motion"]
+assert d["blocked"] == "Waiting on your answer; each row names its Desk card, or says none is linked.", d["blocked"]
 EOF2
 [[ "$(slugs "$root/p1.html" blocked)" == "b1 adhoc-op" ]] && ok "blocked: operator-blocked rows, oldest first, an adhoc- one among them" || bad "blocked" "$(slugs "$root/p1.html" blocked)"
 [[ "$(slugs "$root/p1.html" motion)" == "m3 i1 legacy-None legacy-none des1 def1 m1 m2" ]] && ok "motion: any open stage moved under 7 days ago, newest first: idea, defined, designed, the 6d23h59m row, and rows with blocked none, None and empty" || bad "motion" "$(slugs "$root/p1.html" motion)"
@@ -117,6 +118,18 @@ grep -q 'data-section="quiet" data-slug="q1"' "$root/p1.html" && ok "a row names
 
 # item 5 of follow-up 2: a row that names another slug in its next action is its own row, listed once
 [[ "$(grep -o 'data-slug="m1"' "$root/p1.html" | wc -l | tr -d ' ')" == 1 && "$(slugs "$root/p1.html" done)" != *m1* ]] && ok "a slug named in another row's next action is text there, and its own row is listed once" || bad "slug named in prose"
+
+# a blocked row with no card linked says so, as the Blocked on you description promises
+fresh 9
+printf '%s\n' '{"ts":"2026-10-27T08:00:00Z","actor":"director","tag":"judgment","event":"open","ws":"nocard","title":"No card","stage":"building","blocked":"operator"}' >"$DIRECTOR_STATE/workstreams.jsonl"
+page >"$root/nc.html"
+python3 - "$root/nc.html" <<'EOF2' && ok "an operator-blocked row with no Desk card says no card is linked" || bad "no card linked"
+import re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+b = re.search(r'<section id="s-blocked">(.*?)</section>', page, re.S).group(1)
+assert 'data-slug="nocard"' in b and "no card linked" in b
+EOF2
+fresh 1; store
 
 # row fields
 python3 - "$root/p1.html" <<'EOF' && ok "a row shows owner, stage, next action, last moved date and links" || bad "row fields"

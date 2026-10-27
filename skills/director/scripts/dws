@@ -54,7 +54,7 @@ defined for the reconciler (K11) and refused on append to workstreams.jsonl unti
 writer (a draft grant in rulings.jsonl carries it). A line
 with no tag, or a value that is not a tag, folds as untagged and is never repaired.
 show --json counts events by tag per row (since the row was last opened) and ledger-wide
-(every event line, including one for a slug with no row); nothing gates on it.
+(every event line, including one for a slug with no row, except a set marked migrate); nothing gates on it.
 
 K9: `record ruling|grant|term` appends to rulings.jsonl (the file merge-guard reads for
 exclusions; MERGE_GUARD_RULINGS names it, default $DIRECTOR_STATE/rulings.jsonl), under
@@ -305,7 +305,9 @@ def fold(path=LEDGER, tally=None, decisions=None):
             if not isinstance(e, dict):
                 torn += 1
                 continue
-            if tally is not None:
+            # The ledger-wide count reads as how often director judged, so a set that
+            # migrate-blocked-none wrote is left out of it, as it is out of the row's own.
+            if tally is not None and not (e.get("event") == "set" and e.get("migrate")):
                 name = tag_name(e)
                 tally[name] = tally.get(name, 0) + 1
             if e.get("event") == "decision":
@@ -344,7 +346,10 @@ def apply(rows, e):
     r = rows.get(slug)
     if r is None:
         return
-    count_tag(r, e)
+    # A set that migrate-blocked-none wrote is housekeeping: it is not an event of the row's own
+    # history, so it joins neither the tag tally nor (below) last moved.
+    if not (ev == "set" and e.get("migrate")):
+        count_tag(r, e)
     if ev in ("stage", "park"):
         r["stage"] = e.get("to", "parked" if ev == "park" else r["stage"])
         r["last_moved"] = max(r["last_moved"], ts)
@@ -2914,7 +2919,7 @@ DONE_STAGES = ("merged", "released", "deployed", "accepted")
 CLOSED_STAGES = DONE_STAGES + ("parked",)
 # (key, heading, the one line under it, the calls a row in it may carry as (action, label))
 PAGE_SECTIONS = (
-    ("blocked", "Blocked on you", "Waiting on your answer; each row names its Desk card.", ()),
+    ("blocked", "Blocked on you", "Waiting on your answer; each row names its Desk card, or says none is linked.", ()),
     ("motion", "In motion", f"Open work moved in the last {PAGE_DAYS} days.",
      (("nudge-owner", "Nudge owner"), ("mark-done", "Mark done"))),
     ("waiting", "Waiting on a seat", "Blocked on a seat or a role, not on you.",
