@@ -2831,14 +2831,18 @@ PAGE_ID = "work-ledger"
 PAGE_DAYS = 7
 DONE_STAGES = ("merged", "released", "deployed", "accepted")
 CLOSED_STAGES = DONE_STAGES + ("parked",)
-# (key, heading, the calls a row in it may carry as (action, label))
+# (key, heading, the one line under it, the calls a row in it may carry as (action, label))
 PAGE_SECTIONS = (
-    ("blocked", "Blocked on you", ()),
-    ("motion", "In motion", (("nudge-owner", "Nudge owner"), ("mark-done", "Mark done"))),
-    ("waiting", "Waiting on a seat", (("nudge-owner", "Nudge owner"), ("reassign", "Reassign"), ("park", "Park"))),
-    ("adhoc", "Ad hoc", (("nudge-owner", "Nudge owner"), ("close", "Close"), ("park", "Park"))),
-    ("done", f"Done in the last {PAGE_DAYS} days", ()),
-    ("quiet", f"Quiet {PAGE_DAYS} days or more", (("kick-off", "Kick off"), ("park", "Park"), ("close", "Close"))),
+    ("blocked", "Blocked on you", "Waiting on your answer; each row names its Desk card.", ()),
+    ("motion", "In motion", f"Open work moved in the last {PAGE_DAYS} days.",
+     (("nudge-owner", "Nudge owner"), ("mark-done", "Mark done"))),
+    ("waiting", "Waiting on a seat", "Blocked on a seat or a role, not on you.",
+     (("nudge-owner", "Nudge owner"), ("reassign", "Reassign"), ("park", "Park"))),
+    ("adhoc", "Ad hoc", f"Ad hoc streams: open ones always, parked or finished ones for {PAGE_DAYS} days after they last moved.",
+     (("nudge-owner", "Nudge owner"), ("close", "Close"), ("park", "Park"))),
+    ("done", f"Done in the last {PAGE_DAYS} days", f"Merged, released, deployed or accepted in the last {PAGE_DAYS} days.", ()),
+    ("quiet", f"Quiet {PAGE_DAYS} days or more", f"Open work not moved for {PAGE_DAYS} days or more.",
+     (("kick-off", "Kick off"), ("park", "Park"), ("close", "Close"))),
 )
 # Sections listed oldest move first; the others newest first.
 PAGE_OLDEST_FIRST = ("blocked", "waiting", "quiet")
@@ -2849,7 +2853,7 @@ body{margin:0;background:var(--bg,Canvas);color:var(--fg,CanvasText);font:15px/1
 main{max-width:960px;margin:0 auto;padding:16px}
 h1{font-size:1.4rem;margin:0 0 4px}
 h2{font-size:1.1rem;margin:28px 0 2px}
-.src,.count,.none,.foot{color:var(--muted,GrayText);font-size:.88rem;margin:2px 0}
+.src,.desc,.count,.none,.foot{color:var(--muted,GrayText);font-size:.88rem;margin:2px 0}
 .notice{border:1px dashed var(--line,GrayText);border-radius:8px;padding:10px 12px;margin:12px 0}
 ul.rows{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
 li.row{border:1px solid var(--line,GrayText);border-radius:8px;padding:10px 12px}
@@ -3062,7 +3066,7 @@ def page_render(theme, nav, desk_url):
     rows, torn = fold()
     snap, why = desk_snapshot()
     ledger_read = os.path.exists(LEDGER)
-    buckets = {k: [] for k, _, _ in PAGE_SECTIONS}
+    buckets = {s[0]: [] for s in PAGE_SECTIONS}
     unplaced = 0
     for r in sorted(rows.values(), key=lambda r: r["slug"]):
         key = page_section(r, t_now)
@@ -3085,10 +3089,10 @@ def page_render(theme, nav, desk_url):
     desk = f"Desk snapshot read {esc(snap['read_at'])}" if snap is not None else f"Desk {esc(why)}"
     out.append(f'<p class="src">{ledger}. {desk}.</p>')
     out.append('<div id="notice" class="notice" role="status" hidden></div>')
-    for key, heading, calls in PAGE_SECTIONS:
+    for key, heading, desc, calls in PAGE_SECTIONS:
         rs = sorted(buckets[key], key=lambda r: r["slug"])
         rs.sort(key=lambda r: r["last_moved"], reverse=key not in PAGE_OLDEST_FIRST)
-        out.append(f'<section id="s-{key}"><h2>{esc(heading)}</h2><p class="count">{page_count(len(rs))}</p>')
+        out.append(f'<section id="s-{key}"><h2>{esc(heading)}</h2><p class="desc">{esc(desc)}</p><p class="count">{page_count(len(rs))}</p>')
         if rs:
             out.append('<ul class="rows">' + "".join(page_row(r, key, calls, snap, desk_url) for r in rs) + "</ul>")
         out.append("</section>")

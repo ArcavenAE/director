@@ -94,6 +94,13 @@ want = [("blocked", "Blocked on you"), ("motion", "In motion"), ("waiting", "Wai
         ("done", "Done in the last 7 days"), ("quiet", "Quiet 7 days or more")]
 sys.exit(0 if h == want else (print(h) or 1))
 EOF
+python3 - "$root/p1.html" <<'EOF2' && ok "each section has a one-line description, and In motion says open work moved in the last 7 days" || bad "section descriptions"
+import re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+d = dict(re.findall(r'<section id="s-([a-z]+)"><h2>[^<]*</h2><p class="desc">(.*?)</p>', page))
+assert sorted(d) == ["adhoc", "blocked", "done", "motion", "quiet", "waiting"], sorted(d)
+assert d["motion"] == "Open work moved in the last 7 days.", d["motion"]
+EOF2
 [[ "$(slugs "$root/p1.html" blocked)" == "b1 adhoc-op" ]] && ok "blocked: operator-blocked rows, oldest first, an adhoc- one among them" || bad "blocked" "$(slugs "$root/p1.html" blocked)"
 [[ "$(slugs "$root/p1.html" motion)" == "m3 i1 legacy-None legacy-none des1 def1 m1 m2" ]] && ok "motion: any open stage moved under 7 days ago, newest first: idea, defined, designed, the 6d23h59m row, and rows with blocked none, None and empty" || bad "motion" "$(slugs "$root/p1.html" motion)"
 [[ "$(slugs "$root/p1.html" waiting)" == "w1" ]] && ok "waiting: a row blocked on a seat" || bad "waiting" "$(slugs "$root/p1.html" waiting)"
