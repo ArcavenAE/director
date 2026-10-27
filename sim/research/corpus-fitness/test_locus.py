@@ -98,18 +98,77 @@ EXPECT = {
 
 
 # The fixture's identity comes from the environment, so the tests run in a
-# clean HOME. Signing is left as the host configures it.
+# clean HOME. Every fixture commit is signed with a throwaway key made for the
+# run in its own temp dir, outside the fixture repo, and no host config or key
+# is read.
+KEYDIR = tempfile.TemporaryDirectory()
+KEY = os.path.join(KEYDIR.name, "fixture-key")
+SIGNING = {
+    "gpg.format": "ssh",
+    "gpg.ssh.program": "ssh-keygen",
+    "user.signingkey": KEY,
+    "commit.gpgsign": "true",
+}
 GIT_ENV = dict(
     os.environ,
     GIT_AUTHOR_NAME="t",
     GIT_AUTHOR_EMAIL="t@example.invalid",
     GIT_COMMITTER_NAME="t",
     GIT_COMMITTER_EMAIL="t@example.invalid",
+    GIT_CONFIG_GLOBAL=os.devnull,
+    GIT_CONFIG_NOSYSTEM="1",
+    GIT_CONFIG_COUNT=str(len(SIGNING)),
 )
+for i, (k, v) in enumerate(SIGNING.items()):
+    GIT_ENV[f"GIT_CONFIG_KEY_{i}"] = k
+    GIT_ENV[f"GIT_CONFIG_VALUE_{i}"] = v
+
+
+def setUpModule():
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "fixture", "-f", KEY], check=True)
+
+
+def tearDownModule():
+    KEYDIR.cleanup()
+
+
+def refused_arg(a):
+    """Args sh() will not pass on: a config, a directory or a signing switch."""
+    return a in ("-c", "-C") or a.startswith("--config-env") or a.startswith("--no-gpg")
+
+
+def has_signature(obj):
+    """Whether a commit object's text carries a gpgsig header, before the
+    blank line that ends the headers."""
+    for line in obj.splitlines():
+        if not line:
+            return False
+        if line.startswith("gpgsig "):
+            return True
+    return False
 
 
 def sh(cwd, *args):
-    return subprocess.run(args, cwd=cwd, env=GIT_ENV, capture_output=True, check=True).stdout.decode()
+    """Run a command in a fixture repo. A git call refuses a caller's config,
+    directory or signing switch before it runs, and after it every commit any
+    ref reaches must carry a signature."""
+    if args[0] == "git":
+        for a in args[1:]:
+            if refused_arg(a):
+                raise AssertionError("sh refuses caller config, directory or signing: " + a)
+    out = subprocess.run(args, cwd=cwd, env=GIT_ENV, capture_output=True, check=True).stdout.decode()
+    if args[0] == "git":
+        shas = subprocess.run(["git", "rev-list", "--all"], cwd=cwd, env=GIT_ENV, capture_output=True, check=True)
+        for sha in shas.stdout.decode().split():
+            obj = subprocess.run(["git", "cat-file", "commit", sha], cwd=cwd, env=GIT_ENV, capture_output=True, check=True)
+            if not has_signature(obj.stdout.decode()):
+                raise AssertionError("fixture commit is not signed:\n" + obj.stdout.decode())
+    return out
+
+
+def commit(cwd, *args):
+    """The one fixture commit site; sh() checks the signature."""
+    sh(cwd, "git", "commit", *args)
 
 
 class LocusTest(unittest.TestCase):
@@ -125,13 +184,12 @@ class LocusTest(unittest.TestCase):
             f.write("# a\n")
         sh(d, "git", "init", "-q")
         sh(d, "git", "add", ".")
-        sh(d, "git", "commit", "-q", "-m", "base")
+        commit(d, "-q", "-m", "base")
         base = sh(d, "git", "rev-parse", "--short=7", "HEAD").strip()
         with open(os.path.join(d, "sim", "requirements.md"), "w") as f:
             f.write(REGISTER.replace("BASE_SHA", base))
         sh(d, "git", "add", ".")
-        # Commits inherit the host git config, signing included; the repo is never pushed.
-        sh(d, "git", "commit", "-q", "-m", "fixture")
+        commit(d, "-q", "-m", "fixture")
         self.repo = d
         self.pin = sh(d, "git", "rev-parse", "HEAD").strip()
 
@@ -207,7 +265,7 @@ class LocusTest(unittest.TestCase):
         path = os.path.join(self.repo, "sim", "requirements.md")
         with open(path, "a") as f:
             f.write("\n**R-01 (OBSERVED) · a second definition.**\n")
-        sh(self.repo, "git", "commit", "-q", "-am", "dup")
+        commit(self.repo, "-q", "-am", "dup")
         self.pin = sh(self.repo, "git", "rev-parse", "HEAD").strip()
         rc, _, err = self.run_locus()
         self.assertNotEqual(rc, 0)
@@ -219,6 +277,83 @@ class LocusTest(unittest.TestCase):
         for word in ("roundtable", "zombie", "sitting", "idle-seats", "replay-pilot"):
             self.assertNotIn(word, out)
 
+
+def guard_violations(src):
+    """The guard's rules over this file's source: the one git commit is
+    commit()'s, signing is set in SIGNING only, and nothing here starts a
+    program outside sh(), setUpModule() and run_locus(). Returns what breaks
+    them. The patterns are bracketed so they cannot match their own lines."""
+    import re
+    out = []
+    sites = re.findall(r'"git", "c[o]mmit"', src)
+    if len(sites) != 1:
+        out.append("commit sites: %d" % len(sites))
+    for want in (r'"commit\.gpg[s]ign": "[t]rue"', r'"user\.signingkey": K[E]Y'):
+        if not re.search(want, src):
+            out.append("the signing config lacks " + want)
+    # Signing is set on one line, in SIGNING; any other mention, in any case
+    # and with any value, is a way to change it.
+    for n, line in enumerate(src.splitlines(), 1):
+        if re.search(r"(?i)gpg[s]ign", line) and not re.fullmatch(r'    "commit\.gpg[s]ign": "[t]rue",', line):
+            out.append("a signing setting at line %d" % n)
+    for banned in (r"--no-gpg-[s]ign", r"commit-[t]ree", r"fast-[i]mport", r"mk[t]ag", r'"-t", "[c]ommit"',
+                   r"\bos\.(syst[e]m|pop[e]n|exe[c]|spaw[n])", r"\bP[o]pen\b", r"check_[o]utput", r"check_[c]all",
+                   r"from subproc[e]ss", r"import subproc[e]ss as"):
+        if re.search(banned, src):
+            out.append("this file holds " + banned)
+    # A program starts only inside these functions, so a git named through a
+    # variable elsewhere is caught.
+    spans = []
+    for name in ("sh", "setUpModule", "run_locus"):
+        m = re.search(r"\n( *)def " + name + r"\(", src)
+        if m:
+            end = re.search(r"\n" + m.group(1) + r"(def |class |\S)", src[m.end():])
+            spans.append((m.start(), m.end() + (end.start() if end else len(src))))
+    for m in re.finditer(r"subproc[e]ss\.\w+\(", src):
+        if not any(a <= m.start() < b for a, b in spans):
+            out.append("a program started outside sh, setUpModule and run_locus")
+    return out
+
+
+class FixtureGuardTest(unittest.TestCase):
+    def source(self):
+        with open(os.path.abspath(__file__)) as f:
+            return f.read()
+
+    def test_one_signed_commit_site(self):
+        self.assertEqual(guard_violations(self.source()), [])
+
+    # director#439, from the kos#158 review: the same two holes. Each mutant
+    # is crafted text added at run time; none is ever run, and no test makes
+    # an unsigned commit.
+    def test_guard_catches_a_signing_override_in_any_case(self):
+        for value in ("no", "0", "off", "FALSE"):
+            mutant = self.source() + '\nsh(d, "git", "-c", "commit.gpg' + "Sign=" + value + '", "merge", "x")\n'
+            self.assertNotEqual(guard_violations(mutant), [], value)
+
+    def test_guard_catches_git_through_a_variable(self):
+        mutant = self.source() + '\nprog = "g' + 'it"\nsubproc' + 'ess.r' + 'un([prog, "com' + 'mit", "-m", "x"])\n'
+        self.assertNotEqual(guard_violations(mutant), [])
+
+    def test_sh_refuses_caller_config(self):
+        with tempfile.TemporaryDirectory() as d:
+            sh(d, "git", "init", "-q")
+            with self.assertRaisesRegex(AssertionError, "refuses caller"):
+                sh(d, "git", "-c", "commit.gpg" + "Sign=no", "com" + "mit", "-q", "--allow-empty", "-m", "x")
+            self.assertEqual(sh(d, "git", "rev-list", "--all"), "")
+
+    def test_sh_refuses_a_signing_switch(self):
+        with tempfile.TemporaryDirectory() as d:
+            sh(d, "git", "init", "-q")
+            with self.assertRaisesRegex(AssertionError, "refuses caller"):
+                sh(d, "git", "com" + "mit", "--no-gpg" + "-sign", "-q", "--allow-empty", "-m", "x")
+            self.assertEqual(sh(d, "git", "rev-list", "--all"), "")
+
+    def test_signature_check_reads_the_commit_object(self):
+        head = "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\ncommitter t <t@example.invalid> 0 +0000\n"
+        self.assertFalse(has_signature(head + "\nx\n"))
+        self.assertTrue(has_signature(head + "gpgsig -----BEGIN SSH SIGNATURE-----\n \n -----END-----\n\nx\n"))
+        self.assertFalse(has_signature(head + "\nmessage\ngpgsig in the body is not a header\n"))
 
 if __name__ == "__main__":
     unittest.main()

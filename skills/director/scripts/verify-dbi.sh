@@ -4,10 +4,9 @@
 # closed pointers, successors and cycles, parked and resolved ideas, the quiet
 # threshold, never-read roots, an unreachable bd named instead of read as "no
 # pointer", read-by-ref from the default branch, no fetch, no prompt, and the
-# pool deadline. The fixtures are built with git fast-import, which writes
-# unsigned commit objects into scratch repos under a temp directory that is never
-# pushed; whether the signing rules cover such objects is an open question for the
-# operator. bd and gh are stubs first on PATH.
+# pool deadline. The fixture commits are signed with a throwaway key made in the
+# temp directory, never a host key or config, and a guard below checks that no other
+# commit writer is in this file. bd and gh are stubs first on PATH.
 #
 # Usage: skills/director/scripts/verify-dbi.sh   Exit nonzero on any miss.
 set -euo pipefail
@@ -18,7 +17,7 @@ pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 
-root="$(mktemp -d)"
+root="$(mktemp -d "${TMPDIR:-/tmp}/dbi.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 export PYTHONDONTWRITEBYTECODE=1 GIT_TERMINAL_PROMPT=0
 export DIRECTOR_STATE="$root/state"
@@ -27,6 +26,50 @@ NOW=$(date -j -u -f %Y-%m-%dT%H:%M:%SZ 2026-10-20T12:00:00Z +%s 2>/dev/null || d
 DAY=86400
 mkdir -p "$DIRECTOR_STATE" "$root/orc" "$root/remotes" "$root/bin"
 export PATH="$root/bin:$PATH"
+
+# --- guard: fixture commits are signed, never with a host key or config ------
+# has_sig FILE: the commit object in FILE has a gpgsig header before the blank line that ends the headers
+has_sig() { awk '/^$/ { exit } /^gpgsig / { f = 1; exit } END { exit f ? 0 : 1 }' "$1"; }
+# unsigned_in DIR: print each commit any ref in DIR reaches that has no signature, however it was made
+unsigned_in() {
+  local c list
+  list="$(git -C "$1" rev-list --all 2>/dev/null)" || return 2
+  for c in $list; do
+    git -C "$1" cat-file commit "$c" >"$root/obj"; has_sig "$root/obj" || echo "$c"
+  done
+}
+# guard_violations FILE: print each way FILE breaks these rules. The one commit writer is the signed
+# tree commit in fx; signing is set on the SIGN line only, in any case and with any value; git runs by
+# name, never through a variable or a looked-up path (any assignment of git, which, whereis, command -v,
+# type -p/-P/-a or hash -t of it, or a path whose last part is the git binary), except the REALGIT pass-through and its
+# gitfail stub for the read-failure cases; nothing writes a commit object another way. The patterns are
+# bracketed so they cannot match their own lines.
+re_var="=[[:space:]]*[\"']?g[i]t([\"'[:space:];),]|\$)"
+re_var="$re_var|(which|whereis|command +-[vV]|type +-[A-Za-z]*[pPa][A-Za-z]*|hash +-t) +[\"']?g[i]t([^[:alnum:]_.-]|\$)"
+re_var="$re_var|/g[i]t([\"'[:space:];),]|\$)"
+guard_violations() {
+  local gl
+  gl="$(grep -nE 'c[o]mmit-tree|git[^#]* c[o]mmit -' "$1" || true)"
+  [[ "$(printf '%s\n' "$gl" | grep -c . || true)" == 1 && "$gl" == *'*SIGN, "commit''-tree", "-S", tree,'* ]] || echo "commit sites: $gl"
+  grep -inE 'gpg[s]ign' "$1" | grep -vE '^[0-9]+:SIGN = \[.*"commit\.gpg[s]ign=[t]rue"\]$' || true
+  grep -nE "$re_var" "$1" | grep -vE '^[0-9]+:(mkdir -p "\$root/gitfail"; REALGIT="\$\(command -v g[i]t\)"|cat >"\$root/gitfail/g[i]t" <<S|chmod \+x "\$root/gitfail/g[i]t")$' || true
+  grep -nE -- '--no-gpg-[s]ign|fast-[i]mport|mk[t]ag|-t [c]ommit' "$1" || true
+}
+self="$here/$(basename "${BASH_SOURCE[0]}")"
+gv="$(guard_violations "$self")"
+[[ -z "$gv" ]] && ok "guard: one fixture commit site, signed with the fixture key, and no other commit writer" || bad "guard: this file" "$gv"
+# The guard against crafted mutants (director#439 review): text only, never run.
+m=0
+for line in '    new = sh("git", "-C", bare, *SIGN, "-c", "commit.gpg''Sign=0", "merge", "x")' 'prog = "g''it"' 'g=g''it; "$g" -C x merge -q y' \
+  'G=/usr/bin/g''it' 'x=$(whi''ch g''it)' 'x=$(type -P g''it)' 'x=$(comma''nd -v g''it)' 'hash -t g''it' 'x=$(where''is g''it)'; do
+  m=$((m+1)); { cat "$self"; printf '%s\n' "$line"; } >"$root/mutant$m"
+  [[ -n "$(guard_violations "$root/mutant$m")" ]] && ok "guard: crafted mutant $m is caught" || bad "guard: crafted mutant $m passed" "$line"
+done
+# The signature check against crafted commit text, so no test makes an unsigned commit.
+hd='tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\ncommitter t <t@t.invalid> 0 +0000\n'
+printf "$hd"'\nx\n' >"$root/c-unsigned"; printf "$hd"'gpgsig -----BEGIN SSH SIGNATURE-----\n \n -----END-----\n\nx\n' >"$root/c-signed"
+printf "$hd"'\nmessage\ngpgsig in the body is not a header\n' >"$root/c-body"
+if ! has_sig "$root/c-unsigned" && has_sig "$root/c-signed" && ! has_sig "$root/c-body"; then ok "has_sig reads the header only"; else bad "has_sig on crafted commit text"; fi
 
 # --- stubs ------------------------------------------------------------------
 cat >"$root/bin/bd" <<'S'
@@ -48,21 +91,41 @@ chmod +x "$root/bin/bd" "$root/bin/gh"
 export DBI_FIX="$root/fix"; mkdir -p "$DBI_FIX"
 echo '[]' >"$DBI_FIX/bd.json"; : >"$DBI_FIX/gh.tsv"
 
-# --- fixture builder: bare remote by fast-import, clone as the checkout ------------
+# --- fixture builder: bare remote by signed commits, clone as the checkout ----------
+# Each commit is built through a scratch index and signed with a throwaway key made in the scratch
+# root, never a host key or config, at the committer date the case needs; fx checks the signature.
+ssh-keygen -q -t ed25519 -N '' -C fixture -f "$root/fixture-key" || { echo "FAIL fixture key: ssh-keygen failed"; exit 1; }
 cat >"$root/fx.py" <<'P'
-import subprocess, sys
-def sh(*a, **k): return subprocess.run(a, check=True, capture_output=True, text=True, **k)
+import os, subprocess, sys
+KEY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixture-key")
+SIGN = ["-c", "gpg.format=ssh", "-c", "gpg.ssh.program=ssh-keygen", "-c", "user.signingkey=" + KEY, "-c", "commit.gpgsign=true"]
+def sh(*a, env=None, inp=None):
+    return subprocess.run(a, check=True, capture_output=True, env=env, input=inp).stdout.decode().strip()
+def has_signature(obj):
+    for l in obj.splitlines():
+        if not l: return False
+        if l.startswith("gpgsig "): return True
+    return False
 def init(bare):
     sh("git", "init", "-q", "--bare", "-b", "main", bare)
 def commit(bare, epoch, files):
     have = subprocess.run(["git", "-C", bare, "rev-parse", "-q", "--verify", "refs/heads/main"], capture_output=True).returncode == 0
-    out = f"commit refs/heads/main\ncommitter T <t@example.invalid> {epoch} +0000\ndata 3\nfx\n"
-    if have: out += "from refs/heads/main^0\n"
+    env = dict(os.environ, GIT_INDEX_FILE=os.path.join(bare, "fx-index"), GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+               GIT_AUTHOR_NAME="T", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_AUTHOR_DATE=f"{epoch} +0000",
+               GIT_COMMITTER_NAME="T", GIT_COMMITTER_EMAIL="t@example.invalid", GIT_COMMITTER_DATE=f"{epoch} +0000")
+    if have: sh("git", "-C", bare, "read-tree", "refs/heads/main", env=env)
+    else: sh("git", "-C", bare, "read-tree", "--empty", env=env)
     for path, body in files:
-        b = body.encode()
-        if body == "\0delete": out += f"D {path}\n"; continue
-        out += f"M 644 inline {path}\ndata {len(b)}\n" + body + "\n"
-    subprocess.run(["git", "-C", bare, "fast-import", "--quiet"], input=out.encode(), check=True)
+        if body == "\0delete": sh("git", "-C", bare, "update-index", "--force-remove", path, env=env); continue
+        blob = sh("git", "-C", bare, "hash-object", "-w", "--stdin", env=env, inp=body.encode())
+        sh("git", "-C", bare, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=env)
+    tree = sh("git", "-C", bare, "write-tree", env=env)
+    parent = ["-p", "refs/heads/main"] if have else []
+    new = sh("git", "-C", bare, *SIGN, "commit-tree", "-S", tree, *parent, "-m", "fx", env=env)
+    obj = sh("git", "-C", bare, "cat-file", "commit", new, env=env)
+    if not has_signature(obj): sys.exit(f"FAIL fixture commit {new} is not signed")
+    sh("git", "-C", bare, "update-ref", "refs/heads/main", new, env=env)
+    os.unlink(env["GIT_INDEX_FILE"])
 if __name__ == "__main__":
     cmd, bare = sys.argv[1], sys.argv[2]
     if cmd == "init": init(bare)
@@ -296,6 +359,18 @@ run >"$root/j" 2>/dev/null
 [[ "$(q "any('linked-blue' in x['path'] for x in d['skipped'])" <"$root/j")" == "True" ]] && ok "the symlinked root's skip is logged" || bad "symlink skip logged" "$(q "d['skipped']" <"$root/j")"
 [[ "$(q "any(r['path'].startswith('lg/') for r in d['rows'])" <"$root/j")" == "True" ]] && ok "a checkout under a parent named run, named by the root's fixed prefix, is read" || bad "legit run parent" "$(q "[d['rows'],d['skipped']]" <"$root/j")"
 cfg
+
+# Every repo the run made under the scratch root, swept at the end, so a commit made by any route is
+# still checked. A path git does not read as a repository is skipped.
+nrepo=0
+while IFS= read -r g; do
+  case "$g" in */.git) r="${g%/.git}" ;; *) r="$g" ;; esac
+  rc=0; u="$(unsigned_in "$r")" || rc=$?
+  [[ $rc -eq 2 ]] && continue
+  nrepo=$((nrepo+1))
+  if [[ -z "$u" ]]; then ok "every commit in ${r#$root/} is signed"; else bad "unsigned commits in ${r#$root/}" "$u"; fi
+done < <(find "$root" \( -name .git -o -type d -name '*.git' \) -prune -print 2>/dev/null)
+if [[ $nrepo -gt 0 ]]; then ok "end sweep read $nrepo repositories"; else bad "end sweep found no repository under the scratch root"; fi
 
 echo "dbi: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

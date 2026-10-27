@@ -39,7 +39,7 @@ NOW="2026-10-20T18:44:00Z"
 state="$root/state"
 conf="$root/c.conf"
 
-genv() { env -i HOME="$root/home" PATH="$BASEPATH" LANG=en_US.UTF-8 GIT_CONFIG_NOSYSTEM=1 "$@"; }
+genv() { env -i HOME="$root/home" PATH="$BASEPATH" LANG=en_US.UTF-8 TMPDIR="$root/t" GIT_CONFIG_NOSYSTEM=1 "$@"; }
 run()  { env -i HOME="$root/home" PATH="$FIXPATH" LANG=en_US.UTF-8 TMPDIR="$root/t" DIRECTOR_STATE="$state" INTROSPECT_NOW="${NOW_OVERRIDE:-$NOW}" python3 -I "$S" "$@"; }
 
 # ---------------------------------------------------------------- fixture generator
@@ -93,8 +93,57 @@ PY
 mk() { python3 "$root/mkfix.py" "$@"; }
 
 # git fixtures: a checkout whose origin/main is ahead of main by commits that touch code, and by a
-# docs-only and a test-only commit that must not count
-gcommit() { genv git -C "$1" -c user.name=t -c user.email=t@t.invalid commit -q --allow-empty-message -m "$2"; }
+# docs-only and a test-only commit that must not count. Every fixture commit is signed with a throwaway
+# key made in the scratch root, never a host key or config, and is checked for its signature.
+fixkey="$root/fixture-key"
+genv ssh-keygen -q -t ed25519 -N '' -C fixture -f "$fixkey" || { echo "FAIL fixture key: ssh-keygen failed"; exit 1; }
+# has_sig FILE: the commit object in FILE has a gpgsig header before the blank line that ends the headers
+has_sig() { awk '/^$/ { exit } /^gpgsig / { f = 1; exit } END { exit f ? 0 : 1 }' "$1"; }
+gcommit() {
+  genv git -C "$1" -c user.name=t -c user.email=t@t.invalid -c gpg.format=ssh -c gpg.ssh.program=ssh-keygen -c user.signingkey="$fixkey" -c commit.gpgsign=true commit -q --allow-empty-message -m "$2" || { echo "FAIL fixture commit in $1"; exit 1; }
+  genv git -C "$1" cat-file commit HEAD >"$root/obj" && has_sig "$root/obj" || { echo "FAIL fixture commit in $1 is not signed"; exit 1; }
+}
+# unsigned_in DIR: print each commit any ref in DIR reaches that has no signature, however it was made
+unsigned_in() {
+  local c list
+  list="$(genv git -C "$1" rev-list --all 2>/dev/null)" || return 2
+  for c in $list; do
+    genv git -C "$1" cat-file commit "$c" >"$root/obj"; has_sig "$root/obj" || echo "$c"
+  done
+}
+# guard_violations FILE: print each way FILE breaks these rules. The one git commit is gcommit's, with
+# the signing config; signing is set on that line only, in any case and with any value; git runs by
+# name, never through a variable or a looked-up path (any assignment of git, which, whereis, command -v,
+# type -p/-P/-a or hash -t of it, or a path whose last part is the git binary), and the env wrapper runs only git and
+# ssh-keygen; nothing writes a commit object another way. The patterns are bracketed so they cannot
+# match their own lines.
+re_var="=[[:space:]]*[\"']?g[i]t([\"'[:space:];),]|\$)"
+re_var="$re_var|(which|whereis|command +-[vV]|type +-[A-Za-z]*[pPa][A-Za-z]*|hash +-t) +[\"']?g[i]t([^[:alnum:]_.-]|\$)"
+re_var="$re_var|/g[i]t([\"'[:space:];),]|\$)"
+re_var="$re_var|gen[v] +[^gs]"
+guard_violations() {
+  local gl
+  gl="$(grep -nE 'git .* c[o]mmit -q' "$1")"
+  [[ "$(printf '%s\n' "$gl" | grep -c .)" == 1 && "$gl" == *'commit.gpg''sign=true'* && "$gl" == *'user.signingkey="$fixkey"'* ]] || echo "commit sites: $gl"
+  grep -inE 'gpg[s]ign' "$1" | grep -vE '^[0-9]+:  genv git -C "\$1" .* -c commit\.gpg[s]ign=[t]rue c[o]mmit -q '
+  grep -nE "$re_var" "$1"
+  grep -nE -- '--no-gpg-[s]ign|commit-[t]ree|fast-[i]mport|mk[t]ag|-t [c]ommit' "$1"
+}
+self="$here/$(basename "${BASH_SOURCE[0]}")"
+gv="$(guard_violations "$self")"
+[[ -z "$gv" ]] && ok "guard: one fixture commit site, signed with the fixture key, and no other commit writer" || bad "guard: this file" "$gv"
+# The guard against two crafted mutants (director#439 review): text only, never run.
+m=0
+for line in 'genv git -C "$d" -c commit.gpg''Sign=0 merge -q x' 'g=g''it; gen''v "$g" -C "$d" com''mit -q -m x' \
+  'G=/usr/bin/g''it' 'x=$(whi''ch g''it)' 'x=$(type -P g''it)' 'x=$(comma''nd -v g''it)' 'hash -t g''it' 'x=$(where''is g''it)'; do
+  m=$((m+1)); { cat "$self"; printf '%s\n' "$line"; } >"$root/mutant$m"
+  [[ -n "$(guard_violations "$root/mutant$m")" ]] && ok "guard: crafted mutant $m is caught" || bad "guard: crafted mutant $m passed" "$line"
+done
+# The signature check against crafted commit text, so no test makes an unsigned commit.
+hd='tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\ncommitter t <t@t.invalid> 0 +0000\n'
+printf "$hd"'\nx\n' >"$root/c-unsigned"; printf "$hd"'gpgsig -----BEGIN SSH SIGNATURE-----\n \n -----END-----\n\nx\n' >"$root/c-signed"
+printf "$hd"'\nmessage\ngpgsig in the body is not a header\n' >"$root/c-body"
+! has_sig "$root/c-unsigned" && has_sig "$root/c-signed" && ! has_sig "$root/c-body" && ok "has_sig reads the header only" || bad "has_sig on crafted commit text"
 mkco() { # $1 dir, $2 code commits ahead
   d="$1"; mkdir -p "$d/cmd/director-mcp" "$d/docs"; genv git -C "$d" init -q -b main
   echo a >"$d/cmd/director-mcp/a.go"; genv git -C "$d" add -A; gcommit "$d" c1
@@ -109,6 +158,10 @@ mkco() { # $1 dir, $2 code commits ahead
 }
 mkco "$root/co-director" 3
 mkco "$root/co-marvel" 2
+for r in co-director co-marvel; do
+  n="$(genv git -C "$root/$r" rev-list --all | grep -c .)"; u="$(unsigned_in "$root/$r")"
+  [[ "$n" -gt 0 && -z "$u" ]] && ok "every commit in $r is signed ($n)" || bad "unsigned commits in $r" "$u"
+done
 C1="$(cat "$root/co-director.c1")"
 M1="$(cat "$root/co-marvel.c1")"
 cat >"$root/bin/marvel" <<SH
@@ -833,6 +886,18 @@ grep -q '^Introspect:' "$sk" && ok "the reply shape has an Introspect block" || 
 grep -q 'never an R-entry\|never an R-entry, a rule' "$sk" && ok "the skill says a count is cited under harvest step 6 only and never becomes an R-entry" || bad "M1 sentence"
 grep -q 'introspect' "$repo/install.sh" && ok "install.sh installs introspect into the bin home" || bad "install line"
 [[ -z "$(git -C "$repo" grep -l introspect HEAD -- sim/requirements.md 2>/dev/null || true)" ]] && ok "M1 no count or script is cited in sim/requirements.md" || bad "M1 requirements"
+
+# Every repo the run made under the scratch root, swept at the end, so a commit made after the fixtures
+# by any route is still checked. A path git does not read as a repository is skipped.
+nrepo=0
+while IFS= read -r g; do
+  case "$g" in */.git) r="${g%/.git}" ;; *) r="$g" ;; esac
+  u="$(unsigned_in "$r")"; rc=$?
+  [[ $rc -eq 2 ]] && continue
+  nrepo=$((nrepo+1))
+  if [[ -z "$u" ]]; then ok "end sweep: every commit in ${r#$root/} is signed"; else bad "end sweep: unsigned commits in ${r#$root/}" "$u"; fi
+done < <(find "$root" \( -name .git -o -type d -name '*.git' \) -prune -print 2>/dev/null)
+[[ $nrepo -gt 0 ]] && ok "end sweep read $nrepo repositories" || bad "end sweep found no repository under the scratch root"
 
 echo "$pass passed, $fail failed, $skip skipped"
 [[ $fail -eq 0 ]]
