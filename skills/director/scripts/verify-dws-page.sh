@@ -13,7 +13,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DWS="${DWS:-$here/dws}"
 SNAP="${SNAP_BIN:-$here/desk-snapshot}"
 NODE="${NODE:-node}"
-pass=0; fail=0
+pass=0; fail=0; skip=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 
@@ -53,13 +53,16 @@ store() {
   DWS_NOW=2026-10-27T10:00:00Z "$SNAP" write --cards "$root/cards.json" --reported 2 >/dev/null
   at 2026-10-27T10:30:00Z "$DWS" open b1 --title 'Tom & "Jerry" <b>x</b>' --owner director --stage building --blocked operator --ask c1 --next "answer it" --link 'pr:ArcavenAE/director#9' 'bd:proj-abc1' >/dev/null
   at 2026-10-25T09:00:00Z "$DWS" open m1 --title "Motion one" --owner team-a/builder --stage building --next "finish tests" --link 'issue:ArcavenAE/director#3' >/dev/null
+  at 2026-10-27T09:30:00Z "$DWS" open m3 --title "Motion blocked none" --owner team-a/builder --stage building --blocked none >/dev/null
   at 2026-10-20T12:00:01Z "$DWS" open m2 --title "Motion edge" --stage "in review" >/dev/null
   at 2026-10-24T09:00:00Z "$DWS" open w1 --title "Waiting one" --owner team-a/builder --stage building --blocked seat >/dev/null
   at 2026-10-26T09:00:00Z "$DWS" open adhoc-q1 --title "Ad hoc one" --stage idea >/dev/null
   at 2026-10-26T20:00:00Z "$DWS" open adhoc-w --title "Ad hoc seat-blocked" --stage building --blocked seat >/dev/null
   at 2026-10-26T22:00:00Z "$DWS" open adhoc-d --title "Ad hoc done" --stage merged >/dev/null
   at 2026-10-27T11:00:00Z "$DWS" open adhoc-op --title "Ad hoc operator-blocked" --stage idea --blocked operator --ask c1 >/dev/null
-  at 2026-10-02T10:00:00Z "$DWS" open adhoc-p --title "Ad hoc parked" --stage parked >/dev/null
+  at 2026-10-02T10:00:00Z "$DWS" open adhoc-p --title "Ad hoc parked long ago" --stage parked >/dev/null
+  at 2026-10-10T10:00:00Z "$DWS" open adhoc-od --title "Ad hoc merged long ago" --stage merged >/dev/null
+  at 2026-10-26T23:00:00Z "$DWS" open adhoc-pr --title "Ad hoc parked today" --stage parked >/dev/null
   at 2026-10-26T15:00:00Z "$DWS" open d1 --title "Done one" --stage merged >/dev/null
   at 2026-10-10T09:00:00Z "$DWS" open q1 --title "Quiet one" --stage designed >/dev/null
   at 2026-10-20T12:00:00Z "$DWS" open q2 --title "Quiet edge" --stage building >/dev/null
@@ -82,16 +85,16 @@ want = [("blocked", "Blocked on you"), ("motion", "In motion"), ("waiting", "Wai
 sys.exit(0 if h == want else (print(h) or 1))
 EOF
 [[ "$(slugs "$root/p1.html" blocked)" == "b1 adhoc-op" ]] && ok "blocked: operator-blocked rows, oldest first, an adhoc- one among them" || bad "blocked" "$(slugs "$root/p1.html" blocked)"
-[[ "$(slugs "$root/p1.html" motion)" == "m1 m2" ]] && ok "motion: building and in review, newest first, the 6d23h59m row in" || bad "motion" "$(slugs "$root/p1.html" motion)"
+[[ "$(slugs "$root/p1.html" motion)" == "m3 m1 m2" ]] && ok "motion: building and in review, newest first, the 6d23h59m row in, and a row with blocked none" || bad "motion" "$(slugs "$root/p1.html" motion)"
 [[ "$(slugs "$root/p1.html" waiting)" == "w1" ]] && ok "waiting: a row blocked on a seat" || bad "waiting" "$(slugs "$root/p1.html" waiting)"
-[[ "$(slugs "$root/p1.html" adhoc)" == "adhoc-d adhoc-w adhoc-q1 adhoc-p" ]] && ok "ad hoc: every remaining adhoc- row, seat-blocked, merged and parked ones too, newest first" || bad "adhoc" "$(slugs "$root/p1.html" adhoc)"
+[[ "$(slugs "$root/p1.html" adhoc)" == "adhoc-pr adhoc-d adhoc-w adhoc-q1" ]] && ok "ad hoc: every remaining adhoc- row, newest first; merged and parked ones only for 7 days after they moved" || bad "adhoc" "$(slugs "$root/p1.html" adhoc)"
 [[ "$(slugs "$root/p1.html" done)" == "d1" ]] && ok "done: merged in the last 7 days, the old deployed row out" || bad "done" "$(slugs "$root/p1.html" done)"
 [[ "$(slugs "$root/p1.html" quiet)" == "q1 q2" ]] && ok "quiet: oldest first, the exactly-7-days row in" || bad "quiet" "$(slugs "$root/p1.html" quiet)"
-for pair in "blocked:2 rows" "motion:2 rows" "waiting:1 row" "adhoc:4 rows" "done:1 row" "quiet:2 rows"; do
+for pair in "blocked:2 rows" "motion:3 rows" "waiting:1 row" "adhoc:4 rows" "done:1 row" "quiet:2 rows"; do
   [[ "$(count "$root/p1.html" "${pair%%:*}")" == "${pair#*:}" ]] && ok "the ${pair%%:*} count line reads ${pair#*:}" || bad "count ${pair%%:*}" "$(count "$root/p1.html" "${pair%%:*}")"
 done
-grep -q 'Not shown: 3 row(s)' "$root/p1.html" && ok "the footer counts the three rows no section holds (parked, old done, fresh idea)" || bad "footer" "$(grep -o 'Not shown[^<]*' "$root/p1.html")"
-[[ "$(actions "$root/p1.html" motion)" == "nudge-owner,mark-done | nudge-owner,mark-done" && "$(actions "$root/p1.html" waiting)" == "nudge-owner,reassign,park" && "$(actions "$root/p1.html" adhoc)" == "nudge-owner,close,park | nudge-owner,close,park | nudge-owner,close,park | nudge-owner,close,park" && "$(actions "$root/p1.html" quiet)" == "kick-off,park,close | kick-off,park,close" ]] && ok "each section carries its own calls" || bad "calls per section"
+grep -q 'Not shown: 5 row(s)' "$root/p1.html" && grep -q 'an adhoc- row that is parked or finished stays in Ad hoc for 7 days' "$root/p1.html" && ok "the footer counts the five rows no section holds (parked, old done, fresh idea, two old adhoc- rows) and says when an adhoc- row leaves" || bad "footer" "$(grep -o 'Not shown[^<]*' "$root/p1.html")"
+[[ "$(actions "$root/p1.html" motion)" == "nudge-owner,mark-done | nudge-owner,mark-done | nudge-owner,mark-done" && "$(actions "$root/p1.html" waiting)" == "nudge-owner,reassign,park" && "$(actions "$root/p1.html" adhoc)" == "nudge-owner,close,park | nudge-owner,close,park | nudge-owner,close,park | nudge-owner,close,park" && "$(actions "$root/p1.html" quiet)" == "kick-off,park,close | kick-off,park,close" ]] && ok "each section carries its own calls" || bad "calls per section"
 [[ -z "$(actions "$root/p1.html" blocked | tr -d ' |')" && -z "$(actions "$root/p1.html" done | tr -d ' |')" ]] && ok "blocked and done rows carry no call (answer on Desk is a link only)" || bad "no calls on blocked and done"
 grep -q 'data-section="quiet" data-slug="q1"' "$root/p1.html" && ok "a row names its section and slug, which make the doc id section--slug" || bad "row data attributes"
 
@@ -135,6 +138,11 @@ if page --theme "$root/missing.html" >/dev/null 2>"$root/e"; then bad "an explic
 # the Desk card link and an unread snapshot
 printf 'https://desk.test/p\n' >"$root/desk-url"
 page --desk-url "$root/desk-url" | grep -q 'href="https://desk.test/p#c1"' && ok "--desk-url links a card id" || bad "desk url link"
+printf 'https://desk.test/p#top\n' >"$root/frag-url"
+page --desk-url "$root/frag-url" >"$root/pf.html"
+grep -q 'href="https://desk.test/p#top"' "$root/pf.html" && ! grep -q 'p#top#' "$root/pf.html" && ok "a Desk url that already has a fragment gets no second #" || bad "fragment url" "$(grep -o 'href="https://desk.test[^"]*"' "$root/pf.html" | head -2)"
+printf 'https://desk.test/p?card={id}\n' >"$root/id-url"
+page --desk-url "$root/id-url" | grep -q 'href="https://desk.test/p?card=c1"' && ok "a {id} in the Desk url is replaced" || bad "id placeholder"
 printf 'http://plain.test\n' >"$root/bad-url"
 if page --desk-url "$root/bad-url" >/dev/null 2>&1; then bad "a Desk url that is not https is refused"; else ok "a Desk url that is not https is refused"; fi
 rm "$DIRECTOR_STATE/desk-snapshot.json"
@@ -165,11 +173,11 @@ const btn = stub({ textContent: "Nudge owner", getAttribute: (a) => (a === "data
   closest: (s) => (s === "button.act" ? btn : s === "li.row" ? li : null) });
 rdy.closest = (s) => (s === "li.row" ? li : null);
 rdy.classList = { contains: (c) => c === "ready" };
-const handlers = {}; const writes = [];
+const handlers = {}; const writes = []; let snapCb = null;
 global.document = { activeElement: null, addEventListener: (t, f) => (handlers[t] = f),
   querySelector: (s) => (s === "#notice" ? notice : null),
   querySelectorAll: (s) => (s === ".call" ? [call] : s === "li.row" ? [li] : []) };
-const db = { collection: () => ({ onSnapshot: (ok) => ok({ docs: [] }) }),
+const db = { collection: () => ({ onSnapshot: (ok) => { snapCb = ok; ok({ docs: [] }); } }),
   doc: (p) => ({ set: (b) => (writes.push({ p, b }), Promise.resolve()), delete: () => Promise.resolve() }) };
 const user = { id: () => Promise.resolve("u1"), can: () => Promise.resolve(mode !== "readonly") };
 global.window = { claude: { use: (n) => Promise.resolve(mode === "null" ? null : n === "db" ? db : user) } };
@@ -181,7 +189,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   if (mode === "null") { console.log(JSON.stringify({ notice: notice.textContent, callHidden: call.hidden })); return; }
   handlers.click({ target: btn }); await wait(700);
   rdy.checked = true; handlers.change({ target: rdy }); await wait(700);
-  console.log(JSON.stringify({ notice: notice.textContent, callHidden: call.hidden, writes }));
+  snapCb({ docs: [{ id: "motion--m1", data: () => ({ action: "nudge-owner", note: "remote edit", ready: true }) }] });
+  console.log(JSON.stringify({ notice: notice.textContent, callHidden: call.hidden, writes, noteAfter: note.value }));
 })().catch((e) => { console.log("ERROR " + e); process.exit(1); });
 EOF
   out="$("$NODE" "$root/harness.js" "$root/p1.html" null 2>&1)"
@@ -201,6 +210,11 @@ assert (first["action"], first["action_label"], first["ready"], first["section"]
        ("nudge-owner", "Nudge owner", False, "motion", "Motion one", "work-ledger", "u1"), first
 assert second["ready"] is True and second["action"] == "nudge-owner", second
 EOF
+  python3 - "$out" <<'EOF2' && ok "after a save settles, a later snapshot replaces the local copy" || bad "snapshot after save" "$out"
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["noteAfter"] == "remote edit", d["noteAfter"]
+EOF2
   out="$("$NODE" "$root/harness.js" "$root/p1.html" readonly 2>&1)"
   python3 - "$out" <<'EOF' && ok "read-only viewer: the banner says so and no write is made" || bad "read-only" "$out"
 import json, sys
@@ -209,7 +223,8 @@ assert "Read-only" in d["notice"], d["notice"]
 assert d["writes"] == [], d["writes"]
 EOF
 else
-  echo "SKIP the JS checks (db null, a pick write, read-only): no node runs here (NODE=$NODE)"
+  echo "SKIP the JS checks (db null, a pick write, a snapshot after a save, read-only): no node runs here (NODE=$NODE)"
+  skip=4
 fi
 
 # --- picks ---------------------------------------------------------------------------------------------------
@@ -248,5 +263,5 @@ printf '{"docs":[{"doc_id":"a--b","data":{"ready":true,"action":"park","at":"t1"
 "$DWS" picks --file "$root/obj.json" >"$root/o5" 2>"$root/e5"
 grep -q '^pick a--b ' "$root/o5" && grep -q '1 entr' "$root/e5" && ok "an object with a docs list is read, and an entry that is not a doc is counted" || bad "docs object" "$(cat "$root/o5" "$root/e5")"
 
-echo "dws page: $pass passed, $fail failed"
+echo "dws page: $pass passed, $fail failed, $skip skipped"
 [[ "$fail" -eq 0 ]]
