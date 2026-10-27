@@ -56,6 +56,10 @@ store() {
   at 2026-10-20T12:00:01Z "$DWS" open m2 --title "Motion edge" --stage "in review" >/dev/null
   at 2026-10-24T09:00:00Z "$DWS" open w1 --title "Waiting one" --owner team-a/builder --stage building --blocked seat >/dev/null
   at 2026-10-26T09:00:00Z "$DWS" open adhoc-q1 --title "Ad hoc one" --stage idea >/dev/null
+  at 2026-10-26T20:00:00Z "$DWS" open adhoc-w --title "Ad hoc seat-blocked" --stage building --blocked seat >/dev/null
+  at 2026-10-26T22:00:00Z "$DWS" open adhoc-d --title "Ad hoc done" --stage merged >/dev/null
+  at 2026-10-27T11:00:00Z "$DWS" open adhoc-op --title "Ad hoc operator-blocked" --stage idea --blocked operator --ask c1 >/dev/null
+  at 2026-10-02T10:00:00Z "$DWS" open adhoc-p --title "Ad hoc parked" --stage parked >/dev/null
   at 2026-10-26T15:00:00Z "$DWS" open d1 --title "Done one" --stage merged >/dev/null
   at 2026-10-10T09:00:00Z "$DWS" open q1 --title "Quiet one" --stage designed >/dev/null
   at 2026-10-20T12:00:00Z "$DWS" open q2 --title "Quiet edge" --stage building >/dev/null
@@ -77,17 +81,17 @@ want = [("blocked", "Blocked on you"), ("motion", "In motion"), ("waiting", "Wai
         ("done", "Done in the last 7 days"), ("quiet", "Quiet 7 days or more")]
 sys.exit(0 if h == want else (print(h) or 1))
 EOF
-[[ "$(slugs "$root/p1.html" blocked)" == "b1" ]] && ok "blocked: an operator-blocked row" || bad "blocked" "$(slugs "$root/p1.html" blocked)"
+[[ "$(slugs "$root/p1.html" blocked)" == "b1 adhoc-op" ]] && ok "blocked: operator-blocked rows, oldest first, an adhoc- one among them" || bad "blocked" "$(slugs "$root/p1.html" blocked)"
 [[ "$(slugs "$root/p1.html" motion)" == "m1 m2" ]] && ok "motion: building and in review, newest first, the 6d23h59m row in" || bad "motion" "$(slugs "$root/p1.html" motion)"
 [[ "$(slugs "$root/p1.html" waiting)" == "w1" ]] && ok "waiting: a row blocked on a seat" || bad "waiting" "$(slugs "$root/p1.html" waiting)"
-[[ "$(slugs "$root/p1.html" adhoc)" == "adhoc-q1" ]] && ok "ad hoc: the adhoc- prefix" || bad "adhoc" "$(slugs "$root/p1.html" adhoc)"
+[[ "$(slugs "$root/p1.html" adhoc)" == "adhoc-d adhoc-w adhoc-q1 adhoc-p" ]] && ok "ad hoc: every remaining adhoc- row, seat-blocked, merged and parked ones too, newest first" || bad "adhoc" "$(slugs "$root/p1.html" adhoc)"
 [[ "$(slugs "$root/p1.html" done)" == "d1" ]] && ok "done: merged in the last 7 days, the old deployed row out" || bad "done" "$(slugs "$root/p1.html" done)"
 [[ "$(slugs "$root/p1.html" quiet)" == "q1 q2" ]] && ok "quiet: oldest first, the exactly-7-days row in" || bad "quiet" "$(slugs "$root/p1.html" quiet)"
-for pair in "blocked:1 row" "motion:2 rows" "waiting:1 row" "adhoc:1 row" "done:1 row" "quiet:2 rows"; do
+for pair in "blocked:2 rows" "motion:2 rows" "waiting:1 row" "adhoc:4 rows" "done:1 row" "quiet:2 rows"; do
   [[ "$(count "$root/p1.html" "${pair%%:*}")" == "${pair#*:}" ]] && ok "the ${pair%%:*} count line reads ${pair#*:}" || bad "count ${pair%%:*}" "$(count "$root/p1.html" "${pair%%:*}")"
 done
 grep -q 'Not shown: 3 row(s)' "$root/p1.html" && ok "the footer counts the three rows no section holds (parked, old done, fresh idea)" || bad "footer" "$(grep -o 'Not shown[^<]*' "$root/p1.html")"
-[[ "$(actions "$root/p1.html" motion)" == "nudge-owner,mark-done | nudge-owner,mark-done" && "$(actions "$root/p1.html" waiting)" == "nudge-owner,reassign,park" && "$(actions "$root/p1.html" adhoc)" == "nudge-owner,close,park" && "$(actions "$root/p1.html" quiet)" == "kick-off,park,close | kick-off,park,close" ]] && ok "each section carries its own calls" || bad "calls per section"
+[[ "$(actions "$root/p1.html" motion)" == "nudge-owner,mark-done | nudge-owner,mark-done" && "$(actions "$root/p1.html" waiting)" == "nudge-owner,reassign,park" && "$(actions "$root/p1.html" adhoc)" == "nudge-owner,close,park | nudge-owner,close,park | nudge-owner,close,park | nudge-owner,close,park" && "$(actions "$root/p1.html" quiet)" == "kick-off,park,close | kick-off,park,close" ]] && ok "each section carries its own calls" || bad "calls per section"
 [[ -z "$(actions "$root/p1.html" blocked | tr -d ' |')" && -z "$(actions "$root/p1.html" done | tr -d ' |')" ]] && ok "blocked and done rows carry no call (answer on Desk is a link only)" || bad "no calls on blocked and done"
 grep -q 'data-section="quiet" data-slug="q1"' "$root/p1.html" && ok "a row names its section and slug, which make the doc id section--slug" || bad "row data attributes"
 
@@ -136,7 +140,7 @@ if page --desk-url "$root/bad-url" >/dev/null 2>&1; then bad "a Desk url that is
 rm "$DIRECTOR_STATE/desk-snapshot.json"
 page >"$root/p5.html" 2>/dev/null && ok "page renders with the Desk snapshot missing" || bad "render without a snapshot"
 grep -q 'Desk UNREAD' "$root/p5.html" && ok "the page says the Desk is UNREAD and does not call the cards open" || bad "UNREAD said"
-[[ "$(slugs "$root/p5.html" blocked)" == "b1" ]] && ok "the blocked row is still listed with the Desk UNREAD" || bad "blocked with desk unread"
+[[ "$(slugs "$root/p5.html" blocked)" == "b1 adhoc-op" ]] && ok "the blocked row is still listed with the Desk UNREAD" || bad "blocked with desk unread"
 
 # ledger missing
 fresh 2

@@ -2673,14 +2673,15 @@ def cmd_decisions(a):
 # to the page's db; `picks` reads an export of those docs back (below).
 #
 # A row lands in at most one section, first match wins:
-#   blocked on the operator (open stage)          Blocked on you
+#   blocked on the operator (open stage)          Blocked on you, ad hoc or not
+#   slug starts adhoc-                            Ad hoc, whatever its stage or seat block
 #   merged, released, deployed, accepted, 7 days  Done in the last 7 days
 #   blocked on anything else, open stage          Waiting on a seat (a seat or a role)
-#   slug starts adhoc-, open stage                Ad hoc
 #   building or in review, moved under 7 days ago In motion
 #   any other open stage, moved 7 days ago or more  Quiet 7 days or more
 # A row in none of them (parked, finished more than 7 days ago, or at idea, defined or
-# designed and moved within 7 days) is counted in the footer, never dropped without a word.
+# designed and moved within 7 days, none of them adhoc-) is counted in the footer, never
+# dropped without a word.
 # The 7 days and the lists are the operator's to change here.
 PAGE_TITLE = "Director: Work Ledger"
 PAGE_ID = "work-ledger"
@@ -2818,14 +2819,14 @@ def page_section(r, t_now):
     age, week = page_age(r, t_now), PAGE_DAYS * 86400
     if stage not in CLOSED_STAGES and blocked and operator_blocked(blocked):
         return "blocked"
+    if r["slug"].startswith("adhoc-"):
+        return "adhoc"
     if stage in DONE_STAGES:
         return "done" if age is not None and age < week else None
     if stage == "parked":
         return None
     if blocked:
         return "waiting"
-    if r["slug"].startswith("adhoc-"):
-        return "adhoc"
     if stage in ("building", "in review") and age is not None and age < week:
         return "motion"
     if age is None or age >= week:
