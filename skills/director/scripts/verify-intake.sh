@@ -130,7 +130,7 @@ if DWS_NOW=2026-10-19T12:00:00Z "$CI" parse "$root/card.md" --area ops --owner x
 
 # --- desk-snapshot keeps the id and the answer time; one read row per answered write ----------------
 printf '{"%s": {"status": "open", "data": {"intake": "I-1"}}, "other": {"status": "open"}}' "$slug" >"$root/c1.json"
-printf '[{"card": "%s", "choice": "1", "note": "", "ready": true, "at": "2026-10-19T11:30:00Z"}]' "$slug" >"$root/a1.json"
+printf '[{"card": "%s", "choice": "1", "note": "", "ready": true, "at": "2026-10-19T11:30:00.123Z"}]' "$slug" >"$root/a1.json"
 r0="$(nlines "$READS")"
 DWS_NOW=2026-10-19T13:00:00Z "$SNAP" write --cards "$root/c1.json" --reported 2 --answers "$root/a1.json" --answers-reported 1 >/dev/null
 python3 - "$DIRECTOR_STATE/desk-snapshot.json" "$slug" <<'P' && ok "the snapshot keeps the card's intake id and the answer's time" || bad "the snapshot keeps intake and answer time"
@@ -146,6 +146,21 @@ r = json.loads(open(sys.argv[1]).read().splitlines()[-1])
 assert r == {"read_at": "2026-10-19T13:00:00Z", "cards": 2, "answered": [sys.argv[2]],
              "answered_not_relayed": [{"card": sys.argv[2], "answered_at": "2026-10-19T11:30:00Z"}]}, r
 P
+# the Desk writes at: new Date().toISOString(), which carries milliseconds
+printf '[{"card": "%s", "at": "2026-10-19T11:30:00.000Z"}, {"card": "other", "at": "2026-10-19T10:00:00Z"}, {"card": "other", "at": "2026-10-19T10:15:00.123Z"}]' "$slug" >"$root/a-ms.json"
+DWS_NOW=2026-10-19T13:00:00Z "$SNAP" write --cards "$root/c1.json" --reported 2 --answers "$root/a-ms.json" --answers-reported 3 >/dev/null
+python3 - "$DIRECTOR_STATE/desk-snapshot.json" "$slug" <<'P' && ok "an answer time with .000Z or .123Z milliseconds reads to the second, and the latest of a card's answers is kept" || bad "millisecond answer times"
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s["answered_at"] == {"other": "2026-10-19T10:15:00Z", sys.argv[2]: "2026-10-19T11:30:00Z"}, s["answered_at"]
+P
+printf '[{"card": "%s", "at": "2026-10-19T11:30:00.Z"}, {"card": "other", "at": "2026-10-19T11:30:00.123"}]' "$slug" >"$root/a-bad.json"
+DWS_NOW=2026-10-19T13:00:00Z "$SNAP" write --cards "$root/c1.json" --reported 2 --answers "$root/a-bad.json" --answers-reported 2 >/dev/null
+python3 - "$DIRECTOR_STATE/desk-snapshot.json" <<'P' && ok "a malformed fraction or a missing Z adds no time, never a guess" || bad "malformed times"
+import json, sys
+s = json.load(open(sys.argv[1])); assert "answered_at" not in s, s
+P
+DWS_NOW=2026-10-19T13:00:00Z "$SNAP" write --cards "$root/c1.json" --reported 2 --answers "$root/a1.json" --answers-reported 1 >/dev/null
 r1="$(nlines "$READS")"
 if DWS_NOW=2026-10-19T13:05:00Z "$SNAP" write --cards "$root/c1.json" --reported 3 --answers "$root/a1.json" --answers-reported 1 >/dev/null 2>&1; then bad "a miscounted read is refused"; else ok "a miscounted read is refused"; fi
 [[ "$(nlines "$READS")" == "$r1" ]] && ok "a refused write appends no read row" || bad "a refused write appends no read row"
