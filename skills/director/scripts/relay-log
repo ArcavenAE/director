@@ -6,7 +6,7 @@ Director's relay-log times were typed by hand and ran up to 35 minutes ahead of
 writes, under the lock, and offers no way for the caller to set it: there is no
 time argument, and the entry text is never read for one.
 
-  relay-log append --to <address> [--ws <slug>]... [--outcome <text>] (--text <t> | --text-file <path|->)
+  relay-log append --to <address> [--ws <slug>]... [--ask <id>] [--kind <word>] [--outcome <text>] (--text <t> | --text-file <path|->)
   relay-log outcome <R-n> (--text <t> | --text-file <path|->)
 
 append adds the next numbered entry (SKILL.md's shape: R-N, to, the verbatim
@@ -14,6 +14,8 @@ text, the outcome) with a UTC stamp in the heading:
 
   ## R-<n> (<YYYY-MM-DDTHH:MM:SSZ>) -> <to>
   **Workstream:** <slug>[, <slug>]        (only when --ws is given)
+  **Intake:** <id>                        (only when --ask is given)
+  **Kind:** <word>                        (only when --kind is given)
   **Text, verbatim:**
   > <each line of the text, prefixed with "> ">
   **Outcome:** <outcome, "pending" when none is given>
@@ -24,6 +26,11 @@ the heading, and checked for shape only (dws's slug pattern): the ledger is neve
 opened, so the writer keeps working with no ledger, no dws and a held ledger lock. The
 text is quoted line by line, so a **Workstream:** line typed inside a message stays
 quoted and links nothing.
+
+--ask names the intake record the entry answers (`dws intake` mints the id, I-<n>), and --kind says
+what sort of entry it is (relay, ruling, build, research or question). Both are written by the
+writer as field lines after the Workstream line and checked for shape only, as --ws is: the intake
+file is never opened, so an entry written with no ask id behaves exactly as it did before.
 
 outcome adds a later note for an existing entry, stamped the same way:
 
@@ -43,6 +50,8 @@ import argparse, datetime, fcntl, os, re, subprocess, sys
 
 HEADING = re.compile(rb"^## R-(\d+)\b", re.M)
 SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]*$")  # dws's pattern; the writer checks the shape only
+ASK_ID = re.compile(r"^I-[0-9]+$")  # dws intake's id; the writer checks the shape only
+KINDS = ("relay", "ruling", "build", "research", "question")
 
 
 def find_log():
@@ -88,6 +97,8 @@ def main():
     a.add_argument("--to", required=True)
     a.add_argument("--outcome", default="pending")
     a.add_argument("--ws", action="append", default=[], help="a workstream slug the entry is about; repeatable")
+    a.add_argument("--ask", help="the intake id (I-<n>) of the operator ask this entry answers")
+    a.add_argument("--kind", choices=KINDS, help="what sort of entry this is")
     g = a.add_mutually_exclusive_group(required=True)
     g.add_argument("--text")
     g.add_argument("--text-file")
@@ -112,7 +123,10 @@ def main():
         for w in args.ws:
             if not SLUG.match(w):
                 sys.exit(f"relay-log: --ws {w!r} is not a workstream slug (lower case letters, digits, '.', '_' or '-'); nothing written")
+        if args.ask is not None and not ASK_ID.match(args.ask):
+            sys.exit(f"relay-log: --ask {args.ask!r} is not an intake id (I-<n>); nothing written")
         ws_line = ("**Workstream:** " + ", ".join(dict.fromkeys(args.ws)) + "\n") if args.ws else ""
+        ws_line += (f"**Intake:** {args.ask}\n" if args.ask else "") + (f"**Kind:** {args.kind}\n" if args.kind else "")
 
     fd = os.open(log + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)

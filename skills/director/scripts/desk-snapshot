@@ -10,7 +10,8 @@ card:
 
   $DIRECTOR_STATE/desk-snapshot.json
       {"read_at": T, "cards": N, "open": [ids, sorted], "by_status": {...}, "areas": [distinct card areas],
-       "ids": {id: status, ...}, ["answered": [ids, sorted],] "source_sha256": H}
+       "ids": {id: status, ...}, ["answered": [ids, sorted],] ["answered_at": {id: time},]
+       ["intake": {id: ask id},] "source_sha256": H}
 
   desk-snapshot write --cards FILE --reported N [--limit 1000]
                       [--answers FILE --answers-reported N]
@@ -30,14 +31,32 @@ each naming its card in "card" or "card_id" (both, only if they agree), with the
 cards; "answered" is then the sorted distinct cards that have an answer, and an empty list
 means the answers were read and none were found. Without --answers there is no "answered"
 key, which card-ingest reads as unknown. `dws` reads only "open", so it is unaffected.
+
+"answered_at" keeps each answered card's answer time: the latest of the record's "answered_at",
+"created_at" or "at" that is an RFC 3339 UTC stamp (a record with none adds no time, and the read row
+below shows it as null). "intake" is a sibling of "ids": the card's intake id (I-<n>, from `dws intake`)
+for every card that carries one in "intake", top level or under "data". Both keys are written only when
+they have something to hold.
+
+A write that read answers also appends one row to $DIRECTOR_STATE/desk-reads.jsonl, after the snapshot
+is in place, under one flock on desk-reads.lock (a refused write appends none):
+      {"read_at": T, "cards": N, "answered": [ids], "answered_not_relayed": [{"card": id, "answered_at": T|null}]}
+A card is answered-not-relayed when it has an answer and its status is not one of CLOSING_STATUSES (the
+relay moves a card to "relayed"). The standing hook reads the newest row.
 Whoever runs it is a claim, as with dws --actor: the helper checks the input's
 shape and completeness, not that a session really read the Desk.
 """
-import argparse, datetime, hashlib, json, os, sys, tempfile
+import argparse, datetime, fcntl, hashlib, json, os, re, sys, tempfile
 
 HOME = os.path.expanduser("~")
 STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
 SNAPSHOT = os.path.join(STATE, "desk-snapshot.json")
+READS = os.path.join(STATE, "desk-reads.jsonl")
+READS_LOCK = os.path.join(STATE, "desk-reads.lock")
+ASK_ID = re.compile(r"^I-[0-9]+$")
+STAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+# The statuses in which a card is no longer waiting for the relay (CLOSING_STATUSES in dws).
+CLOSING_STATUSES = ("closed", "resolved", "withdrawn", "superseded", "relayed")
 
 
 class Refused(Exception):
@@ -72,6 +91,21 @@ def areas_of(raw):
     return sorted(found)
 
 
+def intakes_of(raw):
+    """{card id: intake id} for the cards that carry an I-<n> id in 'intake' (top level or under data)."""
+    items = raw.items() if isinstance(raw, dict) else [(c.get("id", c.get("doc_id")), c) for c in raw if isinstance(c, dict)]
+    out = {}
+    for cid, c in items:
+        if not isinstance(c, dict):
+            continue
+        v = c.get("intake")
+        if v is None and isinstance(c.get("data"), dict):
+            v = c["data"].get("intake")
+        if isinstance(v, str) and ASK_ID.match(v):
+            out[cid] = v
+    return dict(sorted(out.items()))
+
+
 def parse_cards(raw):
     """Returns {id: status}. Raises Refused on any shape it cannot trust."""
     items = []
@@ -101,10 +135,11 @@ def parse_cards(raw):
 
 
 def parse_answers(raw, cards):
-    """Returns (count, sorted distinct card ids). Raises Refused on a shape it cannot trust."""
+    """Returns (count, sorted distinct card ids, {card: latest answer time}). Raises Refused on a shape it cannot trust."""
     if not isinstance(raw, list):
         raise Refused("the answers file is not a list of answer records")
     answered = set()
+    times = {}
     for r in raw:
         if not isinstance(r, dict):
             raise Refused("an answer in the list is not an object")
@@ -116,7 +151,13 @@ def parse_answers(raw, cards):
         if cid not in cards:
             raise Refused(f"an answer names card {cid}, which the cards read does not hold")
         answered.add(cid)
-    return len(raw), sorted(answered)
+        for key in ("answered_at", "created_at", "at"):
+            t = r.get(key)
+            if isinstance(t, str) and STAMP.match(t):
+                if cid not in times or t > times[cid]:
+                    times[cid] = t
+                break
+    return len(raw), sorted(answered), dict(sorted(times.items()))
 
 
 def cmd_write(a):
@@ -137,6 +178,7 @@ def cmd_write(a):
     if a.reported >= a.limit:
         raise Refused(f"{a.reported} cards is at the read limit {a.limit}; the read may be truncated. Read again with a higher limit")
     answered = None
+    answer_times = {}
     if a.answers is not None:
         if a.answers_reported is None:
             raise Refused("--answers needs --answers-reported, the count the answers read itself reported")
@@ -147,7 +189,7 @@ def cmd_write(a):
             raise Refused(f"cannot read the answers file {a.answers}: {err.strerror}")
         except ValueError as err:
             raise Refused(f"the answers file is not JSON: {err}")
-        n, answered = parse_answers(araw, cards)
+        n, answered, answer_times = parse_answers(araw, cards)
         if n != a.answers_reported:
             raise Refused(f"the answers read reported {a.answers_reported} answers and the file holds {n}; the read is incomplete or the wrong file")
         if a.answers_reported >= a.limit:
@@ -164,6 +206,11 @@ def cmd_write(a):
             "source_sha256": hashlib.sha256(data).hexdigest()}
     if answered is not None:
         snap["answered"] = answered
+    if answer_times:
+        snap["answered_at"] = answer_times
+    intakes = intakes_of(raw)
+    if intakes:
+        snap["intake"] = intakes
     os.makedirs(STATE, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".desk-snapshot.")
     try:
@@ -177,6 +224,25 @@ def cmd_write(a):
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+    if answered is not None:
+        waiting = [{"card": c, "answered_at": answer_times.get(c)} for c in answered if cards[c] not in CLOSING_STATUSES]
+        row = {"read_at": snap["read_at"], "cards": snap["cards"], "answered": answered, "answered_not_relayed": waiting}
+        os.makedirs(STATE, exist_ok=True)
+        fd = os.open(READS_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            with open(READS, "ab") as f:
+                if f.tell() > 0:
+                    with open(READS, "rb") as r:
+                        r.seek(-1, os.SEEK_END)
+                        lead = b"" if r.read(1) == b"\n" else b"\n"
+                else:
+                    lead = b""
+                f.write(lead + (json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+                f.flush()
+                os.fsync(f.fileno())
+        finally:
+            os.close(fd)
     print(f"desk-snapshot: {snap['cards']} cards, {len(snap['open'])} open, read_at {snap['read_at']} -> {SNAPSHOT}")
 
 
