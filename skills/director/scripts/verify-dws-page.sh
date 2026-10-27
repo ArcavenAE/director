@@ -67,6 +67,16 @@ store() {
   at 2026-10-10T09:00:00Z "$DWS" open q1 --title "Quiet one" --stage designed >/dev/null
   at 2026-10-20T12:00:00Z "$DWS" open q2 --title "Quiet edge" --stage building >/dev/null
   at 2026-10-27T09:00:00Z "$DWS" open i1 --title "Fresh idea" --stage idea >/dev/null
+  at 2026-10-26T12:00:00Z "$DWS" open def1 --title "Fresh defined" --stage defined >/dev/null
+  at 2026-10-26T13:00:00Z "$DWS" open des1 --title "Fresh designed" --stage designed >/dev/null
+  # ledger lines a dws before the none mapping wrote: blocked "none" and "None" stored as given
+  for pair in "legacy-none:none:08:00" "legacy-None:None:08:10"; do
+    IFS=: read -r s v h m <<<"$pair"
+    printf '{"ts":"2026-10-27T%s:%s:00Z","actor":"director","tag":"judgment","event":"open","ws":"%s","title":"Legacy %s","stage":"building","blocked":"%s"}\n' "$h" "$m" "$s" "$v" "$v" >>"$DIRECTOR_STATE/workstreams.jsonl"
+  done
+  at 2026-10-27T07:00:00Z "$DWS" open ref1 --title "Names another row" --stage accepted --next "work in ws m1" >/dev/null
+  at 2026-10-20T12:00:00Z "$DWS" open adhoc-b7 --title "Ad hoc closed exactly 7 days ago" --stage merged >/dev/null
+  at 2026-10-20T12:00:01Z "$DWS" open adhoc-b7m --title "Ad hoc closed 1s inside 7 days" --stage parked >/dev/null
   at 2026-10-01T09:00:00Z "$DWS" open d0 --title "Old done" --stage deployed >/dev/null
   at 2026-10-02T09:00:00Z "$DWS" open p1 --title "Parked" --stage parked >/dev/null
 }
@@ -84,19 +94,29 @@ want = [("blocked", "Blocked on you"), ("motion", "In motion"), ("waiting", "Wai
         ("done", "Done in the last 7 days"), ("quiet", "Quiet 7 days or more")]
 sys.exit(0 if h == want else (print(h) or 1))
 EOF
+python3 - "$root/p1.html" <<'EOF2' && ok "each section has a one-line description, and In motion says open work moved in the last 7 days" || bad "section descriptions"
+import re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+d = dict(re.findall(r'<section id="s-([a-z]+)"><h2>[^<]*</h2><p class="desc">(.*?)</p>', page))
+assert sorted(d) == ["adhoc", "blocked", "done", "motion", "quiet", "waiting"], sorted(d)
+assert d["motion"] == "Open work moved in the last 7 days.", d["motion"]
+EOF2
 [[ "$(slugs "$root/p1.html" blocked)" == "b1 adhoc-op" ]] && ok "blocked: operator-blocked rows, oldest first, an adhoc- one among them" || bad "blocked" "$(slugs "$root/p1.html" blocked)"
-[[ "$(slugs "$root/p1.html" motion)" == "m3 m1 m2" ]] && ok "motion: building and in review, newest first, the 6d23h59m row in, and a row with blocked none" || bad "motion" "$(slugs "$root/p1.html" motion)"
+[[ "$(slugs "$root/p1.html" motion)" == "m3 i1 legacy-None legacy-none des1 def1 m1 m2" ]] && ok "motion: any open stage moved under 7 days ago, newest first: idea, defined, designed, the 6d23h59m row, and rows with blocked none, None and empty" || bad "motion" "$(slugs "$root/p1.html" motion)"
 [[ "$(slugs "$root/p1.html" waiting)" == "w1" ]] && ok "waiting: a row blocked on a seat" || bad "waiting" "$(slugs "$root/p1.html" waiting)"
-[[ "$(slugs "$root/p1.html" adhoc)" == "adhoc-pr adhoc-d adhoc-w adhoc-q1" ]] && ok "ad hoc: every remaining adhoc- row, newest first; merged and parked ones only for 7 days after they moved" || bad "adhoc" "$(slugs "$root/p1.html" adhoc)"
-[[ "$(slugs "$root/p1.html" done)" == "d1" ]] && ok "done: merged in the last 7 days, the old deployed row out" || bad "done" "$(slugs "$root/p1.html" done)"
+[[ "$(slugs "$root/p1.html" adhoc)" == "adhoc-pr adhoc-d adhoc-w adhoc-q1 adhoc-b7m" ]] && ok "ad hoc: every remaining adhoc- row, newest first; merged and parked ones only for 7 days after they moved, and one second inside the 7 days is in" || bad "adhoc" "$(slugs "$root/p1.html" adhoc)"
+[[ "$(slugs "$root/p1.html" done)" == "ref1 d1" ]] && ok "done: merged in the last 7 days, the old deployed row out" || bad "done" "$(slugs "$root/p1.html" done)"
 [[ "$(slugs "$root/p1.html" quiet)" == "q1 q2" ]] && ok "quiet: oldest first, the exactly-7-days row in" || bad "quiet" "$(slugs "$root/p1.html" quiet)"
-for pair in "blocked:2 rows" "motion:3 rows" "waiting:1 row" "adhoc:4 rows" "done:1 row" "quiet:2 rows"; do
+for pair in "blocked:2 rows" "motion:8 rows" "waiting:1 row" "adhoc:5 rows" "done:2 rows" "quiet:2 rows"; do
   [[ "$(count "$root/p1.html" "${pair%%:*}")" == "${pair#*:}" ]] && ok "the ${pair%%:*} count line reads ${pair#*:}" || bad "count ${pair%%:*}" "$(count "$root/p1.html" "${pair%%:*}")"
 done
-grep -q 'Not shown: 5 row(s)' "$root/p1.html" && grep -q 'an adhoc- row that is parked or finished stays in Ad hoc for 7 days' "$root/p1.html" && ok "the footer counts the five rows no section holds (parked, old done, fresh idea, two old adhoc- rows) and says when an adhoc- row leaves" || bad "footer" "$(grep -o 'Not shown[^<]*' "$root/p1.html")"
-[[ "$(actions "$root/p1.html" motion)" == "nudge-owner,mark-done | nudge-owner,mark-done | nudge-owner,mark-done" && "$(actions "$root/p1.html" waiting)" == "nudge-owner,reassign,park" && "$(actions "$root/p1.html" adhoc)" == "nudge-owner,close,park | nudge-owner,close,park | nudge-owner,close,park | nudge-owner,close,park" && "$(actions "$root/p1.html" quiet)" == "kick-off,park,close | kick-off,park,close" ]] && ok "each section carries its own calls" || bad "calls per section"
+grep -q 'Not shown: 5 row(s)' "$root/p1.html" && grep -q 'an adhoc- row that is parked or finished stays in Ad hoc for 7 days' "$root/p1.html" && ok "the footer counts the five rows no section holds (parked, old done, three closed adhoc- rows at or past 7 days) and says when an adhoc- row leaves" || bad "footer" "$(grep -o 'Not shown[^<]*' "$root/p1.html")"
+[[ "$(actions "$root/p1.html" motion)" == "$(printf 'nudge-owner,mark-done | %.0s' 1 2 3 4 5 6 7)nudge-owner,mark-done" && "$(actions "$root/p1.html" waiting)" == "nudge-owner,reassign,park" && "$(actions "$root/p1.html" adhoc)" == "$(printf 'nudge-owner,close,park | %.0s' 1 2 3 4)nudge-owner,close,park" && "$(actions "$root/p1.html" quiet)" == "kick-off,park,close | kick-off,park,close" ]] && ok "each section carries its own calls" || bad "calls per section"
 [[ -z "$(actions "$root/p1.html" blocked | tr -d ' |')" && -z "$(actions "$root/p1.html" done | tr -d ' |')" ]] && ok "blocked and done rows carry no call (answer on Desk is a link only)" || bad "no calls on blocked and done"
 grep -q 'data-section="quiet" data-slug="q1"' "$root/p1.html" && ok "a row names its section and slug, which make the doc id section--slug" || bad "row data attributes"
+
+# item 5 of follow-up 2: a row that names another slug in its next action is its own row, listed once
+[[ "$(grep -o 'data-slug="m1"' "$root/p1.html" | wc -l | tr -d ' ')" == 1 && "$(slugs "$root/p1.html" done)" != *m1* ]] && ok "a slug named in another row's next action is text there, and its own row is listed once" || bad "slug named in prose"
 
 # row fields
 python3 - "$root/p1.html" <<'EOF' && ok "a row shows owner, stage, next action, last moved date and links" || bad "row fields"
@@ -226,6 +246,56 @@ else
   echo "SKIP the JS checks (db null, a pick write, a snapshot after a save, read-only): no node runs here (NODE=$NODE)"
   skip=4
 fi
+
+# --- every row lands in exactly one place, over every stage dws knows ----------------------------------------
+# One row per stage, age (1 day, exactly 7 days, 30 days), block (none, a seat, the operator) and
+# ad hoc or not, written as ledger lines so the operator block needs no Desk read. A row with an
+# open stage must be in exactly one section; a row with a closed stage in at most one, and the
+# rows in sections plus the footer count must be every row.
+fresh 7
+python3 - "$DWS" "$DIRECTOR_STATE/workstreams.jsonl" <<'EOF2'
+import datetime, importlib.machinery, json, sys
+dws = importlib.machinery.SourceFileLoader("dwsmod", sys.argv[1]).load_module()
+now = datetime.datetime(2026, 10, 27, 12, 0, 0, tzinfo=datetime.timezone.utc)
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    n = 0
+    for si, stage in enumerate(dws.STAGES):
+        for ai, days in enumerate((1, 7, 30)):
+            ts = (now - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            for bi, blocked in enumerate(("none", "seat", "operator")):
+                for adhoc in (False, True):
+                    n += 1
+                    ev = {"ts": ts, "actor": "director", "tag": "judgment", "event": "open", "ws": f"{'adhoc-' if adhoc else ''}s{si}-a{ai}-b{bi}",
+                          "title": f"{stage} {days}d {blocked}", "stage": stage, "blocked": blocked}
+                    if blocked == "operator":
+                        ev["links"] = ["ask:c1"]
+                    f.write(json.dumps(ev) + "\n")
+print(len(dws.STAGES), "stages,", n, "rows")
+EOF2
+page >"$root/all.html"
+python3 - "$root/all.html" "$DIRECTOR_STATE/workstreams.jsonl" <<'EOF2' && ok "over every stage, age, block and ad hoc or not, each row is in at most one section, an open-stage row in exactly one, and sections plus footer count every row" || bad "exactly one place"
+import json, re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+rows = [json.loads(l) for l in open(sys.argv[2], encoding="utf-8")]
+placed = {}
+for key in re.findall(r'<section id="s-([a-z]+)">', page):
+    body = re.search(r'<section id="s-%s">(.*?)</section>' % key, page, re.S).group(1)
+    for slug in re.findall(r'data-slug="([^"]*)"', body):
+        placed.setdefault(slug, []).append(key)
+footer = int(re.search(r"Not shown: ([0-9]+) row", page).group(1))
+closed = {"merged", "released", "deployed", "accepted", "parked"}
+errs = []
+for slug, keys in placed.items():
+    if len(keys) != 1:
+        errs.append(f"{slug} in {keys}")
+for r in rows:
+    if r["stage"] not in closed and r["ws"] not in placed:
+        errs.append(f"open row {r['ws']} ({r['stage']}) in no section")
+if len(placed) + footer != len(rows):
+    errs.append(f"{len(placed)} placed + {footer} footer != {len(rows)} rows")
+print("\n".join(errs[:8]))
+sys.exit(1 if errs else 0)
+EOF2
 
 # --- picks ---------------------------------------------------------------------------------------------------
 fresh 3

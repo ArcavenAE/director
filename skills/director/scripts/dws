@@ -17,6 +17,7 @@ CLI and the instance-id refusal; W2 adds refresh; W3 adds the page and the read 
   dws [--actor A] park <slug> --from <current>
   dws refresh [<slug>...]
   dws show [--json]
+  dws migrate-blocked-none [--dry-run]
   dws page [--out FILE] [--theme FILE] [--nav FILE] [--desk-url FILE]
   dws picks --file FILE
 
@@ -117,6 +118,12 @@ the same checks run when `stage` moves a row out of parked. `decisions` orders t
 window first and carries the affected rows; `decision override` prints them and `rework` refuses while one
 is open. `decision paths|pick|withdraw` record two paths at once (section 8). `merge-hold REPO#N` is the
 read merge-guard makes: it holds a PR whose row waits on a decision that is not confirmed.
+
+A blocked value of "none" (any case) means not blocked: `open` and `set` store it as empty, so
+every reader sees the same thing. `migrate-blocked-none` clears the "none" values stored before
+that, one set event per row marked migrate, which does not move the row's last moved time; it
+changes nothing but those rows, and a second run finds none. --dry-run names the rows and
+writes nothing.
 
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
@@ -256,6 +263,11 @@ def desk_card_open(card_id):
     return f"card {card_id} is open in the Desk snapshot read {int(hours)}h ago ({snap['read_at']})"
 
 
+def blocked_stored(field, stored):
+    """A blocked value of none, in any case, is not blocked: it is stored as empty."""
+    return "" if field == "blocked" and stored.lower() == "none" else stored
+
+
 def blocked_on_operator(blocked, ask):
     """Applies K13 to one write. Returns the ask link to add, or None."""
     if ask is not None and (blocked is None or not operator_blocked(blocked)):
@@ -342,8 +354,10 @@ def apply(rows, e):
         for k in ("owner", "next", "blocked", "repos"):
             if k in e:
                 r[k] = e[k]
-        # R-197: an authored update counts as movement. It never moves the clock back.
-        r["last_moved"] = max(r["last_moved"], ts)
+        # R-197: an authored update counts as movement. It never moves the clock back. A set that
+        # migrate-blocked-none wrote is housekeeping, not an update, and moves nothing.
+        if not e.get("migrate"):
+            r["last_moved"] = max(r["last_moved"], ts)
     elif ev == "link":
         for link in e.get("add", []):
             if link not in r["links"]:
@@ -535,7 +549,7 @@ def cmd_open(a):
     for field in ("owner", "next", "blocked"):
         v = getattr(a, field)
         if v is not None:
-            ev[field] = checked(field, v)
+            ev[field] = blocked_stored(field, checked(field, v))
     if a.repos:
         ev["repos"] = a.repos
     ask_link = blocked_on_operator(a.blocked, a.ask)
@@ -596,7 +610,7 @@ def cmd_set(a):
     for field in ("owner", "next", "blocked"):
         v = getattr(a, field)
         if v is not None:
-            ev[field] = checked(field, v)
+            ev[field] = blocked_stored(field, checked(field, v))
     if a.repos is not None:
         ev["repos"] = a.repos
     # --waits ask:<card> keeps K13 and stays a link; --waits decision:<id> is a wait edge.
@@ -2863,25 +2877,31 @@ def cmd_decisions(a):
 #                                                 or finished one leaves 7 days after it last moved
 #   merged, released, deployed, accepted, 7 days  Done in the last 7 days
 #   blocked on anything else, open stage          Waiting on a seat (a seat or a role)
-#   building or in review, moved under 7 days ago In motion
+#   any other open stage, moved under 7 days ago  In motion (idea, defined, designed, building,
+#                                                 in review)
 #   any other open stage, moved 7 days ago or more  Quiet 7 days or more
+# Every row with an open stage lands in exactly one section. Only a row that is parked, or
+# finished more than 7 days ago, is counted in the footer instead.
 # A blocked value of "none" or nothing is not blocked, as `dws set` writes it. A row in none
-# of the sections (parked, finished more than 7 days ago, or at idea, defined or designed and
-# moved within 7 days) is counted in the footer, never dropped without a word.
+# of the sections is counted in the footer, never dropped without a word.
 # The 7 days and the lists are the operator's to change here.
 PAGE_TITLE = "Director: Work Ledger"
 PAGE_ID = "work-ledger"
 PAGE_DAYS = 7
 DONE_STAGES = ("merged", "released", "deployed", "accepted")
 CLOSED_STAGES = DONE_STAGES + ("parked",)
-# (key, heading, the calls a row in it may carry as (action, label))
+# (key, heading, the one line under it, the calls a row in it may carry as (action, label))
 PAGE_SECTIONS = (
-    ("blocked", "Blocked on you", ()),
-    ("motion", "In motion", (("nudge-owner", "Nudge owner"), ("mark-done", "Mark done"))),
-    ("waiting", "Waiting on a seat", (("nudge-owner", "Nudge owner"), ("reassign", "Reassign"), ("park", "Park"))),
-    ("adhoc", "Ad hoc", (("nudge-owner", "Nudge owner"), ("close", "Close"), ("park", "Park"))),
-    ("done", f"Done in the last {PAGE_DAYS} days", ()),
-    ("quiet", f"Quiet {PAGE_DAYS} days or more", (("kick-off", "Kick off"), ("park", "Park"), ("close", "Close"))),
+    ("blocked", "Blocked on you", "Waiting on your answer; each row names its Desk card.", ()),
+    ("motion", "In motion", f"Open work moved in the last {PAGE_DAYS} days.",
+     (("nudge-owner", "Nudge owner"), ("mark-done", "Mark done"))),
+    ("waiting", "Waiting on a seat", "Blocked on a seat or a role, not on you.",
+     (("nudge-owner", "Nudge owner"), ("reassign", "Reassign"), ("park", "Park"))),
+    ("adhoc", "Ad hoc", f"Ad hoc streams: open ones always, parked or finished ones for {PAGE_DAYS} days after they last moved.",
+     (("nudge-owner", "Nudge owner"), ("close", "Close"), ("park", "Park"))),
+    ("done", f"Done in the last {PAGE_DAYS} days", f"Merged, released, deployed or accepted in the last {PAGE_DAYS} days.", ()),
+    ("quiet", f"Quiet {PAGE_DAYS} days or more", f"Open work not moved for {PAGE_DAYS} days or more.",
+     (("kick-off", "Kick off"), ("park", "Park"), ("close", "Close"))),
 )
 # Sections listed oldest move first; the others newest first.
 PAGE_OLDEST_FIRST = ("blocked", "waiting", "quiet")
@@ -2892,7 +2912,7 @@ body{margin:0;background:var(--bg,Canvas);color:var(--fg,CanvasText);font:15px/1
 main{max-width:960px;margin:0 auto;padding:16px}
 h1{font-size:1.4rem;margin:0 0 4px}
 h2{font-size:1.1rem;margin:28px 0 2px}
-.src,.count,.none,.foot{color:var(--muted,GrayText);font-size:.88rem;margin:2px 0}
+.src,.desc,.count,.none,.foot{color:var(--muted,GrayText);font-size:.88rem;margin:2px 0}
 .notice{border:1px dashed var(--line,GrayText);border-radius:8px;padding:10px 12px;margin:12px 0}
 ul.rows{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
 li.row{border:1px solid var(--line,GrayText);border-radius:8px;padding:10px 12px}
@@ -3020,11 +3040,9 @@ def page_section(r, t_now):
         return None
     if blocked:
         return "waiting"
-    if stage in ("building", "in review") and age is not None and age < week:
+    if age is not None and age < week:
         return "motion"
-    if age is None or age >= week:
-        return "quiet"
-    return None
+    return "quiet"
 
 
 def page_link(link):
@@ -3107,7 +3125,7 @@ def page_render(theme, nav, desk_url):
     rows, torn = fold()
     snap, why = desk_snapshot()
     ledger_read = os.path.exists(LEDGER)
-    buckets = {k: [] for k, _, _ in PAGE_SECTIONS}
+    buckets = {s[0]: [] for s in PAGE_SECTIONS}
     unplaced = 0
     for r in sorted(rows.values(), key=lambda r: r["slug"]):
         key = page_section(r, t_now)
@@ -3130,15 +3148,14 @@ def page_render(theme, nav, desk_url):
     desk = f"Desk snapshot read {esc(snap['read_at'])}" if snap is not None else f"Desk {esc(why)}"
     out.append(f'<p class="src">{ledger}. {desk}.</p>')
     out.append('<div id="notice" class="notice" role="status" hidden></div>')
-    for key, heading, calls in PAGE_SECTIONS:
+    for key, heading, desc, calls in PAGE_SECTIONS:
         rs = sorted(buckets[key], key=lambda r: r["slug"])
         rs.sort(key=lambda r: r["last_moved"], reverse=key not in PAGE_OLDEST_FIRST)
-        out.append(f'<section id="s-{key}"><h2>{esc(heading)}</h2><p class="count">{page_count(len(rs))}</p>')
+        out.append(f'<section id="s-{key}"><h2>{esc(heading)}</h2><p class="desc">{esc(desc)}</p><p class="count">{page_count(len(rs))}</p>')
         if rs:
             out.append('<ul class="rows">' + "".join(page_row(r, key, calls, snap, desk_url) for r in rs) + "</ul>")
         out.append("</section>")
-    out.append(f'<p class="foot">Not shown: {unplaced} row(s), parked, finished more than {PAGE_DAYS} days ago, '
-               f"or at idea, defined or designed and moved in the last {PAGE_DAYS} days "
+    out.append(f'<p class="foot">Not shown: {unplaced} row(s), parked or finished more than {PAGE_DAYS} days ago '
                f"(an adhoc- row that is parked or finished stays in Ad hoc for {PAGE_DAYS} days after it last moved).</p></main>")
     out.append(f"<script>{PAGE_JS}</script></body></html>\n")
     return "".join(out)
@@ -3164,6 +3181,19 @@ def cmd_page(a):
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+
+
+def cmd_migrate_blocked_none(a):
+    def hits(rows):
+        return sorted(r["slug"] for r in rows.values() if stored_form(str(r.get("blocked") or "")).lower() == "none")
+    if a.dry_run:
+        rows, _ = fold()
+        slugs = hits(rows)
+        print(f"dws: would clear blocked none on {len(slugs)} row(s)" + "".join(f"\n  {s}" for s in slugs))
+        return
+    events = write_plan(a.actor, lambda rows, decisions: [
+        {"event": "set", "ws": s, "blocked": "", "migrate": "blocked-none"} for s in hits(rows)])
+    print(f"dws: cleared blocked none on {len(events)} row(s)")
 
 
 # W3: `picks` reads an export of the page's picks collection (the doc list the Artifact data
@@ -3459,6 +3489,10 @@ def main(argv):
     dl.add_argument("--daily", action="store_true", help="the trial's daily line and the unconfirmed list")
     dl.add_argument("--trial-start", dest="trial_start", metavar="YYYY-MM-DD", help="the trial's first day, for --daily")
     dl.set_defaults(fn=cmd_decisions)
+
+    mg = sub.add_parser("migrate-blocked-none", help="clear the stored blocked values of none; one marked set per row, last moved untouched; --dry-run writes nothing")
+    mg.add_argument("--dry-run", action="store_true")
+    mg.set_defaults(fn=cmd_migrate_blocked_none)
 
     pg = sub.add_parser("page", help="render the ledger as a self-contained HTML page to stdout or --out; reads the ledger and the Desk snapshot, writes only --out (W3)")
     pg.add_argument("--out", help="write the page here (temp file and rename) instead of stdout")
