@@ -59,6 +59,10 @@ const (
 	// the cluster-gone alert's bound (cashp design section 5)
 	thresholdPresenceLostAfter    = "presence_lost_after"
 	thresholdPresenceLostAfterMax = "presence_lost_after_max"
+	// count rows, read by loadCountRows: not durations
+	thresholdPresenceHubMoveMin    = "presence_hub_move_min"
+	thresholdPresenceHubMoveWindow = "presence_hub_move_window"
+	thresholdPresenceAlertCap      = "presence_alert_cap"
 )
 
 // presenceWatcher is the watch as the shim holds it.
@@ -103,7 +107,8 @@ func (p *presenceWatcher) tick(ctx context.Context) {
 		p.log("presence watch: event file not written: %v", err)
 	}
 	for _, e := range evs {
-		if !e.Collapsed {
+		// a capped notice stays in the events file; only the hourly summary reaches the reader
+		if !e.Collapsed && !e.Capped {
 			p.pending = append(p.pending, p.noticeText(e))
 		}
 	}
@@ -179,10 +184,16 @@ func (p *presenceWatcher) noticeText(e watchEvent) string {
 	case "absent":
 		return fmt.Sprintf("presence: %s absent, last seen %s (%s, host sleep not counted)", e.Unit, p.lastSeen(e.Unit), p.w.AbsenceDuration(e.Unit, e.At).Round(time.Second))
 	case "back":
+		if e.Text != "" {
+			return fmt.Sprintf("presence: %s back; %s", e.Unit, e.Text)
+		}
 		return fmt.Sprintf("presence: %s back", e.Unit)
 	case "appeared":
 		return fmt.Sprintf("presence: %s seen", e.Unit)
 	case "present-after-gap":
+		if e.Text != "" {
+			return fmt.Sprintf("presence: %s present after a gap in the watch, not a return; %s", e.Unit, e.Text)
+		}
 		return fmt.Sprintf("presence: %s present after a gap in the watch, not a return", e.Unit)
 	case "absent-before-gap":
 		return fmt.Sprintf("presence: %s absent before a gap in the watch", e.Unit)
@@ -190,6 +201,8 @@ func (p *presenceWatcher) noticeText(e watchEvent) string {
 		return fmt.Sprintf("presence: key %s does not have the shape a supervisor writes and is not counted", e.Text)
 	case "lost":
 		return fmt.Sprintf("presence: cluster %s lost: absent %s, past its %s bound (host sleep not counted)", e.Unit, p.w.AbsenceDuration(e.Unit, e.At).Round(time.Second), e.Text)
+	case "hub-moved", "hub-moved-closed", "hub-moved-converted", "alerts-capped":
+		return "presence: " + e.Text
 	case "lost-after-ignored", "lost-after-clamped":
 		return fmt.Sprintf("presence: cluster %s: %s", e.Unit, e.Text)
 	case "flapping":
@@ -235,6 +248,10 @@ func (b *Bus) startPresenceWatch(logf func(string, ...any)) error {
 	th := defaultWatchThresholds()
 	th.LostAfter = table[thresholdPresenceLostAfter]
 	th.LostMax = table[thresholdPresenceLostAfterMax]
+	th.HubMoveWindow = table[thresholdPresenceHubMoveWindow]
+	counts, cnotes := loadCountRows(dir)
+	th.HubMoveMin, th.AlertCap = counts[thresholdPresenceHubMoveMin], counts[thresholdPresenceAlertCap]
+	notes = append(notes, cnotes...)
 	th.FlapWindow = table[thresholdPresenceFlapWindow]
 	th.FlapQuiet = table[thresholdPresenceFlapQuiet]
 	store := newWatchStore(dir)
