@@ -179,7 +179,11 @@ release, revise or cancel (the cancel_held tool).
    The work ledger page is a second view of the same rows: `dws page --out <file>` renders
    it from the ledger and the Desk snapshot, with the look and nav read from the instance
    files `page-theme.css.html` and `page-nav.html` in the state directory (none are in the
-   repo). Publishing it is yours; the `picks` collection it writes is read at step 3 below.
+   repo). A card id links to the Desk only when `--desk-url FILE`, or the instance file
+   `page-desk-url` in the state directory, holds the Desk address (https only; `{id}` in
+   it is replaced, a plain address gets `#<id>`, and one that already has a fragment is
+   used as it is). Publishing the page is yours; the `picks` collection it writes is read
+   at step 3 below.
 
 To mark a row blocked on the operator, the row must name an open Desk card
 (K13). A script cannot read the Desk, so in session read the cards with the
@@ -293,7 +297,8 @@ hook's three-line checklist asks about:
    This gives `desk-snapshot.json`. Read page picks beside it: export the work ledger
    page's `picks` collection to a file and run `dws picks --file <export>`. It prints
    each ready pick once and records it in `picks-seen.jsonl`. This gives the calls to
-   route.
+   route. A pick's `by` is the user id the page reported, a claim like `--actor`: dws
+   cannot check who wrote it.
 4. Move the rows: `dws refresh --local` (`board-html` runs it on render). This
    gives the moved rows.
 5. Write the operations dashboard, at most every 30 minutes. Run `dash-writer run`; if it prints

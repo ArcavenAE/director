@@ -2674,14 +2674,15 @@ def cmd_decisions(a):
 #
 # A row lands in at most one section, first match wins:
 #   blocked on the operator (open stage)          Blocked on you, ad hoc or not
-#   slug starts adhoc-                            Ad hoc, whatever its stage or seat block
+#   slug starts adhoc-                            Ad hoc, whatever its stage or seat block; a parked
+#                                                 or finished one leaves 7 days after it last moved
 #   merged, released, deployed, accepted, 7 days  Done in the last 7 days
 #   blocked on anything else, open stage          Waiting on a seat (a seat or a role)
 #   building or in review, moved under 7 days ago In motion
 #   any other open stage, moved 7 days ago or more  Quiet 7 days or more
-# A row in none of them (parked, finished more than 7 days ago, or at idea, defined or
-# designed and moved within 7 days, none of them adhoc-) is counted in the footer, never
-# dropped without a word.
+# A blocked value of "none" or nothing is not blocked, as `dws set` writes it. A row in none
+# of the sections (parked, finished more than 7 days ago, or at idea, defined or designed and
+# moved within 7 days) is counted in the footer, never dropped without a word.
 # The 7 days and the lists are the operator's to change here.
 PAGE_TITLE = "Director: Work Ledger"
 PAGE_ID = "work-ledger"
@@ -2750,22 +2751,25 @@ PAGE_JS = """
   function save(li){
     if(!state.db){return}
     var id=rowId(li); clearTimeout(timers[id]);
-    timers[id]=setTimeout(function(){
+    var t=setTimeout(function(){
+      function settled(){if(timers[id]===t){delete timers[id]}}
       var p=state.picks[id]||{}, ref=state.db.doc("picks/"+id), act=$(".act[data-action=\\""+(p.action||"")+"\\"]",li);
       if(!p.action&&!p.note){
         status(li,"Saving");
-        ref.delete().then(function(){status(li,"Cleared")}).catch(function(){status(li,"Not saved, try again")});
+        ref.delete().then(function(){status(li,"Cleared");settled()}).catch(function(){status(li,"Not saved, try again");settled()});
         return;
       }
       var body={action:p.action||null,action_label:act?act.textContent:null,note:p.note||"",
         ready:!!(p.ready&&p.action),section:li.getAttribute("data-section"),title:li.getAttribute("data-title"),
         page:PAGE,at:new Date().toISOString(),by:state.by};
       status(li,"Saving");
-      ref.set(body).then(function(){status(li,"Saved")}).catch(function(e){
+      ref.set(body).then(function(){status(li,"Saved");settled()}).catch(function(e){
         if(e&&e.code==="invalid_argument"){state.canWrite=false; notice("Read-only: you can see the calls here, but not save them."); paintAll(); status(li,"You can't save here")}
         else{status(li,"Not saved, try again")}
+        settled();
       });
     },500);
+    timers[id]=t;
   }
   function edit(li,fn){
     var id=rowId(li); state.picks[id]=Object.assign({},state.picks[id]||{}); fn(state.picks[id]); paint(li); save(li);
@@ -2816,10 +2820,14 @@ def page_age(r, t_now):
 def page_section(r, t_now):
     """The section key a row belongs in, or None (see the table above)."""
     stage, blocked = r["stage"], str(r.get("blocked") or "").strip()
+    if blocked.lower() == "none":
+        blocked = ""
     age, week = page_age(r, t_now), PAGE_DAYS * 86400
     if stage not in CLOSED_STAGES and blocked and operator_blocked(blocked):
         return "blocked"
     if r["slug"].startswith("adhoc-"):
+        if stage in CLOSED_STAGES and not (age is not None and age < week):
+            return None
         return "adhoc"
     if stage in DONE_STAGES:
         return "done" if age is not None and age < week else None
@@ -2855,7 +2863,10 @@ def page_desk_link(card, desk_url):
     esc = htmlmod.escape
     if not desk_url:
         return f"<code>{esc(card)}</code>"
-    href = desk_url.replace("{id}", card) if "{id}" in desk_url else f"{desk_url}#{card}"
+    if "{id}" in desk_url:
+        href = desk_url.replace("{id}", card)
+    else:
+        href = desk_url if "#" in desk_url else f"{desk_url}#{card}"
     return f'<a href="{esc(href)}" rel="noopener"><code>{esc(card)}</code></a>'
 
 
@@ -2942,7 +2953,8 @@ def page_render(theme, nav, desk_url):
             out.append('<ul class="rows">' + "".join(page_row(r, key, calls, snap, desk_url) for r in rs) + "</ul>")
         out.append("</section>")
     out.append(f'<p class="foot">Not shown: {unplaced} row(s), parked, finished more than {PAGE_DAYS} days ago, '
-               f"or at idea, defined or designed and moved in the last {PAGE_DAYS} days.</p></main>")
+               f"or at idea, defined or designed and moved in the last {PAGE_DAYS} days "
+               f"(an adhoc- row that is parked or finished stays in Ad hoc for {PAGE_DAYS} days after it last moved).</p></main>")
     out.append(f"<script>{PAGE_JS}</script></body></html>\n")
     return "".join(out)
 
