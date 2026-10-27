@@ -1328,11 +1328,16 @@ def approved_at(d):
                 and r.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
                 and isinstance(r.get("submittedAt"), str)):
             latest[who] = (r["state"], r["submittedAt"])
+    # Any non-author's latest review at the head being CHANGES_REQUESTED blocks the PR, even with another
+    # reviewer's approval (director's ruling on #445). A change request on an older commit is not at the head.
+    if any(st == "CHANGES_REQUESTED" for st, _ in latest.values()):
+        latest = {}
     times = sorted(t for st, t in latest.values() if st == "APPROVED")
     decision = d.get("reviewDecision")
-    # GitHub's own APPROVED is trusted as is: it already folds in required reviewers, dismissed and stale
-    # reviews, and branch rules, which the review list here does not carry. The head and author check
-    # above is for a repo that gives no decision.
+    # GitHub's own APPROVED is trusted as is: it already folds in required reviewers and branch rules,
+    # which the review list here does not carry. It does not drop approvals of older commits in this repo,
+    # whose ruleset sets dismiss_stale_reviews_on_push to false, so a decision of APPROVED can rest on an
+    # older head; the head and author check above applies only where GitHub gives no decision.
     if decision == "APPROVED" or (not decision and times):
         return times[-1] if times else NONE
     return None
