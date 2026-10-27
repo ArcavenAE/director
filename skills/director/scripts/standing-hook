@@ -33,7 +33,21 @@ $DIRECTOR_STATE/last-stalled-scan the same way. The hook never runs the scan its
 each repo's remote, which takes seconds, and a prompt hook must not. It only shows how old the
 last one is, so a sweep that skipped the block shows that in the next answer.
 
-The hook never types into a pane and never reads the hub; it reads one file.
+One more line follows, last, only when something waits:
+
+  waiting: <n> Desk answers not relayed (oldest <age>, ids <ids>); <m> approved PRs not merged (oldest <age>); Desk read <age> ago
+
+Each clause appears only when its count is nonzero, and the Desk-read age is always there when the line
+prints. When nothing waits it prints nothing, no empty line and no "0". When an input is missing,
+unreadable, in the future or older than DIRECTOR_WAITING_MAX_HOURS (default 24), it prints
+`waiting: UNKNOWN (<reason>)` naming the age of what it read, so a dead signal reads as dead. The
+answers come from the newest row of $DIRECTOR_STATE/desk-reads.jsonl (desk-snapshot write --answers); the
+PRs come from $DIRECTOR_STATE/waiting-prs.json, which `dws waiting write` writes in the sweep and which
+is the only step that may call gh. A missing file is UNKNOWN, including when neither exists.
+
+The hook never types into a pane and never reads the hub or the network; it reads files: the heartbeat,
+the dash and scan stamps, and the two inputs above. The waiting line widens the contract the earlier
+"reads one file" stated, on purpose.
 """
 import datetime, json, os, sys, tempfile
 
@@ -113,6 +127,106 @@ def age_line():
     return f"drain age: {mins}m since the last drain ({raw})"
 
 
+WAIT_FMT = FMT
+
+
+def state_dir():
+    return os.path.dirname(state_file())
+
+
+def max_hours():
+    try:
+        return float(os.environ.get("DIRECTOR_WAITING_MAX_HOURS", "24"))
+    except ValueError:
+        return 24.0
+
+
+def age_text(seconds):
+    m = int(seconds // 60)
+    if m < 60:
+        return f"{m}m"
+    h = m // 60
+    return f"{h}h" if h < 48 else f"{h // 24}d"
+
+
+def parse_stamp(raw):
+    return datetime.datetime.strptime(raw, WAIT_FMT).replace(tzinfo=datetime.timezone.utc)
+
+
+def read_input(name, stamp_key, loader):
+    """(data, age seconds, None) or (None, None, reason). A reason names the file and what is wrong with it."""
+    path = os.path.join(state_dir(), name)
+    if not os.path.exists(path):
+        return None, None, "missing"
+    try:
+        data = loader(path)
+        t = parse_stamp(data[stamp_key])
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return None, None, f"{name} unreadable"
+    age = (now() - t).total_seconds()
+    if age < 0:
+        return None, None, f"{name} is stamped in the future ({data[stamp_key]})"
+    if age > max_hours() * 3600:
+        return None, None, f"{name} is {age_text(age)} old, over the {max_hours():g}h limit"
+    return data, age, None
+
+
+def last_row(path):
+    with open(path, encoding="utf-8") as f:
+        rows = [ln for ln in f.read().splitlines() if ln.strip()]
+    row = json.loads(rows[-1])
+    if not isinstance(row, dict) or not isinstance(row.get("answered_not_relayed"), list):
+        raise ValueError("not a desk read row")
+    return row
+
+
+def whole(path):
+    with open(path, encoding="utf-8") as f:
+        d = json.load(f)
+    if not isinstance(d, dict) or not isinstance(d.get("approved_not_merged"), list):
+        raise ValueError("not a waiting cache")
+    return d
+
+
+def waiting_line():
+    reads_path = os.path.join(state_dir(), "desk-reads.jsonl")
+    prs_path = os.path.join(state_dir(), "waiting-prs.json")
+    reads, read_age, why_reads = read_input("desk-reads.jsonl", "read_at", last_row)
+    prs, _, why_prs = read_input("waiting-prs.json", "written_at", whole)
+    why = []
+    if why_reads:
+        why.append("desk-reads.jsonl missing, desk-snapshot write --answers has not run" if why_reads == "missing" else why_reads)
+    if why_prs:
+        why.append("waiting-prs.json missing, `dws waiting write` has not run" if why_prs == "missing" else why_prs)
+    if why:
+        return f"waiting: UNKNOWN ({'; '.join(why)})"
+    t_now = now()
+    clauses = []
+    answers = [r for r in reads["answered_not_relayed"] if isinstance(r, dict) and isinstance(r.get("card"), str)]
+    if answers:
+        ages = []
+        for r in answers:
+            try:
+                ages.append((t_now - parse_stamp(r["answered_at"])).total_seconds())
+            except (KeyError, TypeError, ValueError):
+                pass
+        oldest = age_text(max(ages)) if ages else "unknown"
+        clauses.append(f"{len(answers)} Desk answers not relayed (oldest {oldest}, ids {', '.join(r['card'] for r in answers)})")
+    waiting_prs = [r for r in prs["approved_not_merged"] if isinstance(r, dict)]
+    if waiting_prs:
+        ages = []
+        for r in waiting_prs:
+            try:
+                ages.append((t_now - parse_stamp(r["approved_at"])).total_seconds())
+            except (KeyError, TypeError, ValueError):
+                pass
+        clauses.append(f"{len(waiting_prs)} approved PRs not merged (oldest {age_text(max(ages)) if ages else 'unknown'})")
+    if not clauses:
+        return None
+    clauses.append(f"Desk read {age_text(read_age)} ago")
+    return "waiting: " + "; ".join(clauses)
+
+
 def main():
     if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] not in ("beat", "scan-beat")):
         sys.exit("usage: standing-hook [beat|scan-beat]")
@@ -123,6 +237,9 @@ def main():
     print(CHECKLIST)
     print(dash_line())
     print(scan_line())
+    line = waiting_line()
+    if line:
+        print(line)
 
 
 if __name__ == "__main__":

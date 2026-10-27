@@ -69,8 +69,15 @@ first="$(unset DIRECTOR_STATE; "$H" | sed -n 1p)"
 [[ "$first" == "drain age: 0m since the last drain ("* ]] && ok "and the hook reads it back from there" || bad "the hook reads the default path" "$first"
 
 # --- the stalled-ideas cue (ld16k): a read of one file, never a scan ----------------------
+# The waiting line (item A) comes after it when present, so the stalled-ideas line is last
+# otherwise: the waiting line, when present, is last; else the stalled-ideas line is.
+tail1() { "$H" | grep -v '^waiting: ' | tail -n 1; }
+out="$("$H")"
+if printf '%s\n' "$out" | grep -q '^waiting: '; then
+  [[ "$(printf '%s\n' "$out" | tail -n 1)" == "waiting: "* ]] && ok "the waiting line, when present, is last" || bad "the waiting line is not last"
+fi
 rm -f "$DIRECTOR_STATE/last-stalled-scan"
-last="$("$H" | tail -n 1)"
+last="$(tail1)"
 [[ "$last" == "stalled ideas: unknown, no scan recorded"* ]] && ok "no scan recorded reads as unknown" || bad "no scan recorded reads as unknown" "$last"
 [[ "$("$H" | sed -n 2p)" == "Before you answer:" && "$("$H" | grep -c '^[123]\. ')" == 3 ]] && ok "the cue sits after the checklist and leaves it as it was" || bad "the cue leaves the checklist as it was"
 t0="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -78,12 +85,12 @@ t0="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 t1="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 st="$(cat "$DIRECTOR_STATE/last-stalled-scan")"
 [[ ! "$st" < "$t0" && ! "$st" > "$t1" ]] && ok "the scan stamp comes from the clock" || bad "the scan stamp comes from the clock" "$t0 <= $st <= $t1"
-[[ "$("$H" | tail -n 1)" == "stalled ideas: last scan 0h ago ($st)" ]] && ok "a fresh scan reads 0h" || bad "a fresh scan reads 0h" "$("$H" | tail -n 1)"
+[[ "$(tail1)" == "stalled ideas: last scan 0h ago ($st)" ]] && ok "a fresh scan reads 0h" || bad "a fresh scan reads 0h" "$(tail1)"
 old="$(python3 -c 'import datetime as d;print((d.datetime.now(d.timezone.utc)-d.timedelta(hours=30,minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 echo "$old" >"$DIRECTOR_STATE/last-stalled-scan"
-[[ "$("$H" | tail -n 1)" == "stalled ideas: last scan 30h ago ($old)" ]] && ok "an old scan reads its age in hours" || bad "an old scan reads its age in hours" "$("$H" | tail -n 1)"
+[[ "$(tail1)" == "stalled ideas: last scan 30h ago ($old)" ]] && ok "an old scan reads its age in hours" || bad "an old scan reads its age in hours" "$(tail1)"
 echo "garbage" >"$DIRECTOR_STATE/last-stalled-scan"
-"$H" | tail -n 1 | grep -q '^stalled ideas: unknown' && ok "a garbled scan stamp reads as unknown" || bad "a garbled scan stamp reads as unknown"
+tail1 | grep -q '^stalled ideas: unknown' && ok "a garbled scan stamp reads as unknown" || bad "a garbled scan stamp reads as unknown"
 if "$H" scan-beat 2000-01-01T00:00:00Z >/dev/null 2>&1; then bad "scan-beat refuses a time argument"; else ok "scan-beat refuses a time argument"; fi
 
 # --- the dash cue: the last batch the session applied, read from dash-writer.json -------------------

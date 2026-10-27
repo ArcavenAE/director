@@ -32,9 +32,10 @@ cards; "answered" is then the sorted distinct cards that have an answer, and an 
 means the answers were read and none were found. Without --answers there is no "answered"
 key, which card-ingest reads as unknown. `dws` reads only "open", so it is unaffected.
 
-"answered_at" keeps each answered card's answer time: the latest of the record's "answered_at",
-"created_at" or "at" that is an RFC 3339 UTC stamp, with or without a fraction of a second (the Desk's
-toISOString() carries milliseconds); the fraction is dropped, so the time reads to the second (a record with none adds no time, and the read row
+"answered_at" keeps each answered card's answer time: the first of the record's "at" (the Desk's answer
+docs are {choice, note, ready, at}), "answered_at" or "created_at" that is an RFC 3339 UTC stamp, with or
+without a fraction of a second (the Desk's toISOString() carries milliseconds); the fraction is dropped,
+so the time reads to the second (a record with none adds no time, and the read row
 below shows it as null). "intake" is a sibling of "ids": the card's intake id (I-<n>, from `dws intake`)
 for every card that carries one in "intake", top level or under "data". Both keys are written only when
 they have something to hold.
@@ -152,7 +153,7 @@ def parse_answers(raw, cards):
         if cid not in cards:
             raise Refused(f"an answer names card {cid}, which the cards read does not hold")
         answered.add(cid)
-        for key in ("answered_at", "created_at", "at"):
+        for key in ("at", "answered_at", "created_at"):
             t = r.get(key)
             m = STAMP.match(t) if isinstance(t, str) else None
             if m:

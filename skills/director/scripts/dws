@@ -25,6 +25,11 @@ and ask:<id>. refresh (W2) reads the first three; ask ids wait for W5, and an
 untyped link is shown but never read. refresh names every link it does not
 read on stderr, so nothing is skipped silently.
 
+Waiting: `dws waiting write` is the sweep step that may call gh. It checks each pr: link on a row
+that is not parked and writes $DIRECTOR_STATE/waiting-prs.json ({written_at, checked,
+approved_not_merged: [{pr, approved_at}]}) for standing-hook, which reads files only. If a PR cannot
+be read it writes nothing and exits 1.
+
 Intake: `dws intake --text-file <path|-> [--source S]` records an operator ask in
 $DIRECTOR_STATE/asks.jsonl, stamped from the clock under one flock, and prints its id, I-<n>.
 The id then travels: relay-log append --ask I-<n> [--kind K], card-ingest parse --intake I-<n>
@@ -1294,6 +1299,60 @@ def cmd_asks(a):
     widths = [max(len(c[i]) for c in table) for i in range(len(cols))]
     for row in table:
         print("  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip())
+
+
+# ---- waiting: the PR half of the standing hook's "waiting:" line --------------------------------
+# `waiting write` is the one step that may call gh. It reads the ledger's pr: links, asks gh which of
+# those PRs are open and approved, and writes $DIRECTOR_STATE/waiting-prs.json for standing-hook to
+# read (the hook reads files only). If any PR cannot be read it writes nothing and says which, so a
+# cache is never a silent partial: the old file just ages until the hook reads it as UNKNOWN.
+WAITING = os.path.join(STATE, "waiting-prs.json")
+
+
+def approved_at(d):
+    """The time a PR open and approved was approved, else None. Reads reviewDecision and the reviews."""
+    if (d.get("state") or "").upper() != "OPEN" or d.get("isDraft"):
+        return None
+    reviews = [r for r in d.get("reviews") or [] if isinstance(r, dict)]
+    times = sorted(r["submittedAt"] for r in reviews if r.get("state") == "APPROVED" and isinstance(r.get("submittedAt"), str))
+    decision = d.get("reviewDecision")
+    if decision == "APPROVED" or (not decision and times):
+        return times[-1] if times else NONE
+    return None
+
+
+def cmd_waiting_write(a):
+    rows, _ = fold()
+    prs = sorted({(m.group(2), m.group(3)) for r in rows.values() if r["stage"] != "parked"
+                  for m in (LINK.match(l) for l in r["links"]) if m and m.group(1) == "pr"})
+    waiting, errors = [], []
+    for repo, num in prs:
+        try:
+            d = json.loads(run_json(["gh", "pr", "view", num, "-R", repo, "--json", "state,isDraft,reviewDecision,reviews"]))
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as err:
+            errors.append(f"{repo}#{num}: {str(err).splitlines()[0][:120] if str(err) else type(err).__name__}")
+            continue
+        at = approved_at(d)
+        if at:
+            waiting.append({"pr": f"{repo}#{num}", "approved_at": at if at != NONE else None})
+    if errors:
+        for e in errors:
+            print(f"dws: waiting: could not read {e}", file=sys.stderr)
+        raise Refused(f"{len(errors)} of {len(prs)} PRs unreadable; {WAITING} not written")
+    os.makedirs(STATE, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".waiting-prs.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump({"written_at": now(), "checked": len(prs), "approved_not_merged": waiting}, f, indent=1)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, WAITING)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    print(f"dws: waiting: {len(waiting)} approved PRs not merged of {len(prs)} checked -> {WAITING}")
 
 
 def cmd_show(a):
@@ -3241,6 +3300,11 @@ def main(argv):
     sk = sub.add_parser("asks", help="join each ask to its card, answer time, relay entry and row; writes nothing")
     sk.add_argument("--json", action="store_true")
     sk.set_defaults(fn=cmd_asks)
+
+    wt = sub.add_parser("waiting", help="the PR cache the standing hook's waiting line reads")
+    wsub = wt.add_subparsers(dest="waiting_cmd", required=True)
+    ww = wsub.add_parser("write", help="ask gh which of the ledger's PRs are approved and not merged; the only waiting step that touches the network")
+    ww.set_defaults(fn=cmd_waiting_write)
 
     n = sub.add_parser("link")
     n.add_argument("slug")
