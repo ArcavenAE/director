@@ -27,6 +27,44 @@ DAY=86400
 mkdir -p "$DIRECTOR_STATE" "$root/orc" "$root/remotes" "$root/bin"
 export PATH="$root/bin:$PATH"
 
+# --- guard: fixture commits are signed, never with a host key or config ------
+# has_sig FILE: the commit object in FILE has a gpgsig header before the blank line that ends the headers
+has_sig() { awk '/^$/ { exit } /^gpgsig / { f = 1; exit } END { exit f ? 0 : 1 }' "$1"; }
+# unsigned_in DIR: print each commit any ref in DIR reaches that has no signature, however it was made
+unsigned_in() {
+  local c
+  for c in $(git -C "$1" rev-list --all); do
+    git -C "$1" cat-file commit "$c" >"$root/obj"; has_sig "$root/obj" || echo "$c"
+  done
+}
+# guard_violations FILE: print each way FILE breaks these rules. The one commit writer is the signed
+# tree commit in fx; signing is set on the SIGN line only, in any case and with any value; git runs by
+# name, never through a variable, except the REALGIT pass-through for the read-failure cases; nothing
+# writes a commit object another way. The patterns are bracketed so they cannot match their own lines.
+re_var="=[[:space:]]*[\"']?g[i]t([\"'[:space:];),]|\$)|command -v g[i]t"
+guard_violations() {
+  local gl
+  gl="$(grep -nE 'c[o]mmit-tree|git[^#]* c[o]mmit -' "$1" || true)"
+  [[ "$(printf '%s\n' "$gl" | grep -c . || true)" == 1 && "$gl" == *'*SIGN, "commit''-tree", "-S", tree,'* ]] || echo "commit sites: $gl"
+  grep -inE 'gpg[s]ign' "$1" | grep -vE '^[0-9]+:SIGN = \[.*"commit\.gpg[s]ign=[t]rue"\]$' || true
+  grep -nE "$re_var" "$1" | grep -vE '^[0-9]+:mkdir -p "\$root/gitfail"; REALGIT="\$\(command -v g[i]t\)"$' || true
+  grep -nE -- '--no-gpg-[s]ign|fast-[i]mport|mk[t]ag|-t [c]ommit' "$1" || true
+}
+self="$here/$(basename "${BASH_SOURCE[0]}")"
+gv="$(guard_violations "$self")"
+[[ -z "$gv" ]] && ok "guard: one fixture commit site, signed with the fixture key, and no other commit writer" || bad "guard: this file" "$gv"
+# The guard against crafted mutants (director#439 review): text only, never run.
+m=0
+for line in '    new = sh("git", "-C", bare, *SIGN, "-c", "commit.gpg''Sign=0", "merge", "x")' 'prog = "g''it"' 'g=g''it; "$g" -C x merge -q y'; do
+  m=$((m+1)); { cat "$self"; printf '%s\n' "$line"; } >"$root/mutant$m"
+  [[ -n "$(guard_violations "$root/mutant$m")" ]] && ok "guard: crafted mutant $m is caught" || bad "guard: crafted mutant $m passed" "$line"
+done
+# The signature check against crafted commit text, so no test makes an unsigned commit.
+hd='tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\ncommitter t <t@t.invalid> 0 +0000\n'
+printf "$hd"'\nx\n' >"$root/c-unsigned"; printf "$hd"'gpgsig -----BEGIN SSH SIGNATURE-----\n \n -----END-----\n\nx\n' >"$root/c-signed"
+printf "$hd"'\nmessage\ngpgsig in the body is not a header\n' >"$root/c-body"
+if ! has_sig "$root/c-unsigned" && has_sig "$root/c-signed" && ! has_sig "$root/c-body"; then ok "has_sig reads the header only"; else bad "has_sig on crafted commit text"; fi
+
 # --- stubs ------------------------------------------------------------------
 cat >"$root/bin/bd" <<'S'
 #!/usr/bin/env bash
@@ -57,6 +95,11 @@ KEY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixture-key")
 SIGN = ["-c", "gpg.format=ssh", "-c", "gpg.ssh.program=ssh-keygen", "-c", "user.signingkey=" + KEY, "-c", "commit.gpgsign=true"]
 def sh(*a, env=None, inp=None):
     return subprocess.run(a, check=True, capture_output=True, env=env, input=inp).stdout.decode().strip()
+def has_signature(obj):
+    for l in obj.splitlines():
+        if not l: return False
+        if l.startswith("gpgsig "): return True
+    return False
 def init(bare):
     sh("git", "init", "-q", "--bare", "-b", "main", bare)
 def commit(bare, epoch, files):
@@ -74,7 +117,7 @@ def commit(bare, epoch, files):
     parent = ["-p", "refs/heads/main"] if have else []
     new = sh("git", "-C", bare, *SIGN, "commit-tree", "-S", tree, *parent, "-m", "fx", env=env)
     obj = sh("git", "-C", bare, "cat-file", "commit", new, env=env)
-    if not any(l.startswith("gpgsig ") for l in obj.splitlines()): sys.exit(f"FAIL fixture commit {new} is not signed")
+    if not has_signature(obj): sys.exit(f"FAIL fixture commit {new} is not signed")
     sh("git", "-C", bare, "update-ref", "refs/heads/main", new, env=env)
     os.unlink(env["GIT_INDEX_FILE"])
 if __name__ == "__main__":
@@ -83,14 +126,6 @@ if __name__ == "__main__":
     else: commit(bare, sys.argv[3], [tuple(a.split("=", 1)) for a in sys.argv[4:]])
 P
 fx() { python3 "$root/fx.py" "$@"; }
-# A guard over this file: the one commit writer is the signed call in fx, and
-# nothing here writes a commit object another way. The patterns are bracketed so they cannot match
-# their own lines.
-self="$here/$(basename "${BASH_SOURCE[0]}")"
-gl="$(grep -nE 'c[o]mmit-tree|git[^#]* c[o]mmit -' "$self")"
-[[ "$(printf '%s\n' "$gl" | grep -c .)" == 1 && "$gl" == *'*SIGN, "commit''-tree"'* ]] && grep -q 'commit\.gpgsign=[t]rue' "$self" && ok "guard: one fixture commit site, signed with the fixture key" || bad "guard: fixture commit sites" "$gl"
-gx="$(grep -nE 'gpgsign=[f]alse|--no-gpg-[s]ign|fast-[i]mport|mk[t]ag|-t [c]ommit' "$self")"
-[[ -z "$gx" ]] && ok "guard: no other way of writing a commit object" || bad "guard: another commit writer" "$gx"
 # newrepo NAME  ->  $root/remotes/NAME.git and, once seeded, $root/orc/NAME
 newrepo() { fx init "$root/remotes/$1.git"; }
 checkout() { git clone -q "$root/remotes/$1.git" "$root/orc/$1" 2>/dev/null; }
@@ -318,6 +353,13 @@ run >"$root/j" 2>/dev/null
 [[ "$(q "any('linked-blue' in x['path'] for x in d['skipped'])" <"$root/j")" == "True" ]] && ok "the symlinked root's skip is logged" || bad "symlink skip logged" "$(q "d['skipped']" <"$root/j")"
 [[ "$(q "any(r['path'].startswith('lg/') for r in d['rows'])" <"$root/j")" == "True" ]] && ok "a checkout under a parent named run, named by the root's fixed prefix, is read" || bad "legit run parent" "$(q "[d['rows'],d['skipped']]" <"$root/j")"
 cfg
+
+# Every commit in every fixture repo is signed, however it was made.
+for r in "$root"/remotes/*.git "$root"/orc/*/ "$root"/orc/run/*/*/ "$root"/legit/run/*/; do
+  [[ -e "$r" ]] || continue
+  u="$(unsigned_in "$r")"
+  if [[ -z "$u" ]]; then ok "every commit in ${r#$root/} is signed"; else bad "unsigned commits in ${r#$root/}" "$u"; fi
+done
 
 echo "dbi: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

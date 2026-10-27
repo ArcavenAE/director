@@ -97,17 +97,46 @@ mk() { python3 "$root/mkfix.py" "$@"; }
 # key made in the scratch root, never a host key or config, and is checked for its signature.
 fixkey="$root/fixture-key"
 genv ssh-keygen -q -t ed25519 -N '' -C fixture -f "$fixkey" || { echo "FAIL fixture key: ssh-keygen failed"; exit 1; }
+# has_sig FILE: the commit object in FILE has a gpgsig header before the blank line that ends the headers
+has_sig() { awk '/^$/ { exit } /^gpgsig / { f = 1; exit } END { exit f ? 0 : 1 }' "$1"; }
 gcommit() {
   genv git -C "$1" -c user.name=t -c user.email=t@t.invalid -c gpg.format=ssh -c gpg.ssh.program=ssh-keygen -c user.signingkey="$fixkey" -c commit.gpgsign=true commit -q --allow-empty-message -m "$2" || { echo "FAIL fixture commit in $1"; exit 1; }
-  genv git -C "$1" cat-file commit HEAD >"$root/obj" && grep -q '^gpgsig ' "$root/obj" || { echo "FAIL fixture commit in $1 is not signed"; exit 1; }
+  genv git -C "$1" cat-file commit HEAD >"$root/obj" && has_sig "$root/obj" || { echo "FAIL fixture commit in $1 is not signed"; exit 1; }
 }
-# A guard over this file: the one git commit is gcommit's, with the signing config, and nothing here
-# writes a commit object another way. The patterns are bracketed so they cannot match their own lines.
+# unsigned_in DIR: print each commit any ref in DIR reaches that has no signature, however it was made
+unsigned_in() {
+  local c
+  for c in $(genv git -C "$1" rev-list --all); do
+    genv git -C "$1" cat-file commit "$c" >"$root/obj"; has_sig "$root/obj" || echo "$c"
+  done
+}
+# guard_violations FILE: print each way FILE breaks these rules. The one git commit is gcommit's, with
+# the signing config; signing is set on that line only, in any case and with any value; git runs by
+# name, never through a variable, and the env wrapper runs only git and ssh-keygen; nothing writes a
+# commit object another way. The patterns are bracketed so they cannot match their own lines.
+re_var="=[[:space:]]*[\"']?g[i]t([\"'[:space:];)]|\$)|gen[v] +[^gs]"
+guard_violations() {
+  local gl
+  gl="$(grep -nE 'git .* c[o]mmit -q' "$1")"
+  [[ "$(printf '%s\n' "$gl" | grep -c .)" == 1 && "$gl" == *'commit.gpg''sign=true'* && "$gl" == *'user.signingkey="$fixkey"'* ]] || echo "commit sites: $gl"
+  grep -inE 'gpg[s]ign' "$1" | grep -vE '^[0-9]+:  genv git -C "\$1" .* -c commit\.gpg[s]ign=[t]rue c[o]mmit -q '
+  grep -nE "$re_var" "$1"
+  grep -nE -- '--no-gpg-[s]ign|commit-[t]ree|fast-[i]mport|mk[t]ag|-t [c]ommit' "$1"
+}
 self="$here/$(basename "${BASH_SOURCE[0]}")"
-gl="$(grep -nE 'git .* c[o]mmit -q' "$self")"
-[[ "$(printf '%s\n' "$gl" | grep -c .)" == 1 && "$gl" == *'commit.gpgsign=true'* && "$gl" == *'user.signingkey="$fixkey"'* ]] && ok "guard: one fixture commit site, signed with the fixture key" || bad "guard: fixture commit sites" "$gl"
-gx="$(grep -nE 'gpgsign=[f]alse|--no-gpg-[s]ign|commit-[t]ree|fast-[i]mport|mk[t]ag|-t [c]ommit' "$self")"
-[[ -z "$gx" ]] && ok "guard: no other way of writing a commit object" || bad "guard: another commit writer" "$gx"
+gv="$(guard_violations "$self")"
+[[ -z "$gv" ]] && ok "guard: one fixture commit site, signed with the fixture key, and no other commit writer" || bad "guard: this file" "$gv"
+# The guard against two crafted mutants (director#439 review): text only, never run.
+m=0
+for line in 'genv git -C "$d" -c commit.gpg''Sign=0 merge -q x' 'g=g''it; gen''v "$g" -C "$d" com''mit -q -m x'; do
+  m=$((m+1)); { cat "$self"; printf '%s\n' "$line"; } >"$root/mutant$m"
+  [[ -n "$(guard_violations "$root/mutant$m")" ]] && ok "guard: crafted mutant $m is caught" || bad "guard: crafted mutant $m passed" "$line"
+done
+# The signature check against crafted commit text, so no test makes an unsigned commit.
+hd='tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\ncommitter t <t@t.invalid> 0 +0000\n'
+printf "$hd"'\nx\n' >"$root/c-unsigned"; printf "$hd"'gpgsig -----BEGIN SSH SIGNATURE-----\n \n -----END-----\n\nx\n' >"$root/c-signed"
+printf "$hd"'\nmessage\ngpgsig in the body is not a header\n' >"$root/c-body"
+! has_sig "$root/c-unsigned" && has_sig "$root/c-signed" && ! has_sig "$root/c-body" && ok "has_sig reads the header only" || bad "has_sig on crafted commit text"
 mkco() { # $1 dir, $2 code commits ahead
   d="$1"; mkdir -p "$d/cmd/director-mcp" "$d/docs"; genv git -C "$d" init -q -b main
   echo a >"$d/cmd/director-mcp/a.go"; genv git -C "$d" add -A; gcommit "$d" c1
@@ -122,6 +151,10 @@ mkco() { # $1 dir, $2 code commits ahead
 }
 mkco "$root/co-director" 3
 mkco "$root/co-marvel" 2
+for r in co-director co-marvel; do
+  n="$(genv git -C "$root/$r" rev-list --all | grep -c .)"; u="$(unsigned_in "$root/$r")"
+  [[ "$n" -gt 0 && -z "$u" ]] && ok "every commit in $r is signed ($n)" || bad "unsigned commits in $r" "$u"
+done
 C1="$(cat "$root/co-director.c1")"
 M1="$(cat "$root/co-marvel.c1")"
 cat >"$root/bin/marvel" <<SH
