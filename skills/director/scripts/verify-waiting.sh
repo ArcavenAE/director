@@ -136,5 +136,28 @@ rm -f "$GH_DIR/3.json"; cp "$PRS" "$root/prs.before"
 PATH="$root/bin:$PATH" "$DWS" waiting write >"$root/w.out" 2>&1 && bad "an unreadable PR is refused" || ok "a PR gh cannot read makes the write refuse"
 cmp -s "$PRS" "$root/prs.before" && grep -q 'o/r#3' "$root/w.out" && ok "the old cache is untouched and the PR is named" || bad "refused write changed the cache" "$(cat "$root/w.out")"
 
+# --- an approval counts only at the current head, by a non-author, when GitHub gives no decision ---------
+cp "$root/prs.before" "$PRS"
+printf '{"state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","reviews":[]}' >"$GH_DIR/3.json"
+"$DWS" open ws-c --title c --stage building --link pr:o/r#6 pr:o/r#7 pr:o/r#8 pr:o/r#9 >/dev/null
+rev() {  # LOGIN COMMIT AGE_H
+  printf '{"state":"APPROVED","author":{"login":"%s"},"commit":{"oid":"%s"},"submittedAt":"%s"}' "$1" "$2" "$(stamp "$3")"
+}
+pr() {  # AUTHOR REVIEW_JSON...
+  local a="$1"; shift; local IFS=,
+  printf '{"state":"OPEN","isDraft":false,"reviewDecision":"","author":{"login":"%s"},"headRefOid":"head2","reviews":[%s]}' "$a" "$*"
+}
+pr alice "$(rev alice head2 3)" >"$GH_DIR/6.json"                 # the author's own approval
+pr alice "$(rev bob head1 3)" >"$GH_DIR/7.json"                   # a non-author approval of an older commit
+pr alice "$(rev bob head2 5)" "$(rev carol head2 2)" >"$GH_DIR/8.json"   # two approvals at the head
+printf '{"state":"OPEN","isDraft":false,"reviewDecision":"","author":{"login":"alice"},"headRefOid":"head2","reviews":[{"state":"COMMENTED","author":{"login":"bob"},"commit":{"oid":"head2"},"submittedAt":"%s"}]}' "$(stamp 1)" >"$GH_DIR/9.json"
+PATH="$root/bin:$PATH" "$DWS" waiting write >"$root/w.out" 2>&1 && ok "waiting write succeeds with the review cases" || bad "waiting write" "$(cat "$root/w.out")"
+python3 - "$PRS" <<'P' && ok "an author's own approval, an older commit's and a comment do not count; a non-author approval at the head does, dated by the latest" || bad "approval rule" "$(cat "$PRS")"
+import json, sys
+c = json.load(open(sys.argv[1]))
+assert sorted(p["pr"] for p in c["approved_not_merged"]) == ["o/r#1", "o/r#8"], c
+assert c["checked"] == 8, c
+P
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

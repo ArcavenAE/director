@@ -1310,11 +1310,19 @@ WAITING = os.path.join(STATE, "waiting-prs.json")
 
 
 def approved_at(d):
-    """The time a PR open and approved was approved, else None. Reads reviewDecision and the reviews."""
+    """The time a PR open and approved was approved, else None. When GitHub's reviewDecision says APPROVED
+    it is believed. With no decision (a repo with no required review), an approval counts only when it was
+    given at the PR's current head by someone other than its author: an approval of an older commit, or
+    the author's own, does not make the PR wait on a merge."""
     if (d.get("state") or "").upper() != "OPEN" or d.get("isDraft"):
         return None
+    author = (d.get("author") or {}).get("login")
+    head = d.get("headRefOid")
     reviews = [r for r in d.get("reviews") or [] if isinstance(r, dict)]
-    times = sorted(r["submittedAt"] for r in reviews if r.get("state") == "APPROVED" and isinstance(r.get("submittedAt"), str))
+    times = sorted(r["submittedAt"] for r in reviews
+                   if r.get("state") == "APPROVED" and isinstance(r.get("submittedAt"), str)
+                   and head and (r.get("commit") or {}).get("oid") == head
+                   and (r.get("author") or {}).get("login") not in (None, author))
     decision = d.get("reviewDecision")
     if decision == "APPROVED" or (not decision and times):
         return times[-1] if times else NONE
@@ -1328,7 +1336,7 @@ def cmd_waiting_write(a):
     waiting, errors = [], []
     for repo, num in prs:
         try:
-            d = json.loads(run_json(["gh", "pr", "view", num, "-R", repo, "--json", "state,isDraft,reviewDecision,reviews"]))
+            d = json.loads(run_json(["gh", "pr", "view", num, "-R", repo, "--json", "state,isDraft,reviewDecision,reviews,author,headRefOid"]))
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as err:
             errors.append(f"{repo}#{num}: {str(err).splitlines()[0][:120] if str(err) else type(err).__name__}")
             continue

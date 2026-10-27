@@ -189,8 +189,6 @@ def whole(path):
 
 
 def waiting_line():
-    reads_path = os.path.join(state_dir(), "desk-reads.jsonl")
-    prs_path = os.path.join(state_dir(), "waiting-prs.json")
     reads, read_age, why_reads = read_input("desk-reads.jsonl", "read_at", last_row)
     prs, _, why_prs = read_input("waiting-prs.json", "written_at", whole)
     why = []
