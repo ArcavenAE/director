@@ -270,6 +270,10 @@ questions crowds them out. Three scripts in `scripts/` give them one.
   heartbeat it says the age is unknown; it never invents one. Its last line gives
   the age of the last stalled-ideas scan (`dbi`, run by the sweep, then
   `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat`), read from a file: the hook never runs the scan.
+  When something waits it adds one last line, `waiting: <n> Desk answers not relayed (...); <m> approved PRs not
+  merged (...); Desk read <age> ago`, or `waiting: UNKNOWN (<reason>)` when an input is missing or too old. The
+  answers come from `desk-snapshot write --answers`; the PR half comes from `dws waiting write`, which the
+  sweep runs after `dws refresh --local` and which is the only step that may call gh.
   `verify-standing-hook.sh` proves it.
 - `reference/relay-template.md` is the form to fill before a relay.
 - `${DIRECTOR_HOME:-$HOME/.director}/bin/composer-check` looks at a pane before an inject that ends in Enter. It
