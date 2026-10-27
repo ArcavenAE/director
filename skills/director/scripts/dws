@@ -4,7 +4,7 @@
 One row per workstream (an issue, a design and its builds), folded on read
 from an append-only event file. Part W1 of the workstream ledger design
 (sim/design/board-workstream-ledger.md): the store, the fold, the lock, the
-CLI and the instance-id refusal; W2 adds refresh. The page (W3) comes later.
+CLI and the instance-id refusal; W2 adds refresh; W3 adds the page and the read of its picks.
 
   $DIRECTOR_STATE/workstreams.jsonl   append-only events
   $DIRECTOR_STATE/workstreams.lock    one flock around fold, check, append
@@ -17,6 +17,8 @@ CLI and the instance-id refusal; W2 adds refresh. The page (W3) comes later.
   dws [--actor A] park <slug> --from <current>
   dws refresh [<slug>...]
   dws show [--json]
+  dws page [--out FILE] [--theme FILE] [--nav FILE] [--desk-url FILE]
+  dws picks --file FILE
 
 Links are typed: pr:<owner>/<repo>#<n>, issue:<owner>/<repo>#<n>, bd:<id>
 and ask:<id>. refresh (W2) reads the first three; ask ids wait for W5, and an
@@ -106,7 +108,7 @@ read merge-guard makes: it holds a PR whose row waits on a decision that is not 
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
 """
-import argparse, datetime, fcntl, json, os, re, subprocess, sys, tempfile, time, unicodedata
+import argparse, datetime, fcntl, hashlib, html as htmlmod, json, os, re, subprocess, sys, tempfile, time, unicodedata
 
 HOME = os.path.expanduser("~")
 STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
@@ -2662,6 +2664,397 @@ def cmd_decisions(a):
         print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
 
 
+# W3: `page` renders the ledger as one self-contained HTML page, from workstreams.jsonl and
+# desk-snapshot.json. No network, no external script, no clock in the output: the same inputs
+# and the same DWS_NOW give the same bytes. The look and the nav are instance files, never
+# repo content: --theme and --nav (defaults page-theme.css.html and page-nav.html in the
+# state directory) are put verbatim at the top of the body, and with neither the page falls
+# back to a plain built-in style and no nav. The "Your call" control on a row writes a doc
+# to the page's db; `picks` reads an export of those docs back (below).
+#
+# A row lands in at most one section, first match wins:
+#   blocked on the operator (open stage)          Blocked on you
+#   merged, released, deployed, accepted, 7 days  Done in the last 7 days
+#   blocked on anything else, open stage          Waiting on a seat (a seat or a role)
+#   slug starts adhoc-, open stage                Ad hoc
+#   building or in review, moved under 7 days ago In motion
+#   any other open stage, moved 7 days ago or more  Quiet 7 days or more
+# A row in none of them (parked, finished more than 7 days ago, or at idea, defined or
+# designed and moved within 7 days) is counted in the footer, never dropped without a word.
+# The 7 days and the lists are the operator's to change here.
+PAGE_TITLE = "Director: Work Ledger"
+PAGE_ID = "work-ledger"
+PAGE_DAYS = 7
+DONE_STAGES = ("merged", "released", "deployed", "accepted")
+CLOSED_STAGES = DONE_STAGES + ("parked",)
+# (key, heading, the calls a row in it may carry as (action, label))
+PAGE_SECTIONS = (
+    ("blocked", "Blocked on you", ()),
+    ("motion", "In motion", (("nudge-owner", "Nudge owner"), ("mark-done", "Mark done"))),
+    ("waiting", "Waiting on a seat", (("nudge-owner", "Nudge owner"), ("reassign", "Reassign"), ("park", "Park"))),
+    ("adhoc", "Ad hoc", (("nudge-owner", "Nudge owner"), ("close", "Close"), ("park", "Park"))),
+    ("done", f"Done in the last {PAGE_DAYS} days", ()),
+    ("quiet", f"Quiet {PAGE_DAYS} days or more", (("kick-off", "Kick off"), ("park", "Park"), ("close", "Close"))),
+)
+# Sections listed oldest move first; the others newest first.
+PAGE_OLDEST_FIRST = ("blocked", "waiting", "quiet")
+
+PAGE_CSS = """
+:root{color-scheme:light dark}
+body{margin:0;background:var(--bg,Canvas);color:var(--fg,CanvasText);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:960px;margin:0 auto;padding:16px}
+h1{font-size:1.4rem;margin:0 0 4px}
+h2{font-size:1.1rem;margin:28px 0 2px}
+.src,.count,.none,.foot{color:var(--muted,GrayText);font-size:.88rem;margin:2px 0}
+.notice{border:1px dashed var(--line,GrayText);border-radius:8px;padding:10px 12px;margin:12px 0}
+ul.rows{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
+li.row{border:1px solid var(--line,GrayText);border-radius:8px;padding:10px 12px}
+.title{font-weight:600}
+code{font-family:ui-monospace,Menlo,monospace;font-size:.82rem;color:var(--muted,GrayText)}
+dl.f{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:4px 16px;margin:6px 0 0}
+dl.f div{min-width:0}
+dt{font-size:.74rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,GrayText)}
+dd{margin:0;overflow-wrap:anywhere}
+.link{margin-right:8px;display:inline-block}
+.call{margin-top:10px;border-top:1px solid var(--line,GrayText);padding-top:8px}
+.call[hidden],.notice[hidden]{display:none}
+.acts{display:flex;flex-wrap:wrap;gap:6px}
+button.act{font:inherit;font-size:.85rem;border:1px solid var(--line,GrayText);background:transparent;color:inherit;border-radius:999px;padding:3px 12px;cursor:pointer}
+button.act[aria-pressed="true"]{background:var(--fg,CanvasText);color:var(--bg,Canvas)}
+.call textarea{display:block;width:100%;box-sizing:border-box;margin:8px 0 4px;font:inherit;background:transparent;color:inherit;border:1px solid var(--line,GrayText);border-radius:6px;padding:6px}
+.call label{font-size:.85rem}
+.st{margin-left:10px;color:var(--muted,GrayText);font-size:.82rem}
+"""
+
+PAGE_JS = """
+(function(){
+  var PAGE="%s", state={db:null,canWrite:true,by:null,picks:{}}, timers={};
+  function $(s,r){return (r||document).querySelector(s)}
+  function all(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))}
+  function notice(t){var n=$("#notice"); if(n){n.textContent=t; n.hidden=!t}}
+  function rowId(li){return li.getAttribute("data-section")+"--"+li.getAttribute("data-slug")}
+  function rowOf(el){return el.closest("li.row")}
+  function paint(li){
+    var p=state.picks[rowId(li)]||{}, note=$(".note",li), rdy=$(".ready",li);
+    all(".act",li).forEach(function(b){
+      b.setAttribute("aria-pressed",String(b.getAttribute("data-action")===p.action));
+      b.disabled=!state.canWrite;
+    });
+    if(note&&document.activeElement!==note){note.value=p.note||""}
+    if(note){note.disabled=!state.canWrite}
+    if(rdy){rdy.checked=!!p.ready; rdy.disabled=!state.canWrite||!p.action}
+  }
+  function paintAll(){all("li.row").forEach(paint)}
+  function status(li,t){var s=$(".st",li); if(s){s.textContent=t}}
+  function save(li){
+    if(!state.db){return}
+    var id=rowId(li); clearTimeout(timers[id]);
+    timers[id]=setTimeout(function(){
+      var p=state.picks[id]||{}, ref=state.db.doc("picks/"+id), act=$(".act[data-action=\\""+(p.action||"")+"\\"]",li);
+      if(!p.action&&!p.note){
+        status(li,"Saving");
+        ref.delete().then(function(){status(li,"Cleared")}).catch(function(){status(li,"Not saved, try again")});
+        return;
+      }
+      var body={action:p.action||null,action_label:act?act.textContent:null,note:p.note||"",
+        ready:!!(p.ready&&p.action),section:li.getAttribute("data-section"),title:li.getAttribute("data-title"),
+        page:PAGE,at:new Date().toISOString(),by:state.by};
+      status(li,"Saving");
+      ref.set(body).then(function(){status(li,"Saved")}).catch(function(e){
+        if(e&&e.code==="invalid_argument"){state.canWrite=false; notice("Read-only: you can see the calls here, but not save them."); paintAll(); status(li,"You can't save here")}
+        else{status(li,"Not saved, try again")}
+      });
+    },500);
+  }
+  function edit(li,fn){
+    var id=rowId(li); state.picks[id]=Object.assign({},state.picks[id]||{}); fn(state.picks[id]); paint(li); save(li);
+  }
+  document.addEventListener("click",function(ev){
+    var b=ev.target.closest&&ev.target.closest("button.act"); if(!b||!state.canWrite){return}
+    var li=rowOf(b), a=b.getAttribute("data-action");
+    edit(li,function(p){if(p.action===a){p.action=null;p.ready=false}else{p.action=a}});
+  });
+  document.addEventListener("change",function(ev){
+    var t=ev.target; if(!t.classList||!t.classList.contains("ready")){return}
+    edit(rowOf(t),function(p){p.ready=t.checked});
+  });
+  document.addEventListener("input",function(ev){
+    var t=ev.target; if(!t.classList||!t.classList.contains("note")){return}
+    var li=rowOf(t), id=rowId(li); state.picks[id]=Object.assign({},state.picks[id]||{},{note:t.value}); save(li);
+  });
+  if(!window.claude||!window.claude.use){notice("The Your call controls are not available in this view."); return}
+  claude.use("db").then(function(db){
+    if(!db){notice("The Your call controls are not available in this view. Open the page signed in to claude.ai."); return}
+    state.db=db;
+    all(".call").forEach(function(c){c.hidden=false});
+    claude.use("user").then(function(u){
+      if(!u){return}
+      if(u.id){u.id().then(function(id){state.by=id}).catch(function(){})}
+      if(u.can){u.can("data.write").then(function(v){
+        if(v===false){state.canWrite=false; notice("Read-only: you can see the calls here, but not save them."); paintAll()}
+      }).catch(function(){})}
+    }).catch(function(){});
+    db.collection("picks").onSnapshot(function(snap){
+      var m={}; snap.docs.forEach(function(d){m[d.id]=d.data()});
+      Object.keys(state.picks).forEach(function(k){if(timers[k]){m[k]=state.picks[k]}});
+      state.picks=m; paintAll();
+    },function(){notice("Calls stopped updating. Reload the page.")});
+  }).catch(function(){notice("The Your call controls are not available in this view.")});
+})();
+""" % PAGE_ID
+
+
+def page_age(r, t_now):
+    """Seconds since the row last moved, or None when the stored time cannot be read."""
+    try:
+        return (t_now - parse_time(r["last_moved"])).total_seconds()
+    except (ValueError, TypeError):
+        return None
+
+
+def page_section(r, t_now):
+    """The section key a row belongs in, or None (see the table above)."""
+    stage, blocked = r["stage"], str(r.get("blocked") or "").strip()
+    age, week = page_age(r, t_now), PAGE_DAYS * 86400
+    if stage not in CLOSED_STAGES and blocked and operator_blocked(blocked):
+        return "blocked"
+    if stage in DONE_STAGES:
+        return "done" if age is not None and age < week else None
+    if stage == "parked":
+        return None
+    if blocked:
+        return "waiting"
+    if r["slug"].startswith("adhoc-"):
+        return "adhoc"
+    if stage in ("building", "in review") and age is not None and age < week:
+        return "motion"
+    if age is None or age >= week:
+        return "quiet"
+    return None
+
+
+def page_link(link):
+    esc = htmlmod.escape
+    m = re.fullmatch(r"(pr|issue):([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)", link)
+    if m:
+        path = "pull" if m.group(1) == "pr" else "issues"
+        return f'<a class="link" href="https://github.com/{esc(m.group(2))}/{path}/{m.group(3)}" rel="noopener">{esc(link)}</a>'
+    return f'<span class="link">{esc(link)}</span>'
+
+
+def page_none():
+    return '<span class="none">none</span>'
+
+
+def page_count(n):
+    return "none" if n == 0 else ("1 row" if n == 1 else f"{n} rows")
+
+
+def page_desk_link(card, desk_url):
+    esc = htmlmod.escape
+    if not desk_url:
+        return f"<code>{esc(card)}</code>"
+    href = desk_url.replace("{id}", card) if "{id}" in desk_url else f"{desk_url}#{card}"
+    return f'<a href="{esc(href)}" rel="noopener"><code>{esc(card)}</code></a>'
+
+
+def page_row(r, key, calls, snap, desk_url):
+    esc = htmlmod.escape
+    cells = [
+        ("Owner", esc(r["owner"]) if r["owner"] else page_none()),
+        ("Stage", esc(r["stage"])),
+        ("Next action", esc(r["next"]) if r["next"] else page_none()),
+        ("Last moved", esc(r["last_moved"][:10]) if r["last_moved"] else page_none()),
+        ("Links", " ".join(page_link(l) for l in r["links"]) or page_none()),
+    ]
+    if key == "blocked":
+        cards = [l[4:] for l in r["links"] if l.startswith("ask:")]
+        parts = []
+        for c in cards:
+            st = card_status(snap, c) if snap is not None else None
+            tag = "" if st == "open" else (' <span class="none">(Desk UNREAD)</span>' if snap is None
+                                           else ' <span class="none">(not open in the Desk snapshot)</span>')
+            parts.append(page_desk_link(c, desk_url) + tag)
+        cells.insert(2, ("Answer on Desk", " ".join(parts) or '<span class="none">no card linked</span>'))
+    out = [f'<li class="row" data-section="{key}" data-slug="{esc(r["slug"])}" data-title="{esc(r["title"])}">',
+           f'<div><span class="title">{esc(r["title"])}</span> <code>{esc(r["slug"])}</code></div>', '<dl class="f">']
+    out += [f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in cells]
+    out.append("</dl>")
+    if calls:
+        out.append('<div class="call" hidden><div class="acts">')
+        out += [f'<button type="button" class="act" data-action="{a}" aria-pressed="false">{esc(label)}</button>' for a, label in calls]
+        out.append('</div><textarea class="note" rows="2" aria-label="Note" placeholder="Note"></textarea>')
+        out.append('<label><input type="checkbox" class="ready" disabled> Ready for director</label><span class="st" role="status"></span></div>')
+    out.append("</li>")
+    return "".join(out)
+
+
+def page_instance_file(flag_value, default_name, label):
+    """The text of an instance file. An explicit path that cannot be read is refused; a
+    default that is simply absent is skipped."""
+    path = flag_value or os.path.join(STATE, default_name)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        if flag_value:
+            raise Refused(f"{label} file {path} does not exist")
+        return ""
+    except (OSError, UnicodeDecodeError) as err:
+        raise Refused(f"{label} file {path} cannot be read ({type(err).__name__})")
+
+
+def page_render(theme, nav, desk_url):
+    esc = htmlmod.escape
+    t_now = parse_time(now())
+    rows, torn = fold()
+    snap, why = desk_snapshot()
+    ledger_read = os.path.exists(LEDGER)
+    buckets = {k: [] for k, _, _ in PAGE_SECTIONS}
+    unplaced = 0
+    for r in sorted(rows.values(), key=lambda r: r["slug"]):
+        key = page_section(r, t_now)
+        if key is None:
+            unplaced += 1
+        else:
+            buckets[key].append(r)
+    out = ["<!doctype html>\n"
+           "<!-- Director Work Ledger page. director publishes it as an Artifact with capabilities\n"
+           '     {"db":{},"user":{}}. Each row\'s "Your call" control writes a doc to the picks collection,\n'
+           "     which `dws picks` reads back. With no db the page renders in full and the controls stay hidden. -->\n"
+           '<html lang="en"><head><meta charset="utf-8">',
+           '<meta name="viewport" content="width=device-width,initial-scale=1">',
+           f"<title>{esc(PAGE_TITLE)}</title><style>{PAGE_CSS}</style></head><body>\n"]
+    out.append(theme)
+    out.append(nav)
+    out.append(f"<main><h1>{esc(PAGE_TITLE)}</h1>")
+    ledger = (f"Ledger: {len(rows)} workstream(s)" + (f", {torn} unreadable line(s) skipped" if torn else "")
+              if ledger_read else f"Ledger UNREAD: {esc(os.path.basename(LEDGER))} does not exist")
+    desk = f"Desk snapshot read {esc(snap['read_at'])}" if snap is not None else f"Desk {esc(why)}"
+    out.append(f'<p class="src">{ledger}. {desk}.</p>')
+    out.append('<div id="notice" class="notice" role="status" hidden></div>')
+    for key, heading, calls in PAGE_SECTIONS:
+        rs = sorted(buckets[key], key=lambda r: r["slug"])
+        rs.sort(key=lambda r: r["last_moved"], reverse=key not in PAGE_OLDEST_FIRST)
+        out.append(f'<section id="s-{key}"><h2>{esc(heading)}</h2><p class="count">{page_count(len(rs))}</p>')
+        if rs:
+            out.append('<ul class="rows">' + "".join(page_row(r, key, calls, snap, desk_url) for r in rs) + "</ul>")
+        out.append("</section>")
+    out.append(f'<p class="foot">Not shown: {unplaced} row(s), parked, finished more than {PAGE_DAYS} days ago, '
+               f"or at idea, defined or designed and moved in the last {PAGE_DAYS} days.</p></main>")
+    out.append(f"<script>{PAGE_JS}</script></body></html>\n")
+    return "".join(out)
+
+
+def cmd_page(a):
+    theme = page_instance_file(a.theme, "page-theme.css.html", "theme")
+    nav = page_instance_file(a.nav, "page-nav.html", "nav")
+    desk_url = page_instance_file(a.desk_url, "page-desk-url", "desk url").strip()
+    if desk_url and not desk_url.startswith("https://"):
+        raise Refused("the Desk url must start with https://")
+    text = page_render(theme, nav, desk_url)
+    if not a.out:
+        sys.stdout.buffer.write(text.encode("utf-8"))
+        return
+    d = os.path.dirname(os.path.abspath(a.out))
+    fd, tmp = tempfile.mkstemp(prefix=".page-", dir=d)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(text.encode("utf-8"))
+        os.replace(tmp, a.out)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+# W3: `picks` reads an export of the page's picks collection (the doc list the Artifact data
+# tool returns) and prints one line per pick with ready true that dws has not reported, then
+# records what it reported in $DIRECTOR_STATE/picks-seen.jsonl, so a pick is reported once.
+# A pick the operator changes afterwards (a new action, note or time) is a new pick. It
+# writes nothing else and never reads the ledger.
+def picks_seen_path():
+    return os.path.join(STATE, "picks-seen.jsonl")
+
+
+def pick_docs(raw):
+    """(list of (doc id, fields), count of entries that were not a doc)."""
+    if isinstance(raw, dict):
+        for k in ("docs", "documents", "items", "results"):
+            if isinstance(raw.get(k), list):
+                raw = raw[k]
+                break
+        else:
+            raise Refused("the picks file is an object with no docs list")
+    if not isinstance(raw, list):
+        raise Refused("the picks file is not a list of docs")
+    docs, bad = [], 0
+    for d in raw:
+        if not isinstance(d, dict):
+            bad += 1
+            continue
+        fields = d["data"] if isinstance(d.get("data"), dict) else d
+        did = next((d[k] for k in ("doc_id", "id", "_id", "name") if isinstance(d.get(k), str) and d[k]), None)
+        if did is None:
+            bad += 1
+            continue
+        docs.append((did, fields))
+    return docs, bad
+
+
+def pick_key(did, f):
+    blob = json.dumps([did, f.get("action"), f.get("note"), f.get("at")], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def pick_text(value):
+    return printable(" ".join(str(value).split()))
+
+
+def cmd_picks(a):
+    try:
+        with open(a.file, encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        raise Refused(f"picks file {a.file} does not exist")
+    except (OSError, ValueError) as err:
+        raise Refused(f"picks file {a.file} cannot be read ({type(err).__name__})")
+    docs, bad = pick_docs(raw)
+    path = picks_seen_path()
+    os.makedirs(STATE, exist_ok=True)
+    reported = already = unready = 0
+    with open(path, "a+", encoding="utf-8") as seen_f:
+        fcntl.flock(seen_f, fcntl.LOCK_EX)
+        seen_f.seek(0)
+        seen, torn = set(), 0
+        for line in seen_f:
+            if not line.strip():
+                continue
+            try:
+                seen.add(json.loads(line)["key"])
+            except (ValueError, KeyError, TypeError):
+                torn += 1
+        for did, f in sorted(docs, key=lambda x: (str(x[1].get("at")), x[0])):
+            if f.get("ready") is not True:
+                unready += 1
+                continue
+            key = pick_key(did, f)
+            if key in seen:
+                already += 1
+                continue
+            label = f.get("action_label") or f.get("action") or "no action"
+            print(f"pick {pick_text(did)}  {pick_text(f.get('section', ''))}  {pick_text(label)}  "
+                  f"title: {pick_text(f.get('title', ''))}  note: {pick_text(f.get('note', '')) or 'none'}  "
+                  f"by {pick_text(f.get('by', '')) or 'unknown'}  at {pick_text(f.get('at', '')) or 'unknown'}")
+            sys.stdout.flush()
+            append({"pick": did, "key": key, "seen_at": now()}, path=path)
+            seen.add(key)
+            reported += 1
+    print(f"dws: {reported} new, {already} already reported, {unready} not ready"
+          + (f", {bad} entr(ies) that were not a doc" if bad else "")
+          + (f", {torn} unreadable line(s) in {path} skipped" if torn else ""), file=sys.stderr)
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="dws", description="director workstream ledger (W1)")
     p.add_argument("--actor", default="director", help="the writer, a claim checked against the writer table")
@@ -2854,6 +3247,17 @@ def main(argv):
     dl.add_argument("--daily", action="store_true", help="the trial's daily line and the unconfirmed list")
     dl.add_argument("--trial-start", dest="trial_start", metavar="YYYY-MM-DD", help="the trial's first day, for --daily")
     dl.set_defaults(fn=cmd_decisions)
+
+    pg = sub.add_parser("page", help="render the ledger as a self-contained HTML page to stdout or --out; reads the ledger and the Desk snapshot, writes only --out (W3)")
+    pg.add_argument("--out", help="write the page here (temp file and rename) instead of stdout")
+    pg.add_argument("--theme", help="file inserted verbatim at the top of the body (default $DIRECTOR_STATE/page-theme.css.html)")
+    pg.add_argument("--nav", help="file inserted verbatim after the theme (default $DIRECTOR_STATE/page-nav.html)")
+    pg.add_argument("--desk-url", help="file holding the Desk page address that a card id links to (default $DIRECTOR_STATE/page-desk-url); {id} in it is replaced, else #id is added")
+    pg.set_defaults(fn=cmd_page)
+
+    pk = sub.add_parser("picks", help="print the ready picks from a page export that were not reported before, and record them in picks-seen.jsonl (W3)")
+    pk.add_argument("--file", required=True, help="JSON list of the picks docs, as the Artifact data tool returns them")
+    pk.set_defaults(fn=cmd_picks)
 
     mh = sub.add_parser("merge-hold", help="exit 1 with the reason when a row linking the PR waits on an unconfirmed decision; read only (D2)")
     mh.add_argument("pr", metavar="OWNER/REPO#N")
