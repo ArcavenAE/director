@@ -80,7 +80,7 @@ Read in director's own docs on 2026-10-27.
   reads its own database only, so a shelf on the same page would read the
   same store.
 - **The digest** is the twice-daily summary the operator reads. The functions
-  list marks it as defined by habit only (`reference/functions.md`, function
+  list marks it as defined by habit only (`skills/director/reference/functions.md`, function
   8), and the timed inbox look already gives its digest a "cleared" list
   (`timed-inbox-look.md`). The shelf's `cleared` state would repeat that
   word with a different meaning unless the two are reconciled. A digest is
@@ -110,6 +110,6 @@ This note picks none of them.
 - Is `read` set by opening the item, or by the operator saying so?
 - How long does a cleared item stay recoverable?
 - Which items should interrupt, and which wait, under the attention budget
-  that R-134 describes?
+  that R-135 describes?
 - What must never go on the shelf, given that a Contributor can see the Desk
   page (`ops-dashboard.md`, section 3, on content bounds)?
