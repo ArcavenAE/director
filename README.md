@@ -280,7 +280,7 @@ director until the launcher is proven. In order:
 ```sh
 probe/nats-phase-0/start.sh &                              # local broker, loopback, JetStream
 nats stream add AGENT_INBOX --subjects 'agent.*.*.*.inbox,agent.*.*.role.*.inbox' \
-  --storage file --retention limits --max-age 72h --max-msg-size 65536 --dupe-window 2m
+  --storage file --retention limits --max-age 168h --max-msg-size 65536 --dupe-window 2m
 nats stream add AGENT_AUDIT --subjects 'agent.audit' --storage file --retention limits --max-age 720h
 nats kv add AGENT_STATE --ttl 90s --storage file
 (cd cmd/director-mcp && go build -o director-mcp .)

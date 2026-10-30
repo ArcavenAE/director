@@ -204,3 +204,32 @@ func TestBrokerRebindRaisesAnOlderGlobalDurableThreshold(t *testing.T) {
 		t.Errorf("an aligned durable reported a change: %q", n)
 	}
 }
+
+// The local half of the aae-orc-t77rr invariant: a local durable outlives the
+// mail AGENT_INBOX keeps. The setup instructions declare the stream's max age,
+// so the test reads it from there and from the README, which must agree.
+func TestLocalInactiveOutlastsInboxMaxAge(t *testing.T) {
+	re := regexp.MustCompile(`(?s)stream add AGENT_INBOX.*?--max-age (\d+)h`)
+	var declared []time.Duration
+	for _, p := range []string{"../../docs/getting-started.md", "../../README.md"} {
+		src, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := re.FindSubmatch(src)
+		if m == nil {
+			t.Fatalf("%s declares no AGENT_INBOX --max-age in hours", p)
+		}
+		hours, _ := strconv.Atoi(string(m[1]))
+		declared = append(declared, time.Duration(hours)*time.Hour)
+	}
+	if declared[0] != declared[1] {
+		t.Fatalf("getting-started.md declares %v and README.md %v for AGENT_INBOX", declared[0], declared[1])
+	}
+	if localConsumerInactive <= declared[0] {
+		t.Errorf("localConsumerInactive = %v, not above the inbox's declared max age %v: a durable would be cleaned up while the inbox still holds its unread mail", localConsumerInactive, declared[0])
+	}
+	if declared[0] != 168*time.Hour {
+		t.Errorf("the setup instructions declare %v for AGENT_INBOX, want 168h; update this test with the declaration", declared[0])
+	}
+}

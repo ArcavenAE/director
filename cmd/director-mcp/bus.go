@@ -97,11 +97,13 @@ type Bus struct {
 }
 
 // localConsumerInactive is the local durable's inactive threshold. The inbox
-// carries a 72h max age (docs/getting-started.md), so a durable cleaned up
-// after a slightly longer idle window can only ever have replayed messages
-// that already expired. It is what keeps superseded instances' durables from
-// accumulating, the same reasoning as globalConsumerInactive.
-const localConsumerInactive = 73 * time.Hour
+// declares a 168h max age (docs/getting-started.md), so a durable cleaned up
+// after a longer idle window can only ever have replayed messages that already
+// expired, and a live seat's durable outlasts its mail (aae-orc-t77rr). It is
+// what keeps superseded instances' durables from accumulating, the same
+// reasoning as globalConsumerInactive. TestLocalInactiveOutlastsInboxMaxAge
+// reads the declared max age and fails if the two drift.
+const localConsumerInactive = 8 * 24 * time.Hour
 
 // dial opens the NATS connection and JetStream context, presenting the R-77
 // credential the launcher supplied (if any). Shared by connect() and

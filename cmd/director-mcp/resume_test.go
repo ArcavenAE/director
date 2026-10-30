@@ -111,8 +111,8 @@ func TestBrokerLocalDurableHasAnInactiveThreshold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Config.InactiveThreshold < 72*time.Hour {
-		t.Errorf("local durable inactive threshold = %v, want above the inbox's 72h max age", info.Config.InactiveThreshold)
+	if info.Config.InactiveThreshold != localConsumerInactive || localConsumerInactive <= 168*time.Hour {
+		t.Errorf("local durable inactive threshold = %v, want %v, above the inbox's 168h max age", info.Config.InactiveThreshold, localConsumerInactive)
 	}
 	_ = js
 }
