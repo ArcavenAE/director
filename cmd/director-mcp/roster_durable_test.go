@@ -144,63 +144,73 @@ func TestGlobalInactiveOutlastsHubStreamMaxAge(t *testing.T) {
 	}
 }
 
-// ensureConsumer binds an existing durable; it used to keep the threshold the
-// durable was created with. A durable made under a shorter one must end at the
-// declared threshold, with its position and filter untouched.
-func TestBrokerRebindRaisesAnOlderGlobalDurableThreshold(t *testing.T) {
+// A shim mints a fresh instance, so every global durable it attaches is a new
+// one; it must be created at the declared threshold, and so must the durable a
+// recovery recreates after the hub lost it. A durable another process created
+// earlier keeps the threshold it was created with: nothing here reaches it.
+func TestBrokerNewGlobalDurablesCarryTheDeclaredThreshold(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
 	nc, _ := provision(t, ctx, url)
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
-	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
 	self := Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
-	bus, err := connect(ctx, url, self, gcfg)
+	bus, err := connect(ctx, url, self, &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer bus.close()
-
 	durable := globalDurable("operator", bus.instance)
-	old := jetstream.ConsumerConfig{
-		Durable:           durable,
-		FilterSubject:     gcfg.inboxSubject(),
-		AckPolicy:         jetstream.AckExplicitPolicy,
-		DeliverPolicy:     jetstream.DeliverAllPolicy,
-		MaxDeliver:        -1,
-		InactiveThreshold: 25 * time.Hour,
+	threshold := func(when string) {
+		t.Helper()
+		cons, err := gjs.Consumer(ctx, globalDirectorStream, durable)
+		if err != nil {
+			t.Fatalf("%s: %v", when, err)
+		}
+		if got := cons.CachedInfo().Config.InactiveThreshold; got != globalConsumerInactive {
+			t.Errorf("%s: durable threshold = %v, want %v", when, got, globalConsumerInactive)
+		}
 	}
-	if _, err := gjs.CreateOrUpdateConsumer(ctx, globalDirectorStream, old); err != nil {
+	if _, err := bus.globalReady(ctx); err != nil {
 		t.Fatal(err)
 	}
+	threshold("at attach")
 
-	g, err := bus.globalReady(ctx)
-	if err != nil {
+	if err := gjs.DeleteConsumer(ctx, globalDirectorStream, durable); err != nil {
 		t.Fatal(err)
 	}
-	cons, err := gjs.Consumer(ctx, globalDirectorStream, durable)
-	if err != nil {
-		t.Fatal(err)
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g1", "INFORM", "after the loss")
+	if res, err := bus.receiveTiered(ctx, 12*time.Second); err != nil || res.Env == nil {
+		t.Fatalf("poll after the loss: %+v %v", res, err)
 	}
-	cfg := cons.CachedInfo().Config
-	if cfg.InactiveThreshold != globalConsumerInactive {
-		t.Errorf("rebound durable threshold = %v, want %v", cfg.InactiveThreshold, globalConsumerInactive)
-	}
-	if cfg.FilterSubject != old.FilterSubject || cfg.AckPolicy != old.AckPolicy || cfg.DeliverPolicy != old.DeliverPolicy {
-		t.Errorf("the update changed more than the threshold: %+v", cfg)
-	}
-	if n := g.takeNotice(); !strings.Contains(n, "25h0m0s") || !strings.Contains(n, "now has") {
-		t.Errorf("the change must be reported once, got %q", n)
-	}
-	if n := g.takeNotice(); n != "" {
-		t.Errorf("notice repeated: %q", n)
-	}
+	threshold("after the hub lost the durable and the poll recreated it")
+}
 
-	// A durable already at the declared threshold is left alone and reports nothing.
-	if err := g.ensureConsumer(ctx, "operator", bus.instance); err != nil {
-		t.Fatal(err)
+// A stalled broker must not hold list_roster for rows times the per-lookup
+// bound: the whole call has one deadline, and rows it did not reach read as
+// unknown, never missing.
+func TestRosterLookupsShareOneDeadline(t *testing.T) {
+	old := rosterLookupDeadline
+	rosterLookupDeadline = 150 * time.Millisecond
+	defer func() { rosterLookupDeadline = old }()
+
+	const n = 40
+	rows := make([]map[string]any, n)
+	for i := range rows {
+		rows[i] = map[string]any{"oldest_pending_s": 0}
 	}
-	if n := g.takeNotice(); n != "" {
-		t.Errorf("an aligned durable reported a change: %q", n)
+	start := time.Now()
+	flagRows(context.Background(), rows, func(ctx context.Context, r map[string]any) []string {
+		<-ctx.Done() // a broker that never answers
+		r["durable"] = "unknown"
+		return []string{flagDurableUnchecked}
+	})
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("flagRows took %v for %d stalled rows, want about the %v deadline", d, n, rosterLookupDeadline)
+	}
+	for i, r := range rows {
+		if r["durable"] != "unknown" || flagsOf(r) != flagDurableUnchecked {
+			t.Errorf("row %d = %v, want unknown and %s", i, r, flagDurableUnchecked)
+		}
 	}
 }
