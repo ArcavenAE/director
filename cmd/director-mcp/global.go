@@ -47,15 +47,16 @@ const (
 	globalDirectorStream = "GLOBAL_TO_DIRECTOR"
 	globalStreamPrefix   = "GLOBAL_TO_"
 
-	// The hub streams carry a 72h max age (raised from 24h, director#77). A
-	// durable cleaned up after a slightly longer idle window can therefore
-	// only ever have replayed messages that have already expired, so the
-	// cleanup costs nothing while still keeping dead sessions' consumers from
-	// accumulating on a shared hub (R-50, and the orphan accumulation the
-	// local preflight comment names). Keep this one hour above the hub max
-	// age: below it, the repair path in ensureConsumer recreates a cleaned-up
-	// durable under DeliverAll and replays mail the session already acked.
-	globalConsumerInactive = 73 * time.Hour
+	// A global durable is cleaned up after this idle window, so the window has
+	// to outlast the mail the hub stream keeps: a durable removed while the
+	// stream still holds its unread mail leaves a live seat with no consumer
+	// and no signal (aae-orc-t77rr). The hub provisioner declares the hub
+	// streams' max age (probe/nats-global-tier/hub/provision.sh, 72h today) and
+	// the inbox retention is moving to 7 days, so the window is 8 days, a day
+	// above that. TestGlobalInactiveOutlastsHubStreamMaxAge reads the
+	// provisioner's value and fails if the two drift. Cleanup still keeps dead
+	// sessions' consumers from accumulating on a shared hub (R-50).
+	globalConsumerInactive = 8 * 24 * time.Hour
 )
 
 // durableCheckEvery bounds how often an empty global pull asks the hub whether
@@ -517,6 +518,7 @@ func attachGlobal(ctx context.Context, nc *nats.Conn, cfg globalConfig, agentID,
 func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance string) error {
 	durable := globalDurable(agentID, instance)
 	if cons, err := g.js.Consumer(ctx, g.cfg.streamName(), durable); err == nil {
+		cons = g.alignInactive(ctx, cons)
 		g.setConsumer(cons)
 		if info := cons.CachedInfo(); info != nil {
 			g.noteAcked(info.AckFloor.Stream)
@@ -546,6 +548,33 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 	g.checked = time.Now()
 	g.mu.Unlock()
 	return nil
+}
+
+// alignInactive brings a rebound durable's inactive threshold to
+// globalConsumerInactive. Binding keeps whatever config the durable was created
+// with, so a durable made under an older, shorter threshold (sim/design/
+// leaf-fabric-one-address-space.md records 25h on the hub) would still be
+// cleaned up while the stream holds its unread mail. Only the threshold is
+// changed: the update starts from the durable's own config, so its position,
+// filter and ack policy stay as they were. A hub that refuses the update leaves
+// the bound durable in place and queues a notice, since the seat can still read.
+func (g *globalTier) alignInactive(ctx context.Context, cons jetstream.Consumer) jetstream.Consumer {
+	info := cons.CachedInfo()
+	if info == nil || info.Config.InactiveThreshold == globalConsumerInactive {
+		return cons
+	}
+	was := info.Config.InactiveThreshold
+	cfg := info.Config
+	cfg.InactiveThreshold = globalConsumerInactive
+	updated, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), cfg)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if err != nil {
+		g.notice = fmt.Sprintf("this session's global durable %s keeps its inactive threshold of %s, not the %s this build sets; updating it failed: %v", info.Name, was, globalConsumerInactive, err)
+		return cons
+	}
+	g.notice = fmt.Sprintf("this session's global durable %s had an inactive threshold of %s and now has %s", info.Name, was, globalConsumerInactive)
+	return updated
 }
 
 // floorListTimeout bounds each lookup seatFloor makes, so a request that gets

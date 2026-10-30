@@ -349,6 +349,15 @@ report: a session whose shim died leaves no row. With global mode on, rows
 from both tiers are merged with a `tier` column, and global rows carry
 `cluster` and `role`.
 
+Each local row also says what its session's durable on `AGENT_INBOX` shows:
+`durable` is `present`, `missing` or `unknown`, `unread` is the durable's own
+count when it is present, and `flags` lists what is wrong or could not be
+established. `no-durable` means the broker answered that the session has no
+durable, so mail sent to it has no reader. `durable-unchecked` means the lookup
+failed or timed out, or the row names no instance, which is unknown and not
+missing. `pending-age-unreported` means the row carries no `oldest_pending_s`,
+as from a shim older than that field. Global rows carry no such fields yet.
+
 ### `set_presence`
 
 | Argument | Default | Meaning |
@@ -671,8 +680,10 @@ Global hub (domain `global`):
 | `GLOBAL_PRESENCE` (KV) | `presence.<cluster>.<role>.<instance>`, `presence.director.<instance>` |
 
 A global durable is `mcp_global_<id>_<instance>` with an inactive threshold
-one hour longer than the hub streams' 72h max age, so cleanup can only ever
-discard a durable whose replay had already expired.
+of 8 days, longer than the hub streams' max age (72h in the hub provisioner
+today, moving to 7 days), so cleanup can only ever discard a durable whose
+replay had already expired. A rebind sets an existing durable's threshold to
+this value, so a durable created under an older, shorter one is brought up to it.
 
 A new global durable resumes the way the local one does: after the highest
 ack floor among the seat's departed `mcp_global_<id>_` durables (filtered on
