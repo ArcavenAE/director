@@ -686,8 +686,10 @@ Global hub (domain `global`):
 A global durable is `mcp_global_<id>_<instance>` with an inactive threshold
 of 8 days, longer than the hub streams' 7 day max age (168h in the hub
 provisioner), so cleanup can only ever discard a durable whose replay had
-already expired. A rebind sets an existing durable's threshold to
-this value, so a durable created under an older, shorter one is brought up to it.
+already expired. Every new durable gets this threshold, including one a
+recovery recreates. A seat whose shim started before this value changed keeps
+the threshold its durable was created with until its shim restarts or the
+operator step tracked outside this change raises it.
 
 A new global durable resumes the way the local one does: after the highest
 ack floor among the seat's departed `mcp_global_<id>_` durables (filtered on
