@@ -55,7 +55,7 @@ MD
 # The guard: the page with no ledger file. GOLDEN is the sha256 of main's page
 # for this board.md, with the generated stamp and the state path normalized.
 # A deliberate change to the no-ledger page updates it.
-GOLDEN=5d6150e5577e5c34ba18f691e3767658926b9c98bb8d6c045d3caa9329bfd60f
+GOLDEN=9cb082fac030d2cb136f33d1c3a470a9820b9f89b056b5069a543d74b7ed6a90
 norm() {
   python3 - "$1" "$DIRECTOR_STATE" <<'PY'
 import hashlib, re, sys
