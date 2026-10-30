@@ -86,6 +86,10 @@ details.done{margin-top:28px}
 details.done summary{cursor:pointer;color:var(--muted);font-weight:600}
 details.done .list{margin-top:12px}
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+/* Narrow screens: long words and URLs wrap, grid and flex children may shrink, nothing scrolls the page sideways. */
+.card,.list,.ot,.row>*,.meta>*{min-width:0}
+.opt{grid-template-columns:auto minmax(0,1fr)}
+h1,h2,.q,.md,.chip,.id,.ruling,.recbox{overflow-wrap:anywhere}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
 
