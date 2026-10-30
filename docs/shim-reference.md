@@ -152,9 +152,9 @@ Slice M (`sim/design/unread-slice-m.md`):
    read from the start, so mail sent to a cold mailbox is delivered. A
    crashed session's presence row can linger up to the bucket's 90s TTL; a
    reconnect inside that window replays rather than skips. The
-   durable carries a 73h inactive threshold, one hour above the inbox's 72h
-   max age, so a superseded instance's durable is cleaned up rather than
-   left behind.
+   durable carries an 8 day inactive threshold, above the inbox's 168h max
+   age, so a superseded instance's durable is cleaned up rather than left
+   behind and a live seat's durable outlasts its mail.
 3. Write presence as `idle`; warn on stderr if another instance of the same
    id is present (R-49).
 4. Start the heartbeat: presence renewed every 30 seconds on the shim's own
@@ -649,7 +649,7 @@ Local broker:
 
 | Object | Subjects | Shape |
 |---|---|---|
-| `AGENT_INBOX` | `agent.*.*.*.inbox`, `agent.*.*.role.*.inbox` | file storage, limits retention, 72h max age, 64 KiB max message, 2m dedupe window |
+| `AGENT_INBOX` | `agent.*.*.*.inbox`, `agent.*.*.role.*.inbox` | file storage, limits retention, 168h max age, 64 KiB max message, 2m dedupe window |
 | `AGENT_AUDIT` | `agent.audit` | file, append-only, 30 days; every sent envelope is mirrored here, and every refused one is recorded here with `Director-Outcome: refused` |
 | `AGENT_STATE` (KV) | `presence.<team>.<id>.<instance>` | 90s TTL on the bucket; a heartbeat rewrite resets the key's age |
 
