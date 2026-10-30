@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -186,12 +187,45 @@ func TestBrokerNewGlobalDurablesCarryTheDeclaredThreshold(t *testing.T) {
 	threshold("after the hub lost the durable and the poll recreated it")
 }
 
+// deadlineSpread records the context deadline each stalled lookup was given
+// and reports how far apart the earliest and latest are. One deadline for a
+// whole roster call gives every lookup the same instant, so the spread is zero
+// whatever the machine load; a deadline per row or per tier gives later lookups
+// later instants, a deadline apart. Unlike a wall-clock bound it does not move
+// when timers are starved.
+type deadlineSpread struct {
+	mu       sync.Mutex
+	earliest time.Time
+	latest   time.Time
+	missing  int
+}
+
+func (d *deadlineSpread) note(ctx context.Context) {
+	dl, ok := ctx.Deadline()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !ok {
+		d.missing++
+		return
+	}
+	if d.earliest.IsZero() || dl.Before(d.earliest) {
+		d.earliest = dl
+	}
+	if dl.After(d.latest) {
+		d.latest = dl
+	}
+}
+
+func (d *deadlineSpread) spread() time.Duration { return d.latest.Sub(d.earliest) }
+
 // A stalled broker must not hold list_roster for rows times the per-lookup
 // bound: the whole call has one deadline, and rows it did not reach read as
-// unknown, never missing.
+// unknown, never missing. The elapsed bound is a small multiple of the
+// deadline, so a regression to a deadline per row or per lookup (40 rows over
+// 8 workers is five deadlines end to end) fails it.
 func TestRosterLookupsShareOneDeadline(t *testing.T) {
 	old := rosterLookupDeadline
-	rosterLookupDeadline = 150 * time.Millisecond
+	rosterLookupDeadline = 500 * time.Millisecond
 	defer func() { rosterLookupDeadline = old }()
 
 	const n = 40
@@ -199,14 +233,26 @@ func TestRosterLookupsShareOneDeadline(t *testing.T) {
 	for i := range rows {
 		rows[i] = map[string]any{"oldest_pending_s": 0}
 	}
+	var seen deadlineSpread
 	start := time.Now()
 	flagRows(context.Background(), rows, func(ctx context.Context, r map[string]any) []string {
-		<-ctx.Done() // a broker that never answers
+		seen.note(ctx)
+		if _, ok := ctx.Deadline(); ok {
+			<-ctx.Done() // a broker that never answers
+		}
 		r["durable"] = "unknown"
 		return []string{flagDurableUnchecked}
 	})
-	if d := time.Since(start); d > 2*time.Second {
-		t.Errorf("flagRows took %v for %d stalled rows, want about the %v deadline", d, n, rosterLookupDeadline)
+	if seen.missing > 0 {
+		t.Errorf("%d lookups ran with no deadline", seen.missing)
+	}
+	if sp := seen.spread(); sp > rosterLookupDeadline/10 {
+		t.Errorf("the %d lookups were given deadlines %v apart, want one shared deadline", n, sp)
+	}
+	// A loose backstop on the wall clock: five deadlines end to end would be
+	// the per-row regression, one is the contract.
+	if d, limit := time.Since(start), 4*rosterLookupDeadline; d > limit {
+		t.Errorf("flagRows took %v for %d stalled rows, want within %v (the %v deadline)", d, n, limit, rosterLookupDeadline)
 	}
 	for i, r := range rows {
 		if r["durable"] != "unknown" || flagsOf(r) != flagDurableUnchecked {
@@ -241,5 +287,166 @@ func TestLocalInactiveOutlastsInboxMaxAge(t *testing.T) {
 	}
 	if declared[0] != 168*time.Hour {
 		t.Errorf("the setup instructions declare %v for AGENT_INBOX, want 168h; update this test with the declaration", declared[0])
+	}
+}
+
+// A global roster row gets the same flags, with the durable looked up on the
+// hub stream of the row's cluster (or the director stream for a director).
+func TestBrokerRosterFlagsGlobalRowsByTheirDurable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	if _, err := gjs.CreateStream(ctx, jetstream.StreamConfig{Name: globalStreamPrefix + "c2", Subjects: []string{"global.c2.>"}}); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(stream, durable, filter string) {
+		t.Helper()
+		_, err := gjs.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{Durable: durable, FilterSubject: filter, AckPolicy: jetstream.AckExplicitPolicy})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk(globalStreamPrefix+"c2", globalDurable("sup", "01HAS"), "global.c2.supervisor.inbox")
+	if _, err := gjs.Publish(ctx, "global.c2.supervisor.inbox", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+
+	self := Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
+	bus, err := connect(ctx, url, self, &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bus.close()
+	if _, err := bus.setPresence(ctx, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	kv, err := gjs.KeyValue(ctx, globalPresenceBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(key string, rec map[string]any) {
+		t.Helper()
+		body, _ := json.Marshal(rec)
+		if _, err := kv.Put(ctx, key, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("presence.c2.supervisor.01HAS", map[string]any{"agent_id": "sup", "cluster": "c2", "role": "supervisor", "instance": "01HAS", "oldest_pending_s": 0})
+	put("presence.c2.supervisor.01LOST", map[string]any{"agent_id": "gone", "cluster": "c2", "role": "supervisor", "instance": "01LOST", "oldest_pending_s": 0})
+	put("presence.c9.supervisor.01NOSTREAM", map[string]any{"agent_id": "far", "cluster": "c9", "role": "supervisor", "instance": "01NOSTREAM", "oldest_pending_s": 0})
+	put("presence.c2.supervisor.01NOCLUSTER", map[string]any{"agent_id": "nowhere", "role": "supervisor", "instance": "01NOCLUSTER"})
+
+	rows, warn, err := bus.rosterMerged(ctx)
+	if err != nil || warn != "" {
+		t.Fatalf("roster: %v %q", err, warn)
+	}
+	byAgent := map[string]map[string]any{}
+	for _, r := range rows {
+		if r["tier"] == "global" {
+			a, _ := r["agent_id"].(string)
+			byAgent[a] = r
+		}
+	}
+	if r := byAgent["sup"]; r["durable"] != "present" || r["unread"] != uint64(1) || flagsOf(r) != "" {
+		t.Errorf("seat with a durable = %v", r)
+	}
+	if r := byAgent["gone"]; r["durable"] != "missing" || flagsOf(r) != flagNoDurable {
+		t.Errorf("seat without a durable = %v", r)
+	}
+	if r := byAgent["far"]; r["durable"] != "unknown" || flagsOf(r) != flagDurableUnchecked {
+		t.Errorf("seat on a stream the hub does not have = %v, want unknown, not missing", r)
+	}
+	if r := byAgent["nowhere"]; r["durable"] != "unknown" || flagsOf(r) != flagPendingAgeUnreported+","+flagDurableUnchecked {
+		t.Errorf("row naming no cluster = %v", r)
+	}
+	if r := byAgent["operator"]; r["durable"] != "present" {
+		t.Errorf("this session's own director row = %v, want present", r)
+	}
+
+	// One deadline covers both tiers: with none left, every row on either tier
+	// reads unknown and none reads missing.
+	old := rosterLookupDeadline
+	rosterLookupDeadline = time.Nanosecond
+	defer func() { rosterLookupDeadline = old }()
+	rows, _, err = bus.rosterMerged(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r["durable"] != "unknown" || !strings.Contains(flagsOf(r), flagDurableUnchecked) {
+			t.Errorf("row after the deadline = %v, want unknown and %s", r, flagDurableUnchecked)
+		}
+	}
+}
+
+// The roster call has one deadline for both tiers, not one per tier: with
+// every lookup stalled, the call returns after about one deadline and not two.
+// The 1ns phase of the global rows test cannot tell the two apart.
+func TestBrokerRosterOneDeadlineCoversBothTiers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	self := Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
+	bus, err := connect(ctx, url, self, &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bus.close()
+	kv, err := gjs.KeyValue(ctx, globalPresenceBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		id := strconv.Itoa(i)
+		putPresence(t, ctx, bus, "presence.ops.l"+id+".01L"+id, map[string]any{"agent_id": "l" + id, "team": "ops", "instance": "01L" + id, "oldest_pending_s": 0})
+		body, _ := json.Marshal(map[string]any{"agent_id": "g" + id, "cluster": "c2", "role": "supervisor", "instance": "01G" + id, "oldest_pending_s": 0})
+		if _, err := kv.Put(ctx, "presence.c2.supervisor.01G"+id, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The property is one deadline for the call, so what is compared is the
+	// deadline each stalled lookup was handed, not elapsed time: elapsed time
+	// grows under load without saying anything about the deadline.
+	oldDeadline, oldCheck := rosterLookupDeadline, durableCheck
+	rosterLookupDeadline = 400 * time.Millisecond
+	var seen deadlineSpread
+	durableCheck = func(ctx context.Context, _ jetstream.JetStream, _, _ string, row map[string]any, flags *[]string) {
+		seen.note(ctx)
+		if _, ok := ctx.Deadline(); ok {
+			<-ctx.Done() // a broker that never answers
+		}
+		row["durable"] = "unknown"
+		*flags = append(*flags, flagDurableUnchecked)
+	}
+	defer func() { rosterLookupDeadline, durableCheck = oldDeadline, oldCheck }()
+
+	rows, _, err := bus.rosterMerged(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen.missing > 0 {
+		t.Errorf("%d lookups ran with no deadline", seen.missing)
+	}
+	if sp := seen.spread(); sp > rosterLookupDeadline/10 {
+		t.Errorf("local and global lookups were given deadlines %v apart, want one deadline for both tiers", sp)
+	}
+	var local, global int
+	for _, r := range rows {
+		if r["durable"] != "unknown" {
+			t.Errorf("row = %v, want unknown", r)
+		}
+		if r["tier"] == "global" {
+			global++
+		} else {
+			local++
+		}
+	}
+	if local < 12 || global < 12 {
+		t.Errorf("rows = %d local, %d global, want at least 12 of each", local, global)
 	}
 }

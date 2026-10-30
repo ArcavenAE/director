@@ -356,7 +356,11 @@ established. `no-durable` means the broker answered that the session has no
 durable, so mail sent to it has no reader. `durable-unchecked` means the lookup
 failed or timed out, or the row names no instance, which is unknown and not
 missing. `pending-age-unreported` means the row carries no `oldest_pending_s`,
-as from a shim older than that field. Global rows carry no such fields yet.
+as from a shim older than that field. Global rows carry the same fields: the
+durable is looked up on the hub stream of the row's cluster (`GLOBAL_TO_<cluster>`,
+or `GLOBAL_TO_DIRECTOR` for a director). A cluster credential that may not read
+another cluster's consumers, or a leaf link that does not answer, gives
+`unknown` and `durable-unchecked`, never `missing`.
 
 ### `set_presence`
 
