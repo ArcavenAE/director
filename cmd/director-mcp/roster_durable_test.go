@@ -318,4 +318,19 @@ func TestBrokerRosterFlagsGlobalRowsByTheirDurable(t *testing.T) {
 	if r := byAgent["operator"]; r["durable"] != "present" {
 		t.Errorf("this session's own director row = %v, want present", r)
 	}
+
+	// One deadline covers both tiers: with none left, every row on either tier
+	// reads unknown and none reads missing.
+	old := rosterLookupDeadline
+	rosterLookupDeadline = time.Nanosecond
+	defer func() { rosterLookupDeadline = old }()
+	rows, _, err = bus.rosterMerged(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r["durable"] != "unknown" || !strings.Contains(flagsOf(r), flagDurableUnchecked) {
+			t.Errorf("row after the deadline = %v, want unknown and %s", r, flagDurableUnchecked)
+		}
+	}
 }

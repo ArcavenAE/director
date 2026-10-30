@@ -120,11 +120,8 @@ func (b *Bus) checkLocalDurable(ctx context.Context, row map[string]any, durable
 // and a leaf link that does not answer looks the same, so a lookup that fails
 // for any reason but "no such durable" marks the row unknown, never missing.
 func (g *globalTier) flagGlobalRows(ctx context.Context, rows []map[string]any) {
-	for _, r := range rows {
-		var flags []string
-		if _, ok := r["oldest_pending_s"]; !ok {
-			flags = append(flags, flagPendingAgeUnreported)
-		}
+	flagRows(ctx, rows, func(ctx context.Context, r map[string]any) []string {
+		flags := flagsOfAge(r)
 		agent, _ := r["agent_id"].(string)
 		inst, _ := r["instance"].(string)
 		role, _ := r["role"].(string)
@@ -139,14 +136,11 @@ func (g *globalTier) flagGlobalRows(ctx context.Context, rows []map[string]any) 
 		if agent == "" || inst == "" || stream == "" {
 			r["durable"] = "unknown"
 			r["durable_note"] = "the presence row names no agent id, instance or cluster, so its durable cannot be looked up"
-			flags = append(flags, flagDurableUnchecked)
-		} else {
-			checkDurable(ctx, g.js, stream, globalDurable(agent, inst), r, &flags)
+			return append(flags, flagDurableUnchecked)
 		}
-		if len(flags) > 0 {
-			r["flags"] = flags
-		}
-	}
+		checkDurable(ctx, g.js, stream, globalDurable(agent, inst), r, &flags)
+		return flags
+	})
 }
 
 // checkDurable looks one durable up under streamReadTimeout and records what the

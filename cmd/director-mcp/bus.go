@@ -1631,7 +1631,11 @@ func (b *Bus) rosterMerged(ctx context.Context) (rows []map[string]any, globalWa
 	if err != nil {
 		return nil, "", err
 	}
-	b.flagLocalRows(ctx, local)
+	// One deadline covers both tiers' durable lookups, so the whole call, and not
+	// each tier, is bounded (rosterLookupDeadline).
+	lctx, stop := context.WithTimeout(ctx, rosterLookupDeadline)
+	defer stop()
+	b.flagLocalRows(lctx, local)
 	for _, r := range local {
 		r["tier"] = "local"
 		rows = append(rows, r)
@@ -1647,7 +1651,7 @@ func (b *Bus) rosterMerged(ctx context.Context) (rows []map[string]any, globalWa
 	if gerr != nil {
 		return rows, fmt.Sprintf("global roster read failed: %v", gerr), nil
 	}
-	g.flagGlobalRows(ctx, global)
+	g.flagGlobalRows(lctx, global)
 	for _, r := range global {
 		r["tier"] = "global"
 		rows = append(rows, r)
