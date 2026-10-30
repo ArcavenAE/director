@@ -188,10 +188,12 @@ func TestBrokerNewGlobalDurablesCarryTheDeclaredThreshold(t *testing.T) {
 
 // A stalled broker must not hold list_roster for rows times the per-lookup
 // bound: the whole call has one deadline, and rows it did not reach read as
-// unknown, never missing.
+// unknown, never missing. The elapsed bound is a small multiple of the
+// deadline, so a regression to a deadline per row or per lookup (40 rows over
+// 8 workers is five deadlines end to end) fails it.
 func TestRosterLookupsShareOneDeadline(t *testing.T) {
 	old := rosterLookupDeadline
-	rosterLookupDeadline = 150 * time.Millisecond
+	rosterLookupDeadline = 200 * time.Millisecond
 	defer func() { rosterLookupDeadline = old }()
 
 	const n = 40
@@ -205,8 +207,8 @@ func TestRosterLookupsShareOneDeadline(t *testing.T) {
 		r["durable"] = "unknown"
 		return []string{flagDurableUnchecked}
 	})
-	if d := time.Since(start); d > 2*time.Second {
-		t.Errorf("flagRows took %v for %d stalled rows, want about the %v deadline", d, n, rosterLookupDeadline)
+	if d, limit := time.Since(start), 3*rosterLookupDeadline; d > limit {
+		t.Errorf("flagRows took %v for %d stalled rows, want within %v (the %v deadline)", d, n, limit, rosterLookupDeadline)
 	}
 	for i, r := range rows {
 		if r["durable"] != "unknown" || flagsOf(r) != flagDurableUnchecked {
@@ -332,5 +334,66 @@ func TestBrokerRosterFlagsGlobalRowsByTheirDurable(t *testing.T) {
 		if r["durable"] != "unknown" || !strings.Contains(flagsOf(r), flagDurableUnchecked) {
 			t.Errorf("row after the deadline = %v, want unknown and %s", r, flagDurableUnchecked)
 		}
+	}
+}
+
+// The roster call has one deadline for both tiers, not one per tier: with
+// every lookup stalled, the call returns after about one deadline and not two.
+// The 1ns phase of the global rows test cannot tell the two apart.
+func TestBrokerRosterOneDeadlineCoversBothTiers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	self := Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
+	bus, err := connect(ctx, url, self, &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bus.close()
+	kv, err := gjs.KeyValue(ctx, globalPresenceBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		id := strconv.Itoa(i)
+		putPresence(t, ctx, bus, "presence.ops.l"+id+".01L"+id, map[string]any{"agent_id": "l" + id, "team": "ops", "instance": "01L" + id, "oldest_pending_s": 0})
+		body, _ := json.Marshal(map[string]any{"agent_id": "g" + id, "cluster": "c2", "role": "supervisor", "instance": "01G" + id, "oldest_pending_s": 0})
+		if _, err := kv.Put(ctx, "presence.c2.supervisor.01G"+id, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	oldDeadline, oldCheck := rosterLookupDeadline, durableCheck
+	rosterLookupDeadline = 400 * time.Millisecond
+	durableCheck = func(ctx context.Context, _ jetstream.JetStream, _, _ string, row map[string]any, flags *[]string) {
+		<-ctx.Done() // a broker that never answers
+		row["durable"] = "unknown"
+		*flags = append(*flags, flagDurableUnchecked)
+	}
+	defer func() { rosterLookupDeadline, durableCheck = oldDeadline, oldCheck }()
+
+	start := time.Now()
+	rows, _, err := bus.rosterMerged(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, limit := time.Since(start), rosterLookupDeadline*3/2; d > limit {
+		t.Errorf("rosterMerged took %v with every lookup stalled, want within %v: one deadline for both tiers", d, limit)
+	}
+	var local, global int
+	for _, r := range rows {
+		if r["durable"] != "unknown" {
+			t.Errorf("row = %v, want unknown", r)
+		}
+		if r["tier"] == "global" {
+			global++
+		} else {
+			local++
+		}
+	}
+	if local < 12 || global < 12 {
+		t.Errorf("rows = %d local, %d global, want at least 12 of each", local, global)
 	}
 }

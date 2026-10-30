@@ -110,7 +110,7 @@ func (b *Bus) flagLocalRows(ctx context.Context, rows []map[string]any) {
 }
 
 func (b *Bus) checkLocalDurable(ctx context.Context, row map[string]any, durable string, flags *[]string) {
-	checkDurable(ctx, b.js, "AGENT_INBOX", durable, row, flags)
+	durableCheck(ctx, b.js, "AGENT_INBOX", durable, row, flags)
 }
 
 // flagGlobalRows is flagLocalRows for the rows of GLOBAL_PRESENCE. A seat's
@@ -138,10 +138,14 @@ func (g *globalTier) flagGlobalRows(ctx context.Context, rows []map[string]any) 
 			r["durable_note"] = "the presence row names no agent id, instance or cluster, so its durable cannot be looked up"
 			return append(flags, flagDurableUnchecked)
 		}
-		checkDurable(ctx, g.js, stream, globalDurable(agent, inst), r, &flags)
+		durableCheck(ctx, g.js, stream, globalDurable(agent, inst), r, &flags)
 		return flags
 	})
 }
+
+// durableCheck is checkDurable, a variable so a test can stand in a broker that
+// never answers and time the whole roster call against its deadline.
+var durableCheck = checkDurable
 
 // checkDurable looks one durable up under streamReadTimeout and records what the
 // broker said on the row: present with its unread count, missing (the broker
