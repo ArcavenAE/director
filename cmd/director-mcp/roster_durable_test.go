@@ -139,6 +139,9 @@ func TestGlobalInactiveOutlastsHubStreamMaxAge(t *testing.T) {
 	if want := 8 * 24 * time.Hour; globalConsumerInactive != want {
 		t.Errorf("globalConsumerInactive = %v, want %v (7-day retention plus a day)", globalConsumerInactive, want)
 	}
+	if maxAge != 168*time.Hour {
+		t.Errorf("provision.sh declares %v for the hub streams, want 168h; update this test with the declaration", maxAge)
+	}
 }
 
 // ensureConsumer binds an existing durable; it used to keep the threshold the

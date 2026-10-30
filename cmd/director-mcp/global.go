@@ -51,11 +51,10 @@ const (
 	// to outlast the mail the hub stream keeps: a durable removed while the
 	// stream still holds its unread mail leaves a live seat with no consumer
 	// and no signal (aae-orc-t77rr). The hub provisioner declares the hub
-	// streams' max age (probe/nats-global-tier/hub/provision.sh, 72h today) and
-	// the inbox retention is moving to 7 days, so the window is 8 days, a day
-	// above that. TestGlobalInactiveOutlastsHubStreamMaxAge reads the
-	// provisioner's value and fails if the two drift. Cleanup still keeps dead
-	// sessions' consumers from accumulating on a shared hub (R-50).
+	// streams' max age (probe/nats-global-tier/hub/provision.sh, 168h), so the
+	// window is 8 days, a day above that. TestGlobalInactiveOutlastsHubStreamMaxAge
+	// reads the provisioner's value and fails if the two drift. Cleanup still
+	// keeps dead sessions' consumers from accumulating on a shared hub (R-50).
 	globalConsumerInactive = 8 * 24 * time.Hour
 )
 
