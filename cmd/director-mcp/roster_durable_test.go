@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -186,6 +187,37 @@ func TestBrokerNewGlobalDurablesCarryTheDeclaredThreshold(t *testing.T) {
 	threshold("after the hub lost the durable and the poll recreated it")
 }
 
+// deadlineSpread records the context deadline each stalled lookup was given
+// and reports how far apart the earliest and latest are. One deadline for a
+// whole roster call gives every lookup the same instant, so the spread is zero
+// whatever the machine load; a deadline per row or per tier gives later lookups
+// later instants, a deadline apart. Unlike a wall-clock bound it does not move
+// when timers are starved.
+type deadlineSpread struct {
+	mu       sync.Mutex
+	earliest time.Time
+	latest   time.Time
+	missing  int
+}
+
+func (d *deadlineSpread) note(ctx context.Context) {
+	dl, ok := ctx.Deadline()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !ok {
+		d.missing++
+		return
+	}
+	if d.earliest.IsZero() || dl.Before(d.earliest) {
+		d.earliest = dl
+	}
+	if dl.After(d.latest) {
+		d.latest = dl
+	}
+}
+
+func (d *deadlineSpread) spread() time.Duration { return d.latest.Sub(d.earliest) }
+
 // A stalled broker must not hold list_roster for rows times the per-lookup
 // bound: the whole call has one deadline, and rows it did not reach read as
 // unknown, never missing. The elapsed bound is a small multiple of the
@@ -193,7 +225,7 @@ func TestBrokerNewGlobalDurablesCarryTheDeclaredThreshold(t *testing.T) {
 // 8 workers is five deadlines end to end) fails it.
 func TestRosterLookupsShareOneDeadline(t *testing.T) {
 	old := rosterLookupDeadline
-	rosterLookupDeadline = 200 * time.Millisecond
+	rosterLookupDeadline = 500 * time.Millisecond
 	defer func() { rosterLookupDeadline = old }()
 
 	const n = 40
@@ -201,13 +233,25 @@ func TestRosterLookupsShareOneDeadline(t *testing.T) {
 	for i := range rows {
 		rows[i] = map[string]any{"oldest_pending_s": 0}
 	}
+	var seen deadlineSpread
 	start := time.Now()
 	flagRows(context.Background(), rows, func(ctx context.Context, r map[string]any) []string {
-		<-ctx.Done() // a broker that never answers
+		seen.note(ctx)
+		if _, ok := ctx.Deadline(); ok {
+			<-ctx.Done() // a broker that never answers
+		}
 		r["durable"] = "unknown"
 		return []string{flagDurableUnchecked}
 	})
-	if d, limit := time.Since(start), 3*rosterLookupDeadline; d > limit {
+	if seen.missing > 0 {
+		t.Errorf("%d lookups ran with no deadline", seen.missing)
+	}
+	if sp := seen.spread(); sp > rosterLookupDeadline/10 {
+		t.Errorf("the %d lookups were given deadlines %v apart, want one shared deadline", n, sp)
+	}
+	// A loose backstop on the wall clock: five deadlines end to end would be
+	// the per-row regression, one is the contract.
+	if d, limit := time.Since(start), 4*rosterLookupDeadline; d > limit {
 		t.Errorf("flagRows took %v for %d stalled rows, want within %v (the %v deadline)", d, n, limit, rosterLookupDeadline)
 	}
 	for i, r := range rows {
@@ -365,22 +409,31 @@ func TestBrokerRosterOneDeadlineCoversBothTiers(t *testing.T) {
 		}
 	}
 
+	// The property is one deadline for the call, so what is compared is the
+	// deadline each stalled lookup was handed, not elapsed time: elapsed time
+	// grows under load without saying anything about the deadline.
 	oldDeadline, oldCheck := rosterLookupDeadline, durableCheck
 	rosterLookupDeadline = 400 * time.Millisecond
+	var seen deadlineSpread
 	durableCheck = func(ctx context.Context, _ jetstream.JetStream, _, _ string, row map[string]any, flags *[]string) {
-		<-ctx.Done() // a broker that never answers
+		seen.note(ctx)
+		if _, ok := ctx.Deadline(); ok {
+			<-ctx.Done() // a broker that never answers
+		}
 		row["durable"] = "unknown"
 		*flags = append(*flags, flagDurableUnchecked)
 	}
 	defer func() { rosterLookupDeadline, durableCheck = oldDeadline, oldCheck }()
 
-	start := time.Now()
 	rows, _, err := bus.rosterMerged(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d, limit := time.Since(start), rosterLookupDeadline*3/2; d > limit {
-		t.Errorf("rosterMerged took %v with every lookup stalled, want within %v: one deadline for both tiers", d, limit)
+	if seen.missing > 0 {
+		t.Errorf("%d lookups ran with no deadline", seen.missing)
+	}
+	if sp := seen.spread(); sp > rosterLookupDeadline/10 {
+		t.Errorf("local and global lookups were given deadlines %v apart, want one deadline for both tiers", sp)
 	}
 	var local, global int
 	for _, r := range rows {
