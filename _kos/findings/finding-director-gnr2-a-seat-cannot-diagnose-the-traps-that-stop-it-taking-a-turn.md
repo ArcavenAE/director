@@ -37,8 +37,10 @@ turn the check would need.**
   2dbfd14, with five later commits on main touching it (#229, #230, #231,
   #271, #279). `aq`, `ax` and `ae` are not installed there. The `/director`
   skill is installed at user scope, and there is no shared project-scope
-  director-mcp registration, so two of the hardening plan's five traps are
-  absent on that host and one (the stale launcher) is present.
+  director-mcp registration. Of the five seat-startup traps in the plan
+  behind aae-orc-wria0, two are absent on that host (trap 2, the shared
+  project-scope MCP block, and trap 4, the `/director` skill not installed)
+  and one is present (trap 5, a stale launcher checkout).
 
 ## 2. Why it matters
 
