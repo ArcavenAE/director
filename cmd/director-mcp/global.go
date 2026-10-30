@@ -47,15 +47,15 @@ const (
 	globalDirectorStream = "GLOBAL_TO_DIRECTOR"
 	globalStreamPrefix   = "GLOBAL_TO_"
 
-	// The hub streams carry a 72h max age (raised from 24h, director#77). A
-	// durable cleaned up after a slightly longer idle window can therefore
-	// only ever have replayed messages that have already expired, so the
-	// cleanup costs nothing while still keeping dead sessions' consumers from
-	// accumulating on a shared hub (R-50, and the orphan accumulation the
-	// local preflight comment names). Keep this one hour above the hub max
-	// age: below it, the repair path in ensureConsumer recreates a cleaned-up
-	// durable under DeliverAll and replays mail the session already acked.
-	globalConsumerInactive = 73 * time.Hour
+	// A global durable is cleaned up after this idle window, so the window has
+	// to outlast the mail the hub stream keeps: a durable removed while the
+	// stream still holds its unread mail leaves a live seat with no consumer
+	// and no signal (aae-orc-t77rr). The hub provisioner declares the hub
+	// streams' max age (probe/nats-global-tier/hub/provision.sh, 168h), so the
+	// window is 8 days, a day above that. TestGlobalInactiveOutlastsHubStreamMaxAge
+	// reads the provisioner's value and fails if the two drift. Cleanup still
+	// keeps dead sessions' consumers from accumulating on a shared hub (R-50).
+	globalConsumerInactive = 8 * 24 * time.Hour
 )
 
 // durableCheckEvery bounds how often an empty global pull asks the hub whether

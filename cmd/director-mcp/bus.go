@@ -1629,6 +1629,7 @@ func (b *Bus) rosterMerged(ctx context.Context) (rows []map[string]any, globalWa
 	if err != nil {
 		return nil, "", err
 	}
+	b.flagLocalRows(ctx, local)
 	for _, r := range local {
 		r["tier"] = "local"
 		rows = append(rows, r)
