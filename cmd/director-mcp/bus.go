@@ -1647,6 +1647,7 @@ func (b *Bus) rosterMerged(ctx context.Context) (rows []map[string]any, globalWa
 	if gerr != nil {
 		return rows, fmt.Sprintf("global roster read failed: %v", gerr), nil
 	}
+	g.flagGlobalRows(ctx, global)
 	for _, r := range global {
 		r["tier"] = "global"
 		rows = append(rows, r)

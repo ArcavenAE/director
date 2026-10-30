@@ -5,7 +5,7 @@ package main
 // seat whose durable was cleaned up, or never created, stays on the roster
 // looking healthy while mail piles up in the stream with no consumer. The
 // unread report walks durables and the roster walks presence rows, so a live
-// seat with no durable had a row in neither. Each local roster row now names
+// seat with no durable had a row in neither. Each roster row now names
 // what its durable says, and flags what could not be established.
 //
 // Diagnostic, not a gate: a flag informs the reader, nothing waits on it.
@@ -61,17 +61,60 @@ func (b *Bus) flagLocalRows(ctx context.Context, rows []map[string]any) {
 }
 
 func (b *Bus) checkLocalDurable(ctx context.Context, row map[string]any, durable string, flags *[]string) {
+	checkDurable(ctx, b.js, "AGENT_INBOX", durable, row, flags)
+}
+
+// flagGlobalRows is flagLocalRows for the rows of GLOBAL_PRESENCE. A seat's
+// global durable sits on its cluster's hub stream (GLOBAL_TO_<cluster>), or on
+// GLOBAL_TO_DIRECTOR for a director, under the name globalDurable gives it. A
+// cluster credential may not be allowed to read another cluster's consumers,
+// and a leaf link that does not answer looks the same, so a lookup that fails
+// for any reason but "no such durable" marks the row unknown, never missing.
+func (g *globalTier) flagGlobalRows(ctx context.Context, rows []map[string]any) {
+	for _, r := range rows {
+		var flags []string
+		if _, ok := r["oldest_pending_s"]; !ok {
+			flags = append(flags, flagPendingAgeUnreported)
+		}
+		agent, _ := r["agent_id"].(string)
+		inst, _ := r["instance"].(string)
+		role, _ := r["role"].(string)
+		cluster, _ := r["cluster"].(string)
+		stream := ""
+		switch {
+		case role == roleDirector:
+			stream = globalDirectorStream
+		case cluster != "":
+			stream = globalStreamPrefix + cluster
+		}
+		if agent == "" || inst == "" || stream == "" {
+			r["durable"] = "unknown"
+			r["durable_note"] = "the presence row names no agent id, instance or cluster, so its durable cannot be looked up"
+			flags = append(flags, flagDurableUnchecked)
+		} else {
+			checkDurable(ctx, g.js, stream, globalDurable(agent, inst), r, &flags)
+		}
+		if len(flags) > 0 {
+			r["flags"] = flags
+		}
+	}
+}
+
+// checkDurable looks one durable up under streamReadTimeout and records what the
+// broker said on the row: present with its unread count, missing (the broker
+// answered not found), or unknown (anything else).
+func checkDurable(ctx context.Context, js jetstream.JetStream, stream, durable string, row map[string]any, flags *[]string) {
 	rctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
 	defer cancel()
-	cons, err := b.js.Consumer(rctx, "AGENT_INBOX", durable)
+	cons, err := js.Consumer(rctx, stream, durable)
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
 		row["durable"] = "missing"
-		row["durable_note"] = fmt.Sprintf("AGENT_INBOX has no durable %s for this live session", durable)
+		row["durable_note"] = fmt.Sprintf("%s has no durable %s for this live session", stream, durable)
 		*flags = append(*flags, flagNoDurable)
 	case err != nil:
 		row["durable"] = "unknown"
-		row["durable_note"] = fmt.Sprintf("looking up durable %s failed: %v", durable, err)
+		row["durable_note"] = fmt.Sprintf("looking up durable %s on %s failed: %v", durable, stream, err)
 		*flags = append(*flags, flagDurableUnchecked)
 	default:
 		row["durable"] = "present"

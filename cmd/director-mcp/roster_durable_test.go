@@ -233,3 +233,79 @@ func TestLocalInactiveOutlastsInboxMaxAge(t *testing.T) {
 		t.Errorf("the setup instructions declare %v for AGENT_INBOX, want 168h; update this test with the declaration", declared[0])
 	}
 }
+
+// A global roster row gets the same flags, with the durable looked up on the
+// hub stream of the row's cluster (or the director stream for a director).
+func TestBrokerRosterFlagsGlobalRowsByTheirDurable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	if _, err := gjs.CreateStream(ctx, jetstream.StreamConfig{Name: globalStreamPrefix + "c2", Subjects: []string{"global.c2.>"}}); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(stream, durable, filter string) {
+		t.Helper()
+		_, err := gjs.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{Durable: durable, FilterSubject: filter, AckPolicy: jetstream.AckExplicitPolicy})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk(globalStreamPrefix+"c2", globalDurable("sup", "01HAS"), "global.c2.supervisor.inbox")
+	if _, err := gjs.Publish(ctx, "global.c2.supervisor.inbox", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+
+	self := Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}
+	bus, err := connect(ctx, url, self, &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bus.close()
+	if _, err := bus.setPresence(ctx, "idle"); err != nil {
+		t.Fatal(err)
+	}
+	kv, err := gjs.KeyValue(ctx, globalPresenceBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(key string, rec map[string]any) {
+		t.Helper()
+		body, _ := json.Marshal(rec)
+		if _, err := kv.Put(ctx, key, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("presence.c2.supervisor.01HAS", map[string]any{"agent_id": "sup", "cluster": "c2", "role": "supervisor", "instance": "01HAS", "oldest_pending_s": 0})
+	put("presence.c2.supervisor.01LOST", map[string]any{"agent_id": "gone", "cluster": "c2", "role": "supervisor", "instance": "01LOST", "oldest_pending_s": 0})
+	put("presence.c9.supervisor.01NOSTREAM", map[string]any{"agent_id": "far", "cluster": "c9", "role": "supervisor", "instance": "01NOSTREAM", "oldest_pending_s": 0})
+	put("presence.c2.supervisor.01NOCLUSTER", map[string]any{"agent_id": "nowhere", "role": "supervisor", "instance": "01NOCLUSTER"})
+
+	rows, warn, err := bus.rosterMerged(ctx)
+	if err != nil || warn != "" {
+		t.Fatalf("roster: %v %q", err, warn)
+	}
+	byAgent := map[string]map[string]any{}
+	for _, r := range rows {
+		if r["tier"] == "global" {
+			a, _ := r["agent_id"].(string)
+			byAgent[a] = r
+		}
+	}
+	if r := byAgent["sup"]; r["durable"] != "present" || r["unread"] != uint64(1) || flagsOf(r) != "" {
+		t.Errorf("seat with a durable = %v", r)
+	}
+	if r := byAgent["gone"]; r["durable"] != "missing" || flagsOf(r) != flagNoDurable {
+		t.Errorf("seat without a durable = %v", r)
+	}
+	if r := byAgent["far"]; r["durable"] != "unknown" || flagsOf(r) != flagDurableUnchecked {
+		t.Errorf("seat on a stream the hub does not have = %v, want unknown, not missing", r)
+	}
+	if r := byAgent["nowhere"]; r["durable"] != "unknown" || flagsOf(r) != flagPendingAgeUnreported+","+flagDurableUnchecked {
+		t.Errorf("row naming no cluster = %v", r)
+	}
+	if r := byAgent["operator"]; r["durable"] != "present" {
+		t.Errorf("this session's own director row = %v, want present", r)
+	}
+}
