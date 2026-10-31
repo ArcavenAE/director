@@ -93,7 +93,7 @@ func orderDrained(items []drained) {
 // returned flagged AckUnconfirmed, the rest of the batch is still acked (so it
 // does not sit ack-pending and redeliver behind newer mail), and the failure
 // comes back as an error beside the items for the caller to report.
-func pullNoWait(ctx context.Context, cons jetstream.Consumer, n int, tier string, h *handledState) ([]drained, int, error) {
+func pullNoWait(ctx context.Context, cons jetstream.Consumer, n int, tier string, h *handledState, drop func(context.Context, jetstream.Msg, *Envelope, uint64) bool) ([]drained, int, error) {
 	if n <= 0 {
 		return nil, 0, nil
 	}
@@ -114,6 +114,9 @@ func pullNoWait(ctx context.Context, cons jetstream.Consumer, n int, tier string
 		var seq uint64
 		if md, err := m.Metadata(); err == nil {
 			seq = md.Sequence.Stream
+		}
+		if drop != nil && drop(ctx, m, &e, seq) {
+			continue // for another team's seat: acked and logged, not returned
 		}
 		if h != nil {
 			// The handled mode (handled.go): hold the message ack-pending and
@@ -165,8 +168,20 @@ func drainAll(pull func(int) ([]drained, int, error), n int) ([]drained, int, er
 // long poll does when the hub no longer has the durable (recover).
 func (g *globalTier) drainNoWait(ctx context.Context, n int, agentID, instance string) ([]drained, int, error) {
 	rebuilt := false
+	pull := func(k int) ([]drained, int, error) {
+		// A pull that dropped every message it fetched is not an empty queue:
+		// go on to the mail behind them.
+		for {
+			before := g.forDrops.Load()
+			out, disc, err := pullNoWait(ctx, g.cons(), k, "global", g.handled, g.dropForeign)
+			if len(out) == 0 && disc == 0 && err == nil && g.forDrops.Load() > before {
+				continue
+			}
+			return out, disc, err
+		}
+	}
 	out, disc, err := drainAll(func(k int) ([]drained, int, error) {
-		out, disc, err := pullNoWait(ctx, g.cons(), k, "global", g.handled)
+		out, disc, err := pull(k)
 		if len(out) == 0 && disc == 0 && !rebuilt {
 			rebuilt = true
 			var ok bool
@@ -180,7 +195,7 @@ func (g *globalTier) drainNoWait(ctx context.Context, n int, agentID, instance s
 				return nil, 0, rerr
 			}
 			if ok {
-				return pullNoWait(ctx, g.cons(), k, "global", g.handled)
+				return pull(k)
 			}
 		}
 		return out, disc, err
