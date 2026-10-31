@@ -14,8 +14,8 @@
 # its stream's max age so a live seat's durable outlasts its mail
 # (aae-orc-t77rr).
 #
-# Nothing runs this at hub start: start.sh starts the server only. Whoever
-# provisions the hub invokes it, with the admin NKey, on the hub host.
+# start.sh runs this once the server answers, so a hub restart applies it. It
+# can also be run by hand with the admin NKey on the hub host.
 set -euo pipefail
 HOME_DIR="${DIRECTOR_GLOBAL_HOME:-$HOME/.director/nats-global}"
 URL="${DIRECTOR_GLOBAL_URL:-nats://127.0.0.1:4242}"
