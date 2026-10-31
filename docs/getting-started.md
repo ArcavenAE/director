@@ -80,6 +80,16 @@ nats kv ls              # AGENT_STATE
 
 A marvel-managed broker does this for you at start (see section 9).
 
+A broker started with `probe/nats-phase-0/start.sh` also runs
+`probe/nats-phase-0/provision.sh` once it answers (needs `jq`). It creates
+`AGENT_INBOX` at 168h if it is missing and only ever raises an existing one:
+a finite max age below 168h goes up to 168h, a longer one or an unlimited one
+is left alone, and each shim durable (`mcp_*`) whose inactive threshold is
+below the stream's max age is raised to a day above it. It prints each value
+before and after. Run it by hand with `probe/nats-phase-0/provision.sh`; for the
+authorized config set `DIRECTOR_PHASE0_ADMIN_USER` and
+`DIRECTOR_PHASE0_ADMIN_PASS`.
+
 ## 3. Build the shim
 
 ```sh
