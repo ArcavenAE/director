@@ -128,12 +128,16 @@ func TestGlobalInactiveOutlastsHubStreamMaxAge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`--max-age (\d+)h`).FindSubmatch(src)
-	if m == nil {
-		t.Fatal("provision.sh declares no --max-age in hours")
+	hours := func(name string) time.Duration {
+		t.Helper()
+		m := regexp.MustCompile(`(?m)^` + name + `=(\d+)h\b`).FindSubmatch(src)
+		if m == nil {
+			t.Fatalf("provision.sh declares no %s=<n>h", name)
+		}
+		n, _ := strconv.Atoi(string(m[1]))
+		return time.Duration(n) * time.Hour
 	}
-	hours, _ := strconv.Atoi(string(m[1]))
-	maxAge := time.Duration(hours) * time.Hour
+	maxAge := hours("STREAM_MAX_AGE")
 	if globalConsumerInactive <= maxAge {
 		t.Errorf("globalConsumerInactive = %v, not above the hub streams' declared max age %v: a durable would be cleaned up while its stream still holds unread mail", globalConsumerInactive, maxAge)
 	}
@@ -142,6 +146,11 @@ func TestGlobalInactiveOutlastsHubStreamMaxAge(t *testing.T) {
 	}
 	if maxAge != 168*time.Hour {
 		t.Errorf("provision.sh declares %v for the hub streams, want 168h; update this test with the declaration", maxAge)
+	}
+	// The script raises existing durables to its own declared threshold; it must
+	// be the one this build gives new durables.
+	if got := hours("DURABLE_INACTIVE"); got != globalConsumerInactive {
+		t.Errorf("provision.sh raises durables to %v, but globalConsumerInactive is %v", got, globalConsumerInactive)
 	}
 }
 

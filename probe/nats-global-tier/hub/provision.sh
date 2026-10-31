@@ -5,9 +5,11 @@
 # A stream that does not exist is created with the declared max age. One that
 # does exist is only ever RAISED: a finite max age shorter than the declared one
 # is edited up to it (max_age and nothing else), and a longer one, or 0
-# (unlimited), is left alone. The same holds for the director's own durables
-# (mcp_global_*) on those streams: a finite inactive_threshold shorter than the
-# declared one is raised to it, a longer one or none (0) is left alone. Nothing
+# (unlimited), is left alone. The same holds for every seat's director durable
+# on those streams, meaning any consumer whose name starts with mcp_global_ (the
+# shim names one per session; a hand-made consumer given that prefix would be
+# raised too): a finite inactive_threshold shorter than the declared one is
+# raised to it, a longer one or none (0) is left alone. Nothing
 # here lowers a value, and each change prints one line. A durable is kept above
 # its stream's max age so a live seat's durable outlasts its mail
 # (aae-orc-t77rr).
@@ -29,13 +31,18 @@ A=(nats -s "$URL" ${TLSCA[@]+"${TLSCA[@]}"} ${AUTH[@]+"${AUTH[@]}"})
 command -v jq >/dev/null 2>&1 || { echo "jq not on PATH" >&2; exit 2; }
 # The declared values. The durable's threshold is a day above the stream's max
 # age, the same invariant director-mcp holds for new durables (globalConsumerInactive).
-STREAM_MAX_AGE=168h;  STREAM_MAX_AGE_NS=604800000000000
-DURABLE_INACTIVE=192h; DURABLE_INACTIVE_NS=691200000000000
+STREAM_MAX_AGE=168h
+DURABLE_INACTIVE=192h
+# The nanosecond forms are derived from the hours above, so the two cannot drift.
+STREAM_MAX_AGE_NS=$(( ${STREAM_MAX_AGE%h} * 3600 * 1000000000 ))
+DURABLE_INACTIVE_NS=$(( ${DURABLE_INACTIVE%h} * 3600 * 1000000000 ))
 clusters=("$@")
 [[ ${#clusters[@]} -gt 0 ]] || clusters=(kinu mokuzai)
 hours() { awk -v n="$1" 'BEGIN { if (n == 0) print "unlimited"; else printf "%gh", n / 3600000000000 }'; }
-# raise_durables lifts the director's own durables on one stream, and only those
-# (mcp_global_*): a hand-made consumer is not this script's to change.
+# raise_durables lifts every consumer on one stream whose name starts with
+# mcp_global_, which is how the shim names each session's durable. The test is a
+# name prefix and nothing more, so a hand-made consumer that happened to carry
+# that prefix would be raised too; one without it is not this script's to change.
 raise_durables() {
   local stream="$1" names c info cur
   names="$("${A[@]}" consumer ls "$stream" --names --json)" || { echo "consumer ls $stream failed" >&2; exit 1; }
