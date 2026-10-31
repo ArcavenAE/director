@@ -63,6 +63,11 @@ run_case() {
   broker "$dir" "$port" "$([[ "$kind" == auth ]] && echo auth)"
   local N=(nats -s "nats://127.0.0.1:$port"); [[ "$kind" == auth ]] && N+=(--user director_admin --password scratch-pass)
   local envs=(DIRECTOR_PHASE0_URL="nats://127.0.0.1:$port"); [[ "$kind" == auth ]] && envs+=(DIRECTOR_PHASE0_ADMIN_USER=director_admin DIRECTOR_PHASE0_ADMIN_PASS=scratch-pass)
+  # A nats in front of the real one that records each argv, so a check can see
+  # what a process listing would show.
+  mkdir -p "$dir/shim"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$ARGV_LOG"\nexec "$REAL_NATS" "$@"\n' > "$dir/shim/nats"; chmod +x "$dir/shim/nats"
+  envs+=(PATH="$dir/shim:$PATH" ARGV_LOG="$dir/argv.log" REAL_NATS="$(command -v nats)")
   local age
   case "$kind" in old|auth) age=72h;; long) age=200h;; unlimited) age=-1;; missing) age="";; esac
   if [[ -n "$age" ]]; then
@@ -109,7 +114,11 @@ run_case() {
       printf '%s\n' "$out1" | /usr/bin/grep -q 'stream AGENT_INBOX max_age raised 72h -> 168h' && ok "$k: the stream line shows before and after" || bad "$k: the stream line shows before and after" "$out1"
       printf '%s\n' "$out1" | /usr/bin/grep -q 'durable mcp_c_1 on AGENT_INBOX inactive_threshold 170h -> 170h (unchanged)' && ok "$k: an unchanged durable prints its value" || bad "$k: an unchanged durable prints its value" "$out1"
       printf '%s\n' "$out1" | /usr/bin/grep -q '^read-back: stream AGENT_INBOX max_age 168h$' && ok "$k: the run ends with a read-back" || bad "$k: the run ends with a read-back" "$out1"
-      printf '%s\n' "$out2" | /usr/bin/grep -q ' raised ' && bad "$k: the second run changes nothing" "$out2" || ok "$k: the second run changes nothing" ;;
+      printf '%s\n' "$out2" | /usr/bin/grep -q ' raised ' && bad "$k: the second run changes nothing" "$out2" || ok "$k: the second run changes nothing"
+      if [[ "$kind" == auth ]]; then
+        [[ -s "$dir/argv.log" ]] || bad "$k: the nats shim recorded the calls" "argv.log empty"
+        /usr/bin/grep -q -e 'scratch-pass' -e '--password' "$dir/argv.log" && bad "$k: no nats argv carries the password" "$(/usr/bin/grep -e 'scratch-pass' -e '--password' "$dir/argv.log" | head -1 | sed 's/scratch-pass/<password>/')" || ok "$k: no nats argv carries the password"
+      fi ;;
     long)
       [[ "$(ma AGENT_INBOX)" == "$((200*hour))" ]] && ok "$k: a 200h stream is left at 200h" || bad "$k: a 200h stream is left at 200h" "got $(ma AGENT_INBOX)"
       [[ "$(th mcp_e_1)" == "$((224*hour))" ]] && ok "$k: a 150h durable is raised to a day above the 200h max age" || bad "$k: a 150h durable is raised to 224h" "got $(th mcp_e_1)"
@@ -150,6 +159,8 @@ mutant() {
 }
 # A stream edit that lowers: edit whenever the max age is not the declared one.
 mutant lowering-stream 'cur > 0 \&\& cur < STREAM_MAX_AGE_NS' 'cur > 0 \&\& cur != STREAM_MAX_AGE_NS' "long"
+# The password on the nats command line, where ps shows it.
+mutant password-on-argv 'A=(nats -s "$URL")' 'A=(nats -s "$URL" --user "${DIRECTOR_PHASE0_ADMIN_USER:-x}" --password "${DIRECTOR_PHASE0_ADMIN_PASS:-x}")' "auth"
 # A durable edit that lowers.
 mutant edits-durable-at-or-above-max-age 'th > 0 \&\& th < cur' 'th > 0 \&\& th != cur' "old"
 

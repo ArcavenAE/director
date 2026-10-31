@@ -27,11 +27,14 @@
 #   probe/nats-phase-0/provision.sh
 set -euo pipefail
 URL="${DIRECTOR_PHASE0_URL:-nats://127.0.0.1:4222}"
-AUTH=()
+# The credential goes to nats through its environment (NATS_USER and
+# NATS_PASSWORD, which natscli reads), never on its command line, where ps would
+# show it.
 if [[ -n "${DIRECTOR_PHASE0_ADMIN_USER:-}" ]]; then
-  AUTH=(--user "$DIRECTOR_PHASE0_ADMIN_USER" --password "${DIRECTOR_PHASE0_ADMIN_PASS:?DIRECTOR_PHASE0_ADMIN_PASS is required with DIRECTOR_PHASE0_ADMIN_USER}")
+  export NATS_USER="$DIRECTOR_PHASE0_ADMIN_USER"
+  export NATS_PASSWORD="${DIRECTOR_PHASE0_ADMIN_PASS:?DIRECTOR_PHASE0_ADMIN_PASS is required with DIRECTOR_PHASE0_ADMIN_USER}"
 fi
-A=(nats -s "$URL" ${AUTH[@]+"${AUTH[@]}"})
+A=(nats -s "$URL")
 command -v jq >/dev/null 2>&1 || { echo "jq not on PATH" >&2; exit 2; }
 # The declared values. A durable's threshold is a day above the stream's max
 # age, the same invariant director-mcp holds for new durables
