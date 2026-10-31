@@ -451,6 +451,10 @@ type globalTier struct {
 	// handled is the bus's handled-mode state, nil when the mode is off.
 	handled *handledState
 
+	// forFilter drops mail whose FOR line names another team's seat; nil when
+	// DIRECTOR_FOR_FILTER is not 1 (forfilter.go).
+	forFilter *forFilter
+
 	// floorWhy is why the seat's earlier hub position could not be read at
 	// attach, empty when it was read or there was none. Reported once with
 	// resumedFrom.
@@ -885,6 +889,15 @@ func (g *globalTier) fetchOne(ctx context.Context, timeout time.Duration) (env *
 			}
 			if md, err := m.Metadata(); err == nil {
 				seq = md.Sequence.Stream
+			}
+			if g.forFilter != nil {
+				if drop, text := g.forFilter.drops(ctx, &e); drop {
+					_ = m.Ack()
+					g.noteAcked(seq)
+					g.forFilter.logf("director-mcp: global ack %s FOR %s", e.MessageID, text)
+					skipped = true
+					continue
+				}
 			}
 			if g.handled == nil {
 				_ = m.Ack()

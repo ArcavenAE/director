@@ -1240,6 +1240,13 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 	}
 	g.handled = b.handled
 	g.violations = b.violations
+	if os.Getenv("DIRECTOR_FOR_FILTER") == "1" {
+		g.forFilter = &forFilter{agentID: b.self.AgentID, team: b.self.Team, role: gcfg.Role, cluster: gcfg.Cluster, now: time.Now, logf: log.Printf,
+			roster: func(ctx context.Context) ([]map[string]any, error) {
+				rows, _, err := g.records(ctx, "")
+				return rows, err
+			}}
+	}
 	b.global = g
 	b.noteResumed("global", g.resumedFrom, g.cons(), g.floorWhy)
 	return g, nil
