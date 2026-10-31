@@ -156,7 +156,7 @@ func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 func (b *Bus) pullLocalNoWait(ctx context.Context, n int) ([]drained, int, error) {
 	rebuilt := false
 	for {
-		out, disc, err := pullNoWait(ctx, b.cons(), n, "local", b.handled)
+		out, disc, err := pullNoWait(ctx, b.cons(), n, "local", b.handled, nil)
 		if !rebuilt && len(out) == 0 && disc == 0 {
 			rebuilt = true
 			var ok bool

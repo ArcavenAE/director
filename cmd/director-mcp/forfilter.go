@@ -18,6 +18,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // forRowFresh is how old a presence row may be and still prove a seat's team.
@@ -183,4 +185,32 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 		}
 	}
 	return true, text
+}
+
+// dropForeign is the one place a received message meets the filter. Every path
+// that takes mail off the global durable calls it before it hands the message
+// on: the blocking fetch (fetchOne) and the no-wait pull behind takeWaiting and
+// receiveBatch (pullNoWait). A third receive path must call it too.
+//
+// It reports true when the message was for another team's seat; the message is
+// then acked (confirmed) and logged with its id, and the caller does not return
+// it. With the filter off it reports false and does nothing. A failed ack still
+// reports true, so a message proven foreign is never delivered; the broker
+// redelivers it and it is dropped again.
+func (g *globalTier) dropForeign(ctx context.Context, m jetstream.Msg, e *Envelope, seq uint64) bool {
+	if g.forFilter == nil {
+		return false
+	}
+	drop, text := g.forFilter.drops(ctx, e)
+	if !drop {
+		return false
+	}
+	if err := m.DoubleAck(ctx); err != nil {
+		g.forFilter.logf("director-mcp: global ack %s FOR %s not confirmed: %v", e.MessageID, text, err)
+		return true
+	}
+	g.noteAcked(seq)
+	g.forDrops.Add(1)
+	g.forFilter.logf("director-mcp: global ack %s FOR %s", e.MessageID, text)
+	return true
 }
