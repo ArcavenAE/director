@@ -2,7 +2,7 @@ package main
 
 // The FOR filter. A hub stream is shared, so a seat's global inbox can hold
 // mail whose first line says it is meant for another team's seat ("FOR
-// e98-supervisor"). With DIRECTOR_FOR_FILTER=1 the shim acks and logs such a
+// alpha-supervisor"). With DIRECTOR_FOR_FILTER=1 the shim acks and logs such a
 // message instead of handing it to the model. The default is off.
 //
 // The rule drops only when it can prove the mail is for someone else: every
