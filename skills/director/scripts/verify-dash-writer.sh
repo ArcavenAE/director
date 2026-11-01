@@ -22,7 +22,7 @@
 # Usage: skills/director/scripts/verify-dash-writer.sh   Exit nonzero on any miss.
 set -uo pipefail
 # No namespace file and no gh: the default namespace (the owner's GitHub login) must not reach these documents.
-export GH=/usr/bin/false
+export DIRECTOR_PAGE_NAMESPACE_TEST=1 DIRECTOR_PAGE_NAMESPACE_TEST=1 GH=/usr/bin/false
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 W="${DASH_WRITER:-$here/dash-writer}"
@@ -51,7 +51,7 @@ STUB="$root/bin/marvel"
 RUN_PATH="$root/bin:/usr/bin:/bin:$PYDIR"
 RUN_DASH_MARVEL="$STUB"
 stub_first() { [[ "$(PATH="$1" command -v marvel)" == "$STUB" ]]; } # does `marvel` resolve to the stub on this PATH?
-run() { env -i HOME="$root/home" PATH="$RUN_PATH" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" GH=/usr/bin/false \
+run() { env -i HOME="$root/home" PATH="$RUN_PATH" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" DIRECTOR_PAGE_NAMESPACE_TEST=1 GH=/usr/bin/false \
         DWS_TEST_CLOCK=1 DWS_NOW="${NOW_OVERRIDE:-$NOW}" DASH_MARVEL="$RUN_DASH_MARVEL" DASH_MARVEL_TIMEOUT="${MARVEL_TIMEOUT:-20}" \
         TABLES="$root/tables" python3 -I "$W" "$@"; }
 
