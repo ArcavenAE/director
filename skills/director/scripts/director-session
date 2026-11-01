@@ -145,8 +145,9 @@ lookup_server() {
   command -v jq >/dev/null 2>&1 || { echo "director-session: jq is needed to read the server name from $cfg" >&2; return 1; }
   [[ -r "$cfg" ]] || { echo "director-session: cannot read the Claude config at $cfg, so the channel server name cannot be looked up" >&2; return 1; }
   local keys names n
+  # jq's own error quotes part of a value it cannot read, so its stderr is dropped.
   keys="$(jq -r --arg a "$PWD" --arg b "$(pwd -P)" \
-    '[ (.mcpServers // {} | keys[]), (.projects[$a].mcpServers // {} | keys[]), (.projects[$b].mcpServers // {} | keys[]) ] | unique[]' "$cfg")" \
+    '[ (.mcpServers // {} | keys[]), (.projects[$a].mcpServers // {} | keys[]), (.projects[$b].mcpServers // {} | keys[]) ] | unique[]' "$cfg" 2>/dev/null)" \
     || { echo "director-session: could not read server names from $cfg" >&2; return 1; }
   names="$(printf '%s\n' "$keys" | grep -E '^director([-_][A-Za-z0-9_-]+)?$' || true)"
   n="$(printf '%s' "$names" | grep -c . || true)"

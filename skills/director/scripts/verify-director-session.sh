@@ -65,7 +65,31 @@ run() {
 }
 
 # runtty: the same, with a pty as stdin and stdout, so the terminal check sees
-# one. python3's pty module works the same on macOS and Linux.
+# one. TTYMODE=nostdin or nostdout points one of the two at /dev/null inside the
+# pty, so each half of the check is pinned on its own. The pty is driven by
+# pty.fork and a read loop that ends on EOF or EIO: pty.spawn blocks forever on
+# macOS's stock python3 3.9, where the master returns b"" at EOF instead of
+# raising EIO. The same loop runs on Linux.
+PTY_PY='import os, pty, sys
+pid, fd = pty.fork()
+if pid == 0:
+    m = os.environ.get("TTYMODE", "both")
+    if m == "nostdin":
+        os.dup2(os.open("/dev/null", os.O_RDONLY), 0)
+    if m == "nostdout":
+        os.dup2(os.open("/dev/null", os.O_WRONLY), 1)
+    os.execv(sys.argv[1], sys.argv[1:])
+while True:
+    try:
+        d = os.read(fd, 4096)
+    except OSError:
+        break
+    if not d:
+        break
+    sys.stdout.buffer.write(d)
+    sys.stdout.buffer.flush()
+_, st = os.waitpid(pid, 0)
+sys.exit(os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st))'
 runtty() {
   local dir="$1"; shift
   local envs=()
@@ -74,7 +98,7 @@ runtty() {
   rm -f "$marker" "$argvf"
   set +e
   out="$(cd "$dir" && env ${envs[@]+"${envs[@]}"} PATH="$work/bin:$PATH" DIRECTOR_SHIM_BIN="$work/shim" \
-    python3 -c 'import os,pty,sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))' "$SESSION" "$@" 2>&1)"
+    python3 -c "$PTY_PY" "$SESSION" "$@" 2>&1)"
   rc=$?
   set -e
   ran=""; argv=""
@@ -199,6 +223,13 @@ mkcfg '{"mcpServers":{"director-mcp":{}},"projects":{"'"$pp"'":{"mcpServers":{"d
 run "$work/plain" "${cfgenv[@]}" -- --channel
 [[ $rc -eq 0 && "$(count server:director-mcp)" == 1 ]] || miss "lookup, same name at both scopes: rc=$rc argv=$argv out=$out"
 
+# A value that is not an object makes jq quote part of it in its own error; that
+# text must never reach the output, whatever the config holds.
+SHORT="s3cr3t-9"   # jq quotes at most 10 characters of the value, so the fixture must fit
+mkcfg '{"mcpServers":"'$SHORT'"}'
+run "$work/plain" "${cfgenv[@]}" -- --channel
+[[ $rc -ne 0 && -z "$ran" && "$out" != *"$SHORT"* ]] || miss "lookup, mcpServers is not an object: rc=$rc ran='$ran' out=$out"
+
 # No config file at all: named, claude never starts.
 run "$work/plain" DIRECTOR_CLAUDE_JSON="$work/absent.json" -- --channel
 [[ $rc -ne 0 && -z "$ran" && "$out" == *"absent.json"* ]] || miss "lookup, no config file: rc=$rc ran='$ran' out=$out"
@@ -221,6 +252,13 @@ run "$work/plain" "${cfgenv[@]}" -- --channel
 # --receiver with no terminal is refused, and claude never starts.
 run "$work/plain" "${cfgenv[@]}" -- --receiver
 [[ $rc -ne 0 && -z "$ran" && "$out" == *"terminal"* ]] || miss "--receiver, no terminal: rc=$rc ran='$ran' out=$out"
+
+# Each half of the terminal check is pinned on its own: a terminal on stdout but
+# not stdin is refused, and so is one on stdin but not stdout.
+runtty "$work/plain" "${cfgenv[@]}" TTYMODE=nostdin -- --receiver
+[[ $rc -ne 0 && -z "$ran" ]] || miss "--receiver, no stdin terminal: rc=$rc ran='$ran' out=$out"
+runtty "$work/plain" "${cfgenv[@]}" TTYMODE=nostdout -- --receiver
+[[ $rc -ne 0 && -z "$ran" ]] || miss "--receiver, no stdout terminal: rc=$rc ran='$ran' out=$out"
 
 # --receiver with a terminal turns the flag on, announces it, and starts.
 runtty "$work/plain" "${cfgenv[@]}" -- --receiver
