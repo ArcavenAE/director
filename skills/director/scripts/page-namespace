@@ -5,7 +5,8 @@
   page-namespace apply [FILE|-]   copy an HTML page to stdout with the namespace in its title and
                                   its description: <title>T</title> becomes <title>T (ns)</title>
                                   and a <meta name="description"> follows it. With no namespace the
-                                  bytes pass through unchanged.
+                                  bytes pass through unchanged, and a page that already carries the
+                                  namespace is returned as it is (apply twice equals apply once).
 
 The namespace is the one line in $DIRECTOR_STATE/page-namespace (default ~/.director/state). With
 no file it is the GitHub login of the install's owner, read with `gh api user --jq .login` (GH
@@ -77,6 +78,13 @@ def apply(page, ns):
         return page
     base = m.group(1)
     esc = html.escape(ns)
+    if base.endswith(f" ({esc})"):
+        # Already applied: a page published again stays as it is.
+        if f'namespace {esc}">' in page[m.end():m.end() + 1000 + len(base) * 2]:
+            return page
+        plain = html.unescape(base[:-len(f" ({esc})")])
+        meta = f'<meta name="description" content="{html.escape(plain, quote=True)}, namespace {esc}">'
+        return page[:m.end()] + meta + page[m.end():]
     meta = f'<meta name="description" content="{html.escape(html.unescape(base), quote=True)}, namespace {esc}">'
     return page[:m.start()] + f"<title>{base} ({esc})</title>" + meta + page[m.end():]
 

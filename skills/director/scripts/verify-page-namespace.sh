@@ -92,6 +92,22 @@ OUT="$(env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$real
 state; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH=/usr/bin/false "$real/page-namespace" apply "$desk" > "$root/desk.out"
 cmp -s "$desk" "$root/desk.out" && ok "desk.html: with no namespace apply returns the file byte for byte" || bad "desk unchanged"
 
+# apply twice equals apply once (a page is republished again and again)
+state; ns_file 'arcaven\n'
+printf '%s' "$page" | env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$real/page-namespace" apply > "$root/ap1"
+env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$real/page-namespace" apply "$root/ap1" > "$root/ap2"
+cmp -s "$root/ap1" "$root/ap2" && [[ $(/usr/bin/grep -c 'namespace arcaven' "$root/ap2") == 1 ]] && ok "apply twice gives the bytes of apply once" || bad "apply is not idempotent" "$(cat "$root/ap2")"
+env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$real/page-namespace" apply "$desk" > "$root/dk1"
+env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$real/page-namespace" apply "$root/dk1" > "$root/dk2"
+cmp -s "$root/dk1" "$root/dk2" && ok "the Desk page applied twice gives the bytes of applying once" || bad "desk apply is not idempotent"
+
+# a missing helper: board-html and dash-writer exit 2 with one line, no traceback
+mkdir -p "$root/nohelper"; cp "$here/board-html" "$here/dash-writer" "$root/nohelper/"; cp "$here/dws" "$root/nohelper/"
+state; BRC=0; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH=/usr/bin/false DWS_NO_RERENDER=1 "$root/nohelper/board-html" >"$root/bout" 2>"$root/berr" || BRC=$?
+[[ $BRC != 0 && "$(cat "$root/berr")" == "board-html: page-namespace is missing"* && "$(wc -l < "$root/berr" | tr -d ' ')" == 1 ]] && ok "board-html without the helper stops with one fixed line" || bad "board-html no helper" "rc=$BRC $(cat "$root/berr")"
+printf "{}" > "$root/v.json"; DRC=0; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH=/usr/bin/false DWS_TEST_CLOCK=1 DWS_NOW="$DWS_NOW" python3 -I "$root/nohelper/dash-writer" run --force --versions "$root/v.json" >"$root/dout" 2>"$root/derr" || DRC=$?
+[[ $DRC == 2 && "$(cat "$root/derr")" == *"dash-writer: page-namespace is missing"* && "$(cat "$root/derr")" != *Traceback* ]] && ok "dash-writer without the helper exits 2 with one fixed line" || bad "dash-writer no helper" "rc=$DRC $(head -c 300 "$root/derr")"
+
 # mutants
 sed 's/^    if not VALID.fullmatch(value):$/    if False:/' "$here/page-namespace" > "$root/m-novalid"
 sed 's/^    if not ns:$/    if True:/' "$here/page-namespace" > "$root/m-noapply"

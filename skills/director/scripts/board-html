@@ -709,7 +709,10 @@ def main() -> None:
             "__SRC__": htmlmod.escape(src_label), "__BOARD_JSON__": payload}
     html = re.sub("|".join(map(re.escape, subs)), lambda m: subs[m.group(0)], TEMPLATE)
     helper = pathlib.Path(__file__).resolve().with_name("page-namespace")
-    r = subprocess.run([str(helper), "apply"], input=html.encode("utf-8"), capture_output=True)
+    try:
+        r = subprocess.run([str(helper), "apply"], input=html.encode("utf-8"), capture_output=True)
+    except OSError:
+        sys.exit("board-html: page-namespace is missing or not runnable beside board-html")
     if r.returncode != 0:
         sys.exit(f"board-html: {r.stderr.decode('utf-8', 'replace').strip() or 'page-namespace failed'}")
     html = r.stdout.decode("utf-8")

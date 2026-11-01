@@ -674,7 +674,11 @@ def cmd_run(force, versions_path):
         for name in PANELS:
             if f"dash_daily/{name}-{day}" in versions:
                 writes.append(put("delete", "dash_daily", f"{name}-{day}", versions))
-    r = subprocess.run([os.path.join(HERE, "page-namespace"), "get"], capture_output=True, text=True)
+    try:
+        r = subprocess.run([os.path.join(HERE, "page-namespace"), "get"], capture_output=True, text=True)
+    except OSError:
+        print("dash-writer: page-namespace is missing or not runnable beside dash-writer", file=sys.stderr)
+        sys.exit(2)
     if r.returncode != 0:
         print(f"dash-writer: {r.stderr.strip() or 'page-namespace failed'}", file=sys.stderr)
         sys.exit(2)
