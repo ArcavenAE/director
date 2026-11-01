@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Publish the director-mcp prerelease for one tag, and finish one that a failed
+# run left short (.github/workflows/release-director-mcp.yml).
+#
+#   scripts/publish-director-mcp-release --tag TAG --sha SHA --dist DIR --repo OWNER/REPO
+#
+# The release is complete when it carries every expected asset: the four
+# binaries, checksums.txt and attestations.sigstore.json. Three cases:
+#   no release for TAG      create it on SHA with every asset
+#   release is complete     nothing to do
+#   release is missing some upload only the missing ones; the tag is not touched
+# A re-run therefore finishes a publish that died after the tag was created, and
+# never re-tags or overwrites an asset that is already there. DIR must hold all
+# the expected files, or the script stops before it calls gh.
+set -euo pipefail
+
+die() { echo "publish-director-mcp-release: $*" >&2; exit 1; }
+EXPECTED=(director-mcp-darwin-arm64 director-mcp-darwin-amd64 director-mcp-linux-amd64 director-mcp-linux-arm64 checksums.txt attestations.sigstore.json)
+
+tag="" sha="" dist="" repo=""
+while (($#)); do
+  case "$1" in
+    --tag) [[ $# -ge 2 ]] || die "--tag needs a value"; tag="$2"; shift ;;
+    --sha) [[ $# -ge 2 ]] || die "--sha needs a value"; sha="$2"; shift ;;
+    --dist) [[ $# -ge 2 ]] || die "--dist needs a value"; dist="$2"; shift ;;
+    --repo) [[ $# -ge 2 ]] || die "--repo needs a value"; repo="$2"; shift ;;
+    *) die "unknown argument: $1" ;;
+  esac
+  shift
+done
+[[ -n "$tag" && -n "$sha" && -n "$dist" && -n "$repo" ]] || die "usage: $0 --tag TAG --sha SHA --dist DIR --repo OWNER/REPO"
+[[ "$tag" =~ ^director-mcp-alpha-[0-9]{8}-[0-9]{6}-[0-9a-f]{7}$ ]] || die "tag '$tag' is not director-mcp-alpha-<date>-<time>-<sha7>"
+[[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "--sha must be a full 40-character commit id"
+for a in "${EXPECTED[@]}"; do [[ -s "$dist/$a" ]] || die "$dist/$a is missing or empty; nothing was published"; done
+
+if have="$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' 2>/dev/null)"; then
+  missing=()
+  for a in "${EXPECTED[@]}"; do
+    grep -qxF -- "$a" <<<"$have" || missing+=("$dist/$a")
+  done
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    echo "$tag already carries every asset; nothing to publish"
+    exit 0
+  fi
+  echo "$tag is missing ${#missing[@]} asset(s); uploading them, the tag stays"
+  gh release upload "$tag" --repo "$repo" "${missing[@]}"
+else
+  gh release create "$tag" --repo "$repo" --target "$sha" --prerelease --title "$tag" \
+    --notes "director-mcp built from $sha. Verify a binary with: gh attestation verify <file> --repo $repo --bundle attestations.sigstore.json" \
+    "${EXPECTED[@]/#/$dist/}"
+fi
