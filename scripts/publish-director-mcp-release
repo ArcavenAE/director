@@ -4,14 +4,18 @@
 #
 #   scripts/publish-director-mcp-release --tag TAG --sha SHA --dist DIR --repo OWNER/REPO
 #
-# The release is complete when it carries every expected asset: the four
-# binaries, checksums.txt and attestations.sigstore.json. Three cases:
+# The release is complete when it carries every expected asset, by exact name,
+# each non-empty and in the uploaded state: the four binaries, checksums.txt and
+# attestations.sigstore.json. Four cases:
 #   no release for TAG      create it on SHA with every asset
+#   release targets another commit than SHA     stop, naming both
 #   release is complete     nothing to do
 #   release is missing some upload only the missing ones; the tag is not touched
-# A re-run therefore finishes a publish that died after the tag was created, and
-# never re-tags or overwrites an asset that is already there. DIR must hold all
-# the expected files, or the script stops before it calls gh.
+# An asset that is there but empty or not uploaded counts as missing, and the
+# upload, which never overwrites, then stops loudly on that name for a person to
+# clear. A re-run therefore finishes a publish that died after the tag was
+# created, and never re-tags or overwrites. DIR must hold all the expected files,
+# or the script stops before it calls gh.
 set -euo pipefail
 
 die() { echo "publish-director-mcp-release: $*" >&2; exit 1; }
@@ -33,7 +37,11 @@ done
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "--sha must be a full 40-character commit id"
 for a in "${EXPECTED[@]}"; do [[ -s "$dist/$a" ]] || die "$dist/$a is missing or empty; nothing was published"; done
 
-if have="$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' 2>/dev/null)"; then
+if view="$(gh release view "$tag" --repo "$repo" --json assets,targetCommitish \
+    --jq '.targetCommitish, (.assets[] | select(.size > 0 and .state == "uploaded") | .name)' 2>/dev/null)"; then
+  target="$(head -n 1 <<<"$view")"
+  have="$(tail -n +2 <<<"$view")"
+  [[ "$target" == "$sha" ]] || die "release $tag targets $target, but this run built $sha; not touching it"
   missing=()
   for a in "${EXPECTED[@]}"; do
     grep -qxF -- "$a" <<<"$have" || missing+=("$dist/$a")
