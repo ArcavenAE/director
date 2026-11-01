@@ -8,6 +8,8 @@
 #
 # Usage: skills/director/scripts/verify-board-html.sh   Exit nonzero on any miss.
 set -euo pipefail
+# No namespace file and no gh: the default namespace (the owner's GitHub login) must not reach these pages.
+export GH=/usr/bin/false
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOARD_HTML="${BOARD_HTML:-$here/board-html}"
@@ -252,7 +254,7 @@ DWS_NOW=2099-01-01T00:00:00Z "$BOARD_HTML" >/dev/null 2>&1
 [[ "$(wc -l <"$DIRECTOR_STATE/workstreams.jsonl" | tr -d ' ')" == "$n" ]] && ok "a second render over the same sources appends nothing" || bad "a second render appends nothing"
 # a fill that fails does not stop the page
 cp "$DWS" "$root/dws-broken"; printf '#!/bin/sh\nexit 3\n' >"$root/dws-broken"; chmod +x "$root/dws-broken"
-mkdir -p "$root/bh"; cp "$BOARD_HTML" "$root/bh/board-html"; cp "$DWS" "$root/bh/dws"
+mkdir -p "$root/bh"; cp "$BOARD_HTML" "$root/bh/board-html"; cp "$DWS" "$root/bh/dws"; cp "$here/page-namespace" "$root/bh/page-namespace"
 python3 - "$root/bh/dws" <<'PY'
 import sys
 t = open(sys.argv[1]).read()

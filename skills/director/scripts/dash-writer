@@ -43,10 +43,11 @@ It writes exactly the fields of section 3 and nothing else:
   dash_daily/<panel>-<day>  panel, day, counts   (kept 14 days: the batch deletes every recorded day 14 or more
                        days back, and the day exactly 14 back; a batch is 2 writes per panel plus the meta write,
                        11 with the five panels, plus 5 per day deleted, at most 50)
-  dash_meta/writer     last_run, runs, reader, checks
+  dash_meta/writer     last_run, runs, reader, checks, namespace
 A row holds only id, stage, age_h, area, title (ledger rows), id, stage, health, last_active,
 cluster (session rows) or kind, id, class, since, cluster (health rows). Never a token, key, socket path, settings value, message body, note text,
-`next`, `repos`, or a person's name. Every failure is counted in the panel's `refusal` by field and
+`next`, `repos`, or a person's name (a GitHub login, which dash_meta carries as `namespace`, is an
+account handle, not a name). Every failure is counted in the panel's `refusal` by field and
 reason, never by value; a placeholder is a fixed word, so nothing from a failed value reaches a document.
 
 A panel over 256 KiB is not written cut short: its rows are dropped and its refusal says so.
@@ -674,7 +675,16 @@ def cmd_run(force, versions_path):
         for name in PANELS:
             if f"dash_daily/{name}-{day}" in versions:
                 writes.append(put("delete", "dash_daily", f"{name}-{day}", versions))
-    meta = {"last_run": t_text, "runs": int(st.get("runs", 0)) + 1, "reader": READER, "checks": checks_of(data, t_now)}
+    try:
+        r = subprocess.run([os.path.join(HERE, "page-namespace"), "get"], capture_output=True, text=True)
+    except OSError:
+        print("dash-writer: page-namespace is missing or not runnable beside dash-writer", file=sys.stderr)
+        sys.exit(2)
+    if r.returncode != 0:
+        print(f"dash-writer: {r.stderr.strip() or 'page-namespace failed'}", file=sys.stderr)
+        sys.exit(2)
+    meta = {"last_run": t_text, "runs": int(st.get("runs", 0)) + 1, "reader": READER, "checks": checks_of(data, t_now),
+            "namespace": r.stdout.strip()}
     writes.append(put("set", "dash_meta", "writer", versions, meta))
     print(json.dumps({"writes": writes, "ack": {"at": t_text, "deleted": expired}}, ensure_ascii=False, indent=1))
 

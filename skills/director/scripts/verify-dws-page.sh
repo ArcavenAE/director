@@ -8,6 +8,8 @@
 # Usage: skills/director/scripts/verify-dws-page.sh   Exit nonzero on any miss.
 # The JS checks need node. Set NODE to a binary; with none that runs, they print SKIP.
 set -euo pipefail
+# No namespace file and no gh: the default namespace (the owner's GitHub login) must not reach these pages.
+export GH=/usr/bin/false
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DWS="${DWS:-$here/dws}"

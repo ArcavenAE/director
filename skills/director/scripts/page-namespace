@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""page-namespace: the one name that tells this install's published pages apart from another's.
+
+  page-namespace get              print the namespace, or nothing when none resolves
+  page-namespace apply [FILE|-]   copy an HTML page to stdout with the namespace in its title and
+                                  its description: <title>T</title> becomes <title>T (ns)</title>
+                                  and a <meta name="description"> follows it. With no namespace the
+                                  bytes pass through unchanged, and a page that already carries the
+                                  namespace is returned as it is (apply twice equals apply once).
+
+The namespace is the one line in $DIRECTOR_STATE/page-namespace (default ~/.director/state). With
+no file it is the GitHub login of the install's owner, read with `gh api user --jq .login` (GH
+names another command, for tests); when that cannot be read there is no namespace and pages keep
+their plain titles. A file that is present but empty, longer than one line, longer than 39
+characters, or holding anything outside letters, digits, dot, underscore and hyphen is refused:
+exit 2 and one fixed line on stderr, never a guess.
+"""
+import html
+import os
+import re
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
+FILE = os.path.join(STATE, "page-namespace")
+VALID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,38}")
+
+
+class Refused(Exception):
+    pass
+
+
+def from_file():
+    try:
+        with open(FILE, "rb") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return None
+    except OSError as err:
+        raise Refused(f"page-namespace file cannot be read ({type(err).__name__})")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused("page-namespace file is not UTF-8")
+    value = text[:-1] if text.endswith("\n") else text
+    if value == "":
+        raise Refused("page-namespace file is empty")
+    if "\n" in value or "\r" in value:
+        raise Refused("page-namespace file holds more than one line")
+    if not VALID.fullmatch(value):
+        raise Refused("page-namespace file must be 1 to 39 characters of letters, digits, dot, underscore and hyphen, starting with a letter or digit")
+    return value
+
+
+def from_login():
+    cmd = os.environ.get("GH") or "gh"
+    try:
+        out = subprocess.run([cmd, "api", "user", "--jq", ".login"], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
+        return ""
+    return out if VALID.fullmatch(out) else ""
+
+
+def resolve():
+    value = from_file()
+    return value if value is not None else from_login()
+
+
+TITLE = re.compile(r"<title>(.*?)</title>", re.S)
+
+
+def apply(page, ns):
+    if not ns:
+        return page
+    m = TITLE.search(page)
+    if not m:
+        return page
+    base = m.group(1)
+    esc = html.escape(ns)
+    if base.endswith(f" ({esc})"):
+        # Already applied: a page published again stays as it is.
+        if f'namespace {esc}">' in page[m.end():m.end() + 1000 + len(base) * 2]:
+            return page
+        plain = html.unescape(base[:-len(f" ({esc})")])
+        meta = f'<meta name="description" content="{html.escape(plain, quote=True)}, namespace {esc}">'
+        return page[:m.end()] + meta + page[m.end():]
+    meta = f'<meta name="description" content="{html.escape(html.unescape(base), quote=True)}, namespace {esc}">'
+    return page[:m.start()] + f"<title>{base} ({esc})</title>" + meta + page[m.end():]
+
+
+def main(argv):
+    if not argv or argv[0] not in ("get", "apply"):
+        print("usage: page-namespace get | apply [FILE|-]", file=sys.stderr)
+        return 64
+    try:
+        ns = resolve()
+    except Refused as err:
+        print(f"page-namespace: {err}", file=sys.stderr)
+        return 2
+    if argv[0] == "get":
+        if ns:
+            print(ns)
+        return 0
+    src = argv[1] if len(argv) > 1 else "-"
+    data = sys.stdin.buffer.read() if src == "-" else open(src, "rb").read()
+    sys.stdout.buffer.write(apply(data.decode("utf-8"), ns).encode("utf-8"))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

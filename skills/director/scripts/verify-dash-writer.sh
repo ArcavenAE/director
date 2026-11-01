@@ -21,6 +21,8 @@
 #
 # Usage: skills/director/scripts/verify-dash-writer.sh   Exit nonzero on any miss.
 set -uo pipefail
+# No namespace file and no gh: the default namespace (the owner's GitHub login) must not reach these documents.
+export GH=/usr/bin/false
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 W="${DASH_WRITER:-$here/dash-writer}"
@@ -49,7 +51,7 @@ STUB="$root/bin/marvel"
 RUN_PATH="$root/bin:/usr/bin:/bin:$PYDIR"
 RUN_DASH_MARVEL="$STUB"
 stub_first() { [[ "$(PATH="$1" command -v marvel)" == "$STUB" ]]; } # does `marvel` resolve to the stub on this PATH?
-run() { env -i HOME="$root/home" PATH="$RUN_PATH" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" \
+run() { env -i HOME="$root/home" PATH="$RUN_PATH" LANG=en_US.UTF-8 DIRECTOR_STATE="$state" GH=/usr/bin/false \
         DWS_TEST_CLOCK=1 DWS_NOW="${NOW_OVERRIDE:-$NOW}" DASH_MARVEL="$RUN_DASH_MARVEL" DASH_MARVEL_TIMEOUT="${MARVEL_TIMEOUT:-20}" \
         TABLES="$root/tables" python3 -I "$W" "$@"; }
 
@@ -212,7 +214,7 @@ for x in w:
     k = set(x["data"])
     if x["collection"] == "dash_panels": assert k == {"panel", "as_of", "writer", "rows", "counts", "refusal"}, k
     if x["collection"] == "dash_daily": assert k == {"panel", "day", "counts"}, k
-    if x["collection"] == "dash_meta": assert k == {"last_run", "runs", "reader", "checks"} and x["doc_id"] == "writer", k
+    if x["collection"] == "dash_meta": assert k == {"last_run", "runs", "reader", "checks", "namespace"} and x["doc_id"] == "writer", k
 ' && ok "only dash_panels, dash_daily and dash_meta; at most 50 writes; each document holds exactly the approved fields" || bad "batch shape"
 pyc '
 import json, sys
@@ -696,6 +698,21 @@ pyc 'import json,sys
 d=json.load(open(sys.argv[1])); p=[x for x in d["writes"] if x["collection"]=="dash_panels" and x["doc_id"]=="in-flight"][0]["data"]
 assert p["rows"]==[] and p["refusal"].get("panel:over-256KiB")==1, (len(p["rows"]), p["refusal"])
 assert len(json.dumps(d).encode()) > 0' && ok "a panel over 256 KiB is written with no rows and a refusal, not cut short" || bad "size cap"
+
+# dash_meta carries the install's namespace (page-namespace): the file's line, "" with none, and a bad file stops the run.
+metans() { pyc 'import json,sys
+d=json.load(open(sys.argv[1])); m=[x for x in d["writes"] if x["collection"]=="dash_meta"][0]["data"]
+print(m["namespace"])'; }
+printf 'arcaven\n' > "$state/page-namespace"
+run run --force --versions "$root/vers.json" >"$root/out.json" 2>"$root/err"; rc=$?
+[[ $rc == 0 && "$(metans)" == arcaven ]] && ok "dash_meta carries the namespace from the page-namespace file" || bad "dash_meta namespace set" "rc=$rc $(head -c 200 "$root/err")"
+rm -f "$state/page-namespace"
+run run --force --versions "$root/vers.json" >"$root/out.json" 2>"$root/err"; rc=$?
+[[ $rc == 0 && "$(metans)" == "" ]] && ok "with no namespace file and no gh, dash_meta namespace is empty" || bad "dash_meta namespace unset" "rc=$rc $(head -c 200 "$root/err")"
+printf 'bad name\n' > "$state/page-namespace"
+run run --force --versions "$root/vers.json" >"$root/out.json" 2>"$root/err"; rc=$?
+[[ $rc == 2 && ! -s "$root/out.json" && "$(cat "$root/err")" == *"page-namespace"* ]] && ok "a malformed namespace file stops the run with exit 2 and no writes" || bad "dash_meta namespace malformed" "rc=$rc $(head -c 200 "$root/err")"
+rm -f "$state/page-namespace"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

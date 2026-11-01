@@ -3146,6 +3146,19 @@ def page_instance_file(flag_value, default_name, label):
         raise Refused(f"{label} file {path} cannot be read ({type(err).__name__})")
 
 
+def page_namespaced(text):
+    """The page with this install's namespace in its title and description (page-namespace,
+    beside this script). A namespace file that is malformed refuses the render."""
+    helper = os.path.join(os.path.dirname(os.path.realpath(__file__)), "page-namespace")
+    try:
+        r = subprocess.run([helper, "apply"], input=text.encode("utf-8"), capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as err:
+        raise Refused(f"page-namespace could not run ({type(err).__name__})")
+    if r.returncode != 0:
+        raise Refused(r.stderr.decode("utf-8", "replace").strip() or f"page-namespace exited {r.returncode}")
+    return r.stdout.decode("utf-8")
+
+
 def page_render(theme, nav, desk_url):
     esc = htmlmod.escape
     t_now = parse_time(now())
@@ -3194,7 +3207,7 @@ def cmd_page(a):
     desk_url = page_instance_file(a.desk_url, "page-desk-url", "desk url").strip()
     if desk_url and not desk_url.startswith("https://"):
         raise Refused("the Desk url must start with https://")
-    text = page_render(theme, nav, desk_url)
+    text = page_namespaced(page_render(theme, nav, desk_url))
     if not a.out:
         sys.stdout.buffer.write(text.encode("utf-8"))
         return

@@ -190,6 +190,13 @@ release, revise or cancel (the cancel_held tool).
    it is replaced, a plain address gets `#<id>`, and one that already has a fragment is
    used as it is). Publishing the page is yours; the `picks` collection it writes is read
    at step 3 below.
+   Every page director publishes carries this install's namespace in its title and
+   description, so two installs' pages can be told apart. The namespace is the one line in the
+   instance file `page-namespace` in the state directory; with no file it is the GitHub login of
+   the install's owner. `dws page` and `board-html` apply it themselves, and `dash-writer` records it as `namespace` in `dash_meta`; for the Desk page, publish
+   the output of `${DIRECTOR_HOME:-$HOME/.director}/bin/page-namespace apply <desk.html>`, not the
+   file itself. A malformed file stops the render with one line saying why. A republish updates
+   the title in place and changes no URL.
 
 To mark a row blocked on the operator, the row must name an open Desk card
 (K13). A script cannot read the Desk, so in session read the cards with the

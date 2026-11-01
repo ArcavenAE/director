@@ -63,6 +63,9 @@ install_one "$SRC/skills/director/scripts/board-html" "$DIRECTOR_HOME/bin/board-
 # board-html runs dws from beside itself (the board's workstream ledger), so a
 # copy install needs dws in the same directory.
 install_one "$SRC/skills/director/scripts/dws" "$DIRECTOR_HOME/bin/dws"
+# page-namespace: board-html and dws run it from beside themselves to put the install's namespace in a page's
+# title and description, and the sweep runs it on the Desk page before publishing.
+install_one "$SRC/skills/director/scripts/page-namespace" "$DIRECTOR_HOME/bin/page-namespace"
 # The skill's other scripts. SKILL.md calls every one of them from this bin home
 # and falls back to the checkout's scripts/ only when the installed copy is missing.
 install_one "$SRC/skills/director/scripts/dsi" "$DIRECTOR_HOME/bin/dsi"
