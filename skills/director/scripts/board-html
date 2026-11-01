@@ -708,6 +708,11 @@ def main() -> None:
     subs = {"__LEDGER_HEAD__": head, "__LEDGER_TAIL__": tail, "__GENERATED__": generated,
             "__SRC__": htmlmod.escape(src_label), "__BOARD_JSON__": payload}
     html = re.sub("|".join(map(re.escape, subs)), lambda m: subs[m.group(0)], TEMPLATE)
+    helper = pathlib.Path(__file__).resolve().with_name("page-namespace")
+    r = subprocess.run([str(helper), "apply"], input=html.encode("utf-8"), capture_output=True)
+    if r.returncode != 0:
+        sys.exit(f"board-html: {r.stderr.decode('utf-8', 'replace').strip() or 'page-namespace failed'}")
+    html = r.stdout.decode("utf-8")
     # Write a sibling temp file and rename it over the page. The rename is
     # atomic on one filesystem, so a timed reload never loads a half-written
     # page whose script would not run and would stop auto-refresh.
