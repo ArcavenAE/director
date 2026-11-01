@@ -193,7 +193,7 @@ release, revise or cancel (the cancel_held tool).
    Every page director publishes carries this install's namespace in its title and
    description, so two installs' pages can be told apart. The namespace is the one line in the
    instance file `page-namespace` in the state directory; with no file it is the GitHub login of
-   the install's owner. `dws page` and `board-html` apply it themselves; for the Desk page, publish
+   the install's owner. `dws page` and `board-html` apply it themselves, and `dash-writer` records it as `namespace` in `dash_meta`; for the Desk page, publish
    the output of `${DIRECTOR_HOME:-$HOME/.director}/bin/page-namespace apply <desk.html>`, not the
    file itself. A malformed file stops the render with one line saying why. A republish updates
    the title in place and changes no URL.
