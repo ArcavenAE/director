@@ -78,7 +78,10 @@ case_restart() {
   wait_up 100 || { bad "$label: the hub did not come back up"; stop_hub; return; }
   wait_for 20 is_168 && ok "$label: a restart raises a 72h stream to 168h" || bad "$label: a restart raises a 72h stream to 168h" "max_age $(max_age GLOBAL_TO_DIRECTOR)"
   wait_for 20 is_192 && ok "$label: a restart raises a 25h director durable to 192h" || bad "$label: a restart raises a 25h director durable to 192h" "threshold $(thresh GLOBAL_TO_DIRECTOR mcp_global_t_1)"
-  /usr/bin/grep -q 'raised' "$dir/log/provision.log" 2>/dev/null && ok "$label: provision.log records the change" || bad "$label: provision.log records the change"
+  # start.sh writes provision.log only after provision.sh returns, which is after
+  # the durable reads 192h, so poll for the line instead of reading it once.
+  has_raised() { /usr/bin/grep -q 'raised' "$dir/log/provision.log" 2>/dev/null; }
+  wait_for 10 has_raised && ok "$label: provision.log records the change" || bad "$label: provision.log records the change"
   stop_hub
 }
 
@@ -117,6 +120,15 @@ case_nojq() {
 case_restart real "$here/start.sh"
 case_failure real "$here/start.sh"
 case_nojq
+
+# The log line lands after provision.sh returns, so a start.sh that writes it a
+# little later must still pass: the check polls for the line. This variant
+# writes it two seconds late. A check that read the log once, as this script
+# used to, failed on it (and on 3 of 9 plain runs).
+ddir="$work/late-log"; mkdir -p "$ddir"; cp "$here/provision.sh" "$ddir/provision.sh"
+sed "s|printf '%s provision ok|sleep 2; printf '%s provision ok|" "$here/start.sh" > "$ddir/start.sh"
+if cmp -s "$ddir/start.sh" "$here/start.sh"; then echo "late-log variant changed nothing"; exit 2; fi
+case_restart late-log "$ddir/start.sh"
 
 # Mutants of start.sh, each beside a copy of provision.sh.
 mutant() { # label from to casefn
