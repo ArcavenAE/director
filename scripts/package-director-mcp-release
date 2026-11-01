@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Build the four director-mcp release binaries from one commit and write their
+# checksums, with the release tag on the last line of output
+# (sim/design/shim-release-and-pinned-install.md, R3).
+#
+#   scripts/package-director-mcp-release --git-dir DIR --sha SHA --out DIR
+#
+# Each binary is scripts/build-director-mcp's output for that commit, so two
+# runs on one commit give identical bytes. Names are director-mcp-<os>-<arch>.
+# checksums.txt lists `<sha256>  <name>`, sorted by name. The last line is
+# `tag=director-mcp-alpha-<date>-<time>-<sha7>`, from the commit's committer
+# time in UTC, the same stamp the binaries carry in their version.
+set -euo pipefail
+
+die() { echo "package-director-mcp-release: $*" >&2; exit 1; }
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+gitdir="" sha="" out=""
+while (($#)); do
+  case "$1" in
+    --git-dir) [[ $# -ge 2 ]] || die "--git-dir needs a value"; gitdir="$2"; shift ;;
+    --sha) [[ $# -ge 2 ]] || die "--sha needs a value"; sha="$2"; shift ;;
+    --out) [[ $# -ge 2 ]] || die "--out needs a value"; out="$2"; shift ;;
+    *) die "unknown argument: $1" ;;
+  esac
+  shift
+done
+[[ -n "$gitdir" && -n "$sha" && -n "$out" ]] || die "usage: $0 --git-dir DIR --sha SHA --out DIR"
+[[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "--sha must be a full 40-character commit id, got '$sha'"
+
+mkdir -p "$out"
+: > "$out/checksums.txt"
+for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+  os="${target%/*}" arch="${target#*/}"
+  GOOS="$os" GOARCH="$arch" "$here/build-director-mcp" --git-dir "$gitdir" --sha "$sha" \
+    --out "$out/director-mcp-$os-$arch" > /dev/null
+done
+(cd "$out" && shasum -a 256 director-mcp-* | sed 's/ \*/  /' | LC_ALL=C sort -k2 > checksums.txt)
+
+stamp="$(TZ=UTC git -C "$gitdir" show -s --format=%cd --date=format-local:%Y%m%d-%H%M%S "$sha")"
+echo "tag=director-mcp-alpha-${stamp}-${sha:0:7}"
