@@ -62,7 +62,7 @@ func resolveSeatEnv() (seatEnv, error) {
 	if se.self.AgentID == "" {
 		return se, errors.New("no DIRECTOR_AGENT_ID and no MARVEL_SESSION. Run inside a marvel\n" +
 			"  session, or start a hand-run seat with the director-session launcher\n" +
-			"  (probe/nats-phase-0/id-a-demo/director-session.sh), which assigns a unique id.")
+			"  (director-session --own-config <id>, installed by install.sh), which assigns a unique id.")
 	}
 	if se.self.Team == "" || se.self.Workspace == "" {
 		return se, errors.New(seatTeamRefusal)

@@ -94,6 +94,9 @@ install_one "$SRC/skills/director/scripts/introspect" "$DIRECTOR_HOME/bin/intros
 # SKILL.md tells the session to run both by name, so a host without them cannot follow it.
 install_one "$SRC/skills/director/scripts/composer-check" "$DIRECTOR_HOME/bin/composer-check"
 install_one "$SRC/skills/director/scripts/standing-hook" "$DIRECTOR_HOME/bin/standing-hook"
+# director-session starts one director session by hand with the channel cue bound when asked
+# (ask I-91); a plain `claude` never binds it.
+install_one "$SRC/skills/director/scripts/director-session" "$DIRECTOR_HOME/bin/director-session"
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"
