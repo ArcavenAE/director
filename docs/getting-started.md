@@ -116,6 +116,13 @@ environment. Three values are the identity, and each must match
 
 `NATS_URL` names the broker (default `nats://127.0.0.1:4222`).
 
+**Starting one session by hand.** On a host with no role library, the first-run
+path is a per-host seat file and `scripts/director start`; "Start the director"
+in the README has the file's keys, the restart form and the recovery steps. The
+launcher for seats cast from a role library is `sim/twin/cast-launch.sh`, and it
+needs that library. The two forms below pass the same server by hand, so you can
+see what a launcher wires.
+
 **Per invocation, the recommended form.** Pass the server on the command
 line so the id belongs to exactly this process:
 
@@ -355,7 +362,8 @@ environment. No session spawns while the bus is down or bare
 plane. A launcher then only has to wire the shim into the harness; the
 twin's `sim/twin/cast-launch.sh` is the worked example, and `sim/twin/`
 carries the manifest and the check runbook. marvel's own documentation of
-the bus section lives in its repository (`docs/bus.md`).
+the bus section lives in its repository, in the admin guide, under "The message
+bus".
 
 ## 10. Join the global tier
 
