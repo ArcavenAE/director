@@ -9,7 +9,7 @@
 # The JS checks need node. Set NODE to a binary; with none that runs, they print SKIP.
 set -euo pipefail
 # No namespace file and no gh: the default namespace (the owner's GitHub login) must not reach these pages.
-export GH=/usr/bin/false
+export DIRECTOR_PAGE_NAMESPACE_TEST=1 GH=/usr/bin/false
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DWS="${DWS:-$here/dws}"

@@ -37,7 +37,7 @@ state() { rm -rf "$root/st"; mkdir -p "$root/st"; printf '%s\n' "# board" "" "##
 ns_file() { printf '%b' "$1" > "$root/st/page-namespace"; }
 helper() { # TREE ARGS... ; sets RC OUT ERR
   local t="$1"; shift; RC=0
-  OUT="$(env -i HOME="$root" PATH="$root/bin:/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH="$root/bin/gh" ${STUB_LOGIN:+STUB_LOGIN="$STUB_LOGIN"} "$t/page-namespace" "$@" 2>"$root/err")" || RC=$?
+  OUT="$(env -i HOME="$root" PATH="$root/bin:/usr/bin:/bin" DIRECTOR_STATE="$root/st" DIRECTOR_PAGE_NAMESPACE_TEST=1 GH="$root/bin/gh" ${STUB_LOGIN:+STUB_LOGIN="$STUB_LOGIN"} "$t/page-namespace" "$@" 2>"$root/err")" || RC=$?
   ERR="$(cat "$root/err")"
 }
 real="$(tree real)"
@@ -54,7 +54,7 @@ ns_file 'ok.name_1-x'; helper "$real" get; [[ $RC == 0 && "$OUT" == ok.name_1-x 
 # unset
 state; STUB_LOGIN=jared helper "$real" get; [[ $RC == 0 && "$OUT" == jared ]] && ok "unset: the owner's GitHub login is the namespace" || bad "unset login" "rc=$RC $OUT $ERR"
 state; unset STUB_LOGIN; helper "$real" get; [[ $RC == 0 && -z "$OUT" ]] && ok "unset, gh cannot answer: no namespace" || bad "unset no gh" "rc=$RC $OUT"
-OUT="$(printf '%s' "$page" | env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH="$root/bin/gh" "$real/page-namespace" apply)"
+OUT="$(printf '%s' "$page" | env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" DIRECTOR_PAGE_NAMESPACE_TEST=1 GH="$root/bin/gh" "$real/page-namespace" apply)"
 [[ "$OUT" == "$page" ]] && ok "unset, gh cannot answer: the page is byte for byte unchanged" || bad "unchanged page" "$OUT"
 
 # malformed
@@ -70,8 +70,8 @@ done
 # the writers
 writer() { # TREE ; runs dws page and board-html under the current state
   local t="$1"
-  WRC=0; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH=/usr/bin/false DWS_NOW="$DWS_NOW" DWS_TEST_CLOCK=1 "$t/dws" page --out "$root/page.html" >"$root/wout" 2>"$root/werr" || WRC=$?
-  BRC=0; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH=/usr/bin/false DWS_NOW="$DWS_NOW" DWS_TEST_CLOCK=1 DWS_NO_RERENDER=1 "$t/board-html" >"$root/bout" 2>"$root/berr" || BRC=$?
+  WRC=0; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" DIRECTOR_PAGE_NAMESPACE_TEST=1 GH=/usr/bin/false DWS_NOW="$DWS_NOW" DWS_TEST_CLOCK=1 "$t/dws" page --out "$root/page.html" >"$root/wout" 2>"$root/werr" || WRC=$?
+  BRC=0; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" DIRECTOR_PAGE_NAMESPACE_TEST=1 GH=/usr/bin/false DWS_NOW="$DWS_NOW" DWS_TEST_CLOCK=1 DWS_NO_RERENDER=1 "$t/board-html" >"$root/bout" 2>"$root/berr" || BRC=$?
 }
 state; ns_file 'arcaven\n'; rm -f "$root/page.html"; writer "$real"
 if [[ $WRC == 0 && $(/usr/bin/grep -c '<title>Director: Work Ledger (arcaven)</title>' "$root/page.html") == 1 && $(/usr/bin/grep -c 'name="description" content="Director: Work Ledger, namespace arcaven"' "$root/page.html") == 1 ]]; then ok "dws page: title and description carry the namespace"
@@ -89,7 +89,7 @@ else bad "writers malformed" "dws=$WRC board=$BRC $(cat "$root/werr") $(cat "$ro
 state; ns_file 'arcaven\n'
 OUT="$(env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$real/page-namespace" apply "$desk")"
 [[ $(printf '%s\n' "$OUT" | /usr/bin/grep -c '<title>Director Decision Desk (arcaven)</title>') == 1 && $(printf '%s\n' "$OUT" | /usr/bin/grep -c 'name="description" content="Director Decision Desk, namespace arcaven"') == 1 ]] && ok "desk.html: apply puts the namespace in its title and description" || bad "desk apply"
-state; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH=/usr/bin/false "$real/page-namespace" apply "$desk" > "$root/desk.out"
+state; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" DIRECTOR_PAGE_NAMESPACE_TEST=1 GH=/usr/bin/false "$real/page-namespace" apply "$desk" > "$root/desk.out"
 cmp -s "$desk" "$root/desk.out" && ok "desk.html: with no namespace apply returns the file byte for byte" || bad "desk unchanged"
 
 # apply twice equals apply once (a page is republished again and again)
@@ -103,9 +103,9 @@ cmp -s "$root/dk1" "$root/dk2" && ok "the Desk page applied twice gives the byte
 
 # a missing helper: board-html and dash-writer exit 2 with one line, no traceback
 mkdir -p "$root/nohelper"; cp "$here/board-html" "$here/dash-writer" "$root/nohelper/"; cp "$here/dws" "$root/nohelper/"
-state; BRC=0; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH=/usr/bin/false DWS_NO_RERENDER=1 "$root/nohelper/board-html" >"$root/bout" 2>"$root/berr" || BRC=$?
+state; BRC=0; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" DIRECTOR_PAGE_NAMESPACE_TEST=1 GH=/usr/bin/false DWS_NO_RERENDER=1 "$root/nohelper/board-html" >"$root/bout" 2>"$root/berr" || BRC=$?
 [[ $BRC != 0 && "$(cat "$root/berr")" == "board-html: page-namespace is missing"* && "$(wc -l < "$root/berr" | tr -d ' ')" == 1 ]] && ok "board-html without the helper stops with one fixed line" || bad "board-html no helper" "rc=$BRC $(cat "$root/berr")"
-printf "{}" > "$root/v.json"; DRC=0; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH=/usr/bin/false DWS_TEST_CLOCK=1 DWS_NOW="$DWS_NOW" python3 -I "$root/nohelper/dash-writer" run --force --versions "$root/v.json" >"$root/dout" 2>"$root/derr" || DRC=$?
+printf "{}" > "$root/v.json"; DRC=0; env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" DIRECTOR_PAGE_NAMESPACE_TEST=1 GH=/usr/bin/false DWS_TEST_CLOCK=1 DWS_NOW="$DWS_NOW" python3 -I "$root/nohelper/dash-writer" run --force --versions "$root/v.json" >"$root/dout" 2>"$root/derr" || DRC=$?
 [[ $DRC == 2 && "$(cat "$root/derr")" == *"dash-writer: page-namespace is missing"* && "$(cat "$root/derr")" != *Traceback* ]] && ok "dash-writer without the helper exits 2 with one fixed line" || bad "dash-writer no helper" "rc=$DRC $(head -c 300 "$root/derr")"
 
 # mutants
@@ -117,6 +117,36 @@ mt="$(tree mnv "$root/m-novalid")"; state; ns_file 'bad name\n'; helper "$mt" ge
 mt="$(tree mna "$root/m-noapply")"; state; ns_file 'arcaven\n'
 OUT="$(printf '%s' "$page" | env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$mt/page-namespace" apply)"
 [[ "$OUT" == "$page" ]] && ok "a helper whose apply does nothing leaves the title bare, so the set cases guard it" || bad "no-apply mutant not caught"
+
+# a page applied under one namespace and then another carries the second once
+state; ns_file 'alpha\n'
+A="$(printf '%s' "$page" | env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$real/page-namespace" apply)"
+ns_file 'beta\n'
+B="$(printf '%s' "$A" | env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$real/page-namespace" apply)"
+F="$(printf '%s' "$page" | env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$real/page-namespace" apply)"
+[[ "$B" == "$F" && "$B" == *'<title>Director Board (beta)</title>'* && "$B" != *alpha* && $(printf '%s' "$B" | /usr/bin/grep -o 'name="description"' | wc -l | tr -d ' ') == 1 ]] && ok "A then B: the second namespace replaces the first, one title suffix and one meta" || bad "A then B" "$B"
+B2="$(printf '%s' "$B" | env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$real/page-namespace" apply)"
+[[ "$B2" == "$B" ]] && ok "A then B then B: still unchanged" || bad "B twice" "$B2"
+
+# GH names another command only when DIRECTOR_PAGE_NAMESPACE_TEST is set; a stray GH is never run
+printf '#!/bin/sh\necho ran >> "%s/seam.log"\necho seamlogin\n' "$root" > "$root/seam-gh"; chmod +x "$root/seam-gh"
+state; rm -f "$root/seam.log"
+SOUT="$(env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH="$root/seam-gh" "$real/page-namespace" get)"
+[[ ! -e "$root/seam.log" && -z "$SOUT" ]] && ok "a GH in the environment is not run without the test variable" || bad "stray GH ran" "$SOUT"
+SOUT="$(env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" DIRECTOR_PAGE_NAMESPACE_TEST=1 GH="$root/seam-gh" "$real/page-namespace" get)"
+[[ -e "$root/seam.log" && "$SOUT" == seamlogin ]] && ok "with the test variable set GH is the command run" || bad "seam not honored" "$SOUT"
+
+# mutants for both
+sed 's/^    if own and m.group(1).endswith.*$/    if False:/' "$here/page-namespace" > "$root/m-nostrip"
+sed 's/(os.environ.get("GH") if os.environ.get("DIRECTOR_PAGE_NAMESPACE_TEST") else "")/os.environ.get("GH")/' "$here/page-namespace" > "$root/m-ungated"
+for m in nostrip ungated; do cmp -s "$here/page-namespace" "$root/m-$m" && bad "mutant $m not built"; done
+mt="$(tree mns "$root/m-nostrip")"; state; ns_file 'alpha\n'
+A="$(printf '%s' "$page" | env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$mt/page-namespace" apply)"; ns_file 'beta\n'
+B="$(printf '%s' "$A" | env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" "$mt/page-namespace" apply)"
+[[ "$B" == *alpha* ]] && ok "a helper that does not replace leaves alpha in the page, so the A then B case guards it" || bad "no-strip mutant not caught" "$B"
+mt="$(tree mug "$root/m-ungated")"; state; rm -f "$root/seam.log"
+env -i HOME="$root" PATH="/usr/bin:/bin" DIRECTOR_STATE="$root/st" GH="$root/seam-gh" "$mt/page-namespace" get > /dev/null
+[[ -e "$root/seam.log" ]] && ok "a helper that honors GH always runs the stray command, so the seam case guards it" || bad "ungated mutant not caught"
 
 echo "page-namespace: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
