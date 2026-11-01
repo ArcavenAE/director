@@ -177,7 +177,11 @@ Two files, both under `probe/nats-phase-0/`:
 - `director-mcp`, the MCP server. Install it with
   `director-install director-mcp --ref <commit>`, or build it and place it at
   `~/.director/bin/director-mcp`, or point `DIRECTOR_MCP_BIN` at it. The
-  launcher refuses to start if it is missing.
+  launcher refuses to start if it is missing. Each push to main that changes
+  the shim also publishes a prerelease, `director-mcp-alpha-<date>-<time>-<sha7>`,
+  with binaries for macOS and Linux (arm64 and amd64), `checksums.txt` and an
+  attestation. Check a download with
+  `gh attestation verify <file> --repo ArcavenAE/director --bundle attestations.sigstore.json`.
 - `director-mcp-seat`, the launcher that works out who the seat is. The fleet
   runs it from `~/.director/bin/director-mcp-seat`, a symlink back to this
   repo.

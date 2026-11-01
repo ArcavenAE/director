@@ -1,0 +1,111 @@
+# Publish a director-mcp prerelease for each push to main that changes the shim
+# (sim/design/shim-release-and-pinned-install.md, R3). Four binaries built by
+# scripts/build-director-mcp from the pushed commit, a checksums.txt, and one
+# build-provenance attestation over all of them as attestations.sigstore.json.
+# No signing key is held here: the attestation is keyless, from the run's OIDC
+# identity. macOS signing and notarization are not part of this release.
+name: Release director-mcp
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/director-mcp/**'
+      - 'scripts/build-director-mcp'
+      - 'scripts/package-director-mcp-release'
+      - '.github/workflows/release-director-mcp.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-director-mcp
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and package
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.pkg.outputs.tag }}
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'cmd/director-mcp/go.mod'
+          cache-dependency-path: cmd/director-mcp/go.sum
+
+      - name: Package
+        id: pkg
+        run: |
+          set -euo pipefail
+          scripts/package-director-mcp-release --git-dir .git --sha "$GITHUB_SHA" --out dist | tee pkg.out
+          tail -n 1 pkg.out >> "$GITHUB_OUTPUT"
+
+      - name: The linux/amd64 binary reports this commit
+        run: |
+          set -euo pipefail
+          chmod +x dist/director-mcp-linux-amd64
+          line="$(dist/director-mcp-linux-amd64 --version)"
+          echo "$line"
+          [[ "$line" == *" rev $GITHUB_SHA "* ]]
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Attest and publish
+    needs: build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      # Creates the tag and the release.
+      contents: write
+      # Keyless attestation.
+      id-token: write
+      attestations: write
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+
+      - name: Attest the binaries and checksums
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: 'dist/*'
+
+      - name: Publish the prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.build.outputs.tag }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^director-mcp-alpha-[0-9]{8}-[0-9]{6}-[0-9a-f]{7}$ ]]
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::notice::$TAG already exists; nothing to publish"
+            exit 0
+          fi
+          cp "$BUNDLE" dist/attestations.sigstore.json
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "$TAG" --notes "director-mcp built from $GITHUB_SHA. Verify a binary with: gh attestation verify <file> --repo $GITHUB_REPOSITORY --bundle attestations.sigstore.json" \
+            dist/*
