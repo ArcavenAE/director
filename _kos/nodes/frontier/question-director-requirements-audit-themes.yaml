@@ -34,6 +34,9 @@ content: |
 edges:
   - target: finding-006-global-tier-has-no-per-agent-address
     type: supports
+  - target: finding-director-7oiu-sim-corpus-fitness-probe
+    type: supports
+    note: "the corpus-fitness probe over the register (R-01 to R-230 at 62b55fc): GO for the reverse-brief run; the register's evidence is public for about a quarter of its entries, and 107 of 230 entries cite only notes; the class versus audit-theme diff stays owed (harvest 2026-11-01)"
 provenance:
   created_by: human
   session: 2026-10-04-arcaven-builder-harvest
