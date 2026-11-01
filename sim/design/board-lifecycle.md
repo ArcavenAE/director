@@ -1,6 +1,6 @@
 # Board lifecycle: decided work stays on the board until it is done
 
-Status: design for review, 2026-10-25. Owner: the architect role. Docs only;
+Status: ruled 2026-11-01 (section 7); designed 2026-10-25. Owner: the architect role. Docs only;
 nothing is built by this document. Commission: the operator, through
 director and the team supervisor.
 
@@ -245,6 +245,11 @@ one to the next, which is the failure section 1 measured.
 Each recommendation below is valid until 2026-11-01; the architect role
 re-checks it then. Nothing applies on silence.
 
+**Ruled 2026-11-01.** The architect role re-checked the five on their expiry
+and renewed them unchanged. Director accepted 1(a) to 5(a) as renewed, under
+the operator's standing ruling to act on recommendations, with no Desk card;
+the operator can override.
+
 | # | question | options | recommendation |
 |---|---|---|---|
 | 1 | Who opens a row for a ruling that starts work | (a) director, in the relay step, with a reconcile line for any missed; (b) refresh, from the Desk snapshot | (a): no writer-table change, and the snapshot cannot tell which rulings start work |
@@ -257,7 +262,7 @@ re-checks it then. Nothing applies on silence.
 
 One feature, so one chain (stacked-PR rule d), each part red first against a
 scratch `$DIRECTOR_STATE`, stubbed `gh` and `bd`, and `DWS_TEST_CLOCK=1`.
-Tickets are filed once the rulings land.
+Tickets were filed on 2026-11-01, after the rulings, flat with blocks edges: BL1 aae-orc-ax903, BL2 aae-orc-ujjtq, BL3 aae-orc-q02cb, BL4 aae-orc-zgy2l, BL5 aae-orc-dtiha, BL6 aae-orc-nersj.
 
 | part | what | depends on |
 |---|---|---|
