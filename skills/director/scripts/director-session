@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# director-session: start one director session by hand, with the channel cue
+# bound when you ask for it (ask I-91). The ID-A launcher (design brief 1,
+# sim/design/identity-at-spawn.md; ratified by the session-identity party
+# 2026-09-18), promoted out of probe/ and installed into
+# ${DIRECTOR_HOME:-~/.director}/bin by install.sh.
+#
+# Why: a plain `claude` never binds the channel cue, because Claude Code binds a
+# development channel only when started with
+# --dangerously-load-development-channels server:<name>. A session started by
+# hand reads no mail until someone types "read your inbox". This launcher adds
+# the flag, with <name> looked up from your own Claude config, so the name is
+# never hard-coded.
+#
+# Usage:
+#   director-session [options] [-- ] [claude args...]
+#
+# Options (all optional; anything else, and everything after the first word it
+# does not know, goes to claude):
+#   --receiver          the seat exists to take mail: turn the channel flag on.
+#                       Needs a terminal, because Claude Code asks one question
+#                       at startup that only a person can answer.
+#   --channel           turn the channel flag on for a seat that is not a
+#                       receiver. The flag is off unless one of these two is
+#                       given.
+#   --own-config ID     do not use your Claude config: launch with this
+#                       launcher's own strict MCP config, which runs the shim as
+#                       the server named "director" under the distinct agent id
+#                       ID (ID-A: the session never picks its own name). The
+#                       shim is $DIRECTOR_SHIM_BIN, else director-mcp on PATH.
+#   --require-orc-root  refuse unless the current directory is an orc root, the
+#                       one holding CLAUDE.md and repos.yaml (aae-orc-skw0b). Off
+#                       by default, because a newcomer's checkout holds neither.
+#   -h, --help          this text.
+#
+# The channel server name, in the default mode: read from your Claude config
+# (${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json, or $DIRECTOR_CLAUDE_JSON) by key
+# name only: the top-level mcpServers keys and this directory's project
+# mcpServers keys. A name is director-shaped when it is "director" or starts
+# "director-" or "director_". None found, or more than one, stops the launch and
+# says which; it never guesses. No value of any server entry is read or printed.
+#
+# The startup prompt: when the channel flag is on, Claude Code shows one prompt
+# at startup to confirm development channels. This launcher says so before it
+# starts claude and never answers the prompt: pressing it is the person's act.
+#
+# Examples:
+#   director-session --receiver --resume director        # a hand-run director seat
+#   director-session --own-config planner                # a second seat, its own id
+#   DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=<label> DIRECTOR_GLOBAL_ROLE=director \
+#     director-session --own-config director --receiver  # global tier, own-config only
+#
+# Global tier (own-config mode only): when DIRECTOR_GLOBAL_DOMAIN is set, with
+# DIRECTOR_CLUSTER and DIRECTOR_GLOBAL_ROLE, the levers are passed into the
+# shim's env. They are inert unless set.
+#
+# Check: skills/director/scripts/verify-director-session.sh
+set -euo pipefail
+
+usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed -e '$d' -e 's/^# \{0,1\}//'; }
+
+own_id=""; receiver=0; channel=0; req_root=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --own-config)
+      [[ $# -ge 2 ]] || { echo "director-session: --own-config needs an agent id" >&2; exit 1; }
+      own_id="$2"; shift 2;;
+    --receiver) receiver=1; channel=1; shift;;
+    --channel) channel=1; shift;;
+    --require-orc-root) req_root=1; shift;;
+    -h|--help) usage; exit 0;;
+    --) shift; break;;
+    *) break;;
+  esac
+done
+# What is left is claude's own.
+claude_args=("$@")
+
+command -v claude >/dev/null 2>&1 || { echo "director-session: claude is not on PATH" >&2; exit 1; }
+
+# The id is a subject token, rejected not rewritten (R-76), same class the shim
+# enforces at spawn. Fail early with a clear message rather than at connect.
+if [[ -n "$own_id" && ! "$own_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  echo "director-session: refusing agent id '$own_id'; the class is [A-Za-z0-9_-] (R-76)" >&2
+  exit 1
+fi
+
+# The receiver's one startup question needs a person at a terminal. A seat
+# started without one would sit at the prompt looking healthy, so refuse.
+if [[ $receiver -eq 1 && ! ( -t 0 && -t 1 ) ]]; then
+  echo "director-session: --receiver needs a terminal on stdin and stdout; Claude Code asks one question at startup that only a person can answer, and a seat without a terminal would wait at it looking healthy" >&2
+  exit 1
+fi
+
+# --require-orc-root: claude is exec'd in the inherited cwd, and a seat launched
+# from a directory that is not the orc root comes up without the orc's skills and
+# settings, and limited to that subtree; from outside the orc it also loses
+# CLAUDE.md, the rules, bd, aq and ax. It runs, looks healthy, and is
+# context-broken (aae-orc-skw0b). So refuse, on the operator's own terms, rather
+# than move them somewhere they did not ask to be. The orc root is found the way
+# aq and ax find it: the nearest ancestor of the cwd, the cwd included, holding
+# both CLAUDE.md and repos.yaml (find_orc_root in tools/aq and tools/ax). The walk
+# is repeated here because the launcher cannot ask aq, which answers in repo mode
+# inside any git checkout. The launch is allowed only when the root found IS the
+# cwd. aq honours ORC_ROOT; this does not, because a seat's context comes from
+# where claude starts.
+find_orc_root() {
+  local dir="${1:-$PWD}"
+  while [[ "$dir" != "/" ]]; do
+    if [[ -f "$dir/CLAUDE.md" && -f "$dir/repos.yaml" ]]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+if [[ $req_root -eq 1 ]]; then
+  if root="$(find_orc_root)"; then
+    if [[ "$root" != "$PWD" ]]; then
+      echo "director-session: refusing to launch from '$PWD'; it is below the orc root, so the seat would start without the orc's skills and settings and limited to this subtree" >&2
+      echo "director-session: cd '$root' and run it again; the launch directory must be the orc root, the one holding CLAUDE.md and repos.yaml" >&2
+      exit 1
+    fi
+  else
+    # The logical path has no root above it. A symlink into the orc can still
+    # resolve to one, so retry on the physical path to name the root to cd to.
+    phys="$(pwd -P)"
+    if [[ "$phys" != "$PWD" ]] && root="$(find_orc_root "$phys")"; then
+      echo "director-session: refusing to launch from '$PWD'; it resolves to '$phys', below the orc root, so the seat would start without the orc's skills and settings and limited to that subtree" >&2
+      echo "director-session: cd '$root' and run it again; the launch directory must be the orc root, the one holding CLAUDE.md and repos.yaml" >&2
+      exit 1
+    fi
+    echo "director-session: refusing to launch from '$PWD'; it is not inside an orc root, so the seat would start without the orc context" >&2
+    echo "director-session: cd to the orc checkout and run it again; the launch directory must be the orc root, the one holding CLAUDE.md and repos.yaml" >&2
+    exit 1
+  fi
+fi
+
+# lookup_server: print the one director-shaped server name in the user's Claude
+# config, or say why not and fail. Keys only: the jq filter prints key names, and
+# no value of any entry is read into the output.
+lookup_server() {
+  local cfg="${DIRECTOR_CLAUDE_JSON:-${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json}"
+  command -v jq >/dev/null 2>&1 || { echo "director-session: jq is needed to read the server name from $cfg" >&2; return 1; }
+  [[ -r "$cfg" ]] || { echo "director-session: cannot read the Claude config at $cfg, so the channel server name cannot be looked up" >&2; return 1; }
+  local keys names n
+  # jq's own error quotes part of a value it cannot read, so its stderr is dropped.
+  keys="$(jq -r --arg a "$PWD" --arg b "$(pwd -P)" \
+    '[ (.mcpServers // {} | keys[]), (.projects[$a].mcpServers // {} | keys[]), (.projects[$b].mcpServers // {} | keys[]) ] | unique[]' "$cfg" 2>/dev/null)" \
+    || { echo "director-session: could not read server names from $cfg" >&2; return 1; }
+  names="$(printf '%s\n' "$keys" | grep -E '^director([-_][A-Za-z0-9_-]+)?$' || true)"
+  n="$(printf '%s' "$names" | grep -c . || true)"
+  if [[ "$n" -eq 0 ]]; then
+    echo "director-session: no director server found in $cfg (looked at the top-level mcpServers and this directory's project mcpServers, for a name that is director or starts director- or director_); add the director-mcp server to your config, or use --own-config ID" >&2
+    return 1
+  fi
+  if [[ "$n" -gt 1 ]]; then
+    echo "director-session: more than one director server found in $cfg: $(printf '%s' "$names" | tr '\n' ' '); I will not guess which one carries your mail" >&2
+    return 1
+  fi
+  printf '%s\n' "$names"
+}
+
+chan_args=()
+announce_channel() {
+  echo "director-session: channel flag ON, server:$1. Claude Code will show one prompt at startup to confirm development channels; this launcher does not answer it, you do." >&2
+}
+
+if [[ -n "$own_id" ]]; then
+  # Own-config mode (ID-A). The shim defaults to director-mcp on PATH, so the
+  # launcher is portable across hosts and checkouts; set DIRECTOR_SHIM_BIN to
+  # override. No hardcoded home path.
+  BIN="${DIRECTOR_SHIM_BIN:-$(command -v director-mcp || true)}"
+  TEAM="${DIRECTOR_TEAM:-ops}"
+  WORKSPACE="${DIRECTOR_WORKSPACE:-aae-orc}"
+  NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
+  if [[ -z "$BIN" || ! -x "$BIN" ]]; then
+    echo "director-session: shim binary not found or not executable: ${BIN:-director-mcp}" >&2
+    echo "build it: ( cd <director checkout> && scripts/build-director-mcp ), or set DIRECTOR_SHIM_BIN" >&2
+    exit 1
+  fi
+  command -v jq >/dev/null 2>&1 || { echo "director-session: jq is needed to build the MCP config" >&2; exit 1; }
+  # Global-tier levers, injected ONLY when DIRECTOR_GLOBAL_DOMAIN is set, so this
+  # launcher is inert on the local tier and crossing-ready when the operator opts
+  # in. The shim validates them too; validating here fails early with a clear
+  # message. DIRECTOR_GLOBAL_ROLE is required (director or supervisor) because the
+  # launcher is generic and does not derive the role from a cast the way marvel's
+  # cast-launch does.
+  env_json="$(jq -n --arg id "$own_id" --arg team "$TEAM" --arg ws "$WORKSPACE" --arg nats "$NATS_URL" \
+    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, NATS_URL:$nats}')"
+  if [[ -n "${DIRECTOR_GLOBAL_DOMAIN:-}" ]]; then
+    : "${DIRECTOR_CLUSTER:?DIRECTOR_GLOBAL_DOMAIN is set, so DIRECTOR_CLUSTER must name this cluster (R-94)}"
+    : "${DIRECTOR_GLOBAL_ROLE:?DIRECTOR_GLOBAL_DOMAIN is set, so DIRECTOR_GLOBAL_ROLE must be director or supervisor (R-94)}"
+    for v in DIRECTOR_GLOBAL_DOMAIN DIRECTOR_CLUSTER DIRECTOR_GLOBAL_ROLE; do
+      if [[ ! "${!v}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        echo "director-session: refusing $v='${!v}'; the class is [A-Za-z0-9_-] (R-76)" >&2
+        exit 1
+      fi
+    done
+    env_json="$(printf '%s' "$env_json" | jq --arg d "$DIRECTOR_GLOBAL_DOMAIN" --arg c "$DIRECTOR_CLUSTER" --arg r "$DIRECTOR_GLOBAL_ROLE" \
+      '. + {DIRECTOR_GLOBAL_DOMAIN:$d, DIRECTOR_CLUSTER:$c, DIRECTOR_GLOBAL_ROLE:$r}')"
+    echo "director-session: global tier ON, domain=$DIRECTOR_GLOBAL_DOMAIN cluster=$DIRECTOR_CLUSTER role=$DIRECTOR_GLOBAL_ROLE" >&2
+  fi
+  if [[ $channel -eq 1 ]]; then
+    # The shim sends the cue only when DIRECTOR_CUE=1 is in its own environment,
+    # so own-config mode sets it. The server is the one this launcher names.
+    env_json="$(printf '%s' "$env_json" | jq '. + {DIRECTOR_CUE:"1"}')"
+    chan_args=(--dangerously-load-development-channels server:director)
+    announce_channel director
+  fi
+  # Pass the config as a JSON STRING (the confirmed --mcp-config form); no temp
+  # file, nothing to clean up. --strict-mcp-config loads ONLY this server, so a
+  # project-scoped director-mcp (baked DIRECTOR_AGENT_ID=operator) is bypassed.
+  # Caveat: if an enterprise managed-mcp.json is deployed on this host,
+  # --strict-mcp-config makes claude exit at startup by design.
+  json="$(jq -nc --arg cmd "$BIN" --argjson env "$env_json" '{mcpServers:{director:{command:$cmd, env:$env}}}')"
+  echo "director-session: launching claude as agent://$TEAM/$own_id (workspace $WORKSPACE) on $NATS_URL" >&2
+  exec claude --strict-mcp-config --mcp-config "$json" ${chan_args[@]+"${chan_args[@]}"} ${claude_args[@]+"${claude_args[@]}"}
+fi
+
+# Default mode: claude runs on your own config. The channel flag, when asked for,
+# names the server found there. The shim's own environment is whatever that
+# config entry sets, so DIRECTOR_CUE=1 must be in the entry for the cue to fire.
+if [[ $channel -eq 1 ]]; then
+  name="$(lookup_server)" || exit 1
+  chan_args=(--dangerously-load-development-channels "server:$name")
+  announce_channel "$name"
+  echo "director-session: the cue fires only if that server's own environment sets DIRECTOR_CUE=1; this launcher does not read or change it" >&2
+fi
+exec claude ${chan_args[@]+"${chan_args[@]}"} ${claude_args[@]+"${claude_args[@]}"}

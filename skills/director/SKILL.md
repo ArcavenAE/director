@@ -266,6 +266,16 @@ card back for this.
   ask whether to hand the work off or drop the role. In session 1 the role
   dissolved into ordinary work over six days and nobody noticed.
 
+## Starting a standing session by hand
+
+A plain `claude` never binds the channel cue, so a hand-started seat reads no
+mail until someone types "read your inbox". Start it with
+`${DIRECTOR_HOME:-$HOME/.director}/bin/director-session --receiver`, which adds
+the channel flag with the server name looked up from your own Claude config
+(keys only), says so, and warns that Claude Code shows one startup prompt that
+the launcher never answers. `--own-config ID` gives the session a distinct
+agent id of the launcher's own making. `verify-director-session.sh` proves it.
+
 ## Standing checklist: a cue outside the answer
 
 Standing duties (drain the inbox, read answered Desk cards) have no cue of

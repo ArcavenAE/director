@@ -38,7 +38,8 @@ content: |
      Identifying the holder requires mapping presence pid to shim to parent
      claude to tty and cwd; there is no session handle in the record.
   c. Preflight the cast (director-mcp --preflight). Passes.
-  d. Launch through probe/nats-phase-0/id-a-demo/director-session.sh with
+  d. Launch through skills/director/scripts/director-session (promoted from
+     probe/nats-phase-0/id-a-demo/director-session.sh; own-config mode) with
      --strict-mcp-config, which on origin/main (#54, 2026-09-18) takes the
      seat id `director` with --resume and passes the global levers when set.
      Its own header says not to set the global levers until the crossing is

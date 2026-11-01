@@ -23,7 +23,7 @@ the real director).
 | where the personal id comes from | read `~/.claude.json` (key names and agent id only) | a **local-scope Claude Code registration** for the orc directory, `director-mcp` with the personal `DIRECTOR_AGENT_ID` baked in, loaded by every Claude Code session started there. It is operator-local and in no git repo |
 | instance ids can collide | `git grep ulid` in director-mcp | fixed for instances: `bus.go:165` uses `crypto/rand` (finding-026's fix). Message ids at `tools.go:124` still use `ulid.Make()`; out of scope here, noted in section 7 |
 | the seat wrapper has a shared fallback | read `probe/nats-phase-0/director-mcp-seat:69` on main | **true.** `DIRECTOR_AGENT_ID="${DIRECTOR_AGENT_ID:-${MARVEL_SESSION:-director-seat}}"`: with neither set, every such seat joins as the literal `director-seat`. mokuzai's seats run this wrapper today |
-| a launcher that assigns ids exists | `probe/nats-phase-0/id-a-demo/director-session.sh` | yes: it assigns a distinct id and passes `--strict-mcp-config`, so the baked registration is bypassed (ID-A) |
+| a launcher that assigns ids exists | `skills/director/scripts/director-session` (promoted from `probe/nats-phase-0/id-a-demo/director-session.sh`) | yes: it assigns a distinct id and passes `--strict-mcp-config`, so the baked registration is bypassed (ID-A) |
 
 So the Go shim has no default, but one shipped wrapper does: the seat
 wrapper's `director-seat` fallback. The change removes that fallback,
