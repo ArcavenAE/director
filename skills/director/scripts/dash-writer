@@ -46,7 +46,8 @@ It writes exactly the fields of section 3 and nothing else:
   dash_meta/writer     last_run, runs, reader, checks, namespace
 A row holds only id, stage, age_h, area, title (ledger rows), id, stage, health, last_active,
 cluster (session rows) or kind, id, class, since, cluster (health rows). Never a token, key, socket path, settings value, message body, note text,
-`next`, `repos`, or a person's name. Every failure is counted in the panel's `refusal` by field and
+`next`, `repos`, or a person's name (a GitHub login, which dash_meta carries as `namespace`, is an
+account handle, not a name). Every failure is counted in the panel's `refusal` by field and
 reason, never by value; a placeholder is a fixed word, so nothing from a failed value reaches a document.
 
 A panel over 256 KiB is not written cut short: its rows are dropped and its refusal says so.
