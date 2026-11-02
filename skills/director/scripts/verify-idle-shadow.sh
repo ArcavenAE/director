@@ -243,15 +243,15 @@ marry_cases() {
   canned '{"count":{"ready":1,"eligible":1,"free":1}}'
   runm "$B"
   [[ "$rc" == 0 && "$(/usr/bin/grep -c -F -- '- GAP duplicate-seat agent://crew/b1 (clusters alpha, beta)' "$root/out" || true)" == 1 ]] \
-    && ok "$tag D1 a duplicated address is named once, with both clusters, and the run ends 0" || bad "$tag D1 duplicate gap" "$(out)"
-  ! has "marry: marvel marry failed" && ok "$tag D1 marry is not refused" || bad "$tag D1 marry refused" "$(out)"
+    && ok "$tag DUP1 a duplicated address is named once, with both clusters, and the run ends 0" || bad "$tag DUP1 duplicate gap" "$(out)"
+  ! has "marry: marvel marry failed" && ok "$tag DUP1 marry is not refused" || bad "$tag DUP1 marry refused" "$(out)"
   jq -e '[.seats[].address] == ["agent://crew/b2"]' "$FIX/marry.in" >/dev/null \
-    && ok "$tag D1 the duplicate is dropped and the other seat still reaches marry" || bad "$tag D1 marry input" "$(jq -c '[.seats[].address]' "$FIX/marry.in" 2>&1)"
+    && ok "$tag DUP1 the duplicate is dropped and the other seat still reaches marry" || bad "$tag DUP1 marry input" "$(jq -c '[.seats[].address]' "$FIX/marry.in" 2>&1)"
   # no duplicate: no duplicate GAP
   reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"
   canned '{"count":{"ready":1,"eligible":1,"free":1}}'
   runm "$B"
-  ! has "duplicate-seat" && ok "$tag D2 no duplicate, no duplicate GAP" || bad "$tag D2 spurious gap" "$(out)"
+  ! has "duplicate-seat" && ok "$tag DUP2 no duplicate, no duplicate GAP" || bad "$tag DUP2 spurious gap" "$(out)"
 
   # a free seat on another cluster than the sender: unplaced
   reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"
