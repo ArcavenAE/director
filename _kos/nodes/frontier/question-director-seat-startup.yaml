@@ -177,6 +177,27 @@ content: |
   pre-releases. `gh api repos/{repo}/releases/latest` is one request; a 404
   maps to no release (director#202). A tool the seat runs every refresh is
   part of what the seat costs to run.
+
+  HARVEST 2026-11-02, from the PRs merged since 2026-11-01:
+  - Sub-question E and the rough spot "two launch paths, each wrong in the
+    other's case": the public launcher now covers a hand-started seat
+    (`--receiver`, #462) and a marvel role's own command (`--marvel-role`,
+    #473) without a role library. The managed-broker seat wrapper is still a
+    separate path. Evidence 1a407d0, d02afd4.
+  - Sub-question F and the stale-build rough spot: each push that changes
+    director-mcp now publishes a prerelease built from that commit, with its
+    version, so a seat binary can be tied to a commit (#464, 27b3b03, issue
+    #68). Presence already carries `rev` (`shimRevision()`, see the
+    2026-10-02 note above), so the open part is that a worktree build can
+    stamp the wrong revision (finding-018), not that none is carried.
+  - Sub-question A: a missing bus URL at launch was not a loud failure in
+    this window. #475 merged after it (679b853, 2026-11-02T03:43:24Z): a
+    launched seat now gets `DIRECTOR_BUS_REQUIRED=1`, and the shim exits 2
+    with one line when that marker is set and `NATS_URL` is not. A shim
+    started without the marker keeps the local default.
+  - What a new user would meet: getting-started now has a hand-start path
+    (#463, 68a8be7).
+
 edges:
   - target: finding-015-a-respawned-seat-still-replays-its-inbox-after-the-resume-fix
     type: derives
