@@ -196,23 +196,31 @@ lookup_server() {
 
 # bus_url_plain: set nats_url to NATS_URL (or the local default) with every
 # user:password@ removed. NATS_URL may be a comma-separated server list, so each
-# entry is cleaned on its own and the list keeps its order and length; within an
-# entry, everything up to the last @ after the scheme goes, so a password holding
-# an @ or a / is removed too. The MCP config lands on the command line, so no part
-# of the userinfo may go in it, or in anything this launcher prints; the shim reads
-# its credentials from DIRECTOR_NATS_USER and DIRECTOR_NATS_PASS, or the seat's
-# password file, as under the fleet's launcher.
+# entry is cleaned on its own and the list keeps its order and length. Within an
+# entry the cut runs to the last @ of the AUTHORITY only (the text after the
+# scheme up to the first / ? or #), so an @ in a path or query is left alone and
+# the shim is never pointed at a host the user did not name. A leading space on
+# an entry and its scheme are kept. The list is split with parameter expansion,
+# not a here-string, so the URL never passes through a shell temp file. The MCP
+# config lands on the command line, so no part of the userinfo may go in it, or in
+# anything this launcher prints; the shim reads its credentials from
+# DIRECTOR_NATS_USER and DIRECTOR_NATS_PASS, or the seat's password file, as under
+# the fleet's launcher.
 bus_url_plain() {
-  local url="${NATS_URL:-nats://127.0.0.1:4222}" re='^([A-Za-z][A-Za-z0-9+.-]*://)?(.*)$' entry scheme rest out="" stripped=0
-  local entries=()
-  IFS=, read -r -a entries <<<"$url"
-  for entry in ${entries[@]+"${entries[@]}"}; do
-    if [[ "$entry" == *@* && "$entry" =~ $re ]]; then
-      scheme="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
-      entry="${scheme}${rest##*@}"
-      stripped=1
+  local rest="${NATS_URL:-nats://127.0.0.1:4222}" entry lead body scheme auth tail out="" first=1 more=1 stripped=0
+  local re='^([A-Za-z][A-Za-z0-9+.-]*://)?([^/?#]*)(.*)$'
+  while [[ $more -eq 1 ]]; do
+    if [[ "$rest" == *,* ]]; then entry="${rest%%,*}"; rest="${rest#*,}"; else entry="$rest"; more=0; fi
+    lead="${entry%%[![:space:]]*}"
+    body="${entry:${#lead}}"
+    if [[ "$body" == *@* && "$body" =~ $re ]]; then
+      scheme="${BASH_REMATCH[1]}"; auth="${BASH_REMATCH[2]}"; tail="${BASH_REMATCH[3]}"
+      if [[ "$auth" == *@* ]]; then
+        body="${scheme}${auth##*@}${tail}"
+        stripped=1
+      fi
     fi
-    out="${out:+$out,}$entry"
+    if [[ $first -eq 1 ]]; then out="${lead}${body}"; first=0; else out="${out},${lead}${body}"; fi
   done
   if [[ $stripped -eq 1 ]]; then
     echo "director-session: NATS_URL carried user:password@; it was left out of the shim's config. Put the credentials in DIRECTOR_NATS_USER and DIRECTOR_NATS_PASS, or the seat's password file, where the shim reads them" >&2

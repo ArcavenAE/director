@@ -29,16 +29,17 @@ SESSION="${DIRECTOR_SESSION:-$here/director-session}"
 command -v jq >/dev/null 2>&1 || { echo "jq not on PATH"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 not on PATH (the terminal case needs a pty)"; exit 2; }
 
-work="$(mktemp -d "${TMPDIR:-/tmp}/director-session-verify.XXXXXX")"
+work="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/director-session-verify.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
 marker="$work/claude-ran"
 argvf="$work/claude-argv"
-cat >"$work/bin/claude" <<STUB
-#!/usr/bin/env bash
-pwd -P >"$marker"
-printf '%s\n' "\$@" >"$argvf"
-STUB
+# A stub harness records its argv, one word per line, and where it ran. It is
+# written with printf, not a here-document, which bash 3.2 puts in a file under /tmp.
+mkstub() {
+  printf '%s\n' '#!/usr/bin/env bash' "pwd -P >\"$marker\"" "printf '%s\\n' \"\$@\" >\"$argvf\"" >"$work/bin/$1"
+}
+mkstub claude
 chmod +x "$work/bin/claude"
 printf '#!/bin/sh\n' >"$work/shim"
 chmod +x "$work/shim"
@@ -277,11 +278,7 @@ if grep -n -E 'send-keys|expect |xdotool|osascript|yes \|' "$SESSION" >/dev/null
 # ---- marvel-role mode (director#461): a marvel role's own command, no role library ----
 
 # A stub codex records its argv the same way claude does.
-cat >"$work/bin/codex" <<STUB
-#!/usr/bin/env bash
-pwd -P >"$marker"
-printf '%s\n' "\$@" >"$argvf"
-STUB
+mkstub codex
 chmod +x "$work/bin/codex"
 # The caller's own marvel and director env must not leak into these cases.
 unset_seat=(-u DIRECTOR_AGENT_ID -u DIRECTOR_TEAM -u DIRECTOR_WORKSPACE -u MARVEL_SESSION -u MARVEL_TEAM
@@ -384,6 +381,33 @@ list_case() { # <input> <expected list in the config>
 list_case 'nats://u:p@127.0.0.1:1,nats://u:p@127.0.0.2:1' 'nats://127.0.0.1:1,nats://127.0.0.2:1'
 list_case 'nats://127.0.0.1:1,nats://u:p@127.0.0.2:1' 'nats://127.0.0.1:1,nats://127.0.0.2:1'
 list_case 'u:p@127.0.0.1:1,u:p@127.0.0.2:1' '127.0.0.1:1,127.0.0.2:1'
+# The cut stays inside the authority: an @ in a path or query is not userinfo, so the
+# host the user named is the host in the config. A leading space on an entry and
+# its scheme (nats:// or tls://) are kept.
+url_case() { # <input> <expected value in the config> <notice: yes|no>
+  local url="$1" want="$2" notice="$3" form
+  for form in claude codex own; do
+    case "$form" in
+      claude) run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role;;
+      codex)  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role --harness codex;;
+      own)    run "$work/plain" "${unset_seat[@]}" "NATS_URL=$url" -- --own-config seat-a;;
+    esac
+    if [[ $rc -ne 0 || "$argv" != *"\"$want\""* ]]; then miss "NATS_URL ($form, '$url'): want \"$want\" in the config: rc=$rc $argv"; fi
+    if [[ "$argv" == *"u:p"* || "$out" == *"u:p"* ]]; then miss "NATS_URL ($form, '$url'): userinfo reached argv or the output: $argv / $out"; fi
+    if [[ "$notice" == yes && "$out" != *"left out of the shim"* ]]; then miss "NATS_URL ($form, '$url'): no strip notice: $out"; fi
+    if [[ "$notice" == no && "$out" == *"left out of the shim"* ]]; then miss "NATS_URL ($form, '$url'): a false strip notice: $out"; fi
+  done
+}
+url_case 'nats://127.0.0.1:1/p@th' 'nats://127.0.0.1:1/p@th' no
+url_case 'nats://u:p@127.0.0.1:1/p@th?q=a@b' 'nats://127.0.0.1:1/p@th?q=a@b' yes
+url_case 'nats://127.0.0.1:1, nats://u:p@127.0.0.2:1' 'nats://127.0.0.1:1, nats://127.0.0.2:1' yes
+url_case ', nats://u:p@127.0.0.2:1' ', nats://127.0.0.2:1' yes
+url_case 'tls://u:p@127.0.0.1:1, tls://u:p@127.0.0.2:1' 'tls://127.0.0.1:1, tls://127.0.0.2:1' yes
+
+# The URL and its password never pass through a shell temp file: the helper uses no
+# here-string or here-document (bash 3.2 writes both to a file under /tmp).
+if sed -n '/^bus_url_plain()/,/^}/p' "$SESSION" | grep -q '<<'; then miss "bus_url_plain uses a here-string or here-document"; fi
+
 run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" NATS_URL=nats://127.0.0.1:1,nats://127.0.0.2:1 -- --marvel-role
 [[ "$out" != *"left out of the shim"* ]] || miss "a clean server list drew a strip notice: $out"
 
