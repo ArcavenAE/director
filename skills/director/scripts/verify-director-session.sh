@@ -285,7 +285,7 @@ chmod +x "$work/bin/codex"
 # The caller's own marvel and director env must not leak into these cases.
 unset_seat=(-u DIRECTOR_AGENT_ID -u DIRECTOR_TEAM -u DIRECTOR_WORKSPACE -u MARVEL_SESSION -u MARVEL_TEAM
   -u MARVEL_WORKSPACE -u DIRECTOR_CUE -u MARVEL_FIRST_PROMPT -u DIRECTOR_CLUSTER -u NATS_URL
-  -u DIRECTOR_NATS_USER -u DIRECTOR_NATS_PASS)
+  -u DIRECTOR_NATS_USER -u DIRECTOR_NATS_PASS -u DIRECTOR_NATS_CREDS -u MARVEL_BUS_STATE)
 seat_a=(DIRECTOR_AGENT_ID=demo-supervisor-g1-0 DIRECTOR_TEAM=demo DIRECTOR_WORKSPACE=first)
 
 # Positive control: the seat starts under the shim named in its own env, with a
@@ -390,6 +390,35 @@ env_case 'nats://tok-s#x@127.0.0.1:1' 'tok-s'
 env_case 'nats://127.0.0.1:1, nats://u:p@127.0.0.2:1' 'u:p'
 env_case ', nats://u:p@127.0.0.2:1' 'u:p'
 env_case 'tls://u:p@127.0.0.1:1, tls://u:p@127.0.0.2:1' 'u:p'
+
+# The bus credential names the shim reads are forwarded by NAME under codex and never put
+# on argv (fixture values). Under claude the launching environment reaches the shim
+# itself, and the value is on neither the command line nor in the output.
+for name in DIRECTOR_NATS_CREDS DIRECTOR_NATS_USER DIRECTOR_NATS_PASS MARVEL_BUS_STATE; do
+  sentinel="sentinel-$name-value"
+  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "$name=$sentinel" -- --marvel-role --harness codex
+  [[ $rc -eq 0 && "$argv" == *"env_vars="*"\"$name\""* ]] || miss "codex: $name not forwarded by name: rc=$rc $argv"
+  [[ "$argv" != *"$sentinel"* && "$out" != *"$sentinel"* ]] || miss "codex: the value of $name is on argv or in the output: $argv / $out"
+  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "$name=$sentinel" -- --marvel-role
+  [[ $rc -eq 0 && "$argv" != *"$sentinel"* && "$out" != *"$sentinel"* && "$argv" != *"$name"* ]] || miss "claude: $name reached argv or the output: rc=$rc $argv / $out"
+  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role --harness codex
+  [[ "$argv" != *"$name"* ]] || miss "codex: $name forwarded though unset: $argv"
+done
+# All four and NATS_URL together are forwarded in one list, by name.
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" DIRECTOR_NATS_CREDS=c1 DIRECTOR_NATS_USER=u1 DIRECTOR_NATS_PASS=p1 MARVEL_BUS_STATE=/b1 NATS_URL=nats://u:p@127.0.0.1:1 -- --marvel-role --harness codex
+[[ "$argv" == *'env_vars=["NATS_URL","DIRECTOR_NATS_CREDS","DIRECTOR_NATS_USER","DIRECTOR_NATS_PASS","MARVEL_BUS_STATE"]'* ]] || miss "codex: the five names are not in one list: $argv"
+
+# The launcher marks every seat it launches, so the shim fails loudly (exit 2, one line)
+# instead of joining the local broker when no NATS_URL arrives: the marker is in the
+# config of the claude and --own-config forms and in the codex env table.
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role
+[[ "$argv" == *'"DIRECTOR_BUS_REQUIRED":"1"'* ]] || miss "marvel-role (claude): the bus-required marker is not in the config: $argv"
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role --harness codex
+[[ "$argv" == *'DIRECTOR_BUS_REQUIRED="1"'* ]] || miss "marvel-role (codex): the bus-required marker is not in the env table: $argv"
+run "$work/plain" "${unset_seat[@]}" -- --own-config seat-a
+[[ "$argv" == *'"DIRECTOR_BUS_REQUIRED":"1"'* ]] || miss "--own-config: the bus-required marker is not in the config: $argv"
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" 'NATS_URL=nats://u:p@127.0.0.1:1' -- --marvel-role
+[[ "$argv" == *'"DIRECTOR_BUS_REQUIRED":"1"'* && "$argv" != *'"NATS_URL"'* ]] || miss "an @ URL: the marker is set and NATS_URL is left to the environment: $argv"
 
 # With no @ the URL (or the local default) goes in the config as before, with no
 # notice and no forwarding.

@@ -256,8 +256,10 @@ if [[ $marvel_role -eq 1 ]]; then
   # Only non-secret values go into the config, which lands on the command line.
   # The bus password is not passed here: the shim finds it as it does under the
   # fleet's launcher.
+  # DIRECTOR_BUS_REQUIRED=1 tells the shim this seat was launched: with no NATS_URL
+  # it exits 2 with one line instead of joining the local broker by default.
   env_json="$(jq -n --arg id "$m_id" --arg team "$m_team" --arg ws "$m_ws" \
-    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws}')"
+    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, DIRECTOR_BUS_REQUIRED:"1"}')"
   if [[ $nats_in_env -eq 0 ]]; then env_json="$(printf '%s' "$env_json" | jq --arg n "$nats_url" '. + {NATS_URL:$n}')"; fi
   if [[ -n "${DIRECTOR_CLUSTER:-}" ]]; then
     if [[ ! "$DIRECTOR_CLUSTER" =~ ^[A-Za-z0-9_-]+$ ]]; then
@@ -283,8 +285,21 @@ if [[ $marvel_role -eq 1 ]]; then
   # accepted as the inline table.
   env_toml="$(printf '%s' "$env_json" | jq -r 'to_entries | map("\(.key)=\(.value|tojson)") | "{" + join(",") + "}"')"
   echo "director-session: launching codex as agent://$m_team/$m_id (workspace $m_ws)" >&2
+  # codex passes its MCP server no environment, so every value the shim needs that
+  # must stay off the command line is forwarded by NAME with env_vars: the bus URL
+  # when it holds an @, and the bus credential names the shim reads (a creds file, a
+  # user and password, the seat's bus state directory) when they are set. Only names
+  # go into the config, never values. Claude Code hands the shim the launching
+  # environment itself, so none of this is needed there.
+  fwd_names=()
+  if [[ $nats_in_env -eq 1 ]]; then fwd_names+=(NATS_URL); fi
+  for n in DIRECTOR_NATS_CREDS DIRECTOR_NATS_USER DIRECTOR_NATS_PASS MARVEL_BUS_STATE; do
+    if [[ -n "${!n:-}" ]]; then fwd_names+=("$n"); fi
+  done
   fwd=()
-  if [[ $nats_in_env -eq 1 ]]; then fwd=(-c 'mcp_servers.director.env_vars=["NATS_URL"]'); fi
+  if [[ ${#fwd_names[@]} -gt 0 ]]; then
+    fwd=(-c "mcp_servers.director.env_vars=$(printf '%s\n' "${fwd_names[@]}" | jq -R . | jq -sc .)")
+  fi
   exec codex -c "mcp_servers.director.command=$(jq -nc --arg c "$BIN" '$c')" -c "mcp_servers.director.env=$env_toml" ${fwd[@]+"${fwd[@]}"} ${claude_args[@]+"${claude_args[@]}"} ${brief[@]+"${brief[@]}"}
 fi
 
@@ -309,7 +324,7 @@ if [[ -n "$own_id" ]]; then
   # launcher is generic and does not derive the role from a cast the way marvel's
   # cast-launch does.
   env_json="$(jq -n --arg id "$own_id" --arg team "$TEAM" --arg ws "$WORKSPACE" \
-    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws}')"
+    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, DIRECTOR_BUS_REQUIRED:"1"}')"
   if [[ $nats_in_env -eq 0 ]]; then env_json="$(printf '%s' "$env_json" | jq --arg n "$nats_url" '. + {NATS_URL:$n}')"; fi
   if [[ -n "${DIRECTOR_GLOBAL_DOMAIN:-}" ]]; then
     : "${DIRECTOR_CLUSTER:?DIRECTOR_GLOBAL_DOMAIN is set, so DIRECTOR_CLUSTER must name this cluster (R-94)}"
