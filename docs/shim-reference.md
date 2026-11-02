@@ -61,7 +61,7 @@ The channel cue (#166). Off unless `DIRECTOR_CUE=1`, and per process.
 
 | Variable | Meaning |
 |---|---|
-| `DIRECTOR_CUE` | `1` makes the shim send its Claude Code one `notifications/claude/channel` notice when mail arrives, so an idle seat is woken; anything else leaves the shim unchanged. It needs `--dangerously-load-development-channels server:director` on the `claude` command line, and that flag brings a one-time startup prompt that needs a person (`docs/getting-started.md`, section 4). A seat without the cue reads mail only when it polls |
+| `DIRECTOR_CUE` | `1` makes the shim send its Claude Code a `notifications/claude/channel` notice when mail arrives (arrivals close together fold into one), so an idle seat is woken; anything else leaves the shim unchanged. It needs `--dangerously-load-development-channels server:director` on the `claude` command line, and that flag brings a one-time startup prompt that needs a person (`docs/getting-started.md`, section 4). A seat without the cue reads mail only when it polls |
 
 Under marvel, `DIRECTOR_AGENT_ID`, `NATS_URL`, `DIRECTOR_NATS_USER`, and
 `DIRECTOR_NATS_PASS` are stamped into the session environment by the

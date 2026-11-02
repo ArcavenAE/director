@@ -185,11 +185,14 @@ nats kv get AGENT_STATE 'presence.ops.operator.<instance>' --raw
 **A seat that takes mail needs the channel cue.** A Claude Code seat that has
 set nothing reads mail only when it calls `wait_for_message` or
 `inbox_summary`, so a seat sitting idle is never woken when mail arrives. With
-the channel cue on, the shim sends that seat's Claude Code one notice per
-arrival, naming the sender, the performative and the message id (never the
-body). The notice starts a turn, and the model then drains with
-`wait_for_message` as before, so order and acks do not change. Two settings
-turn it on, both per seat:
+the channel cue on, the shim sends that seat's Claude Code a notice when mail
+arrives. Arrivals within a few seconds of each other fold into one notice,
+which carries a count and the sender, performative and message id of the
+oldest waiting message (never the body). No notice is sent while the seat has
+a `wait_for_message` open, since that call delivers the message; a notice
+nobody answers is sent once more after a wait. The notice starts a turn, and
+the model then drains with `wait_for_message` as before, so order and acks do
+not change. Two settings turn it on, both per seat:
 
 - `DIRECTOR_CUE=1` in the shim's `env`. Only the exact value `1` counts.
 - `--dangerously-load-development-channels server:director` on the `claude`
@@ -208,8 +211,11 @@ needs a person to answer it, and a seat nobody attends stays at that prompt
 until someone does, so start a seat with the cue where its first screen will
 be read. After the prompt, the shim sends a self-test notice and reports the
 cue as `live` once the model answers it, or `unverified` if it does not.
-`DIRECTOR_CUE` has no effect on a codex session, which has no channel flag.
-Leave both settings off and the shim is unchanged: the seat reads mail when it
+The cue is enabled only for the client protocol version it was measured on
+(2025-11-25). Under any other version the shim turns the cue off and reports
+`protocol <v> not verified`, so a Claude Code release that changes its
+protocol version leaves a seat with both settings never woken. Leave both
+settings off and the shim is unchanged: the seat reads mail when it
 polls, and only then.
 
 ## 5. Join a second harness
