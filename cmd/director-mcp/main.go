@@ -64,6 +64,20 @@ func env(k, def string) string {
 	return def
 }
 
+// busURL is the broker URL the shim connects to. NATS_URL wins. With none, a
+// launched seat (the launcher sets DIRECTOR_BUS_REQUIRED=1) fails loudly, so a
+// seat whose URL never reached it cannot quietly join the local broker; a shim
+// wired by hand keeps the documented local default.
+func busURL(get func(string) string) (string, error) {
+	if u := get("NATS_URL"); u != "" {
+		return u, nil
+	}
+	if get("DIRECTOR_BUS_REQUIRED") == "1" {
+		return "", fmt.Errorf("DIRECTOR_BUS_REQUIRED is set and no NATS_URL arrived; set NATS_URL for this seat")
+	}
+	return "nats://127.0.0.1:4222", nil
+}
+
 func main() {
 	// --preflight: connect, verify the broker is provisioned, and exit. Used by
 	// cast-launch before starting the harness (finding-166, R-93).
@@ -132,7 +146,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "director-mcp: %v\n", err)
 		os.Exit(2)
 	}
-	url := env("NATS_URL", "nats://127.0.0.1:4222")
+	url, err := busURL(os.Getenv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "director-mcp: %v\n", err)
+		os.Exit(2)
+	}
 	// The global levers are validated here, before anything connects, for the
 	// same reason the local identity is: a bad role or a cluster name that is
 	// not a subject token would build a subject that is not ours, so it is

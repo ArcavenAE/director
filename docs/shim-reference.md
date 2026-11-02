@@ -22,6 +22,7 @@ never rewritten (R-76).
 | `DIRECTOR_TEAM` | `default` | the team |
 | `DIRECTOR_WORKSPACE` | `default` | the workspace |
 | `NATS_URL` | `nats://127.0.0.1:4222` | the local broker |
+| `DIRECTOR_BUS_REQUIRED` | unset | set to `1` by `director-session` for the seats it launches: with no `NATS_URL` the shim exits 2 with one line instead of using the local default |
 
 Broker credentials, all optional. Unset means an anonymous connection.
 
