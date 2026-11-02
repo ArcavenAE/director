@@ -49,6 +49,16 @@ content: |
   - finding-021: `sender.session` is the harness session UUID; the shim's
     per-process ULID travels in `sender.instance`, self-asserted. `unread`
     keys its reads-outside-durable evidence on it and says so in `basis`.
+
+  HARVEST 2026-11-02:
+  - Sub-question A: #462 reports that a hand-started session without the cue
+    read no mail for 12 hours overnight; its `--receiver` mode binds the cue.
+    #473 keeps the cue off for a marvel role unless `--receiver`, `--channel`
+    or `DIRECTOR_CUE=1` asks for it, so the default for roles is still off.
+    Evidence 1a407d0, d02afd4.
+  - Retention: the live AGENT_INBOX read 72h against a documented 168h, so an
+    idle seat's mail and durable could expire after three days; `provision.sh`
+    raises it at start (#459, f166790).
 edges:
   - target: finding-013-an-idle-supervisor-without-the-cue-reads-mail-hours-late
     type: derives
