@@ -404,6 +404,31 @@ url_case 'nats://127.0.0.1:1, nats://u:p@127.0.0.2:1' 'nats://127.0.0.1:1, nats:
 url_case ', nats://u:p@127.0.0.2:1' ', nats://127.0.0.2:1' yes
 url_case 'tls://u:p@127.0.0.1:1, tls://u:p@127.0.0.2:1' 'tls://127.0.0.1:1, tls://127.0.0.2:1' yes
 
+# The fragment ends the authority too: an @ after # is not userinfo.
+url_case 'nats://127.0.0.1:1#fr@g' 'nats://127.0.0.1:1#fr@g' no
+url_case 'nats://u:p@127.0.0.1:1#fr@g' 'nats://127.0.0.1:1#fr@g' yes
+
+# A raw / ? or # in a password ends the authority early and leaves part of the
+# credential there with no @ to cut at. The launcher refuses, in one line that
+# shows neither the URL nor the credential, before the harness starts, in all
+# three launch forms (fixture credentials).
+for pw in 'u-s:pw/s' 'u-s:pw?s' 'u-s:pw#s'; do
+  for form in claude codex own; do
+    case "$form" in
+      claude) run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=nats://$pw@127.0.0.1:1" -- --marvel-role;;
+      codex)  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=nats://$pw@127.0.0.1:1" -- --marvel-role --harness codex;;
+      own)    run "$work/plain" "${unset_seat[@]}" "NATS_URL=nats://$pw@127.0.0.1:1" -- --own-config seat-a;;
+    esac
+    if [[ $rc -eq 0 || -n "$ran" || "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" != 1 || "$out" != *"percent-encode"* ]]; then
+      miss "NATS_URL password form '$pw' ($form): want one refusal line before the harness: rc=$rc ran='$ran' out=$out"
+    fi
+    if [[ "$out" == *"u-s"* || "$out" == *"pw"* || "$out" == *"127.0.0.1"* ]]; then miss "NATS_URL password form '$pw' ($form): the refusal shows the URL or the credential: $out"; fi
+  done
+done
+# A list refuses on any one bad entry, and a good list still starts.
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" 'NATS_URL=nats://127.0.0.1:1,nats://u-s:pw/s@127.0.0.2:1' -- --marvel-role
+[[ $rc -ne 0 && -z "$ran" && "$out" != *"u-s"* ]] || miss "NATS_URL list with one bad entry: rc=$rc ran='$ran' out=$out"
+
 # The URL and its password never pass through a shell temp file: the helper uses no
 # here-string or here-document (bash 3.2 writes both to a file under /tmp).
 if sed -n '/^bus_url_plain()/,/^}/p' "$SESSION" | grep -q '<<'; then miss "bus_url_plain uses a here-string or here-document"; fi

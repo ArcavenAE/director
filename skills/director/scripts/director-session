@@ -205,10 +205,12 @@ lookup_server() {
 # config lands on the command line, so no part of the userinfo may go in it, or in
 # anything this launcher prints; the shim reads its credentials from
 # DIRECTOR_NATS_USER and DIRECTOR_NATS_PASS, or the seat's password file, as under
-# the fleet's launcher.
+# the fleet's launcher. A server whose authority is still not host or host:port
+# after the cut is refused (see the check below).
 bus_url_plain() {
   local rest="${NATS_URL:-nats://127.0.0.1:4222}" entry lead body scheme auth tail out="" first=1 more=1 stripped=0
   local re='^([A-Za-z][A-Za-z0-9+.-]*://)?([^/?#]*)(.*)$'
+  local hostre='^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+)(:[0-9]+)?$'
   while [[ $more -eq 1 ]]; do
     if [[ "$rest" == *,* ]]; then entry="${rest%%,*}"; rest="${rest#*,}"; else entry="$rest"; more=0; fi
     lead="${entry%%[![:space:]]*}"
@@ -218,6 +220,16 @@ bus_url_plain() {
       if [[ "$auth" == *@* ]]; then
         body="${scheme}${auth##*@}${tail}"
         stripped=1
+      fi
+    fi
+    # What is left must be host or host:port. A raw / ? or # in a password ends the
+    # authority early and leaves part of the credential there with no @ to cut at, so
+    # refuse, in one line that shows neither the URL nor the credential.
+    if [[ -n "$body" && "$body" =~ $re ]]; then
+      auth="${BASH_REMATCH[2]}"
+      if [[ ! "$auth" =~ $hostre ]]; then
+        echo "director-session: a server in NATS_URL is not host or host:port after its scheme; if its password holds a / ? or #, percent-encode it. The URL is not shown" >&2
+        exit 1
       fi
     fi
     if [[ $first -eq 1 ]]; then out="${lead}${body}"; first=0; else out="${out},${lead}${body}"; fi
