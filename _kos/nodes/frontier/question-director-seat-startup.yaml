@@ -187,9 +187,14 @@ content: |
   - Sub-question F and the stale-build rough spot: each push that changes
     director-mcp now publishes a prerelease built from that commit, with its
     version, so a seat binary can be tied to a commit (#464, 27b3b03, issue
-    #68). Presence still carries no revision.
-  - Sub-question A: a missing bus URL at launch is not yet a loud failure.
-    #475 is open for it; recorded as pending, not built.
+    #68). Presence already carries `rev` (`shimRevision()`, see the
+    2026-10-02 note above), so the open part is that a worktree build can
+    stamp the wrong revision (finding-018), not that none is carried.
+  - Sub-question A: a missing bus URL at launch was not a loud failure in
+    this window. #475 merged after it (679b853, 2026-11-02T03:43:24Z): a
+    launched seat now gets `DIRECTOR_BUS_REQUIRED=1`, and the shim exits 2
+    with one line when that marker is set and `NATS_URL` is not. A shim
+    started without the marker keeps the local default.
   - What a new user would meet: getting-started now has a hand-start path
     (#463, 68a8be7).
 
