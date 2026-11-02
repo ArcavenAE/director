@@ -346,6 +346,28 @@ run "$work/plain" "${unset_seat[@]}" 'DIRECTOR_AGENT_ID=bad id' DIRECTOR_TEAM=de
 run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" DIRECTOR_NATS_PASS=hunter2-sentinel DIRECTOR_NATS_USER=u-sentinel -- --marvel-role
 [[ $rc -eq 0 && "$argv" != *hunter2-sentinel* && "$argv" != *u-sentinel* ]] || miss "marvel-role: a bus credential reached argv: $argv"
 
+# A NATS_URL with user:password@ is stripped before it reaches argv, the output or
+# any written file, in all three launch forms. A fixture URL, never a real one;
+# a password holding an @ is stripped through its last @.
+for url in 'nats://u:p@127.0.0.1:1' 'nats://u:p@ss@127.0.0.1:1'; do
+  for form in claude codex own; do
+    case "$form" in
+      claude) run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role;;
+      codex)  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role --harness codex;;
+      own)    run "$work/plain" "${unset_seat[@]}" "NATS_URL=$url" -- --own-config seat-a;;
+    esac
+    [[ $rc -eq 0 && "$argv" == *127.0.0.1:1* ]] || miss "NATS_URL userinfo ($form, $url): the host did not reach the config: rc=$rc $argv"
+    if [[ "$argv" == *"u:p"* || "$argv" == *"p@"* || "$out" == *"u:p"* || "$out" == *"p@"* || "$argv" == *"ss@"* ]]; then
+      miss "NATS_URL userinfo ($form, $url): the credential reached argv or the output: $argv / $out"
+    fi
+    if grep -r -l -E 'u:p|p@' "$work" >/dev/null 2>&1; then miss "NATS_URL userinfo ($form, $url): the credential reached a file under the scratch dir"; fi
+  done
+done
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" NATS_URL=nats://u:p@127.0.0.1:1 -- --marvel-role
+[[ "$out" == *"left out of the shim"* ]] || miss "NATS_URL userinfo: no one-line notice: $out"
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" NATS_URL=nats://127.0.0.1:1 -- --marvel-role
+[[ "$out" != *"left out of the shim"* && "$argv" == *'"NATS_URL":"nats://127.0.0.1:1"'* ]] || miss "NATS_URL without userinfo changed: $out $argv"
+
 # Flag combinations that make no sense are one-line refusals.
 run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role --own-config x
 [[ $rc -ne 0 && -z "$ran" ]] || miss "marvel-role with --own-config: rc=$rc"

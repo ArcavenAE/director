@@ -194,6 +194,23 @@ lookup_server() {
   printf '%s\n' "$names"
 }
 
+# bus_url_plain: set nats_url to NATS_URL (or the local default) with any
+# user:password@ removed from its authority. The MCP config lands on the command
+# line, so no part of the userinfo may go in it, or in anything this launcher
+# prints; the shim reads its credentials from its own env or the seat's password
+# file, as under the fleet's launcher.
+bus_url_plain() {
+  local url="${NATS_URL:-nats://127.0.0.1:4222}" re='^([A-Za-z][A-Za-z0-9+.-]*://)?([^/?#]*)(.*)$' scheme auth rest
+  if [[ "$url" =~ $re ]]; then
+    scheme="${BASH_REMATCH[1]}"; auth="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"
+    if [[ "$auth" == *@* ]]; then
+      url="${scheme}${auth##*@}${rest}"
+      echo "director-session: NATS_URL carries user:password@; it was left out of the shim's config, and the shim reads its credentials from its own env or the seat's password file" >&2
+    fi
+  fi
+  nats_url="$url"
+}
+
 chan_args=()
 announce_channel() {
   echo "director-session: channel flag ON, server:$1. Claude Code will show one prompt at startup to confirm development channels; this launcher does not answer it, you do." >&2
@@ -230,10 +247,11 @@ if [[ $marvel_role -eq 1 ]]; then
     echo "director-session: codex has no channel flag, so --receiver and --channel do not apply to --harness codex" >&2
     exit 1
   fi
+  bus_url_plain
   # Only non-secret values go into the config, which lands on the command line.
   # The bus password is not passed here: the shim finds it as it does under the
   # fleet's launcher.
-  env_json="$(jq -n --arg id "$m_id" --arg team "$m_team" --arg ws "$m_ws" --arg nats "${NATS_URL:-nats://127.0.0.1:4222}" \
+  env_json="$(jq -n --arg id "$m_id" --arg team "$m_team" --arg ws "$m_ws" --arg nats "$nats_url" \
     '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, NATS_URL:$nats}')"
   if [[ -n "${DIRECTOR_CLUSTER:-}" ]]; then
     if [[ ! "$DIRECTOR_CLUSTER" =~ ^[A-Za-z0-9_-]+$ ]]; then
@@ -269,7 +287,7 @@ if [[ -n "$own_id" ]]; then
   BIN="${DIRECTOR_SHIM_BIN:-$(command -v director-mcp || true)}"
   TEAM="${DIRECTOR_TEAM:-ops}"
   WORKSPACE="${DIRECTOR_WORKSPACE:-aae-orc}"
-  NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
+  bus_url_plain
   if [[ -z "$BIN" || ! -x "$BIN" ]]; then
     echo "director-session: shim binary not found or not executable: ${BIN:-director-mcp}" >&2
     echo "build it: ( cd <director checkout> && scripts/build-director-mcp ), or set DIRECTOR_SHIM_BIN" >&2
@@ -282,7 +300,7 @@ if [[ -n "$own_id" ]]; then
   # message. DIRECTOR_GLOBAL_ROLE is required (director or supervisor) because the
   # launcher is generic and does not derive the role from a cast the way marvel's
   # cast-launch does.
-  env_json="$(jq -n --arg id "$own_id" --arg team "$TEAM" --arg ws "$WORKSPACE" --arg nats "$NATS_URL" \
+  env_json="$(jq -n --arg id "$own_id" --arg team "$TEAM" --arg ws "$WORKSPACE" --arg nats "$nats_url" \
     '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, NATS_URL:$nats}')"
   if [[ -n "${DIRECTOR_GLOBAL_DOMAIN:-}" ]]; then
     : "${DIRECTOR_CLUSTER:?DIRECTOR_GLOBAL_DOMAIN is set, so DIRECTOR_CLUSTER must name this cluster (R-94)}"
@@ -310,7 +328,7 @@ if [[ -n "$own_id" ]]; then
   # Caveat: if an enterprise managed-mcp.json is deployed on this host,
   # --strict-mcp-config makes claude exit at startup by design.
   json="$(jq -nc --arg cmd "$BIN" --argjson env "$env_json" '{mcpServers:{director:{command:$cmd, env:$env}}}')"
-  echo "director-session: launching claude as agent://$TEAM/$own_id (workspace $WORKSPACE) on $NATS_URL" >&2
+  echo "director-session: launching claude as agent://$TEAM/$own_id (workspace $WORKSPACE) on $nats_url" >&2
   exec claude --strict-mcp-config --mcp-config "$json" ${chan_args[@]+"${chan_args[@]}"} ${claude_args[@]+"${claude_args[@]}"}
 fi
 
