@@ -335,13 +335,22 @@ marry_step() {
   if [[ "$elig_ok" != 1 ]]; then
     gap "seat-eligibility: $elig_why; seats go to marry with no classes, scopes or duty cells"
   fi
-  jq -n -c --arg run "idle-shadow-$now" --arg at "$at" --arg sender "$sender_cluster" --argjson stale "$stale" \
+  # marry refuses the whole input when one address is listed twice (an address held under two
+  # clusters, marvel#1231). Each such address is dropped and named once; the rest still goes.
+  dups_json="$(jq -s -c '[ .[] | {a: "agent://\(.team)/\(.name)", c: (.cluster | tostring)} ] | group_by(.a)
+    | map(select(length > 1) | {a: .[0].a, c: (map(.c) | unique | join(", "))})' "$seats_file" 2>/dev/null || true)"
+  if [[ -z "$dups_json" ]]; then dups_json='[]'; fi
+  while IFS=$'\t' read -r dup_addr dup_clusters; do
+    if [[ -n "$dup_addr" ]]; then gap "duplicate-seat $(printf '%s' "$dup_addr" | tr -d '[:cntrl:]') (clusters $(printf '%s' "$dup_clusters" | tr -d '[:cntrl:]'))"; fi
+  done < <(jq -r '.[] | "\(.a)\t\(.c)"' <<<"$dups_json" 2>/dev/null)
+  jq -n -c --arg run "idle-shadow-$now" --arg at "$at" --arg sender "$sender_cluster" --argjson stale "$stale" --argjson dups "$dups_json" \
     --slurpfile items "$tmp/marry.items" --slurpfile st "$seats_file" --slurpfile el "$tmp/elig.json" '
     ($el[0].seats // []) as $es
     | { run_id: $run, now: $at, items: $items[0],
         seats: [ $st[]
           | (if $stale == 1 then .state = "unknown" else . end)
           | ("agent://\(.team)/\(.name)") as $addr
+          | select(([ $dups[].a ] | index($addr)) == null)
           | ([ $es[] | select(.address == $addr) ][0] // {}) as $e
           | {address: $addr, team: .team, cluster: .cluster,
              availability: (if .state == "free" then "free" elif .state == "busy" then "working" elif .state == "waiting" then "parked" else "unknown" end)}
