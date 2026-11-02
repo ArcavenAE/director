@@ -29,7 +29,7 @@ SESSION="${DIRECTOR_SESSION:-$here/director-session}"
 command -v jq >/dev/null 2>&1 || { echo "jq not on PATH"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 not on PATH (the terminal case needs a pty)"; exit 2; }
 
-work="$(mktemp -d)"
+work="$(mktemp -d "${TMPDIR:-/tmp}/director-session-verify.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
 marker="$work/claude-ran"
@@ -365,6 +365,31 @@ for url in 'nats://u:p@127.0.0.1:1' 'nats://u:p@ss@127.0.0.1:1'; do
 done
 run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" NATS_URL=nats://u:p@127.0.0.1:1 -- --marvel-role
 [[ "$out" == *"left out of the shim"* ]] || miss "NATS_URL userinfo: no one-line notice: $out"
+[[ "$out" == *DIRECTOR_NATS_USER* && "$out" == *DIRECTOR_NATS_PASS* ]] || miss "NATS_URL userinfo: the notice does not name where credentials go: $out"
+
+# A server list is cleaned entry by entry: order and length kept, no server dropped,
+# no entry's userinfo left (fixture hosts, never connected).
+list_case() { # <input> <expected list in the config>
+  local url="$1" want="$2" form
+  for form in claude codex own; do
+    case "$form" in
+      claude) run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role;;
+      codex)  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role --harness codex;;
+      own)    run "$work/plain" "${unset_seat[@]}" "NATS_URL=$url" -- --own-config seat-a;;
+    esac
+    if [[ $rc -ne 0 || "$argv" != *"\"$want\""* ]]; then miss "NATS_URL list ($form, $url): want \"$want\" in the config: rc=$rc $argv"; fi
+    if [[ "$argv" == *"u:p"* || "$out" == *"u:p"* || "$argv" == *"p@"* ]]; then miss "NATS_URL list ($form, $url): userinfo reached argv or the output: $argv / $out"; fi
+  done
+}
+list_case 'nats://u:p@127.0.0.1:1,nats://u:p@127.0.0.2:1' 'nats://127.0.0.1:1,nats://127.0.0.2:1'
+list_case 'nats://127.0.0.1:1,nats://u:p@127.0.0.2:1' 'nats://127.0.0.1:1,nats://127.0.0.2:1'
+list_case 'u:p@127.0.0.1:1,u:p@127.0.0.2:1' '127.0.0.1:1,127.0.0.2:1'
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" NATS_URL=nats://127.0.0.1:1,nats://127.0.0.2:1 -- --marvel-role
+[[ "$out" != *"left out of the shim"* ]] || miss "a clean server list drew a strip notice: $out"
+
+# codex with DIRECTOR_CUE=1 in the env still starts, and says the cue does not apply.
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" DIRECTOR_CUE=1 -- --marvel-role --harness codex
+[[ $rc -eq 0 && -n "$ran" && "$out" == *"DIRECTOR_CUE=1"*"no effect"* && "$argv" != *DIRECTOR_CUE* ]] || miss "marvel-role codex with DIRECTOR_CUE=1: rc=$rc out=$out argv=$argv"
 run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" NATS_URL=nats://127.0.0.1:1 -- --marvel-role
 [[ "$out" != *"left out of the shim"* && "$argv" == *'"NATS_URL":"nats://127.0.0.1:1"'* ]] || miss "NATS_URL without userinfo changed: $out $argv"
 

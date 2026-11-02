@@ -194,21 +194,30 @@ lookup_server() {
   printf '%s\n' "$names"
 }
 
-# bus_url_plain: set nats_url to NATS_URL (or the local default) with any
-# user:password@ removed from its authority. The MCP config lands on the command
-# line, so no part of the userinfo may go in it, or in anything this launcher
-# prints; the shim reads its credentials from its own env or the seat's password
-# file, as under the fleet's launcher.
+# bus_url_plain: set nats_url to NATS_URL (or the local default) with every
+# user:password@ removed. NATS_URL may be a comma-separated server list, so each
+# entry is cleaned on its own and the list keeps its order and length; within an
+# entry, everything up to the last @ after the scheme goes, so a password holding
+# an @ or a / is removed too. The MCP config lands on the command line, so no part
+# of the userinfo may go in it, or in anything this launcher prints; the shim reads
+# its credentials from DIRECTOR_NATS_USER and DIRECTOR_NATS_PASS, or the seat's
+# password file, as under the fleet's launcher.
 bus_url_plain() {
-  local url="${NATS_URL:-nats://127.0.0.1:4222}" re='^([A-Za-z][A-Za-z0-9+.-]*://)?([^/?#]*)(.*)$' scheme auth rest
-  if [[ "$url" =~ $re ]]; then
-    scheme="${BASH_REMATCH[1]}"; auth="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"
-    if [[ "$auth" == *@* ]]; then
-      url="${scheme}${auth##*@}${rest}"
-      echo "director-session: NATS_URL carries user:password@; it was left out of the shim's config, and the shim reads its credentials from its own env or the seat's password file" >&2
+  local url="${NATS_URL:-nats://127.0.0.1:4222}" re='^([A-Za-z][A-Za-z0-9+.-]*://)?(.*)$' entry scheme rest out="" stripped=0
+  local entries=()
+  IFS=, read -r -a entries <<<"$url"
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    if [[ "$entry" == *@* && "$entry" =~ $re ]]; then
+      scheme="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
+      entry="${scheme}${rest##*@}"
+      stripped=1
     fi
+    out="${out:+$out,}$entry"
+  done
+  if [[ $stripped -eq 1 ]]; then
+    echo "director-session: NATS_URL carried user:password@; it was left out of the shim's config. Put the credentials in DIRECTOR_NATS_USER and DIRECTOR_NATS_PASS, or the seat's password file, where the shim reads them" >&2
   fi
-  nats_url="$url"
+  nats_url="$out"
 }
 
 chan_args=()
@@ -246,6 +255,9 @@ if [[ $marvel_role -eq 1 ]]; then
   if [[ $harness == codex && $channel -eq 1 ]]; then
     echo "director-session: codex has no channel flag, so --receiver and --channel do not apply to --harness codex" >&2
     exit 1
+  fi
+  if [[ $harness == codex && "${DIRECTOR_CUE:-}" == 1 ]]; then
+    echo "director-session: codex has no channel flag, so DIRECTOR_CUE=1 in this seat's env has no effect under --harness codex" >&2
   fi
   bus_url_plain
   # Only non-secret values go into the config, which lands on the command line.
