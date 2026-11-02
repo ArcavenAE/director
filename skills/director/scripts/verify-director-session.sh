@@ -274,6 +274,97 @@ runtty "$work/plain" X=1 -- --own-config seat-a --receiver
 # The launcher never answers the prompt: no keystroke tool in its source.
 if grep -n -E 'send-keys|expect |xdotool|osascript|yes \|' "$SESSION" >/dev/null; then miss "the launcher source names a way to answer a prompt"; fi
 
+# ---- marvel-role mode (director#461): a marvel role's own command, no role library ----
+
+# A stub codex records its argv the same way claude does.
+cat >"$work/bin/codex" <<STUB
+#!/usr/bin/env bash
+pwd -P >"$marker"
+printf '%s\n' "\$@" >"$argvf"
+STUB
+chmod +x "$work/bin/codex"
+# The caller's own marvel and director env must not leak into these cases.
+unset_seat=(-u DIRECTOR_AGENT_ID -u DIRECTOR_TEAM -u DIRECTOR_WORKSPACE -u MARVEL_SESSION -u MARVEL_TEAM
+  -u MARVEL_WORKSPACE -u DIRECTOR_CUE -u MARVEL_FIRST_PROMPT -u DIRECTOR_CLUSTER -u NATS_URL
+  -u DIRECTOR_NATS_USER -u DIRECTOR_NATS_PASS)
+seat_a=(DIRECTOR_AGENT_ID=demo-supervisor-g1-0 DIRECTOR_TEAM=demo DIRECTOR_WORKSPACE=first)
+
+# Positive control: the seat starts under the shim named in its own env, with a
+# strict config of the launcher's own and no channel flag.
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role
+[[ $rc -eq 0 && -n "$ran" ]] || miss "marvel-role: rc=$rc out=$out"
+[[ "$(count --strict-mcp-config)" == 1 && "$argv" == *'"DIRECTOR_AGENT_ID":"demo-supervisor-g1-0"'* ]] || miss "marvel-role: id not in the config: $argv"
+[[ "$argv" == *'"DIRECTOR_TEAM":"demo"'* && "$argv" == *'"DIRECTOR_WORKSPACE":"first"'* ]] || miss "marvel-role: team or workspace not in the config: $argv"
+[[ "$(count --dangerously-load-development-channels)" == 0 && "$argv" != *DIRECTOR_CUE* ]] || miss "marvel-role: a cue with no request: $argv"
+
+# Two seats from one manifest get two ids.
+run "$work/plain" "${unset_seat[@]}" DIRECTOR_AGENT_ID=demo-worker-g1-0 DIRECTOR_TEAM=demo DIRECTOR_WORKSPACE=first -- --marvel-role
+[[ "$argv" == *'"DIRECTOR_AGENT_ID":"demo-worker-g1-0"'* && "$argv" != *demo-supervisor* ]] || miss "marvel-role: the second seat does not carry its own id: $argv"
+
+# marvel's own names stand in for the director ones.
+run "$work/plain" "${unset_seat[@]}" MARVEL_SESSION=demo-worker-g1-1 MARVEL_TEAM=demo MARVEL_WORKSPACE=first -- --marvel-role
+[[ $rc -eq 0 && "$argv" == *'"DIRECTOR_AGENT_ID":"demo-worker-g1-1"'* ]] || miss "marvel-role: MARVEL_SESSION not used: rc=$rc $argv"
+
+# The role's own prompt is the first message, and the harness args pass through.
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "MARVEL_FIRST_PROMPT=You answer on the bus." -- --marvel-role --model sonnet
+last="$(printf '%s\n' "$argv" | tail -1)"
+[[ "$last" == "You answer on the bus." && "$(count --model)" == 1 ]] || miss "marvel-role: brief or passthrough wrong: $argv"
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role
+[[ "$(printf '%s\n' "$argv" | tail -1)" != *"answer"* ]] || miss "marvel-role: a brief with no prompt set: $argv"
+
+# No cue unless asked: --channel and DIRECTOR_CUE=1 each give exactly one flag,
+# the shim gets DIRECTOR_CUE=1, it is announced, and the prompt is not answered.
+for ask in "--channel" "env"; do
+  if [[ "$ask" == env ]]; then
+    run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" DIRECTOR_CUE=1 -- --marvel-role
+  else
+    run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role --channel
+  fi
+  [[ "$(count --dangerously-load-development-channels)" == 1 && "$(count server:director)" == 1 && "$argv" == *'"DIRECTOR_CUE":"1"'* ]] || miss "marvel-role cue ($ask): want one flag and DIRECTOR_CUE=1: $argv"
+  [[ "$out" == *"channel flag ON"* && "$out" == *"does not answer"* ]] || miss "marvel-role cue ($ask): not announced: $out"
+done
+
+# --receiver with a terminal carries the cue once and names the prompt; with no
+# terminal it is one line and the harness never starts.
+runtty "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role --receiver
+[[ $rc -eq 0 && "$(count --dangerously-load-development-channels)" == 1 && "$out" == *"channel flag ON"* && "$out" == *"prompt"* ]] || miss "marvel-role receiver, terminal: rc=$rc $out"
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role --receiver
+[[ $rc -ne 0 && -z "$ran" && "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" == 1 && "$out" == *"terminal"* ]] || miss "marvel-role receiver, no terminal: rc=$rc ran='$ran' out=$out"
+
+# A missing shim is one line naming the install command, and the harness never starts.
+rc=0; rm -f "$marker"
+out="$(cd "$work/plain" && env "${unset_seat[@]}" "${seat_a[@]}" PATH="$work/bin:$PATH" DIRECTOR_SHIM_BIN="$work/nope" "$SESSION" --marvel-role 2>&1 </dev/null)" || rc=$?
+[[ $rc -ne 0 && ! -f "$marker" && "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" == 1 && "$out" == *"build-director-mcp"* ]] || miss "marvel-role: missing shim rc=$rc out=$out"
+
+# A missing identity names the variable; a wrong class is refused (R-76); neither starts the harness.
+run "$work/plain" "${unset_seat[@]}" DIRECTOR_TEAM=demo DIRECTOR_WORKSPACE=first -- --marvel-role
+[[ $rc -ne 0 && -z "$ran" && "$out" == *"DIRECTOR_AGENT_ID"* ]] || miss "marvel-role: no id: rc=$rc out=$out"
+run "$work/plain" "${unset_seat[@]}" 'DIRECTOR_AGENT_ID=bad id' DIRECTOR_TEAM=demo DIRECTOR_WORKSPACE=first -- --marvel-role
+[[ $rc -ne 0 && -z "$ran" && "$out" == *"R-76"* ]] || miss "marvel-role: bad id: rc=$rc out=$out"
+
+# The bus password never reaches the command line.
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" DIRECTOR_NATS_PASS=hunter2-sentinel DIRECTOR_NATS_USER=u-sentinel -- --marvel-role
+[[ $rc -eq 0 && "$argv" != *hunter2-sentinel* && "$argv" != *u-sentinel* ]] || miss "marvel-role: a bus credential reached argv: $argv"
+
+# Flag combinations that make no sense are one-line refusals.
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role --own-config x
+[[ $rc -ne 0 && -z "$ran" ]] || miss "marvel-role with --own-config: rc=$rc"
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --harness codex
+[[ $rc -ne 0 && -z "$ran" ]] || miss "--harness without --marvel-role: rc=$rc"
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role --harness nope
+[[ $rc -ne 0 && -z "$ran" ]] || miss "--harness nope: rc=$rc"
+
+# codex: the shim and its env go in as -c overrides, the prompt is last, and a
+# channel request is refused because codex has none.
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "MARVEL_FIRST_PROMPT=You answer on the bus." -- --marvel-role --harness codex
+[[ $rc -eq 0 && "$argv" == *"mcp_servers.director.command=\"$work/shim\""* && "$argv" == *'mcp_servers.director.env={'* ]] || miss "marvel-role codex: config not passed: rc=$rc $argv"
+[[ "$argv" == *'DIRECTOR_AGENT_ID="demo-supervisor-g1-0"'* && "$(printf '%s\n' "$argv" | tail -1)" == "You answer on the bus." ]] || miss "marvel-role codex: id or brief missing: $argv"
+run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role --harness codex --channel
+[[ $rc -ne 0 && -z "$ran" && "$out" == *"codex has no channel flag"* ]] || miss "marvel-role codex --channel: rc=$rc out=$out"
+
+# The mode needs no role library: the launcher names none.
+if grep -n -E 'OVERLAY_ROOT|slice\.sh' "$SESSION" >/dev/null; then miss "the launcher reaches for the fleet's role-library launcher"; fi
+
 # ---- missing claude ----
 rc=0
 out="$(cd "$work/plain" && env -i HOME="$work" PATH="/usr/bin:/bin" "$SESSION" 2>&1 </dev/null)" || rc=$?

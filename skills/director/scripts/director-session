@@ -31,6 +31,21 @@
 #   --require-orc-root  refuse unless the current directory is an orc root, the
 #                       one holding CLAUDE.md and repos.yaml (aae-orc-skw0b). Off
 #                       by default, because a newcomer's checkout holds neither.
+#   --marvel-role       run as a marvel role's command, with no role library
+#                       (director#461). The seat's identity comes from the env
+#                       marvel sets (DIRECTOR_AGENT_ID, DIRECTOR_TEAM and
+#                       DIRECTOR_WORKSPACE, or MARVEL_SESSION, MARVEL_TEAM and
+#                       MARVEL_WORKSPACE), so two seats from one manifest get two
+#                       ids. The shim goes in through the launcher's own strict
+#                       config, and the role's own prompt (MARVEL_FIRST_PROMPT,
+#                       which marvel sets for a wrapper command) is the first
+#                       message. The shim is $DIRECTOR_SHIM_BIN, else director-mcp
+#                       on PATH. The channel flag stays off unless --receiver or
+#                       --channel is given, or DIRECTOR_CUE=1 is in the seat's env.
+#                       Not combined with --own-config.
+#   --harness NAME      with --marvel-role: claude (the default) or codex. codex
+#                       has no channel flag, so codex with --receiver or --channel
+#                       is refused.
 #   -h, --help          this text.
 #
 # The channel server name, in the default mode: read from your Claude config
@@ -46,6 +61,8 @@
 #
 # Examples:
 #   director-session --receiver --resume director        # a hand-run director seat
+#   director-session --marvel-role                       # a marvel role's command (claude)
+#   director-session --marvel-role --harness codex       # the same, for codex
 #   director-session --own-config planner                # a second seat, its own id
 #   DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=<label> DIRECTOR_GLOBAL_ROLE=director \
 #     director-session --own-config director --receiver  # global tier, own-config only
@@ -59,7 +76,7 @@ set -euo pipefail
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed -e '$d' -e 's/^# \{0,1\}//'; }
 
-own_id=""; receiver=0; channel=0; req_root=0
+own_id=""; receiver=0; channel=0; req_root=0; marvel_role=0; harness=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --own-config)
@@ -68,6 +85,10 @@ while [[ $# -gt 0 ]]; do
     --receiver) receiver=1; channel=1; shift;;
     --channel) channel=1; shift;;
     --require-orc-root) req_root=1; shift;;
+    --marvel-role) marvel_role=1; shift;;
+    --harness)
+      [[ $# -ge 2 ]] || { echo "director-session: --harness needs claude or codex" >&2; exit 1; }
+      harness="$2"; shift 2;;
     -h|--help) usage; exit 0;;
     --) shift; break;;
     *) break;;
@@ -76,7 +97,18 @@ done
 # What is left is claude's own.
 claude_args=("$@")
 
-command -v claude >/dev/null 2>&1 || { echo "director-session: claude is not on PATH" >&2; exit 1; }
+if [[ -n "$harness" && $marvel_role -eq 0 ]]; then
+  echo "director-session: --harness is only for --marvel-role" >&2; exit 1
+fi
+if [[ $marvel_role -eq 1 && -n "$own_id" ]]; then
+  echo "director-session: --marvel-role takes its id from the seat's env, so it is not combined with --own-config" >&2; exit 1
+fi
+harness="${harness:-claude}"
+case "$harness" in
+  claude|codex) ;;
+  *) echo "director-session: --harness is claude or codex, not '$harness'" >&2; exit 1;;
+esac
+command -v "$harness" >/dev/null 2>&1 || { echo "director-session: $harness is not on PATH" >&2; exit 1; }
 
 # The id is a subject token, rejected not rewritten (R-76), same class the shim
 # enforces at spawn. Fail early with a clear message rather than at connect.
@@ -166,6 +198,69 @@ chan_args=()
 announce_channel() {
   echo "director-session: channel flag ON, server:$1. Claude Code will show one prompt at startup to confirm development channels; this launcher does not answer it, you do." >&2
 }
+
+if [[ $marvel_role -eq 1 ]]; then
+  # Marvel-role mode (director#461): a marvel role's own command, no role library.
+  # Every refusal is one line and comes before the harness starts.
+  for v in id team ws; do
+    case "$v" in
+      id)   name="DIRECTOR_AGENT_ID"; val="${DIRECTOR_AGENT_ID:-${MARVEL_SESSION:-}}";;
+      team) name="DIRECTOR_TEAM"; val="${DIRECTOR_TEAM:-${MARVEL_TEAM:-}}";;
+      ws)   name="DIRECTOR_WORKSPACE"; val="${DIRECTOR_WORKSPACE:-${MARVEL_WORKSPACE:-}}";;
+    esac
+    if [[ -z "$val" ]]; then
+      echo "director-session: --marvel-role reads the seat's identity from its env and $name is not set; run it as a marvel role's command" >&2
+      exit 1
+    fi
+    if [[ ! "$val" =~ ^[A-Za-z0-9_-]+$ ]]; then
+      echo "director-session: refusing $name '$val'; the class is [A-Za-z0-9_-] (R-76)" >&2
+      exit 1
+    fi
+    printf -v "m_$v" '%s' "$val"
+  done
+  BIN="${DIRECTOR_SHIM_BIN:-$(command -v director-mcp || true)}"
+  if [[ -z "$BIN" || ! -x "$BIN" ]]; then
+    echo "director-session: the director-mcp shim is not on PATH or at DIRECTOR_SHIM_BIN; install it by running scripts/build-director-mcp in a director checkout" >&2
+    exit 1
+  fi
+  command -v jq >/dev/null 2>&1 || { echo "director-session: jq is needed to build the MCP config" >&2; exit 1; }
+  # DIRECTOR_CUE=1 in the seat's own env counts as asking for the cue, like --channel.
+  if [[ $harness == claude && "${DIRECTOR_CUE:-}" == 1 ]]; then channel=1; fi
+  if [[ $harness == codex && $channel -eq 1 ]]; then
+    echo "director-session: codex has no channel flag, so --receiver and --channel do not apply to --harness codex" >&2
+    exit 1
+  fi
+  # Only non-secret values go into the config, which lands on the command line.
+  # The bus password is not passed here: the shim finds it as it does under the
+  # fleet's launcher.
+  env_json="$(jq -n --arg id "$m_id" --arg team "$m_team" --arg ws "$m_ws" --arg nats "${NATS_URL:-nats://127.0.0.1:4222}" \
+    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, NATS_URL:$nats}')"
+  if [[ -n "${DIRECTOR_CLUSTER:-}" ]]; then
+    if [[ ! "$DIRECTOR_CLUSTER" =~ ^[A-Za-z0-9_-]+$ ]]; then
+      echo "director-session: refusing DIRECTOR_CLUSTER '$DIRECTOR_CLUSTER'; the class is [A-Za-z0-9_-] (R-76)" >&2
+      exit 1
+    fi
+    env_json="$(printf '%s' "$env_json" | jq --arg c "$DIRECTOR_CLUSTER" '. + {DIRECTOR_CLUSTER:$c}')"
+  fi
+  brief=()
+  if [[ -n "${MARVEL_FIRST_PROMPT:-}" ]]; then brief=("$MARVEL_FIRST_PROMPT"); fi
+  if [[ $harness == claude ]]; then
+    if [[ $channel -eq 1 ]]; then
+      env_json="$(printf '%s' "$env_json" | jq '. + {DIRECTOR_CUE:"1"}')"
+      chan_args=(--dangerously-load-development-channels server:director)
+      announce_channel director
+    fi
+    json="$(jq -nc --arg cmd "$BIN" --argjson env "$env_json" '{mcpServers:{director:{command:$cmd, env:$env}}}')"
+    echo "director-session: launching claude as agent://$m_team/$m_id (workspace $m_ws)" >&2
+    exec claude --strict-mcp-config --mcp-config "$json" ${chan_args[@]+"${chan_args[@]}"} ${claude_args[@]+"${claude_args[@]}"} ${brief[@]+"${brief[@]}"}
+  fi
+  # codex takes the server as -c overrides: the command and an env table, both TOML
+  # values. A JSON string is a valid TOML string, and a JSON object of strings is
+  # accepted as the inline table.
+  env_toml="$(printf '%s' "$env_json" | jq -r 'to_entries | map("\(.key)=\(.value|tojson)") | "{" + join(",") + "}"')"
+  echo "director-session: launching codex as agent://$m_team/$m_id (workspace $m_ws)" >&2
+  exec codex -c "mcp_servers.director.command=$(jq -nc --arg c "$BIN" '$c')" -c "mcp_servers.director.env=$env_toml" ${claude_args[@]+"${claude_args[@]}"} ${brief[@]+"${brief[@]}"}
+fi
 
 if [[ -n "$own_id" ]]; then
   # Own-config mode (ID-A). The shim defaults to director-mcp on PATH, so the
