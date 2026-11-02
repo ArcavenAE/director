@@ -283,6 +283,14 @@ the channel flag with the server name looked up from your own Claude config
 the launcher never answers. `--own-config ID` gives the session a distinct
 agent id of the launcher's own making. `verify-director-session.sh` proves it.
 
+A marvel role can use the same launcher as its command, with no role library:
+`director-session --marvel-role` (add `--harness codex` for a codex role). The
+seat's id, team and workspace come from the env marvel sets, so two seats from
+one manifest get two ids; the role's own `prompt` (`MARVEL_FIRST_PROMPT`) is the
+first message; the channel flag stays off unless the role passes `--channel`,
+`--receiver`, or sets `DIRECTOR_CUE=1`. The fleet's own role-library launcher is
+a separate script and is unchanged.
+
 ## Standing checklist: a cue outside the answer
 
 Standing duties (drain the inbox, read answered Desk cards) have no cue of
