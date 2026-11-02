@@ -194,50 +194,23 @@ lookup_server() {
   printf '%s\n' "$names"
 }
 
-# bus_url_plain: set nats_url to NATS_URL (or the local default) with every
-# user:password@ removed. NATS_URL may be a comma-separated server list, so each
-# entry is cleaned on its own and the list keeps its order and length. Within an
-# entry the cut runs to the last @ of the AUTHORITY only (the text after the
-# scheme up to the first / ? or #), so an @ in a path or query is left alone and
-# the shim is never pointed at a host the user did not name. A leading space on
-# an entry and its scheme are kept. The list is split with parameter expansion,
-# not a here-string, so the URL never passes through a shell temp file. The MCP
-# config lands on the command line, so no part of the userinfo may go in it, or in
-# anything this launcher prints; the shim reads its credentials from
-# DIRECTOR_NATS_USER and DIRECTOR_NATS_PASS, or the seat's password file, as under
-# the fleet's launcher. A server whose authority is still not host or host:port
-# after the cut is refused (see the check below).
-bus_url_plain() {
-  local rest="${NATS_URL:-nats://127.0.0.1:4222}" entry lead body scheme auth tail out="" first=1 more=1 stripped=0
-  local re='^([A-Za-z][A-Za-z0-9+.-]*://)?([^/?#]*)(.*)$'
-  local hostre='^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+)(:[0-9]+)?$'
-  while [[ $more -eq 1 ]]; do
-    if [[ "$rest" == *,* ]]; then entry="${rest%%,*}"; rest="${rest#*,}"; else entry="$rest"; more=0; fi
-    lead="${entry%%[![:space:]]*}"
-    body="${entry:${#lead}}"
-    if [[ "$body" == *@* && "$body" =~ $re ]]; then
-      scheme="${BASH_REMATCH[1]}"; auth="${BASH_REMATCH[2]}"; tail="${BASH_REMATCH[3]}"
-      if [[ "$auth" == *@* ]]; then
-        body="${scheme}${auth##*@}${tail}"
-        stripped=1
-      fi
-    fi
-    # What is left must be host or host:port. A raw / ? or # in a password ends the
-    # authority early and leaves part of the credential there with no @ to cut at, so
-    # refuse, in one line that shows neither the URL nor the credential.
-    if [[ -n "$body" && "$body" =~ $re ]]; then
-      auth="${BASH_REMATCH[2]}"
-      if [[ ! "$auth" =~ $hostre ]]; then
-        echo "director-session: a server in NATS_URL is not host or host:port after its scheme; if its password holds a / ? or #, percent-encode it. The URL is not shown" >&2
-        exit 1
-      fi
-    fi
-    if [[ $first -eq 1 ]]; then out="${lead}${body}"; first=0; else out="${out},${lead}${body}"; fi
-  done
-  if [[ $stripped -eq 1 ]]; then
-    echo "director-session: NATS_URL carried user:password@; it was left out of the shim's config. Put the credentials in DIRECTOR_NATS_USER and DIRECTOR_NATS_PASS, or the seat's password file, where the shim reads them" >&2
+# bus_url_arg: decide how the shim gets its bus URL. The MCP config lands on the
+# command line, so a NATS_URL that may carry credentials never goes in it. If the
+# URL has an @ anywhere, it is left out of the config altogether and the shim reads
+# NATS_URL from the environment this launcher inherits (Claude Code passes the
+# launching environment to a stdio MCP server; codex is told to forward it by name
+# with env_vars). Nothing is parsed or rewritten, so no form of the URL (a list, a
+# path, a query, a fragment, or a raw / ? or # in a password) can reach argv or the
+# output. With no @ the URL, or the local default, goes in the config as before.
+nats_in_env=0
+nats_url=""
+bus_url_arg() {
+  if [[ "${NATS_URL:-}" == *@* ]]; then
+    nats_in_env=1
+    echo "director-session: NATS_URL has an @, so it is not put on the command line; the shim reads it from this seat's environment" >&2
+  else
+    nats_url="${NATS_URL:-nats://127.0.0.1:4222}"
   fi
-  nats_url="$out"
 }
 
 chan_args=()
@@ -279,12 +252,13 @@ if [[ $marvel_role -eq 1 ]]; then
   if [[ $harness == codex && "${DIRECTOR_CUE:-}" == 1 ]]; then
     echo "director-session: codex has no channel flag, so DIRECTOR_CUE=1 in this seat's env has no effect under --harness codex" >&2
   fi
-  bus_url_plain
+  bus_url_arg
   # Only non-secret values go into the config, which lands on the command line.
   # The bus password is not passed here: the shim finds it as it does under the
   # fleet's launcher.
-  env_json="$(jq -n --arg id "$m_id" --arg team "$m_team" --arg ws "$m_ws" --arg nats "$nats_url" \
-    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, NATS_URL:$nats}')"
+  env_json="$(jq -n --arg id "$m_id" --arg team "$m_team" --arg ws "$m_ws" \
+    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws}')"
+  if [[ $nats_in_env -eq 0 ]]; then env_json="$(printf '%s' "$env_json" | jq --arg n "$nats_url" '. + {NATS_URL:$n}')"; fi
   if [[ -n "${DIRECTOR_CLUSTER:-}" ]]; then
     if [[ ! "$DIRECTOR_CLUSTER" =~ ^[A-Za-z0-9_-]+$ ]]; then
       echo "director-session: refusing DIRECTOR_CLUSTER '$DIRECTOR_CLUSTER'; the class is [A-Za-z0-9_-] (R-76)" >&2
@@ -309,7 +283,9 @@ if [[ $marvel_role -eq 1 ]]; then
   # accepted as the inline table.
   env_toml="$(printf '%s' "$env_json" | jq -r 'to_entries | map("\(.key)=\(.value|tojson)") | "{" + join(",") + "}"')"
   echo "director-session: launching codex as agent://$m_team/$m_id (workspace $m_ws)" >&2
-  exec codex -c "mcp_servers.director.command=$(jq -nc --arg c "$BIN" '$c')" -c "mcp_servers.director.env=$env_toml" ${claude_args[@]+"${claude_args[@]}"} ${brief[@]+"${brief[@]}"}
+  fwd=()
+  if [[ $nats_in_env -eq 1 ]]; then fwd=(-c 'mcp_servers.director.env_vars=["NATS_URL"]'); fi
+  exec codex -c "mcp_servers.director.command=$(jq -nc --arg c "$BIN" '$c')" -c "mcp_servers.director.env=$env_toml" ${fwd[@]+"${fwd[@]}"} ${claude_args[@]+"${claude_args[@]}"} ${brief[@]+"${brief[@]}"}
 fi
 
 if [[ -n "$own_id" ]]; then
@@ -319,7 +295,7 @@ if [[ -n "$own_id" ]]; then
   BIN="${DIRECTOR_SHIM_BIN:-$(command -v director-mcp || true)}"
   TEAM="${DIRECTOR_TEAM:-ops}"
   WORKSPACE="${DIRECTOR_WORKSPACE:-aae-orc}"
-  bus_url_plain
+  bus_url_arg
   if [[ -z "$BIN" || ! -x "$BIN" ]]; then
     echo "director-session: shim binary not found or not executable: ${BIN:-director-mcp}" >&2
     echo "build it: ( cd <director checkout> && scripts/build-director-mcp ), or set DIRECTOR_SHIM_BIN" >&2
@@ -332,8 +308,9 @@ if [[ -n "$own_id" ]]; then
   # message. DIRECTOR_GLOBAL_ROLE is required (director or supervisor) because the
   # launcher is generic and does not derive the role from a cast the way marvel's
   # cast-launch does.
-  env_json="$(jq -n --arg id "$own_id" --arg team "$TEAM" --arg ws "$WORKSPACE" --arg nats "$nats_url" \
-    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, NATS_URL:$nats}')"
+  env_json="$(jq -n --arg id "$own_id" --arg team "$TEAM" --arg ws "$WORKSPACE" \
+    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws}')"
+  if [[ $nats_in_env -eq 0 ]]; then env_json="$(printf '%s' "$env_json" | jq --arg n "$nats_url" '. + {NATS_URL:$n}')"; fi
   if [[ -n "${DIRECTOR_GLOBAL_DOMAIN:-}" ]]; then
     : "${DIRECTOR_CLUSTER:?DIRECTOR_GLOBAL_DOMAIN is set, so DIRECTOR_CLUSTER must name this cluster (R-94)}"
     : "${DIRECTOR_GLOBAL_ROLE:?DIRECTOR_GLOBAL_DOMAIN is set, so DIRECTOR_GLOBAL_ROLE must be director or supervisor (R-94)}"
@@ -360,7 +337,7 @@ if [[ -n "$own_id" ]]; then
   # Caveat: if an enterprise managed-mcp.json is deployed on this host,
   # --strict-mcp-config makes claude exit at startup by design.
   json="$(jq -nc --arg cmd "$BIN" --argjson env "$env_json" '{mcpServers:{director:{command:$cmd, env:$env}}}')"
-  echo "director-session: launching claude as agent://$TEAM/$own_id (workspace $WORKSPACE) on $nats_url" >&2
+  echo "director-session: launching claude as agent://$TEAM/$own_id (workspace $WORKSPACE)${nats_url:+ on $nats_url}" >&2
   exec claude --strict-mcp-config --mcp-config "$json" ${chan_args[@]+"${chan_args[@]}"} ${claude_args[@]+"${claude_args[@]}"}
 fi
 

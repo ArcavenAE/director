@@ -34,10 +34,11 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
 marker="$work/claude-ran"
 argvf="$work/claude-argv"
+envf="$work/claude-natsurl"
 # A stub harness records its argv, one word per line, and where it ran. It is
 # written with printf, not a here-document, which bash 3.2 puts in a file under /tmp.
 mkstub() {
-  printf '%s\n' '#!/usr/bin/env bash' "pwd -P >\"$marker\"" "printf '%s\\n' \"\$@\" >\"$argvf\"" >"$work/bin/$1"
+  printf '%s\n' '#!/usr/bin/env bash' "pwd -P >\"$marker\"" "printf '%s\\n' \"\$@\" >\"$argvf\"" "printf '%s' \"\$NATS_URL\" >\"$envf\"" >"$work/bin/$1"
 }
 mkstub claude
 chmod +x "$work/bin/claude"
@@ -55,14 +56,15 @@ run() {
   local envs=()
   while [[ $# -gt 0 && "$1" != "--" ]]; do envs+=("$1"); shift; done
   shift
-  rm -f "$marker" "$argvf"
+  rm -f "$marker" "$argvf" "$envf"
   set +e
   out="$(cd "$dir" && env ${envs[@]+"${envs[@]}"} PATH="$work/bin:$PATH" DIRECTOR_SHIM_BIN="$work/shim" "$SESSION" "$@" 2>&1 </dev/null)"
   rc=$?
   set -e
-  ran=""; argv=""
+  ran=""; argv=""; seen_url=""
   if [[ -f "$marker" ]]; then ran="$(<"$marker")"; fi
   if [[ -f "$argvf" ]]; then argv="$(<"$argvf")"; fi
+  if [[ -f "$envf" ]]; then seen_url="$(<"$envf")"; fi
 }
 
 # runtty: the same, with a pty as stdin and stdout, so the terminal check sees
@@ -343,104 +345,73 @@ run "$work/plain" "${unset_seat[@]}" 'DIRECTOR_AGENT_ID=bad id' DIRECTOR_TEAM=de
 run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" DIRECTOR_NATS_PASS=hunter2-sentinel DIRECTOR_NATS_USER=u-sentinel -- --marvel-role
 [[ $rc -eq 0 && "$argv" != *hunter2-sentinel* && "$argv" != *u-sentinel* ]] || miss "marvel-role: a bus credential reached argv: $argv"
 
-# A NATS_URL with user:password@ is stripped before it reaches argv, the output or
-# any written file, in all three launch forms. A fixture URL, never a real one;
-# a password holding an @ is stripped through its last @.
-for url in 'nats://u:p@127.0.0.1:1' 'nats://u:p@ss@127.0.0.1:1'; do
+# A NATS_URL with an @ anywhere never goes on argv or into the output. It is left
+# out of the MCP config, the launcher says so in one line without showing it, and the
+# shim gets it from the environment: the stub harness records the NATS_URL it was
+# launched with, which must be the URL unchanged. Nothing is parsed, so every form
+# is covered: userinfo, a server list, an @ in the path, query or fragment, a raw
+# / ? or # in a password, a password of digits, a leading space, tls://. Fixture
+# URLs only. Under codex the name is forwarded with env_vars.
+env_case() { # <url> <fragment of the credential that must not appear>
+  local url="$1" frag="$2" form
   for form in claude codex own; do
     case "$form" in
       claude) run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role;;
       codex)  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role --harness codex;;
       own)    run "$work/plain" "${unset_seat[@]}" "NATS_URL=$url" -- --own-config seat-a;;
     esac
-    [[ $rc -eq 0 && "$argv" == *127.0.0.1:1* ]] || miss "NATS_URL userinfo ($form, $url): the host did not reach the config: rc=$rc $argv"
-    if [[ "$argv" == *"u:p"* || "$argv" == *"p@"* || "$out" == *"u:p"* || "$out" == *"p@"* || "$argv" == *"ss@"* ]]; then
-      miss "NATS_URL userinfo ($form, $url): the credential reached argv or the output: $argv / $out"
-    fi
-    if grep -r -l -E 'u:p|p@' "$work" >/dev/null 2>&1; then miss "NATS_URL userinfo ($form, $url): the credential reached a file under the scratch dir"; fi
-  done
-done
-run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" NATS_URL=nats://u:p@127.0.0.1:1 -- --marvel-role
-[[ "$out" == *"left out of the shim"* ]] || miss "NATS_URL userinfo: no one-line notice: $out"
-[[ "$out" == *DIRECTOR_NATS_USER* && "$out" == *DIRECTOR_NATS_PASS* ]] || miss "NATS_URL userinfo: the notice does not name where credentials go: $out"
-
-# A server list is cleaned entry by entry: order and length kept, no server dropped,
-# no entry's userinfo left (fixture hosts, never connected).
-list_case() { # <input> <expected list in the config>
-  local url="$1" want="$2" form
-  for form in claude codex own; do
-    case "$form" in
-      claude) run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role;;
-      codex)  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role --harness codex;;
-      own)    run "$work/plain" "${unset_seat[@]}" "NATS_URL=$url" -- --own-config seat-a;;
-    esac
-    if [[ $rc -ne 0 || "$argv" != *"\"$want\""* ]]; then miss "NATS_URL list ($form, $url): want \"$want\" in the config: rc=$rc $argv"; fi
-    if [[ "$argv" == *"u:p"* || "$out" == *"u:p"* || "$argv" == *"p@"* ]]; then miss "NATS_URL list ($form, $url): userinfo reached argv or the output: $argv / $out"; fi
+    if [[ $rc -ne 0 || -z "$ran" ]]; then miss "NATS_URL '$url' ($form): did not start: rc=$rc out=$out"; fi
+    if [[ "$argv" == *"$frag"* || "$out" == *"$frag"* ]]; then miss "NATS_URL '$url' ($form): the credential reached argv or the output: $argv / $out"; fi
+    if [[ "$argv" == *"127.0.0."* || "$out" == *"127.0.0."* || "$argv" == *'"NATS_URL":'* || "$argv" == *'NATS_URL="'* ]]; then miss "NATS_URL '$url' ($form): the URL or its key is on argv or in the output: $argv / $out"; fi
+    if [[ "$seen_url" != "$url" ]]; then miss "NATS_URL '$url' ($form): the shim's environment did not get the URL unchanged: '$seen_url'"; fi
+    if [[ "$out" != *"not put on the command line"* ]]; then miss "NATS_URL '$url' ($form): no one-line notice: $out"; fi
+    if [[ "$form" == codex && "$argv" != *'env_vars=["NATS_URL"]'* ]]; then miss "NATS_URL '$url' (codex): NATS_URL is not forwarded by name: $argv"; fi
+    if grep -r -l -F --exclude=claude-natsurl -e "$frag" "$work" >/dev/null 2>&1; then miss "NATS_URL '$url' ($form): the credential reached a file under the scratch dir"; fi
   done
 }
-list_case 'nats://u:p@127.0.0.1:1,nats://u:p@127.0.0.2:1' 'nats://127.0.0.1:1,nats://127.0.0.2:1'
-list_case 'nats://127.0.0.1:1,nats://u:p@127.0.0.2:1' 'nats://127.0.0.1:1,nats://127.0.0.2:1'
-list_case 'u:p@127.0.0.1:1,u:p@127.0.0.2:1' '127.0.0.1:1,127.0.0.2:1'
-# The cut stays inside the authority: an @ in a path or query is not userinfo, so the
-# host the user named is the host in the config. A leading space on an entry and
-# its scheme (nats:// or tls://) are kept.
-url_case() { # <input> <expected value in the config> <notice: yes|no>
-  local url="$1" want="$2" notice="$3" form
-  for form in claude codex own; do
-    case "$form" in
-      claude) run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role;;
-      codex)  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=$url" -- --marvel-role --harness codex;;
-      own)    run "$work/plain" "${unset_seat[@]}" "NATS_URL=$url" -- --own-config seat-a;;
-    esac
-    if [[ $rc -ne 0 || "$argv" != *"\"$want\""* ]]; then miss "NATS_URL ($form, '$url'): want \"$want\" in the config: rc=$rc $argv"; fi
-    if [[ "$argv" == *"u:p"* || "$out" == *"u:p"* ]]; then miss "NATS_URL ($form, '$url'): userinfo reached argv or the output: $argv / $out"; fi
-    if [[ "$notice" == yes && "$out" != *"left out of the shim"* ]]; then miss "NATS_URL ($form, '$url'): no strip notice: $out"; fi
-    if [[ "$notice" == no && "$out" == *"left out of the shim"* ]]; then miss "NATS_URL ($form, '$url'): a false strip notice: $out"; fi
-  done
-}
-url_case 'nats://127.0.0.1:1/p@th' 'nats://127.0.0.1:1/p@th' no
-url_case 'nats://u:p@127.0.0.1:1/p@th?q=a@b' 'nats://127.0.0.1:1/p@th?q=a@b' yes
-url_case 'nats://127.0.0.1:1, nats://u:p@127.0.0.2:1' 'nats://127.0.0.1:1, nats://127.0.0.2:1' yes
-url_case ', nats://u:p@127.0.0.2:1' ', nats://127.0.0.2:1' yes
-url_case 'tls://u:p@127.0.0.1:1, tls://u:p@127.0.0.2:1' 'tls://127.0.0.1:1, tls://127.0.0.2:1' yes
+env_case 'nats://u:p@127.0.0.1:1' 'u:p'
+env_case 'nats://u:p@ss@127.0.0.1:1' 'ss@'
+env_case 'nats://u:p@127.0.0.1:1,nats://u:p@127.0.0.2:1' 'u:p'
+env_case 'nats://127.0.0.1:1,nats://u:p@127.0.0.2:1' 'u:p'
+env_case 'u:p@127.0.0.1:1,u:p@127.0.0.2:1' 'u:p'
+env_case 'nats://127.0.0.1:1/p@th' 'p@th'
+env_case 'nats://u:p@127.0.0.1:1/p@th?q=a@b' 'u:p'
+env_case 'nats://127.0.0.1:1#fr@g' 'fr@g'
+env_case 'nats://u:p@127.0.0.1:1#fr@g' 'u:p'
+env_case 'nats://u-s:pw/s@127.0.0.1:1' 'u-s'
+env_case 'nats://u-s:pw?s@127.0.0.1:1' 'u-s'
+env_case 'nats://u-s:pw#s@127.0.0.1:1' 'u-s'
+env_case 'nats://u:123/x@127.0.0.1:1' '123/x'
+# Token auth is nats://<token>@host, and a base64 token can hold a raw / (a fixture token).
+env_case 'nats://tok-s@127.0.0.1:1' 'tok-s'
+env_case 'nats://tok-s/x@127.0.0.1:1' 'tok-s'
+env_case 'nats://tok-s?x@127.0.0.1:1' 'tok-s'
+env_case 'nats://tok-s#x@127.0.0.1:1' 'tok-s'
+env_case 'nats://127.0.0.1:1, nats://u:p@127.0.0.2:1' 'u:p'
+env_case ', nats://u:p@127.0.0.2:1' 'u:p'
+env_case 'tls://u:p@127.0.0.1:1, tls://u:p@127.0.0.2:1' 'u:p'
 
-# The fragment ends the authority too: an @ after # is not userinfo.
-url_case 'nats://127.0.0.1:1#fr@g' 'nats://127.0.0.1:1#fr@g' no
-url_case 'nats://u:p@127.0.0.1:1#fr@g' 'nats://127.0.0.1:1#fr@g' yes
-
-# A raw / ? or # in a password ends the authority early and leaves part of the
-# credential there with no @ to cut at. The launcher refuses, in one line that
-# shows neither the URL nor the credential, before the harness starts, in all
-# three launch forms (fixture credentials).
-for pw in 'u-s:pw/s' 'u-s:pw?s' 'u-s:pw#s'; do
-  for form in claude codex own; do
-    case "$form" in
-      claude) run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=nats://$pw@127.0.0.1:1" -- --marvel-role;;
-      codex)  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" "NATS_URL=nats://$pw@127.0.0.1:1" -- --marvel-role --harness codex;;
-      own)    run "$work/plain" "${unset_seat[@]}" "NATS_URL=nats://$pw@127.0.0.1:1" -- --own-config seat-a;;
-    esac
-    if [[ $rc -eq 0 || -n "$ran" || "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" != 1 || "$out" != *"percent-encode"* ]]; then
-      miss "NATS_URL password form '$pw' ($form): want one refusal line before the harness: rc=$rc ran='$ran' out=$out"
-    fi
-    if [[ "$out" == *"u-s"* || "$out" == *"pw"* || "$out" == *"127.0.0.1"* ]]; then miss "NATS_URL password form '$pw' ($form): the refusal shows the URL or the credential: $out"; fi
-  done
+# With no @ the URL (or the local default) goes in the config as before, with no
+# notice and no forwarding.
+for form in claude codex own; do
+  case "$form" in
+    claude) run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" NATS_URL=nats://127.0.0.1:1,nats://127.0.0.2:1 -- --marvel-role;;
+    codex)  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" NATS_URL=nats://127.0.0.1:1,nats://127.0.0.2:1 -- --marvel-role --harness codex;;
+    own)    run "$work/plain" "${unset_seat[@]}" NATS_URL=nats://127.0.0.1:1,nats://127.0.0.2:1 -- --own-config seat-a;;
+  esac
+  [[ $rc -eq 0 && "$out" != *"not put on the command line"* && "$argv" != *env_vars* ]] || miss "clean NATS_URL list ($form): rc=$rc out=$out argv=$argv"
+  [[ "$argv" == *nats://127.0.0.1:1,nats://127.0.0.2:1* ]] || miss "clean NATS_URL list ($form): not in the config: $argv"
+  case "$form" in
+    claude) run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role;;
+    codex)  run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role --harness codex;;
+    own)    run "$work/plain" "${unset_seat[@]}" -- --own-config seat-a;;
+  esac
+  [[ "$argv" == *nats://127.0.0.1:4222* ]] || miss "no NATS_URL ($form): the local default is not in the config: $argv"
 done
-# A list refuses on any one bad entry, and a good list still starts.
-run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" 'NATS_URL=nats://127.0.0.1:1,nats://u-s:pw/s@127.0.0.2:1' -- --marvel-role
-[[ $rc -ne 0 && -z "$ran" && "$out" != *"u-s"* ]] || miss "NATS_URL list with one bad entry: rc=$rc ran='$ran' out=$out"
-
-# The URL and its password never pass through a shell temp file: the helper uses no
-# here-string or here-document (bash 3.2 writes both to a file under /tmp).
-if sed -n '/^bus_url_plain()/,/^}/p' "$SESSION" | grep -q '<<'; then miss "bus_url_plain uses a here-string or here-document"; fi
-
-run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" NATS_URL=nats://127.0.0.1:1,nats://127.0.0.2:1 -- --marvel-role
-[[ "$out" != *"left out of the shim"* ]] || miss "a clean server list drew a strip notice: $out"
 
 # codex with DIRECTOR_CUE=1 in the env still starts, and says the cue does not apply.
 run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" DIRECTOR_CUE=1 -- --marvel-role --harness codex
 [[ $rc -eq 0 && -n "$ran" && "$out" == *"DIRECTOR_CUE=1"*"no effect"* && "$argv" != *DIRECTOR_CUE* ]] || miss "marvel-role codex with DIRECTOR_CUE=1: rc=$rc out=$out argv=$argv"
-run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" NATS_URL=nats://127.0.0.1:1 -- --marvel-role
-[[ "$out" != *"left out of the shim"* && "$argv" == *'"NATS_URL":"nats://127.0.0.1:1"'* ]] || miss "NATS_URL without userinfo changed: $out $argv"
 
 # Flag combinations that make no sense are one-line refusals.
 run "$work/plain" "${unset_seat[@]}" "${seat_a[@]}" -- --marvel-role --own-config x
