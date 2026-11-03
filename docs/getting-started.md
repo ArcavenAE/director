@@ -406,8 +406,8 @@ the three objects above, and stamps `NATS_URL`, `DIRECTOR_NATS_USER`,
 environment. No session spawns while the bus is down or bare
 (`bus.unavailable` on marvel's event ring), which is R-93 at the control
 plane. A launcher then only has to wire the shim into the harness; the
-twin's `sim/twin/cast-launch.sh` is the worked example, and `sim/twin/`
-carries the manifest and the check runbook. marvel's own documentation of
+twin's `sim/twin/cast-launch.sh` is the launcher for seats cast from a role
+library, and `sim/twin/` carries the manifest and the check runbook. marvel's own documentation of
 the bus section lives in its repository, in the admin guide, under "The message
 bus".
 

@@ -78,16 +78,24 @@ skills/director/     the skill: role, modes, output contract, capture triggers
                      filters, collapsible sections, auto-refresh); no network;
                      with a ledger, the ledger sections above the history
   scripts/dws        the workstream ledger: one row per stream, stage, last moved
+  scripts/           the other tools install.sh links; see "What install.sh links"
 skills/stansfield/   full fleet roll call: enumerate every session across the
                      bus, marvel clusters and SendMessage, deduped to one
                      identity each, then optionally relay an action
 commands/director.md thin command that invokes the skill
 install.sh           symlink or copy the skills and command into ~/.claude,
                      and harness-neutral tools into ~/.director/bin
+cmd/director-mcp/    the shim (Go): eight tools, plus cancel_held and mark_handled in
+                     presence-watch and handled modes; local and global tiers, preflight
+config/              director-mcp.json, the MCP config `scripts/director start` hands to claude
+scripts/             director (start a director session), director-install, the
+                     director-mcp build and release scripts, and verify-*.sh checks
 docs/                operator guide, shim reference, architecture and use-case diagrams
-probe/nats-phase-0/  the transport probe: NATS broker + director-mcp shim
-  PROGRESS.md          sub-probe results (poll is the receive, finding-160)
-  director-mcp-seat    the launcher a seat registers; see Install
+probe/nats-phase-0/  the transport probe: NATS broker config, provisioning, checks
+  PROGRESS.md          sub-probe results 1 through 9 (poll is the receive, finding-160)
+  director-mcp-seat    the launcher a seat registers; see "The bus seat, by hand"
+  authorization.conf   the credential-to-subject binding (director#4)
+  cross-harness-demo.sh  codex and headless Claude Code joining the bus
 probe/nats-global-tier/
                      the global tier probe: a TLS hub and leaf-connected
                      clusters, so separate clusters share one director tier
@@ -97,11 +105,6 @@ probe/nats-global-tier/
   hub/                 hub config, the CA ceremony, provisioning scripts
   leaf-remote.conf.example  the leaf side of the connection
   verify-*.sh          checks that a tier is actually carrying traffic
-  director-mcp/        the shim (Go): eight tools, local and global tiers, preflight
-  PROGRESS.md          sub-probe results 1 through 9 (poll is the receive, finding-160)
-  authorization.conf   the credential-to-subject binding (director#4)
-  cross-harness-demo.sh  codex and headless Claude Code joining the bus
-probe/nats-global-tier/  the R-86 hub: config, provisioning, leaf recipe, verify scripts
 sim/                 the simulation record
   prompt-session-1.md  the original direction, verbatim
   requirements.md      the requirements register (the point)
@@ -125,16 +128,17 @@ into the platform's knowledge graph.
 ```
 
 That installs the director and stansfield skills and the command, creates
-`~/.director/bin` (override with `DIRECTOR_HOME`), links `board-html`, `dws`
-and `director-install` into it, and creates the state root. It is the whole
-of what `install.sh` does.
+`~/.director/bin` (override with `DIRECTOR_HOME`), links the tools
+listed under "What install.sh links" into it, and creates the state root. It
+also writes default idea roots to `idea-roots.conf` in the state root when that
+file is absent.
 
 ### What installs what
 
 Three tools, each with its own scope:
 
-- **`install.sh`** (above): the skills, the command, `board-html`, `dws`,
-  `director-install`, and the state root.
+- **`install.sh`** (above): the skills, the command, the tools under "What
+  install.sh links", and the state root.
 - **By hand** (next section): the bus seat and `director-mcp-seat`. No tool
   installs `director-mcp-seat` yet.
 - **`director-install`**: `cast-launch`, the launcher marvel runs for
@@ -149,6 +153,33 @@ with no checkout needed:
 director-install cast-launch --ref origin/main
 director-install --status    # what is installed and how far behind main
 ```
+
+### What install.sh links
+
+Into `~/.director/bin`, one line each. Each is a script under `skills/director/scripts/`, except `director-install`, which is under `scripts/`.
+
+| Tool | What it does |
+|---|---|
+| `board-html` | renders `board.md` as a local page (next section) |
+| `dws` | the workstream ledger: one row per stream, stage, last moved |
+| `page-namespace` | puts the install's namespace in a page's title and description |
+| `dsi` | session inventory across the adapters |
+| `dsx` | external state verification |
+| `merge-guard` | the fail-closed read before a merge; prints PROCEED or a refusal |
+| `relay-log` | writes a relay-log entry, stamped from the clock |
+| `desk-snapshot` | writes the local snapshot of the Desk's open cards that `dws` checks |
+| `lane-ledger` | renders the lane ledger page from director's own files |
+| `card-ingest` | turns a seat's card file into a Desk write, and refuses a card missing a part |
+| `draft-sweep` | read-only list of fleet drafts nobody has reviewed and PRs merged with no review |
+| `dbi` | the stalled big ideas scan |
+| `freebusy` | read-only free/busy table |
+| `idle-shadow` | the idle scheduler's shadow run, read side |
+| `dash-writer` | shapes the operations dashboard's documents for the Desk's second tab |
+| `introspect` | the runtime fact check director runs at the sweep and at harvest |
+| `composer-check` | looks at a pane before an inject that ends in Enter |
+| `standing-hook` | prints the drain age and the standing checklist before each answer |
+| `director-session` | starts one director session by hand, with the channel cue bound when asked |
+| `director-install` | installs components from a commit (above) |
 
 ### The board as a page
 
@@ -172,9 +203,9 @@ mentions a broker (`install.sh` does create `~/.director/bin`, where it goes).
 On this fleet that gap is closed by hand. It is honest to say what this is: Phase 0 probe material being run in
 anger, not a packaged install. Writing the installer is a separate job.
 
-Two files, both under `probe/nats-phase-0/`:
+Two pieces:
 
-- `director-mcp`, the MCP server. Install it with
+- `director-mcp`, the MCP server, built from `cmd/director-mcp/`. Install it with
   `director-install director-mcp --ref <commit>`, or build it and place it at
   `~/.director/bin/director-mcp`, or point `DIRECTOR_MCP_BIN` at it. The
   launcher refuses to start if it is missing. Each push to main that changes
@@ -182,9 +213,9 @@ Two files, both under `probe/nats-phase-0/`:
   with binaries for macOS and Linux (arm64 and amd64), `checksums.txt` and an
   attestation. Check a download with
   `gh attestation verify <file> --repo ArcavenAE/director --bundle attestations.sigstore.json`.
-- `director-mcp-seat`, the launcher that works out who the seat is. The fleet
-  runs it from `~/.director/bin/director-mcp-seat`, a symlink back to this
-  repo.
+- `director-mcp-seat`, the launcher that works out who the seat is, under
+  `probe/nats-phase-0/`. The fleet runs it from
+  `~/.director/bin/director-mcp-seat`, a symlink back to this repo.
 
 Register it once, with no identity of its own. The same registration is then
 correct both for a marvel-managed session and for a seat you start yourself:
