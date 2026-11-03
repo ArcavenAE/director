@@ -2,7 +2,8 @@
 
 The shim is a Go program in `cmd/director-mcp/`. A harness
 launches one per session as an MCP stdio server; the shim connects to a NATS
-broker and exposes eight tools that carry director envelopes. It is the Phase
+broker and exposes eight tools that carry director envelopes, plus `cancel_held` and
+`mark_handled`, which appear only in presence-watch and handled modes. It is the Phase
 0 probe cut, kept small on purpose: it proves the transport and the receive
 shape. It is not the director software.
 
@@ -22,6 +23,7 @@ never rewritten (R-76).
 | `DIRECTOR_TEAM` | `default` | the team |
 | `DIRECTOR_WORKSPACE` | `default` | the workspace |
 | `NATS_URL` | `nats://127.0.0.1:4222` | the local broker |
+| `MARVEL_SESSION`, `MARVEL_TEAM`, `MARVEL_WORKSPACE` | unset | read when `DIRECTOR_AGENT_ID`, `DIRECTOR_TEAM` or `DIRECTOR_WORKSPACE` is unset, so a session marvel spawned needs no registration env of its own; outside marvel, team and workspace are then required and the shim exits without them |
 | `DIRECTOR_BUS_REQUIRED` | unset | set to `1` by `director-session` for the seats it launches: with no `NATS_URL` the shim exits 2 with one line instead of using the local default |
 
 Broker credentials, all optional. Unset means an anonymous connection.
@@ -30,6 +32,7 @@ Broker credentials, all optional. Unset means an anonymous connection.
 |---|---|
 | `DIRECTOR_NATS_USER`, `DIRECTOR_NATS_PASS` | user and password for a broker running the authorization block |
 | `DIRECTOR_NATS_CREDS` | path to a `.creds` file (NKey or JWT); the forward path, not wired at the Phase 0 broker |
+| `MARVEL_BUS_STATE` | the directory that holds `director.pass`, the seat password the shim reads when no credential is set; default `~/.marvel/state/nats` |
 
 The global tier (R-86). Off unless the first is set; with it set the other
 two are required. The role is one of exactly two words.
@@ -39,6 +42,7 @@ two are required. The role is one of exactly two words.
 | `DIRECTOR_GLOBAL_DOMAIN` | the hub's JetStream domain, reached over the local broker's leaf link (for example `global`) |
 | `DIRECTOR_CLUSTER` | this cluster's subject token (for example `kinu`, `mokuzai`) |
 | `DIRECTOR_GLOBAL_ROLE` | `supervisor` or `director` |
+| `DIRECTOR_FOR_FILTER` | optional, default off. `1` makes the shim ack and log, not deliver, a global message whose first line is `FOR <seat>` and whose every named seat provably belongs to another team. Any doubt delivers: no FOR line, an unparsed line, an unknown name, a stale presence row, an unreadable roster |
 
 With `DIRECTOR_GLOBAL_DOMAIN` unset the global tier is off, which is correct for
 a worker. A seat that holds the director role (`DIRECTOR_GLOBAL_ROLE=director`
@@ -62,6 +66,18 @@ The channel cue (#166). Off unless `DIRECTOR_CUE=1`, and per process.
 | Variable | Meaning |
 |---|---|
 | `DIRECTOR_CUE` | `1` makes the shim send its Claude Code a `notifications/claude/channel` notice when mail arrives (arrivals close together fold into one), so an idle seat is woken; anything else leaves the shim unchanged. It needs `--dangerously-load-development-channels server:director` on the `claude` command line, and that flag brings a one-time startup prompt that needs a person (`docs/getting-started.md`, section 4). A seat without the cue reads mail only when it polls |
+
+The presence watch. Off unless `DIRECTOR_PRESENCE_WATCH` is `1` and the seat holds the
+global director role; with it on the shim offers `cancel_held` and holds some global
+sends instead of refusing them (see `cancel_held` below). Anything else leaves the shim
+unchanged.
+
+The `dossier` subcommand (`director-mcp dossier`) reads two more variables:
+
+| Variable | Meaning |
+|---|---|
+| `DIRECTOR_DWS` | the `dws` binary it runs for the inherited ledger rows; default `dws` on the `PATH` |
+| `MARVEL_PREDECESSOR` | the predecessor session, used when `--predecessor` is not given; a value that is not a plain token is ignored and the source reads `unknown` |
 
 Under marvel, `DIRECTOR_AGENT_ID`, `NATS_URL`, `DIRECTOR_NATS_USER`, and
 `DIRECTOR_NATS_PASS` are stamped into the session environment by the
@@ -172,7 +188,8 @@ Slice M (`sim/design/unread-slice-m.md`):
 
 ## The eight tools
 
-Every tool is request and response. `wait_for_message` is the long poll
+Eight tools, plus `cancel_held` and `mark_handled`, which appear only in
+presence-watch and handled modes (their sections come last). Every tool is request and response. `wait_for_message` is the long poll
 that stands in for a push the transport cannot make.
 
 ### `send_message`
