@@ -257,6 +257,12 @@ func (s *Server) cueBefore(name string, args json.RawMessage) func(any) {
 	}
 	switch name {
 	case "wait_for_message":
+		if s.bus != nil && s.bus.waitIsOpen() {
+			// toolWait refuses this call and reads nothing: it answers the
+			// cue's receipt and does not count as an open wait.
+			s.cue.answered()
+			return func(any) {}
+		}
 		s.cue.waitBegin()
 		return func(any) { s.cue.waitEnd() }
 	case "inbox_summary":

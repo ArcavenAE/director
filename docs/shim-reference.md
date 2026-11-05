@@ -249,6 +249,8 @@ success. See "Refusal records" below.
 | `timeout_seconds` | 30 (max 120) | how long to block when nothing is already waiting |
 | `max` | 1 (max 50) | most messages to return in one call |
 
+One wait at a time per session; a second open wait is refused and reads nothing.
+
 Result with a message:
 
 ```json

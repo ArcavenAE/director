@@ -211,27 +211,36 @@ func TestCancelEndsAWaitWithinOneSecondAndConsumesNothing(t *testing.T) {
 func TestResponseIDsAreKeptUnderInterleaving(t *testing.T) {
 	r := newPipeRig(t, false)
 	r.wait(`"a"`, 2, 1)
-	r.wait(`7`, 1, 1)
-	if !r.untilInFlight(2, 2*time.Second) {
-		t.Fatalf("two waits are not in flight: %d", r.s.inFlight())
+	if !r.untilInFlight(1, 2*time.Second) {
+		t.Fatalf("the first wait is not in flight: %d", r.s.inFlight())
 	}
+	// One wait at a time (aae-orc-jnxus): the second is refused at once, so it
+	// is answered exactly once, with the refusal.
+	r.wait(`7`, 1, 1)
 	r.send(`{"jsonrpc":"2.0","id":"p","method":"ping"}`)
 	r.send(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
 	got := map[string]int{}
 	var order []string
+	refused := false
 	for i := 0; i < 4; i++ {
 		m := r.next(5 * time.Second)
 		id := idOf(m)
 		got[id]++
 		order = append(order, id)
+		if id == `7` {
+			refused = isErr(m)
+		}
 	}
 	for _, id := range []string{`"a"`, `7`, `"p"`, `3`} {
 		if got[id] != 1 {
 			t.Fatalf("id %s answered %d times; order %v", id, got[id], order)
 		}
 	}
-	if order[0] != `"p"` {
-		t.Fatalf("ping not answered first: %v", order)
+	if !refused {
+		t.Fatalf("the second wait's answer is not the refusal: %v", order)
+	}
+	if order[len(order)-1] != `"a"` {
+		t.Fatalf("the blocked wait must answer last: %v", order)
 	}
 }
 

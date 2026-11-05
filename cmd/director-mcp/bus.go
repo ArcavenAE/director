@@ -26,6 +26,11 @@ import (
 )
 
 type Bus struct {
+	// waitMu guards waitSince, the start of the one open wait_for_message
+	// (zero when none). A second wait is refused while it is set (toolWait).
+	waitMu    sync.Mutex
+	waitSince time.Time
+
 	// violations holds the broker's recent publish permission violations (see
 	// violations.go); the global tier shares it because it shares nc.
 	violations *violationRing
