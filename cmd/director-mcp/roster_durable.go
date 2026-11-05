@@ -32,6 +32,10 @@ const (
 	// flagPendingAgeUnreported: the row carries no oldest_pending_s, as from a
 	// shim older than the field, so how long mail has waited is not known.
 	flagPendingAgeUnreported = "pending-age-unreported"
+	// flagPendingAgeOver: the row's oldest_pending_s is over the pending-age
+	// bound (pendingAgeBound). The row's pending_age_note names the age.
+	// Diagnostic only: nothing waits on it.
+	flagPendingAgeOver = "pending-age-over"
 )
 
 // inboxDurableName is the name of a local session's durable on AGENT_INBOX.
@@ -82,10 +86,22 @@ func flagRows(ctx context.Context, rows []map[string]any, check func(ctx context
 	}
 }
 
-// flagsOfAge is the age flag alone, for a row that was not looked up.
+// flagsOfAge is the age flag alone, for a row that was not looked up. A row
+// with no oldest_pending_s is unreported; a row whose age is over the bound is
+// flagged pending-age-over, with the age in the row's pending_age_note. A row at
+// the bound is not over it.
 func flagsOfAge(row map[string]any) []string {
-	if _, ok := row["oldest_pending_s"]; !ok {
+	v, ok := row["oldest_pending_s"]
+	if !ok {
 		return []string{flagPendingAgeUnreported}
+	}
+	age, ok := ageSeconds(v)
+	if !ok {
+		return []string{flagPendingAgeUnreported}
+	}
+	if bound := pendingAgeBound; age > bound.Seconds() {
+		row["pending_age_note"] = fmt.Sprintf("oldest unread message has waited %d s, over the %d s bound", int64(age), int64(bound.Seconds()))
+		return []string{flagPendingAgeOver}
 	}
 	return nil
 }

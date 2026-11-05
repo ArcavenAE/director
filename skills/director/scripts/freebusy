@@ -27,6 +27,13 @@
 #                  works from each seat durable's ack floor, creates no consumer, acks nothing and
 #                  writes no presence row; a row with over_threshold true is a live seat holding mail
 #                  older than the 300 s receipt window. This script never opens a bus connection itself
+#     over-bound   the same reader's pending-age bound (I-190:1), read twice: once as above, once more
+#                  with --global, because one call returns only one tier. A row with over_bound true is
+#                  a live seat whose oldest unread message is older than the reader's bound (600 s by
+#                  default, DIRECTOR_PENDING_AGE_BOUND to override), whatever --older-than says. Each is
+#                  printed before the summary line as "- OVER-BOUND <tier> <seat> <age>s"; the bound is
+#                  read only through that flag and never worked out here. A failed --global call is a
+#                  GAP line and the local lines stay. Diagnostic: the exit status is unchanged
 #     versions     marvel version (client line), marvel version --cluster NAME (the daemon line),
 #                  and the version line of the tap's Formula/marvel.rb as the local checkout
 #                  $FREEBUSY_TAP_FORMULA names it (no default; no network, no gh)
@@ -553,6 +560,14 @@ if [[ -x "$mcp" ]]; then
   ) &
   pids+=("$!")
   set +m
+  set -m
+  (
+    set +e
+    "$mcp" unread --json --global </dev/null >"$tmp/unread-global.out" 2>"$tmp/unread-global.err"
+    echo $? >"$tmp/unread-global.rc"
+  ) &
+  pids+=("$!")
+  set +m
 fi
 if [[ ${#pids[@]} -gt 0 ]]; then wait_jobs "${pids[@]}"; fi
 unset wait_limit
@@ -626,6 +641,25 @@ else
     chmod 600 "$eps"
   fi
 fi
+# over the pending-age bound: one line per flagged live seat, read from the reader's over_bound rows, on each tier
+overbound="$tmp/overbound"
+: >"$overbound"
+if [[ "$mail_ok" == 1 ]]; then
+  jq -r '.durables[] | select(.over_bound == true and (.agent_id | type) == "string")
+    | "- OVER-BOUND local \(.agent_id) \((.oldest_unread_age_seconds // 0) | floor)s"' "$tmp/unread.out" >>"$overbound"
+fi
+if [[ -x "$mcp" ]]; then
+  if [[ ! -f "$tmp/unread-global.rc" ]]; then
+    gap "mail: director-mcp unread --global gave no answer within ${capture_timeout}s, so the global tier's over-bound seats are not listed"
+  elif [[ "$(cat "$tmp/unread-global.rc")" != 0 ]]; then
+    gap "mail: director-mcp unread --global exited $(cat "$tmp/unread-global.rc") ($(head -c 120 "$tmp/unread-global.err" | tr '\n' ' ')), so the global tier's over-bound seats are not listed"
+  elif ! jq -e '(.reports | type) == "array" and ((.error // "") == "")' "$tmp/unread-global.out" >/dev/null 2>&1; then
+    gap "mail: director-mcp unread --global did not read the hub ($(jq -r '.error // empty' "$tmp/unread-global.out" 2>/dev/null | head -c 120 | tr '\n' ' ')$(first_line "$tmp/unread-global.err")), so the global tier's over-bound seats are not listed"
+  else
+    jq -r '.reports[].durables[]? | select(.over_bound == true and (.agent_id | type) == "string")
+      | "- OVER-BOUND global \(.agent_id) \((.oldest_unread_age_seconds // 0) | floor)s"' "$tmp/unread-global.out" >>"$overbound"
+  fi
+fi
 if [[ -s "$eps" ]]; then
   jq -s -c --arg at "$at" 'group_by(.key) | map(last) | .[] | select(.event == "open") | {kind: "mail", at: $at, seat: .key, oldest_pending_s: .oldest_pending_s, since: .at}' "$eps" >>"$tmp/health.new"
 fi
@@ -664,6 +698,7 @@ chmod 600 "$dir/flow.jsonl"
 
 cat "$gaps"
 cat "$notes"
+cat "$overbound"
 line="freebusy: clusters: $read_ok of $total read; seats: $seat_counts; lanes: $lane_counts; asks: $asks_note; health: $health_counts"
 if [[ -n "$unlisted" ]]; then line="$line; not listed: $unlisted"; fi
 echo "$line"
