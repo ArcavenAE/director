@@ -69,6 +69,7 @@ chmod +x "$root/bin/curl"
 # Run cast-launch.sh with a clean, fully controlled environment. `env -i` is the
 # point: it guarantees the only DIRECTOR_* values in play are the ones each case
 # names, so a pass cannot come from this shell's own environment.
+launch_args=() # arguments handed to the launcher itself, as marvel passes a role's args
 cast() { # role, then extra KEY=VALUE pairs
   local role="$1"; shift
   rm -f "$root/out/claude.env" "$root/out/claude.args" "$root/out/preflight.env"
@@ -80,7 +81,7 @@ cast() { # role, then extra KEY=VALUE pairs
     TWIN_CWD="$root" \
     DIRECTOR_TEAM=fleet DIRECTOR_WORKSPACE=verifyws \
     "$@" \
-    "$LAUNCH" >"$root/out/stdout" 2>"$root/out/stderr"
+    "$LAUNCH" ${launch_args[@]+"${launch_args[@]}"} >"$root/out/stdout" 2>"$root/out/stderr"
 }
 
 # Does a lever appear in the mcp-config claude was handed?
@@ -485,6 +486,78 @@ for v in 0 true yes; do
   else
     bad "builder cast, cue=$v" "$(cat "$root/out/stderr")"
   fi
+done
+
+# --- I-190: the cue is the default for supervisor casts (operator ruling 2026-11-05)
+# It replaces the 2026-10-01 opt-in for supervisors only. A set DIRECTOR_CUE
+# always wins, director casts are not included, and a headless launch (-p or
+# --print) cannot use a channel, so it gets none.
+cue_flag() { grep -A1 -x -- "--dangerously-load-development-channels" "$root/out/claude.args" | tail -1 | grep -qx "server:director"; }
+no_cue_flag() { ! grep -q -- "--dangerously-load-development-channels" "$root/out/claude.args"; }
+last_arg_is_cue() { [[ "$(tail -2 "$root/out/claude.args")" == "$(printf '%s\n' --dangerously-load-development-channels server:director)" ]]; }
+for role in supervisor research-supervisor; do
+  if cast "$role"; then
+    cue_flag && last_arg_is_cue \
+      && ok "$role, cue unset: the channel flag is on and last" \
+      || bad "$role, cue unset: the channel flag is on and last" "$(tail -4 "$root/out/claude.args")"
+    in_mcp DIRECTOR_CUE 1 \
+      && ok "$role, cue unset: the shim env carries DIRECTOR_CUE=1" \
+      || bad "$role, cue unset: the shim env carries DIRECTOR_CUE=1"
+    grep -q "channel cue ON (default for supervisor casts)" "$root/out/stderr" \
+      && ok "$role, cue unset: the spawn line names the default" \
+      || bad "$role, cue unset: the spawn line names the default" "$(cat "$root/out/stderr")"
+  else
+    bad "$role cast, cue unset" "$(cat "$root/out/stderr")"
+  fi
+done
+if cast supervisor DIRECTOR_CUE=0; then
+  no_cue_flag && ! has_mcp DIRECTOR_CUE \
+    && ok "supervisor, DIRECTOR_CUE=0: no channel flag, the opt-out wins" \
+    || bad "supervisor, DIRECTOR_CUE=0: no channel flag, the opt-out wins" "$(tail -4 "$root/out/claude.args")"
+  grep -qi "channel cue" "$root/out/stderr" \
+    && bad "supervisor, DIRECTOR_CUE=0: the spawn line says nothing about a cue" \
+    || ok "supervisor, DIRECTOR_CUE=0: the spawn line says nothing about a cue"
+else
+  bad "supervisor cast, cue=0" "$(cat "$root/out/stderr")"
+fi
+if cast supervisor DIRECTOR_CUE=; then
+  no_cue_flag \
+    && ok "supervisor, DIRECTOR_CUE set but empty: a set value wins, no channel flag" \
+    || bad "supervisor, DIRECTOR_CUE set but empty: a set value wins, no channel flag"
+else
+  bad "supervisor cast, cue empty" "$(cat "$root/out/stderr")"
+fi
+if cast builder; then
+  no_cue_flag \
+    && ok "builder, cue unset: still no channel flag" \
+    || bad "builder, cue unset: still no channel flag"
+else
+  bad "builder cast, cue unset (I-190)" "$(cat "$root/out/stderr")"
+fi
+if cast director; then
+  no_cue_flag \
+    && ok "director, cue unset: not included, no channel flag" \
+    || bad "director, cue unset: not included, no channel flag"
+else
+  bad "director cast, cue unset" "$(cat "$root/out/stderr")"
+fi
+if cast supervisor DIRECTOR_CUE=1; then
+  cue_flag && grep -q "channel cue ON (DIRECTOR_CUE=1)" "$root/out/stderr" \
+    && ok "supervisor, DIRECTOR_CUE=1: on, with the set-value note" \
+    || bad "supervisor, DIRECTOR_CUE=1: on, with the set-value note" "$(cat "$root/out/stderr")"
+else
+  bad "supervisor cast, cue=1" "$(cat "$root/out/stderr")"
+fi
+for flag in --print -p; do
+  launch_args=("$flag")
+  if cast supervisor; then
+    no_cue_flag \
+      && ok "supervisor with $flag, cue unset: a headless launch gets no channel" \
+      || bad "supervisor with $flag, cue unset: a headless launch gets no channel" "$(tail -4 "$root/out/claude.args")"
+  else
+    bad "supervisor cast with $flag" "$(cat "$root/out/stderr")"
+  fi
+  launch_args=()
 done
 
 # --- a supervisor cast without levers on a leafed host is loud, not refused --
