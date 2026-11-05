@@ -158,6 +158,7 @@ TOK="ghp_""$(python3 -c 'print("Z"*30)')"
   openev idea-a "idea" "an idea" "" '[]' 2026-10-05T06:00:00Z
   openev idea-b "idea" "another idea" "" '[]' 2026-10-09T06:00:00Z
   openev done-a "merged" "merged one" "" '["pr:o/r#11"]' 2026-10-10T06:00:00Z
+  openev plan-a "planned" "planned one" "" '["bd:x-1"]' 2026-10-10T07:00:00Z
   printf '{"ts":"2026-10-20T10:00:00Z","actor":"refresh","tag":"mirror","event":"refresh-run","at":"2026-10-20T10:00:00Z","rows":14,"links":3,"warnings":0}\n'
 } >"$root/ledger.lines"
 seed <"$root/ledger.lines"
@@ -265,8 +266,10 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 c = {x["doc_id"]: x["data"]["counts"] for x in d["writes"] if x["collection"] == "dash_panels"}["where-work-sits"]
 assert c["idea"] == 2 and c["merged"] == 1 and c["ideas_oldest_opened"] == "2026-10-05", c
+assert c["planned"] == 1, c
 f = [x["data"]["rows"] for x in d["writes"] if x["collection"] == "dash_panels" and x["doc_id"] == "in-flight"][0]
 assert not any(r["id"] in ("idea-a", "idea-b", "done-a") for r in f), "ideas and merged are not in flight"
+assert any(r["id"] == "plan-a" and r["stage"] == "planned" for r in f), "a planned row is in flight"
 ' && ok "ideas and merged rows are counts only, never listed in flight" || bad "ideas and merged"
 
 # ---------------------------------------------------------------- sessions
