@@ -90,7 +90,7 @@ func newReapRig(t *testing.T) *reapRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &reapRig{ctx: ctx, url: url, self: Sender{AgentID: "arcaven-supervisor-g58-0", Workspace: "aae", Team: "arcaven"}, kv: kv}
+	return &reapRig{ctx: ctx, url: url, self: Sender{AgentID: "supervisor-a", Workspace: "aae", Team: "arcaven"}, kv: kv}
 }
 
 func (r *reapRig) bus(t *testing.T, gcfg *globalConfig) *Bus {
