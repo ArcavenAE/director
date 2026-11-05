@@ -24,6 +24,7 @@ never rewritten (R-76).
 | `DIRECTOR_WORKSPACE` | `default` | the workspace |
 | `NATS_URL` | `nats://127.0.0.1:4222` | the local broker |
 | `MARVEL_SESSION`, `MARVEL_TEAM`, `MARVEL_WORKSPACE` | unset | read when `DIRECTOR_AGENT_ID`, `DIRECTOR_TEAM` or `DIRECTOR_WORKSPACE` is unset, so a session marvel spawned needs no registration env of its own; outside marvel, team and workspace are then required and the shim exits without them |
+| `MARVEL_SOCKET`, `MARVEL_HEARTBEAT_TOKEN`, `MARVEL_HEARTBEAT_TOKEN_FILE` | unset | the bus beat to marvel (see Startup behaviour, step 4). The feed needs `MARVEL_SOCKET`, `MARVEL_SESSION` and a token; the file named by `MARVEL_HEARTBEAT_TOKEN_FILE` wins over `MARVEL_HEARTBEAT_TOKEN` when set, and an unreadable named file gives no token, never the variable. With any of them absent the feed is off and the shim runs as before |
 | `DIRECTOR_BUS_REQUIRED` | unset | set to `1` by `director-session` for the seats it launches: with no `NATS_URL` the shim exits 2 with one line instead of using the local default |
 
 Broker credentials, all optional. Unset means an anonymous connection.
@@ -202,7 +203,20 @@ Slice M (`sim/design/unread-slice-m.md`):
    same id is present (R-49).
 4. Start the heartbeat: presence renewed every 30 seconds on the shim's own
    timer, independent of the model (R-56). The same tick carries the global
-   presence row and re-attaches a hub that was down at start.
+   presence row and re-attaches a hub that was down at start. When
+   `MARVEL_SOCKET`, `MARVEL_SESSION` and a heartbeat token are all present, the
+   same tick also sends marvel one `bus.beat` request on that unix socket (2
+   second limit), and only when that tick's local presence write succeeded; one
+   more goes right after the first presence write at start. The beat means
+   "this shim reached the bus and its presence bucket within the last tick",
+   so a seat with a dead bus stops beating while its statusline does not. The
+   request is `{"method":"bus.beat","params":{"session_key":...,"session_token":...,"source":"director-shim"}}`
+   (pinned by `cmd/director-mcp/testdata/bus-beat-request.json`). With a key
+   absent the feed is off and one log line names the absent keys, never a
+   value. A marvel that answers `unknown method` turns it off for the life of
+   the process, with one log line. Any other failure is logged on the
+   transition only and retried on the next tick; a daemon still adopting
+   (`starting`) is retried silently. The token never reaches a log.
 5. Log `connected to <url> as agent://<team>/<id> instance <ulid> in
    workspace <ws>`, then serve.
 
