@@ -69,6 +69,8 @@ type Bus struct {
 	// what was waiting, reported once in the next wait_for_message result.
 	resumedMu sync.Mutex
 	resumed   []string
+	// expiry remembers which expired-unread gap was last reported (expiry.go).
+	expiry expiryWatch
 	// cueState reports the channel cue state for presence at an age of the
 	// oldest waiting message (cue.presenceAt); nil when off.
 	cueState func(age time.Duration, known bool, unverified string) (state, reason string, stalled bool)

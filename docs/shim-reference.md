@@ -255,6 +255,14 @@ Result without one:
 { "message": null, "note": "no message within the window; this is silence, not failure" }
 ```
 
+An empty poll also carries `expired_unread` when the local inbox stream has
+aged past this seat's last read position: mail for the seat inside that gap may
+have expired unread, so the quiet is not proof of no mail. It is a window of
+stream sequences and not a count, because the gap also holds other seats'
+mail, and it is reported once per gap. An idle seat in a busy fleet sees it
+whether or not any of its own mail was lost. A sender whose ask went
+unanswered resends.
+
 With global mode on, the poll first takes a message already waiting, from
 the tier whose turn it is and then the other, flipping the turn every call,
 so a backlog on one tier cannot starve the other. With nothing waiting it
