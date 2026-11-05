@@ -642,6 +642,10 @@ def move(a, event, to):
             for did in r.get("waits", []):
                 if decisions.get(did, {}).get("state") in DECISION_OPEN:
                     window_check(rows, decisions, did, a.slug, t_now)
+        if event == "park" and operator_blocked(r["blocked"]):
+            # A parked row stays in show --json rows, so it must not read as blocked on the operator
+            # there: the sweep's "Blocked on you" takes its rows from that list.
+            return [{"event": "set", "ws": a.slug, "blocked": ""}, ev]
         return [ev]
     write_plan(a.actor, plan)
 

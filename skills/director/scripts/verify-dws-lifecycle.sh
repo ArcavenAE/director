@@ -115,5 +115,22 @@ fake="$root/bin"; mkdir -p "$fake"; printf '#!/bin/sh\necho "gh called: $*" >>"%
 PATH="$fake:$PATH" "$DWS" waiting write >/dev/null 2>&1 || true
 [[ ! -e "$root/gh.log" ]] && ok "waiting write does not ask gh about a closed row's PR" || bad "waiting write skips a closed row" "$(cat "$root/gh.log")"
 
+# --- a row parked while blocked on the operator is not blocked on the operator any more ------------
+fresh 5
+printf '{"c1":{"status":"open"}}' >"$root/cards.json"
+"$here/desk-snapshot" write --cards "$root/cards.json" --reported 1 >/dev/null
+"$DWS" open bl --title bl --stage building --blocked operator --ask c1 >/dev/null 2>"$root/e" || bad "setup: a row blocked on the operator" "$(cat "$root/e")"
+"$DWS" open ob --title ob --stage building --blocked operator --ask c1 >/dev/null 2>&1
+"$DWS" park bl --from building --reason "dropped" >/dev/null 2>&1
+"$DWS" show --json | python3 -c "
+import json,sys; d=json.load(sys.stdin)
+blocked=[r['slug'] for r in d['rows'] if r['blocked']=='operator']
+assert blocked==['ob'], blocked
+bl=[r for r in d['rows'] if r['slug']=='bl'][0]; assert bl['stage']=='parked' and bl['blocked']==''
+" 2>"$root/e" && ok "park clears the operator block: only the open row reads as blocked on you in show --json rows" || bad "park clears the operator block" "$(cat "$root/e")"
+"$DWS" digest 2>/dev/null | grep -q 'bl (card' && bad "the digest lists a parked row as blocked on the operator" || ok "the digest does not list the parked row as blocked on the operator"
+"$DWS" open nb --title nb --stage building >/dev/null; "$DWS" park nb --from building >/dev/null 2>&1
+[[ "$(grep -c '"ws":"nb"' "$DIRECTOR_STATE/workstreams.jsonl")" == 2 ]] && ok "park of a row not blocked on the operator writes only the park" || bad "park of an unblocked row writes only the park"
+
 echo "dws lifecycle: $pass passed, $fail failed"
 [[ $fail == 0 ]]
