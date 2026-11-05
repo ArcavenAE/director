@@ -763,7 +763,7 @@ func keysOf(m map[string]any) []string {
 }
 
 // Control: with the cue off the global row is unchanged except for
-// oldest_pending_s, and the local row gains only that field too.
+// oldest_pending_s and host (reap.go), and the local row gains only the first.
 func TestWithTheCueOffTheRowsGainOnlyOldestPending(t *testing.T) {
 	t.Setenv("DIRECTOR_PRESENCE_LOST_AFTER", "")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -773,7 +773,7 @@ func TestWithTheCueOffTheRowsGainOnlyOldestPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := globalRow(t, ctx, bus)
-	want := "agent_id cluster instance oldest_pending_s pid role state team ts workspace"
+	want := "agent_id cluster host instance oldest_pending_s pid role state team ts workspace"
 	if got := strings.Join(keysOf(g), " "); got != want {
 		t.Fatalf("cue-off global row keys:\n got %s\nwant %s", got, want)
 	}

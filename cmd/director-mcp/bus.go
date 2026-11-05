@@ -55,6 +55,9 @@ type Bus struct {
 	// collapse into one (R-50). pid is recorded for the roster.
 	instance string
 	pid      int
+	// host is os.Hostname, written beside pid so a later shim reaps only rows
+	// whose pid it can probe (reap.go).
+	host string
 
 	// state is the last presence state the model set; the heartbeat re-writes
 	// it on the shim's own timer (R-56), never on a model tool call.
@@ -233,7 +236,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		nc.Close()
 		return nil, herr
 	}
-	b := &Bus{violations: ring, nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), state: "idle", globalCfg: gcfg, handled: h}
+	b := &Bus{violations: ring, nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), host: thisHost(), state: "idle", globalCfg: gcfg, handled: h}
 	if h != nil {
 		h.streamOf = b.streamFor
 		h.onAck = b.noteTierAcked
@@ -1442,7 +1445,10 @@ func (b *Bus) writeGlobalPresenceView(ctx context.Context, state string, view pr
 	if err != nil {
 		return err.Error()
 	}
-	if err := g.writePresenceWith(ctx, b.self, b.instance, b.pid, state, view.fields); err != nil {
+	if err := g.writePresenceWith(ctx, b.self, b.instance, b.pid, state, func(rec map[string]any) {
+		view.fields(rec)
+		rec["host"] = b.host
+	}); err != nil {
 		return fmt.Sprintf("global presence write failed: %v", err)
 	}
 	return ""
@@ -1513,6 +1519,7 @@ func (b *Bus) writePresenceView(ctx context.Context, state string, view presence
 		"workspace": b.self.Workspace,
 		"instance":  b.instance,
 		"pid":       b.pid,
+		"host":      b.host,
 		"state":     state,
 		"ts":        time.Now().UTC().Format(time.RFC3339),
 		// The shim revision this session runs, from the binary's own build

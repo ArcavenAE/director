@@ -193,6 +193,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer bus.close()
+	// Remove rows a dead predecessor left, before the first write, so the
+	// roster never lists this seat twice (aae-orc-4unyk).
+	bus.reapDeadPredecessors(ctx, logf)
 	// Announce presence on start so a roster lists us immediately.
 	globalWarn, _ := bus.setPresence(ctx, "idle")
 	bus.reportGlobalWarn(globalWarn, logf)
