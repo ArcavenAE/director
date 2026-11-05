@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -40,8 +41,8 @@ func TestHintedAgentSendWithNoConsumerIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("a hinted send to a subject no consumer filters was accepted")
 	}
-	if !strings.Contains(err.Error(), "no consumer") || !strings.Contains(err.Error(), "cold") {
-		t.Errorf("the refusal should say no consumer filters the subject and name cold: %v", err)
+	if !strings.Contains(err.Error(), "no consumer filters agent.aae-orc.director.director.inbox") || !strings.Contains(err.Error(), "cold: true") {
+		t.Errorf("the refusal should name the subject no consumer filters and name cold: %v", err)
 	}
 	if got := refusalStage(err, "none"); got != "resolve" {
 		t.Errorf("refusal stage = %q, want resolve", got)
@@ -61,6 +62,9 @@ func TestHintedRoleSendWithNoConsumerIsRefused(t *testing.T) {
 	err := sendRole(ctx, sender, "role://ops/nobody", "lost2", "aae-orc")
 	if err == nil {
 		t.Fatal("a hinted role send to a subject no consumer filters was accepted")
+	}
+	if !strings.Contains(err.Error(), "no consumer filters agent.aae-orc.ops.role.nobody.inbox") {
+		t.Errorf("the refusal should name the role subject no consumer filters: %v", err)
 	}
 	if got := refusalStage(err, "none"); got != "resolve" {
 		t.Errorf("refusal stage = %q, want resolve", got)
@@ -119,10 +123,10 @@ func TestColdHintedSendPublishesAndSaysNoConsumer(t *testing.T) {
 		t.Errorf("held = %d, want 1", n)
 	}
 
-	// The same address without cold is refused.
+	// The same address without cold is refused, for the same reason.
 	raw = json.RawMessage(`{"to":"agent://ops/newseat","performative":"INFORM","text":"again","workspace":"aae-orc"}`)
-	if _, err := toolSend(ctx, sender, raw); err == nil {
-		t.Error("the same hinted send without cold was accepted")
+	if _, err := toolSend(ctx, sender, raw); err == nil || !strings.Contains(err.Error(), "no consumer filters agent.aae-orc.ops.newseat.inbox") {
+		t.Errorf("the same hinted send without cold = %v, want a refusal naming the subject", err)
 	}
 }
 
@@ -161,5 +165,34 @@ func TestSubjectMatchesFilter(t *testing.T) {
 		if got := subjectMatchesFilter(c.filter, c.subject); got != c.want {
 			t.Errorf("subjectMatchesFilter(%q, %q) = %v, want %v", c.filter, c.subject, got, c.want)
 		}
+	}
+}
+
+// When the consumer list cannot be read, a hinted send is refused, and a cold
+// one publishes but must not claim that no consumer filters the subject.
+func TestHintedVerdictWhenTheCheckCannotRun(t *testing.T) {
+	boom := errors.New("list failed")
+	const subj, addr = "agent.w.t.x.inbox", "agent://t/x"
+
+	refusal, _, _ := hintedVerdict(subj, addr, false, boom, false)
+	if refusal == nil || !strings.Contains(refusal.Error(), "NOT established") || !strings.Contains(refusal.Error(), "list failed") {
+		t.Errorf("unreadable list without cold = %v, want a refusal saying it was not established", refusal)
+	}
+	if got := refusalStage(refusal, "none"); got != "resolve" {
+		t.Errorf("refusal stage = %q, want resolve", got)
+	}
+
+	refusal, noConsumer, notChecked := hintedVerdict(subj, addr, false, boom, true)
+	if refusal != nil || noConsumer || notChecked != "list failed" {
+		t.Errorf("unreadable list with cold = (%v, %v, %q), want published, not a no-consumer claim, and the error", refusal, noConsumer, notChecked)
+	}
+
+	refusal, noConsumer, notChecked = hintedVerdict(subj, addr, false, nil, true)
+	if refusal != nil || !noConsumer || notChecked != "" {
+		t.Errorf("no consumer with cold = (%v, %v, %q)", refusal, noConsumer, notChecked)
+	}
+	refusal, noConsumer, notChecked = hintedVerdict(subj, addr, true, nil, false)
+	if refusal != nil || noConsumer || notChecked != "" {
+		t.Errorf("filtered subject = (%v, %v, %q), want a plain accept", refusal, noConsumer, notChecked)
 	}
 }

@@ -878,6 +878,28 @@ type sendResult struct {
 	// consumer on AGENT_INBOX filters: the bytes are stored, and nobody reads
 	// them until a seat's durable comes to filter that subject.
 	NoConsumer bool
+	// CheckFailed is set on a cold send whose consumer list could not be read:
+	// whether a consumer filters the subject was not established, so the result
+	// must not say that none does.
+	CheckFailed string
+}
+
+// hintedVerdict decides a hinted send from what the consumer lookup returned. A
+// refusal is returned as an error; otherwise noConsumer says a cold send went
+// to an unfiltered subject, and notChecked carries the lookup error of a cold
+// send whose answer was not established.
+func hintedVerdict(subject, addr string, filtered bool, ferr error, cold bool) (refusal error, noConsumer bool, notChecked string) {
+	switch {
+	case ferr != nil && !cold:
+		return atStage("resolve", fmt.Errorf("whether a consumer filters %s was NOT established (%v), so %s is refused rather than sent to a subject nobody may read; send with cold: true to publish it anyway", subject, ferr, addr)), false, ""
+	case ferr != nil:
+		return nil, false, ferr.Error()
+	case !filtered && !cold:
+		return atStage("resolve", fmt.Errorf("no consumer filters %s, so %s is refused rather than sent to a subject nobody reads; check the workspace, team and id, or send with cold: true to hold it for a seat that has not started", subject, addr)), false, ""
+	case !filtered:
+		return nil, true, ""
+	}
+	return nil, false, ""
 }
 
 // coldSendKey marks a send with cold: true, which publishes a hinted send to a
@@ -967,14 +989,11 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 	if wsHint != "" && durable && !strings.HasPrefix(e.Recipient.Address, "broadcast://") {
 		filtered, ferr := b.subjectFiltered(ctx, subject)
 		cold, _ := ctx.Value(coldSendKey{}).(bool)
-		switch {
-		case ferr != nil && !cold:
-			return nil, atStage("resolve", fmt.Errorf("whether a consumer filters %s was NOT established (%v), so %s is refused rather than sent to a subject nobody may read; send with cold: true to publish it anyway", subject, ferr, e.Recipient.Address))
-		case !filtered && !cold:
-			return nil, atStage("resolve", fmt.Errorf("no consumer filters %s, so %s is refused rather than sent to a subject nobody reads; check the workspace, team and id, or send with cold: true to hold it for a seat that has not started", subject, e.Recipient.Address))
-		case !filtered:
-			res.NoConsumer = true
+		refusal, noConsumer, notChecked := hintedVerdict(subject, e.Recipient.Address, filtered, ferr, cold)
+		if refusal != nil {
+			return nil, refusal
 		}
+		res.NoConsumer, res.CheckFailed = noConsumer, notChecked
 	}
 	msg := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
 	msg.Header.Set(jetstream.MsgIDHeader, e.MessageID)

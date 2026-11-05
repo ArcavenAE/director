@@ -312,6 +312,9 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if res.NoConsumer {
 		out["cold"] = "no consumer filters this subject yet: the message is stored and stays unread until a seat's durable filters it"
 	}
+	if res.CheckFailed != "" {
+		out["cold"] = "the check for a consumer on this subject could not run (" + res.CheckFailed + "): the message is stored, and whether anyone reads it was not established"
+	}
 	return out, nil
 }
 
