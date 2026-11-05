@@ -2878,7 +2878,7 @@ def cmd_decision_paths(a):
             if x.get("paths", {}).get("card") == a.card:
                 raise Refused(f"card {a.card!r} already has a paths record ({x['id']!r}, {x['state']}); one card gets one pair "
                               "of paths, ever. A reworked and reposted card has a new id, and may get a new pair")
-        need(rows, row_a), need(rows, row_b)
+        need_open(rows, row_a), need_open(rows, row_b)
         return [ev, {"event": "wait", "ws": row_a, "add": [did]}, {"event": "wait", "ws": row_b, "add": [did]}]
     write_plan(a.actor, plan)
     print(f"dws: wrote paths record {did} (paths-open); edges set on {row_a} and {row_b}")
