@@ -92,6 +92,8 @@ func main() {
 		fmt.Println(versionLine())
 		return
 	}
+	// The pending-age bound is read once, where the reader runs (I-190:1).
+	pendingAgeBound = loadPendingAgeBound(os.Getenv, os.Stderr)
 	preflightMode := cli.mode == "preflight"
 	// unread is a read-only report over every seat's durable: it needs no
 	// identity of its own and never registers one (LR-3).

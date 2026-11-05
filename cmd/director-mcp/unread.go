@@ -255,6 +255,10 @@ type unreadDurable struct {
 	Evidence      *unreadEvidence `json:"evidence,omitempty"`
 	ScanTruncated bool            `json:"scan_truncated,omitempty"`
 	OverThreshold bool            `json:"over_threshold,omitempty"`
+	// OverBound is set on a live row whose oldest unread message is older than
+	// the pending-age bound (pendingage.go). It is the reading, not a filter, so
+	// --older-than does not hide it.
+	OverBound bool `json:"over_bound,omitempty"`
 
 	created    time.Time
 	pendingIDs map[string]bool
@@ -701,6 +705,19 @@ func applyThreshold(r *unreadReport, d time.Duration) {
 	}
 }
 
+// applyBound marks each live row whose oldest unread message is older than the
+// pending-age bound (I-190:1). Unlike applyThreshold it runs whatever
+// --older-than says, and reads-outside-durable rows are never marked, since
+// their pending mail was answered and is not unread mail. It changes the report
+// only; the exit code stays 0 (ADR-007, R-113).
+func applyBound(r *unreadReport, bound time.Duration) {
+	for i := range r.Durables {
+		row := &r.Durables[i]
+		row.OverBound = row.Live && row.State != stateReadsOutside &&
+			row.OldestSeq != 0 && row.OldestAgeSeconds > bound.Seconds()
+	}
+}
+
 // rollupRoles groups live rows by team and role (M5). The oldest age counts
 // holders in behind or durable-idle only: a role reads its mail if anyone in
 // it does, and the reader does not judge which instance should have.
@@ -830,6 +847,11 @@ func printRow(w io.Writer, d unreadDurable) {
 	mark := ""
 	if d.OverThreshold {
 		mark = "! "
+	}
+	if d.OverBound {
+		defer func() {
+			_, _ = fmt.Fprintf(w, "    over the %d s pending-age bound: %s\n", int64(pendingAgeBound.Seconds()), d.Durable)
+		}()
 	}
 	state := d.State
 	if !d.Live {
@@ -990,6 +1012,7 @@ func runUnreadCmd(ctx context.Context, url string, cli cliArgs, domain string, o
 	opts := unreadOpts{JSON: cli.json, All: cli.all, ByRole: cli.byRole}
 	finish := func(r *unreadReport) {
 		applyThreshold(r, cli.olderThan)
+		applyBound(r, pendingAgeBound)
 		if cli.byRole {
 			rollupRoles(r)
 		}

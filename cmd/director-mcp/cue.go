@@ -63,6 +63,12 @@ func defaultCueConfig() cueConfig {
 	}
 }
 
+// defaultPendingAgeBound is how old a live seat's oldest unread message may be
+// before a reader flags it: 2 times the cue's default Window, so it agrees with
+// the stalled state above and one number means one thing. It is derived from
+// the Window and is not a second literal (see pendingage.go).
+func defaultPendingAgeBound() time.Duration { return 2 * defaultCueConfig().Window }
+
 // loadCueConfig reads the per-seat opt-in. Only the exact value 1 turns it on.
 func loadCueConfig() cueConfig {
 	cfg := defaultCueConfig()

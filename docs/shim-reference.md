@@ -150,6 +150,12 @@ Slice M (`sim/design/unread-slice-m.md`):
 - **`--older-than <dur>`** marks `behind` and `durable-idle` rows older than
   the threshold (`!` in text, `over_threshold` in JSON) and counts them.
   Exit stays 0.
+- **`over_bound`** (JSON) and an `over the N s pending-age bound` line (text)
+  mark a live durable whose oldest unread message has waited longer than the
+  pending-age bound, with no flag needed. The bound is twice the cue window
+  (600 s); `DIRECTOR_PENDING_AGE_BOUND` (a Go duration) overrides it, and an
+  unparsable or non-positive value is reported on stderr and ignored. A
+  durable that only reads outside its own subjects is not marked. Exit stays 0.
 - **`--global`** reads every `mcp_global_` durable on each `GLOBAL_TO_*`
   stream through the hub's domain (`DIRECTOR_GLOBAL_DOMAIN`, default
   `global`), with presence from `GLOBAL_PRESENCE`, one section per stream.
@@ -388,7 +394,9 @@ established. `no-durable` means the broker answered that the session has no
 durable, so mail sent to it has no reader. `durable-unchecked` means the lookup
 failed or timed out, or the row names no instance, which is unknown and not
 missing. `pending-age-unreported` means the row carries no `oldest_pending_s`,
-as from a shim older than that field. Global rows carry the same fields: the
+as from a shim older than that field. `pending-age-over` means the age is over
+the same bound as `over_bound` above, and the row's `pending_age_note` says how
+long the oldest unread message has waited. Global rows carry the same fields: the
 durable is looked up on the hub stream of the row's cluster (`GLOBAL_TO_<cluster>`,
 or `GLOBAL_TO_DIRECTOR` for a director). A cluster credential that may not read
 another cluster's consumers, or a leaf link that does not answer, gives
