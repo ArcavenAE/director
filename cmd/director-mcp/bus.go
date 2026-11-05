@@ -874,6 +874,60 @@ type sendResult struct {
 	Tier     string
 	Stream   string
 	Sequence uint64
+	// NoConsumer is set on a cold send (cold: true) whose subject no durable
+	// consumer on AGENT_INBOX filters: the bytes are stored, and nobody reads
+	// them until a seat's durable comes to filter that subject.
+	NoConsumer bool
+}
+
+// coldSendKey marks a send with cold: true, which publishes a hinted send to a
+// subject no consumer filters yet (mail for a seat that has not started).
+type coldSendKey struct{}
+
+// subjectMatchesFilter reports whether a consumer filter subject covers a
+// subject, with the NATS wildcards: "*" is one token and a trailing ">" is one
+// or more.
+func subjectMatchesFilter(filter, subject string) bool {
+	f := strings.Split(filter, ".")
+	s := strings.Split(subject, ".")
+	for i, tok := range f {
+		if tok == ">" {
+			return i == len(f)-1 && len(s) > i
+		}
+		if i >= len(s) || (tok != "*" && tok != s[i]) {
+			return false
+		}
+	}
+	return len(f) == len(s)
+}
+
+// subjectFiltered reports whether any durable consumer on AGENT_INBOX reads
+// the subject. A consumer with no filter reads every subject. An error means
+// the answer was not established, which the caller refuses on, as R-92 does
+// for an unreadable presence scan.
+func (b *Bus) subjectFiltered(ctx context.Context, subject string) (bool, error) {
+	st, err := b.js.Stream(ctx, "AGENT_INBOX")
+	if err != nil {
+		return false, err
+	}
+	lister := st.ListConsumers(ctx)
+	found := false
+	for info := range lister.Info() {
+		filters := filterSubjects(info.Config)
+		if len(filters) == 0 {
+			found = true
+			continue
+		}
+		for _, f := range filters {
+			if subjectMatchesFilter(f, subject) {
+				found = true
+			}
+		}
+	}
+	if err := lister.Err(); err != nil {
+		return false, err
+	}
+	return found, nil
 }
 
 // publish sends the envelope to its recipient subject and mirrors it to the
@@ -905,9 +959,25 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 	if err != nil {
 		return nil, atStage("resolve", err)
 	}
+	res := &sendResult{Tier: "local"}
+	// A hinted agent:// or role:// send skips the roster, so nothing has shown
+	// that anyone reads its subject. Refuse it unless a durable consumer filters
+	// the subject, or the sender said cold: true (mail for a seat that has not
+	// started). A refusal here is audited like any other resolve-stage one.
+	if wsHint != "" && durable && !strings.HasPrefix(e.Recipient.Address, "broadcast://") {
+		filtered, ferr := b.subjectFiltered(ctx, subject)
+		cold, _ := ctx.Value(coldSendKey{}).(bool)
+		switch {
+		case ferr != nil && !cold:
+			return nil, atStage("resolve", fmt.Errorf("whether a consumer filters %s was NOT established (%v), so %s is refused rather than sent to a subject nobody may read; send with cold: true to publish it anyway", subject, ferr, e.Recipient.Address))
+		case !filtered && !cold:
+			return nil, atStage("resolve", fmt.Errorf("no consumer filters %s, so %s is refused rather than sent to a subject nobody reads; check the workspace, team and id, or send with cold: true to hold it for a seat that has not started", subject, e.Recipient.Address))
+		case !filtered:
+			res.NoConsumer = true
+		}
+	}
 	msg := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
 	msg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
-	res := &sendResult{Tier: "local"}
 	if durable {
 		start := time.Now()
 		ack, err := b.js.PublishMsg(ctx, msg)

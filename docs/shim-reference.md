@@ -172,7 +172,7 @@ Slice M (`sim/design/unread-slice-m.md`):
    row for that instance), so a reconnect does not replay the inbox. A live
    sibling's position is not taken: a session joining a live seat reads the
    inbox from the start, its own copy. With no departed durable the inbox is
-   read from the start, so mail sent to a cold mailbox is delivered. A
+   read from the start, so mail sent to a cold mailbox with `cold: true` is delivered. A
    crashed session's presence row can linger up to the bucket's 90s TTL; a
    reconnect inside that window replays rather than skips. The
    durable carries an 8 day inactive threshold, above the inbox's 168h max
@@ -202,7 +202,8 @@ that stands in for a push the transport cannot make.
 | `refs` | no | pointers: `bd:`, `finding:`, `file:`, `url:`, `pr:` |
 | `in_reply_to` | no | the `message_id` being answered; also sets `correlation_id` so receipts correlate (R-88) |
 | `reply_by` | no | RFC 3339 deadline |
-| `workspace` | no | the recipient's workspace. Omit and it is resolved from the recipient's live presence; with no live presence the send is refused rather than misdelivered (R-92). Set it to address a known cold mailbox verbatim. Ignored for `global://` and `broadcast://`, whose address carries its own scope. |
+| `workspace` | no | the recipient's workspace. Omit and it is resolved from the recipient's live presence; with no live presence the send is refused rather than misdelivered (R-92). Set it to address a known mailbox verbatim; the send is then refused unless a durable consumer on `AGENT_INBOX` filters that subject, or `cold` is true. Ignored for `global://` and `broadcast://`, whose address carries its own scope. |
+| `cold` | no | with `workspace` set, publish even when no consumer filters the subject yet, for mail to a seat that has not started. The result then carries a `cold` note saying no consumer filters it, and the message stays unread until a seat's durable does. Without `cold`, a hinted send to an unfiltered subject is refused before publish (a tool error, audited like any resolve-stage refusal), so a typo in the workspace, team or id is caught. |
 
 A `broadcast://` address takes the same path as the `broadcast` tool (see
 below): one durable send per live seat in scope, the broadcast result shape,
@@ -669,7 +670,8 @@ team's live presence rows whose `role` names the role. None is a refusal
 before publish, as for an agent with no live presence; rows that could not
 be read are reported as not established, never as absence. An explicit
 workspace addresses the role's mailbox verbatim, as it does a cold agent
-mailbox.
+mailbox, and is refused before publish unless a durable consumer filters the
+role subject or the send carries `cold: true`.
 
 ## Streams and buckets
 
@@ -814,7 +816,7 @@ type.
 | `CFP` | call for proposals |
 | `PROPOSE`, `ACCEPT-PROPOSAL`, `REJECT-PROPOSAL` | the negotiation triple |
 | `CANCEL` | withdraw a request |
-| `NOT-UNDERSTOOD` | protocol rejection; also what a role address with no holder returns |
+| `NOT-UNDERSTOOD` | protocol rejection. A role address with no holder is not answered with this verb: the send is refused before publish and the sender gets a tool error |
 
 ### Content types
 

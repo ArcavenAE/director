@@ -59,7 +59,8 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 					"refs":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "pointers: bd:, finding:, file:, url:, pr:"},
 					"in_reply_to":  str("optional message_id being answered"),
 					"reply_by":     str("optional RFC3339 deadline"),
-					"workspace":    str("optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known cold mailbox (no live presence) verbatim. Ignored for a global:// address, whose subject carries no workspace."),
+					"workspace":    str("optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known mailbox (no live presence) verbatim; the send is then refused unless a consumer filters that subject, or cold is true. Ignored for a global:// address, whose subject carries no workspace."),
+					"cold":         map[string]any{"type": "boolean", "description": "optional. With workspace set, publish even when no consumer filters the subject yet, for mail to a seat that has not started; the result says no consumer filters it. Without cold, a hinted send to an unfiltered subject is refused."},
 				},
 				"required": []string{"to", "performative", "text"},
 			},
@@ -270,10 +271,14 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	}
 	var opts struct {
 		FailFast bool `json:"fail_fast"`
+		Cold     bool `json:"cold"`
 	}
 	_ = json.Unmarshal(raw, &opts)
 	if opts.FailFast {
 		ctx = context.WithValue(ctx, holdFailFastKey{}, true)
+	}
+	if opts.Cold {
+		ctx = context.WithValue(ctx, coldSendKey{}, true)
 	}
 	res, err := bus.publish(ctx, e, wsHint)
 	var held *heldErr
@@ -303,6 +308,9 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if res.Stream != "" {
 		out["stream"] = res.Stream
 		out["sequence"] = res.Sequence
+	}
+	if res.NoConsumer {
+		out["cold"] = "no consumer filters this subject yet: the message is stored and stays unread until a seat's durable filters it"
 	}
 	return out, nil
 }
