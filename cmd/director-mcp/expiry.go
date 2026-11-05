@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // The inbox stream drops mail past its max age whether or not the seat has
@@ -41,19 +42,60 @@ func (b *Bus) expiredUnread(ctx context.Context) string {
 	if err != nil {
 		return ""
 	}
-	first, read := si.State.FirstSeq, ci.Delivered.Stream
+	return b.expiry.note("AGENT_INBOX", si.State.FirstSeq, ci.Delivered.Stream, si.Config.MaxAge)
+}
+
+// note is the shared comparison: the stream's first sequence against the
+// durable's last delivered one, reported once per gap. The caller's own
+// expiryWatch holds the once-per-gap state, so each tier keeps its own.
+func (w *expiryWatch) note(stream string, first, read uint64, maxAge time.Duration) string {
 	if first <= read+1 {
 		return ""
 	}
-	b.expiry.mu.Lock()
-	defer b.expiry.mu.Unlock()
-	if first <= b.expiry.reported {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if first <= w.reported {
 		return ""
 	}
-	b.expiry.reported = first
-	return fmt.Sprintf("mail addressed to this seat may have expired unread: stream sequences %d to %d are gone from AGENT_INBOX (its max age is %s), past this seat's last read at sequence %d. The gap also holds other seats' mail, so this is a window and not a count; a sender whose ask went unanswered should resend",
-		read+1, first-1, si.Config.MaxAge, read)
+	w.reported = first
+	return fmt.Sprintf("mail addressed to this seat may have expired unread: stream sequences %d to %d are gone from %s (its max age is %s), past this seat's last read at sequence %d. The gap also holds other seats' mail, so this is a window and not a count; a sender whose ask went unanswered should resend",
+		read+1, first-1, stream, maxAge, read)
 }
 
-// expiredUnread is the global tier's check; see expiryWatch.
-func (g *globalTier) expiredUnread(ctx context.Context) string { return "" }
+// expiredUnread is the global tier's check, the same comparison against the
+// seat's hub durable and the hub stream it reads. It uses only the seat's own
+// consumer info and the stream's info: a cluster credential cannot list
+// consumers (finding-006), and a failed read says nothing.
+func (g *globalTier) expiredUnread(ctx context.Context) string {
+	cons := g.cons()
+	if cons == nil {
+		return ""
+	}
+	ci, err := cons.Info(ctx)
+	if err != nil {
+		return ""
+	}
+	name := g.cfg.streamName()
+	st, err := g.js.Stream(ctx, name)
+	if err != nil {
+		return ""
+	}
+	si, err := st.Info(ctx)
+	if err != nil {
+		return ""
+	}
+	return g.expiry.note(name, si.State.FirstSeq, ci.Delivered.Stream, si.Config.MaxAge)
+}
+
+// globalExpiredUnread is the note for a poll that found nothing on the global
+// tier, "" when the tier is off or not attached yet.
+func (b *Bus) globalExpiredUnread(ctx context.Context) string {
+	if b.globalCfg == nil {
+		return ""
+	}
+	g, err := b.globalReady(ctx)
+	if err != nil {
+		return ""
+	}
+	return g.expiredUnread(ctx)
+}
