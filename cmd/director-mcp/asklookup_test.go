@@ -29,8 +29,8 @@ func TestFindByIDAnswersByMessageIDAndNamesAnExpiredAsk(t *testing.T) {
 		want  string
 	}{
 		{"m-fresh", true, "no acknowledgement yet"},
-		{"m-old", true, "may have expired unread"},
-		{"m-done-reply", true, "answered"}, // a thread id finds its row
+		{"m-old", true, "no acknowledgement yet"}, // age alone no longer says expired
+		{"m-done-reply", true, "answered"},        // a thread id finds its row
 		{"m-nobody", false, "no row"},
 	}
 	for _, c := range cases {

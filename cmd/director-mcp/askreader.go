@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -72,6 +73,12 @@ type askMeta struct {
 	Seen     map[string]time.Time `json:"seen"`
 }
 
+// askSends is the send records, under their own key so the meta value stays
+// small (the records hold one entry per local send for inboxMaxAge plus a day).
+type askSends struct {
+	Sends map[string]sendRec `json:"sends"`
+}
+
 type askIDs struct {
 	IDs   []idEntry `json:"ids"`
 	Tombs []idEntry `json:"tombs"`
@@ -106,6 +113,17 @@ func loadAskStore(ctx context.Context, kv jetstream.KeyValue) (*askLedger, []str
 		}
 		l.LastSeq, l.LastPass, l.Down, l.Orphans, l.Dropped, l.Seen = m.LastSeq, m.LastPass, m.Down, m.Orphans, m.Dropped, m.Seen
 		notRead = m.NotRead
+	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return nil, nil, err
+	}
+	if e, err := kv.Get(ctx, "sends"); err == nil {
+		var s askSends
+		if err := json.Unmarshal(e.Value(), &s); err != nil {
+			return nil, nil, fmt.Errorf("store sends unreadable: %w", err)
+		}
+		if s.Sends != nil {
+			l.Sends = s.Sends
+		}
 	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, nil, err
 	}
@@ -272,6 +290,9 @@ func (r *askReader) readAudit(ctx context.Context) {
 			return
 		}
 		rec := auditRec{Broker: b, Seq: seq, At: msg.Time, Refused: msg.Header.Get("Director-Outcome") == "refused"}
+		if n, err := strconv.ParseUint(msg.Header.Get("Director-Inbox-Seq"), 10, 64); err == nil {
+			rec.InboxSeq, rec.InboxSubject = n, msg.Header.Get("Director-Inbox-Subject")
+		}
 		if json.Unmarshal(msg.Data, &rec.Env) != nil {
 			r.ledger.LastSeq[b] = seq // not an envelope: nothing to ledger
 			continue
@@ -299,6 +320,7 @@ func (r *askReader) Pass(ctx context.Context, now time.Time) error {
 	}
 	r.readAudit(ctx)
 	r.ledger.Resolve(now)
+	r.markExpired(ctx, now)
 	r.ledger.Sweep(now)
 	if err := r.persist(ctx, now); err != nil {
 		return err
@@ -324,6 +346,9 @@ func (r *askReader) put(ctx context.Context, key string, v any) error {
 func (r *askReader) persist(ctx context.Context, now time.Time) error {
 	l := r.ledger
 	if err := r.put(ctx, "meta", askMeta{LastSeq: l.LastSeq, LastPass: l.LastPass, Down: l.Down, Orphans: l.Orphans, Dropped: l.Dropped, NotRead: r.NotRead, Seen: l.Seen}); err != nil {
+		return err
+	}
+	if err := r.put(ctx, "sends", askSends{Sends: l.Sends}); err != nil {
 		return err
 	}
 	if err := r.put(ctx, "ids", askIDs{IDs: l.IDs, Tombs: l.Tombs}); err != nil {
@@ -627,6 +652,10 @@ func runAskLookup(ctx context.Context, js jetstream.JetStream, cli cliArgs, out,
 		}
 	}
 	res := l.FindByID(cli.askID, time.Now())
+	if res.Send != nil {
+		d := deliveryOf(*res.Send, readInboxView(ctx, js))
+		res.Delivery = &d
+	}
 	if cli.json {
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
@@ -634,8 +663,43 @@ func runAskLookup(ctx context.Context, js jetstream.JetStream, cli cliArgs, out,
 		return 0
 	}
 	_, _ = fmt.Fprintf(out, "%s: %s\n", res.ID, res.Verdict)
+	if res.Delivery != nil {
+		line := "delivery: " + res.Delivery.State + " (the inbox's own read, not a reply)"
+		if res.Delivery.Error != "" {
+			line = "delivery: unknown (" + res.Delivery.Error + ")"
+		}
+		_, _ = fmt.Fprintln(out, line)
+	}
 	if len(notRead) > 0 {
 		_, _ = fmt.Fprintf(out, "partial: not every stream was read (%s)\n", strings.Join(notRead, "; "))
 	}
 	return 0
+}
+
+// markExpired is the sender's signal (aae-orc-t77rr, item 3): an open REQUEST
+// past alarmAfter that the inbox dropped before any covering durable read it is
+// marked once, and the existing alarm path then says so. It reads the stream and
+// its consumers once per pass, and only when a row needs the check.
+func (r *askReader) markExpired(ctx context.Context, now time.Time) {
+	var cand []*askRow
+	for _, row := range r.ledger.Rows {
+		if row.State != askSent || row.ExpiredUnread != "" || now.Sub(row.AskedAt) <= alarmAfter {
+			continue
+		}
+		if _, ok := r.ledger.Sends[row.Ask]; ok {
+			cand = append(cand, row)
+		}
+	}
+	if len(cand) == 0 {
+		return
+	}
+	view := readInboxView(ctx, r.js)
+	for _, row := range cand {
+		switch d := deliveryOf(r.ledger.Sends[row.Ask], view); d.State {
+		case deliveryExpiredUnrd:
+			row.ExpiredUnread = stamp(now)
+		case deliveryUnknown:
+			r.NotRead = append(r.NotRead, "delivery of "+row.Ask+": "+d.Error)
+		}
+	}
 }
