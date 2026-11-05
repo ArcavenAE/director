@@ -50,6 +50,24 @@ func linuxPidNamespace(path string) string {
 	return t
 }
 
+// linuxPlatformPidspace is the linux platform part: the random boot id, which
+// tells two hosts apart, and the pid namespace link, which tells a container
+// from its host (a container shares its host's boot id). Neither alone covers
+// both. Either unreadable or empty gives "", so the whole pidspace is empty.
+// The paths are parameters so a test can point them at fixtures.
+func linuxPlatformPidspace(bootIDPath, nsPath string) string {
+	b, err := os.ReadFile(bootIDPath)
+	if err != nil {
+		return ""
+	}
+	boot := strings.TrimSpace(string(b))
+	ns := linuxPidNamespace(nsPath)
+	if boot == "" || ns == "" {
+		return ""
+	}
+	return boot + "|" + ns
+}
+
 // pidGone reports whether the process that wrote a presence row is provably
 // gone on this host. Every doubt answers false, so the row stays: the pid must
 // parse as a 32-bit integer above 1 (a wider number acts on its low 32 bits on

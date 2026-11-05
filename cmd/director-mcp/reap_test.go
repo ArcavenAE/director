@@ -323,3 +323,88 @@ func TestLinuxPidNamespaceReadsTheLinkTarget(t *testing.T) {
 		t.Fatalf("an unreadable link gave %q, want empty", got)
 	}
 }
+
+func writeLinuxFixture(t *testing.T, boot, ns string) (bootPath, nsPath string) {
+	t.Helper()
+	dir := t.TempDir()
+	bootPath = filepath.Join(dir, "boot_id")
+	nsPath = filepath.Join(dir, "pid")
+	if boot != "" {
+		if err := os.WriteFile(bootPath, []byte(boot+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ns != "" {
+		if err := os.Symlink(ns, nsPath); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return bootPath, nsPath
+}
+
+// The linux platform part joins the boot id and the namespace link; either one
+// missing or empty gives an empty part, so the whole pidspace is empty.
+func TestLinuxPlatformPidspaceNeedsBothFiles(t *testing.T) {
+	bp, np := writeLinuxFixture(t, "a1b2-boot", "pid:[4026531836]")
+	if got := linuxPlatformPidspace(bp, np); got != "a1b2-boot|pid:[4026531836]" {
+		t.Fatalf("linuxPlatformPidspace = %q", got)
+	}
+	bp, np = writeLinuxFixture(t, "", "pid:[4026531836]")
+	if got := linuxPlatformPidspace(bp, np); got != "" {
+		t.Fatalf("an unreadable boot_id gave %q, want empty", got)
+	}
+	bp, np = writeLinuxFixture(t, "a1b2-boot", "")
+	if got := linuxPlatformPidspace(bp, np); got != "" {
+		t.Fatalf("an unreadable ns link gave %q, want empty", got)
+	}
+	bp, np = writeLinuxFixture(t, "   ", "pid:[4026531836]")
+	if got := linuxPlatformPidspace(bp, np); got != "" {
+		t.Fatalf("an empty boot_id gave %q, want empty", got)
+	}
+	if got := pidspaceOf("kinu", linuxPlatformPidspace(bp, np)); got != "" {
+		t.Fatalf("an empty platform part gave pidspace %q, want empty", got)
+	}
+}
+
+// g23-0's case: the same host name and the same namespace link (the initial
+// namespace reads the same on every kernel) with a different boot id are two
+// hosts, so the row stays.
+func TestReapKeepsRowWithSameHostNameAndNsButAnotherBootId(t *testing.T) {
+	r := newReapRig(t)
+	b := r.bus(t, nil)
+	b1, n1 := writeLinuxFixture(t, "boot-AAAA", "pid:[4026531836]")
+	b2, n2 := writeLinuxFixture(t, "boot-BBBB", "pid:[4026531836]")
+	mine := pidspaceOf("shared-name", linuxPlatformPidspace(b1, n1))
+	theirs := pidspaceOf("shared-name", linuxPlatformPidspace(b2, n2))
+	if mine == theirs || mine == "" {
+		t.Fatalf("fixtures must differ: %q %q", mine, theirs)
+	}
+	b.pidspace = mine
+	key := localKey(r.self, "I-OTHERBOOT")
+	r.seed(t, r.kv, key, seedRec(r.self, "I-OTHERBOOT", theirs, reapedChildPid(t)))
+	if b.reapDeadRows(r.ctx, r.kv, "presence."+r.self.Team+"."+r.self.AgentID+".", nil) != 0 || !r.has(t, r.kv, key) {
+		t.Fatal("a row from another boot was reaped")
+	}
+	// Same boot id and link: the same pid space, so the dead row goes.
+	seedSame := seedRec(r.self, "I-SAMEBOOT", mine, reapedChildPid(t))
+	key2 := localKey(r.self, "I-SAMEBOOT")
+	r.seed(t, r.kv, key2, seedSame)
+	if b.reapDeadRows(r.ctx, r.kv, "presence."+r.self.Team+"."+r.self.AgentID+".", nil) != 1 || r.has(t, r.kv, key2) {
+		t.Fatal("a dead row in the same pid space was not reaped")
+	}
+}
+
+// Empty is never equal to empty: a shim and a row that both carry an empty
+// pidspace leave the row alone.
+func TestReapKeepsRowWhenBothPidspacesAreEmpty(t *testing.T) {
+	r := newReapRig(t)
+	b := r.bus(t, nil)
+	b.pidspace = ""
+	key := localKey(r.self, "I-EMPTYBOTH")
+	rec := seedRec(r.self, "I-EMPTYBOTH", "", reapedChildPid(t))
+	rec["pidspace"] = ""
+	r.seed(t, r.kv, key, rec)
+	if b.reapDeadRows(r.ctx, r.kv, "presence."+r.self.Team+"."+r.self.AgentID+".", nil) != 0 || !r.has(t, r.kv, key) {
+		t.Fatal("a row with an empty pidspace was reaped by a shim with an empty pidspace")
+	}
+}
