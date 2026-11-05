@@ -7,7 +7,7 @@ content: |
   not read director's bus, so that the components stay independent;
   director may read marvel, not the reverse (finding-director-gmah section 3).
 graveyard:
-  approach: "Marvel's watchdog reads director's bus"
+  approach: "marvel's watchdog reads director's bus to find stalled seats"
   ruling: "Marvel's watchdog does not read director's bus, so that the components stay independent; director may read marvel, not the reverse (finding-director-gmah section 3)."
   reopener: "An amended component-independence decision."
 provenance:
