@@ -96,6 +96,9 @@ func loadGlobalConfig() (*globalConfig, error) {
 	return cfg, nil
 }
 
+// supervisorHeld names the role in the supervisor warning; the director case keeps its own advice.
+const supervisorHeld = "the global supervisor role"
+
 // globalOffWarning is the start-up warning for a seat that holds the director
 // role, or asks for the global supervisor role, with the global tier off.
 // DIRECTOR_GLOBAL_DOMAIN unset is a valid off case, and the right one for a
@@ -119,12 +122,12 @@ func globalOffWarning(cfg *globalConfig, globalRole, role string) string {
 	case role == roleDirector:
 		trigger, held = "DIRECTOR_ROLE="+roleDirector, "the director role"
 	case globalRole == roleSupervisor:
-		trigger, held = "DIRECTOR_GLOBAL_ROLE="+roleSupervisor, "the global supervisor role"
+		trigger, held = "DIRECTOR_GLOBAL_ROLE="+roleSupervisor, supervisorHeld
 	default:
 		return ""
 	}
 	set := "DIRECTOR_GLOBAL_DOMAIN, DIRECTOR_CLUSTER and DIRECTOR_GLOBAL_ROLE=" + roleDirector
-	if globalRole == roleSupervisor {
+	if held == supervisorHeld {
 		set = "DIRECTOR_GLOBAL_DOMAIN and DIRECTOR_CLUSTER"
 	}
 	return "this seat holds " + held + " (" + trigger + ") but DIRECTOR_GLOBAL_DOMAIN is unset, so the global tier is off: " +

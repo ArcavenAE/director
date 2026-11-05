@@ -44,6 +44,20 @@ func TestGlobalOffWarnsASupervisorByGlobalRoleOnly(t *testing.T) {
 	}
 }
 
+// A seat with both levers takes the director case, so it hears the director's
+// advice, including DIRECTOR_GLOBAL_ROLE=director, not the supervisor's.
+func TestGlobalOffDirectorRoleWithASupervisorGlobalRoleKeepsTheDirectorAdvice(t *testing.T) {
+	w := globalOffWarning(nil, "supervisor", "director")
+	for _, want := range []string{"(DIRECTOR_ROLE=director)", "the director role", "DIRECTOR_GLOBAL_ROLE=director"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("warning lacks %q: %q", want, w)
+		}
+	}
+	if strings.Contains(w, "supervisor") {
+		t.Errorf("the director case gave supervisor advice: %q", w)
+	}
+}
+
 func TestGlobalOffStaysSilentForAWorkerAndWhenTheTierIsOn(t *testing.T) {
 	on := &globalConfig{Domain: "global", Cluster: "c", Role: roleDirector}
 	for name, c := range map[string]struct {
@@ -92,8 +106,12 @@ func TestShimStartWarnsAGlobalOffDirectorAndNotAWorker(t *testing.T) {
 		t.Errorf("director with the tier on: warned: %q", out)
 	}
 	// A global supervisor with no domain warns, naming its lever; the local role lever alone does not.
-	if out := run("DIRECTOR_GLOBAL_ROLE=supervisor"); !strings.Contains(out, "WARNING") || !strings.Contains(out, "(DIRECTOR_GLOBAL_ROLE=supervisor)") {
+	if out := run("DIRECTOR_GLOBAL_ROLE=supervisor"); !strings.Contains(out, "WARNING") || !strings.Contains(out, "(DIRECTOR_GLOBAL_ROLE=supervisor)") || strings.Index(out, "broker unreachable") < strings.Index(out, "WARNING") || !strings.Contains(out, "broker unreachable") {
 		t.Errorf("supervisor with the tier off: no warning naming its lever on stderr: %q", out)
+	}
+	// Both levers: the director case wins and keeps its own advice.
+	if out := run("DIRECTOR_ROLE=director", "DIRECTOR_GLOBAL_ROLE=supervisor"); !strings.Contains(out, "(DIRECTOR_ROLE=director)") || !strings.Contains(out, "DIRECTOR_GLOBAL_ROLE=director") {
+		t.Errorf("director by DIRECTOR_ROLE with a supervisor global role: want the director advice: %q", out)
 	}
 	if out := run("DIRECTOR_ROLE=supervisor"); strings.Contains(out, "WARNING") {
 		t.Errorf("DIRECTOR_ROLE=supervisor alone: warned: %q", out)
