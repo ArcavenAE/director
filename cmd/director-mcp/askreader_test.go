@@ -298,3 +298,24 @@ func TestTheReaderResolvesAGlobalOwnerFromTheHubsPresenceAndNamesAnUnreadableHub
 		t.Fatalf("not read = %v, want %s named", r2.NotRead, globalPresenceBucket)
 	}
 }
+
+func TestAsksIDReadsOneMessageFromTheStore(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provisionAudit(t, ctx, url)
+	auditPublish(t, ctx, js, envFor("m1", "REQUEST", "sup-1", "agent://ops/builder-1", "please build x"), false)
+	r := newAskReader(js, askReaderCfg{Broker: "local", File: filepath.Join(t.TempDir(), "a.json")})
+	if err := r.Pass(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"m1": "no acknowledgement yet", "nope": "no row"} {
+		var out bytes.Buffer
+		if code := runAsksCmd(ctx, url, cliArgs{mode: "asks", askID: id}, &out, &out); code != 0 {
+			t.Fatalf("exit %d: %s", code, out.String())
+		}
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("asks --id %s = %q, want %q", id, out.String(), want)
+		}
+	}
+}

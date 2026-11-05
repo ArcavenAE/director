@@ -481,6 +481,9 @@ func runAsksCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Write
 		return 0
 	}
 	defer nc.Close()
+	if cli.askID != "" {
+		return runAskLookup(ctx, js, cli, out, errw)
+	}
 	rep, err := readAskReport(ctx, js, time.Now(), cli.all)
 	if err != nil {
 		_, _ = fmt.Fprintf(errw, "director-mcp asks: %v\n", err)
@@ -604,4 +607,35 @@ func readGlobalSeen(ctx context.Context, js jetstream.JetStream) (map[string]glo
 		out[ge.Cluster+"/"+ge.Role] = ge
 	}
 	return out, seenLedger, nil
+}
+
+// runAskLookup answers asks --id: what became of one message id. Like the
+// report it runs no pass, reads the stored ledger only, and exits 0.
+func runAskLookup(ctx context.Context, js jetstream.JetStream, cli cliArgs, out, errw io.Writer) int {
+	l := newAskLedger()
+	var notRead []string
+	kv, err := js.KeyValue(ctx, askBucket)
+	switch {
+	case errors.Is(err, jetstream.ErrBucketNotFound):
+	case err != nil:
+		_, _ = fmt.Fprintf(errw, "director-mcp asks: %v\n", err)
+		return 0
+	default:
+		if l, notRead, err = loadAskStore(ctx, kv); err != nil {
+			_, _ = fmt.Fprintf(errw, "director-mcp asks: %v\n", err)
+			return 0
+		}
+	}
+	res := l.FindByID(cli.askID, time.Now())
+	if cli.json {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(res)
+		return 0
+	}
+	_, _ = fmt.Fprintf(out, "%s: %s\n", res.ID, res.Verdict)
+	if len(notRead) > 0 {
+		_, _ = fmt.Fprintf(out, "partial: not every stream was read (%s)\n", strings.Join(notRead, "; "))
+	}
+	return 0
 }

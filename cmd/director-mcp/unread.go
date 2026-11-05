@@ -100,6 +100,7 @@ type cliArgs struct {
 	interval    time.Duration // ask-reader: the pass interval; 0 means the 30s default
 	file        string        // ask-reader: the JSON file it rewrites after each pass
 	help        bool          // asks: print the help text
+	askID       string        // asks: report one message id and exit
 	role        string        // dossier: TEAM/ROLE
 	pred        string        // dossier: the predecessor's agent id
 	predState   string        // dossier: the predecessor's state directory
@@ -124,6 +125,7 @@ func parseArgs(args []string) (cliArgs, error) {
 		return cliArgs{mode: "version"}, nil
 	case args[0] == "asks":
 		out := cliArgs{mode: "asks"}
+		idArg := false
 		for _, a := range args[1:] {
 			switch a {
 			case "--json":
@@ -132,9 +134,18 @@ func parseArgs(args []string) (cliArgs, error) {
 				out.all = true
 			case "--help", "-h":
 				out.help = true
+			case "--id":
+				idArg = true
 			default:
+				if idArg {
+					out.askID, idArg = a, false
+					continue
+				}
 				return cliArgs{}, fmt.Errorf("asks: unknown argument %q (usage: %s)", a, asksUsage)
 			}
+		}
+		if idArg {
+			return cliArgs{}, fmt.Errorf("asks: --id needs a message id (usage: %s)", asksUsage)
 		}
 		return out, nil
 	case args[0] == "ask-reader":
