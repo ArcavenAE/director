@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -924,7 +925,7 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 			return nil, atStage("publish", err)
 		}
 	}
-	b.auditMirror(ctx, e, body)
+	b.auditMirrorStored(ctx, e, body, subject, res.Sequence)
 	return res, nil
 }
 
@@ -962,8 +963,20 @@ func (b *Bus) publishGlobalOnce(ctx context.Context, e *Envelope, body []byte) (
 // effort in the probe: a missing audit stream must not fail a send that the
 // recipient's inbox already accepted.
 func (b *Bus) auditMirror(ctx context.Context, e *Envelope, body []byte) {
+	b.auditMirrorStored(ctx, e, body, "", 0)
+}
+
+// auditMirrorStored is auditMirror for a local send the inbox stream stored: it
+// adds where, as Director-Inbox-Subject and Director-Inbox-Seq, so the ask
+// reader can later tell a sender whether the message was read or expired
+// unread (aae-orc-t77rr). Subject empty or seq zero leaves the headers off.
+func (b *Bus) auditMirrorStored(ctx context.Context, e *Envelope, body []byte, subject string, seq uint64) {
 	amsg := &nats.Msg{Subject: "agent.audit", Data: body, Header: nats.Header{}}
 	amsg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
+	if subject != "" && seq > 0 {
+		amsg.Header.Set("Director-Inbox-Subject", subject)
+		amsg.Header.Set("Director-Inbox-Seq", strconv.FormatUint(seq, 10))
+	}
 	_, _ = b.js.PublishMsg(ctx, amsg)
 }
 
