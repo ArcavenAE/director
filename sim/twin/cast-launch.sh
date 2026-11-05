@@ -166,22 +166,38 @@ else
   GLOBAL_ADDR=""
 fi
 
-# The channel cue (sim/design/channel-cue.md, C-5), opt-in per seat by the
-# operator's ruling of 2026-10-01: DIRECTOR_CUE=1 in the role's environment
-# tells the shim to cue and loads the director server as a development
-# channel. Only the value 1 does, as in the shim; unset or anything else, the
-# launch line is exactly what it was before.
+# The channel cue (sim/design/channel-cue.md, C-5): DIRECTOR_CUE=1 in the
+# role's environment tells the shim to cue and loads the director server as a
+# development channel. Only the value 1 does, as in the shim.
+# It was opt-in per seat by the operator's ruling of 2026-10-01. The operator's
+# ruling I-190 (2026-11-05) replaces that for supervisor casts: a supervisor
+# (GROLE=supervisor, so research-supervisors too) gets the cue when DIRECTOR_CUE
+# is unset and the launch is not headless. A SET value always wins, so
+# DIRECTOR_CUE=0, or a set-but-empty value, keeps it off for a seat that opts
+# out. Director casts and every other role are unchanged: unset, the launch line
+# is exactly what it was before.
 # The value can be inherited from the shell that started the tmux server, not
 # only set in the role's manifest, so a cue that is on is named in the spawn
-# line below. The flag goes last: a bare -- in a role's args would make it a
-# positional, and a headless (--print) role gets a channel it cannot use.
+# line below, and says which way it came on. The flag goes last: a bare -- in a
+# role's args would make it a positional, and a headless (-p or --print) launch
+# gets a channel it cannot use, so the default does not apply to it.
 cue_env=""
 cue_args=()
 cue_note=""
+cue_how=""
 if [[ "${DIRECTOR_CUE:-}" == 1 ]]; then
+  cue_how="DIRECTOR_CUE=1"
+elif [[ -z "${DIRECTOR_CUE+x}" && "$GROLE" == supervisor ]]; then
+  cue_headless=""
+  for a in "$@"; do
+    [[ "$a" == -p || "$a" == --print ]] && cue_headless=1
+  done
+  [[ -z "$cue_headless" ]] && cue_how="default for supervisor casts"
+fi
+if [[ -n "$cue_how" ]]; then
   cue_env=',"DIRECTOR_CUE":"1"'
   cue_args=(--dangerously-load-development-channels server:director)
-  cue_note=", channel cue ON (DIRECTOR_CUE=1)"
+  cue_note=", channel cue ON ($cue_how)"
 fi
 
 # A supervisor-type cast with no global address on a host whose broker IS

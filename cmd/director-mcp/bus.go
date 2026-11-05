@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,6 +73,8 @@ type Bus struct {
 	// what was waiting, reported once in the next wait_for_message result.
 	resumedMu sync.Mutex
 	resumed   []string
+	// expiry remembers which expired-unread gap was last reported (expiry.go).
+	expiry expiryWatch
 	// cueState reports the channel cue state for presence at an age of the
 	// oldest waiting message (cue.presenceAt); nil when off.
 	cueState func(age time.Duration, known bool, unverified string) (state, reason string, stalled bool)
@@ -909,23 +912,6 @@ func hintedVerdict(subject, addr string, filtered bool, ferr error, cold bool) (
 // subject no consumer filters yet (mail for a seat that has not started).
 type coldSendKey struct{}
 
-// readsSubject reports whether a consumer is a mailbox for the subject: it is
-// durable (Config.Durable set) and one of its filter subjects equals the
-// subject literally. An unfiltered consumer and a wildcard filter ("*" or ">")
-// do not count: a reader of everything is a monitor, not somebody's mailbox,
-// and an ephemeral consumer ends with its session.
-func readsSubject(cfg jetstream.ConsumerConfig, subject string) bool {
-	if cfg.Durable == "" {
-		return false
-	}
-	for _, f := range filterSubjects(cfg) {
-		if f == subject {
-			return true
-		}
-	}
-	return false
-}
-
 // inboxConsumerConfigs lists the consumers on AGENT_INBOX. Bus.inboxConsumers,
 // when set, replaces it so a test can inject a list error.
 func (b *Bus) inboxConsumerConfigs(ctx context.Context) ([]jetstream.ConsumerConfig, error) {
@@ -1023,7 +1009,7 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 			return nil, atStage("publish", err)
 		}
 	}
-	b.auditMirror(ctx, e, body)
+	b.auditMirrorStored(ctx, e, body, subject, res.Sequence)
 	return res, nil
 }
 
@@ -1061,8 +1047,20 @@ func (b *Bus) publishGlobalOnce(ctx context.Context, e *Envelope, body []byte) (
 // effort in the probe: a missing audit stream must not fail a send that the
 // recipient's inbox already accepted.
 func (b *Bus) auditMirror(ctx context.Context, e *Envelope, body []byte) {
+	b.auditMirrorStored(ctx, e, body, "", 0)
+}
+
+// auditMirrorStored is auditMirror for a local send the inbox stream stored: it
+// adds where, as Director-Inbox-Subject and Director-Inbox-Seq, so the ask
+// reader can later tell a sender whether the message was read or expired
+// unread (aae-orc-t77rr). Subject empty or seq zero leaves the headers off.
+func (b *Bus) auditMirrorStored(ctx context.Context, e *Envelope, body []byte, subject string, seq uint64) {
 	amsg := &nats.Msg{Subject: "agent.audit", Data: body, Header: nats.Header{}}
 	amsg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
+	if subject != "" && seq > 0 {
+		amsg.Header.Set("Director-Inbox-Subject", subject)
+		amsg.Header.Set("Director-Inbox-Seq", strconv.FormatUint(seq, 10))
+	}
 	_, _ = b.js.PublishMsg(ctx, amsg)
 }
 

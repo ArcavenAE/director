@@ -25,7 +25,7 @@ const (
 	// interval late, and presence outlives its last beat by the TTL.
 	resolveMargin = askPassInterval + presenceTTL
 	alarmAfter    = 15 * time.Minute // the one threshold table (design section 7)
-	staleAfter    = 72 * time.Hour   // the inbox's own max age
+	staleAfter    = 72 * time.Hour   // the ledger's staleness and Seen-pruning window, not the inbox age (inboxMaxAge)
 	closedKeep    = 30 * 24 * time.Hour
 	idKeep        = 30 * 24 * time.Hour
 	lineMax       = 120
@@ -51,6 +51,11 @@ type auditRec struct {
 	At      time.Time
 	Refused bool
 	Env     Envelope
+	// InboxSeq and InboxSubject are where the inbox stream stored the send,
+	// from the audit mirror's Director-Inbox-* headers; zero and empty for a
+	// send the mirror did not stamp (a broadcast, a global send, an older shim).
+	InboxSeq     uint64
+	InboxSubject string
 }
 
 // askParty is one end of an ask, as sent and as resolved (design section 4a).
@@ -77,13 +82,16 @@ type askRow struct {
 	Brokers     []string `json:"brokers"`
 
 	// Kept for the reader's own bookkeeping, and persisted with the row.
-	AskedAt     time.Time `json:"asked_at"`        // the REQUEST's stream timestamp
-	LastMsgAt   time.Time `json:"last_msg_at"`     // the latest message of the thread, stream timestamp
-	ClosedAt    time.Time `json:"closed_at"`       // set when a closing state is reached
-	AskerRole   string    `json:"asker_wire_role"` // the sender.role the REQUEST carried, if any
-	ThreadIDs   []string  `json:"thread_ids"`      // message ids that belong to this row
-	ReplyRole   string    `json:"reply_role"`      // step 3: the owner's own declared role
-	OwnerRoleBy string    `json:"owner_role_by"`   // wire, table, reply or empty
+	AskedAt   time.Time `json:"asked_at"`    // the REQUEST's stream timestamp
+	LastMsgAt time.Time `json:"last_msg_at"` // the latest message of the thread, stream timestamp
+	ClosedAt  time.Time `json:"closed_at"`   // set when a closing state is reached
+	// ExpiredUnread is when a pass observed that the inbox dropped this ask
+	// before any covering durable acked it; empty until then, set once.
+	ExpiredUnread string   `json:"expired_unread,omitempty"`
+	AskerRole     string   `json:"asker_wire_role"` // the sender.role the REQUEST carried, if any
+	ThreadIDs     []string `json:"thread_ids"`      // message ids that belong to this row
+	ReplyRole     string   `json:"reply_role"`      // step 3: the owner's own declared role
+	OwnerRoleBy   string   `json:"owner_role_by"`   // wire, table, reply or empty
 }
 
 // idEntry is one (team, role) the reader saw an agent id under (step 2).
@@ -131,6 +139,7 @@ type readerGap struct {
 type askLedger struct {
 	Rows     map[string]*askRow   `json:"rows"`
 	Seen     map[string]time.Time `json:"seen"`       // message ids seen on the audit stream
+	Sends    map[string]sendRec   `json:"sends"`      // where the inbox stream stored each local send (delivery.go)
 	IDs      []idEntry            `json:"ids"`        // the id table, with expired entries kept 30 days
 	Tombs    []idEntry            `json:"tombs"`      // dropped entries, kept while a row resolved through the id is kept
 	GlobalID []globalEntry        `json:"global_ids"` // hub principals seen in GLOBAL_PRESENCE (part A2)
@@ -149,6 +158,7 @@ func newAskLedger() *askLedger {
 	return &askLedger{
 		Rows:    map[string]*askRow{},
 		Seen:    map[string]time.Time{},
+		Sends:   map[string]sendRec{},
 		Orphans: map[string]int{},
 		LastSeq: map[string]uint64{},
 		threads: map[string]string{},
@@ -169,6 +179,9 @@ func (l *askLedger) reindex() {
 	}
 	if l.Seen == nil {
 		l.Seen = map[string]time.Time{}
+	}
+	if l.Sends == nil {
+		l.Sends = map[string]sendRec{}
 	}
 	if l.Orphans == nil {
 		l.Orphans = map[string]int{}
@@ -252,6 +265,9 @@ func (l *askLedger) Ingest(rec auditRec) {
 	e := rec.Env
 	if e.MessageID == "" {
 		return
+	}
+	if rec.InboxSeq > 0 && rec.InboxSubject != "" {
+		l.Sends[e.MessageID] = sendRec{Seq: rec.InboxSeq, Subject: rec.InboxSubject, Perf: e.Performative, At: rec.At}
 	}
 	if _, dup := l.Seen[e.MessageID]; dup {
 		if ask, ok := l.threads[e.MessageID]; ok {
@@ -662,6 +678,25 @@ func (l *askLedger) Sweep(now time.Time) {
 			delete(l.Seen, id)
 		}
 	}
+	for id, s := range l.Sends {
+		if now.Sub(s.At) > sendKeep {
+			delete(l.Sends, id)
+		}
+	}
+	if len(l.Sends) > sendsMax {
+		type kv struct {
+			id string
+			at time.Time
+		}
+		all := make([]kv, 0, len(l.Sends))
+		for id, s := range l.Sends {
+			all = append(all, kv{id, s.At})
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i].at.Before(all[j].at) })
+		for _, x := range all[:len(all)-sendsMax] {
+			delete(l.Sends, x.id)
+		}
+	}
 	if len(l.Seen) > seenMax {
 		type kv struct {
 			id string
@@ -958,6 +993,9 @@ func (l *askLedger) alarm(r *askRow, now time.Time, stale bool) askAlarm {
 	if stale {
 		text += ", stale"
 	}
+	if r.ExpiredUnread != "" {
+		text += ", expired unread: the inbox dropped it before any seat acked it"
+	}
 	return askAlarm{Ask: r.Ask, Text: text + ")", AgeSec: int64(age.Seconds())}
 }
 
@@ -1007,7 +1045,7 @@ func (l *askLedger) chains(rows []*askRow, now time.Time) []askChain {
 }
 
 // asksUsage and asksHelp are the read command's usage and help text.
-const asksUsage = "director-mcp asks [--json] [--all] [--help]"
+const asksUsage = "director-mcp asks [--json] [--all] [--id <message_id>] [--help]"
 
 func asksHelp() string {
 	return asksUsage + `
@@ -1031,5 +1069,17 @@ not lost mail.
 
 --json carries every row and the rollups; --all also lists stale rows among
 the alarms.
+
+--id <message_id> answers one question and exits: what became of that
+message. It finds the ask by its own id or any id in its thread and says
+whether the owner replied. For any local send the ledger recorded it also
+reports delivery, read live from the inbox stream: read (a durable reader of
+the exact subject acked it), not_yet_read, expired_unread (the inbox dropped
+it before any such reader acked it), no_reader (nothing reads that subject),
+or unknown with the error when the stream could not be read. Delivery is an
+ack, never a reply. In handled mode (DIRECTOR_HANDLED=1) a seat acks only at
+mark_handled, so mail it received and has not marked handled is not yet
+acked. Only a REQUEST opens a row; global and broadcast sends are not
+recorded.
 `
 }
