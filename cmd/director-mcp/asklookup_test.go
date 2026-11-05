@@ -20,6 +20,7 @@ func TestFindByIDAnswersByMessageIDAndNamesAnExpiredAsk(t *testing.T) {
 	add("m-fresh", askSent, 10*time.Minute)
 	add("m-old", askSent, inboxMaxAge+time.Hour)
 	add("m-done", askAnswered, 2*time.Hour, "m-done-reply")
+	add("m-cancel", askCancelled, 3*time.Hour)
 	l.reindex()
 
 	cases := []struct {
@@ -37,6 +38,11 @@ func TestFindByIDAnswersByMessageIDAndNamesAnExpiredAsk(t *testing.T) {
 		if got.Found != c.found || !strings.Contains(got.Verdict, c.want) {
 			t.Errorf("FindByID(%q) = found %v, %q; want found %v containing %q", c.id, got.Found, got.Verdict, c.found, c.want)
 		}
+	}
+	// A cancel is the asker's own message, so the verdict must not credit the
+	// recipient with it.
+	if got := l.FindByID("m-cancel", now); !strings.Contains(got.Verdict, "cancelled by the asker") || strings.Contains(got.Verdict, "recipient") {
+		t.Errorf("a cancelled ask read as %q", got.Verdict)
 	}
 	if got := l.FindByID("m-fresh", now); strings.Contains(got.Verdict, "expired") {
 		t.Errorf("a fresh unanswered ask read as expired: %q", got.Verdict)

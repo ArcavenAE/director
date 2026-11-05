@@ -39,6 +39,8 @@ func (l *askLedger) FindByID(id string, now time.Time) askLookup {
 		out.Verdict = fmt.Sprintf("sent and not acknowledged for %s, longer than the inbox keeps mail (%s): it may have expired unread; resend it", humanAge(age), humanAge(inboxMaxAge))
 	case r.State == askSent:
 		out.Verdict = fmt.Sprintf("sent %s ago, no acknowledgement yet", humanAge(age))
+	case r.State == askCancelled:
+		out.Verdict = fmt.Sprintf("cancelled by the asker at %s", r.StateAt)
 	default:
 		out.Verdict = fmt.Sprintf("%s at %s (the recipient's reply, not a read receipt)", r.State, r.StateAt)
 	}
