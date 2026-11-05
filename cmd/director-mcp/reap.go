@@ -17,15 +17,37 @@ import (
 type reapRow struct {
 	AgentID  string          `json:"agent_id"`
 	Instance string          `json:"instance"`
-	Host     string          `json:"host"`
+	Pidspace string          `json:"pidspace"`
 	Pid      json.RawMessage `json:"pid"`
 }
 
-// thisHost is the host name a shim writes beside its pid, so a later shim can
-// tell a pid it may probe from one that means nothing here.
-func thisHost() string {
+// pidspaceOf names the pid space a shim runs in: the host name plus a platform
+// part that tells two pid spaces under one host name apart (a container that
+// takes its host's name has its own pid namespace, so a live pid there reads as
+// ESRCH here). Either part unreadable gives "", and an empty pidspace never
+// reaps and is never reaped.
+func pidspaceOf(host, part string) string {
+	if host == "" || part == "" {
+		return ""
+	}
+	return host + "|" + part
+}
+
+// thisPidspace is this shim's pid space, written beside its pid.
+func thisPidspace() string {
 	h, _ := os.Hostname()
-	return h
+	return pidspaceOf(h, platformPidspace())
+}
+
+// linuxPidNamespace reads the pid namespace link, for example "pid:[4026531836]".
+// It differs per pid namespace; the boot id does not, because a container shares
+// it with its host. The path is a parameter so a test can point it at a fixture.
+func linuxPidNamespace(path string) string {
+	t, err := os.Readlink(path)
+	if err != nil {
+		return ""
+	}
+	return t
 }
 
 // pidGone reports whether the process that wrote a presence row is provably
@@ -45,7 +67,7 @@ func pidGone(raw json.RawMessage) (int, bool) {
 // reapDeadRows deletes, from one presence bucket, the rows an earlier shim of
 // this same agent left behind when it died without deregistering (aae-orc-4unyk).
 // A row goes only when all four hold: another instance wrote it for this agent
-// id, on this host, its pid is provably gone, and the delete is conditional on
+// id, in this pid space, its pid is provably gone, and the delete is conditional on
 // the revision read here, so a row that beat in between survives. Anything else
 // is left to the bucket TTL and to checkCollision, which still warns. It returns
 // the number of rows it removed.
@@ -70,7 +92,7 @@ func (b *Bus) reapDeadRows(ctx context.Context, kv jetstream.KeyValue, prefix st
 		if row.AgentID != b.self.AgentID || row.Instance == "" || row.Instance == b.instance {
 			continue
 		}
-		if b.host == "" || row.Host != b.host {
+		if b.pidspace == "" || row.Pidspace != b.pidspace {
 			continue
 		}
 		pid, gone := pidGone(row.Pid)

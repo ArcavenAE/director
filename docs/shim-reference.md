@@ -184,8 +184,19 @@ Slice M (`sim/design/unread-slice-m.md`):
    durable carries an 8 day inactive threshold, above the inbox's 168h max
    age, so a superseded instance's durable is cleaned up rather than left
    behind and a live seat's durable outlasts its mail.
-3. Write presence as `idle`; warn on stderr if another instance of the same
-   id is present (R-49).
+3. Before the first presence write, remove the row a dead shim of this seat
+   left behind. Each presence row carries `pidspace`, the host name plus the
+   boot session (darwin) or the pid namespace (linux). A row of the same agent
+   id and another instance is deleted only when its `pidspace` equals this
+   shim's, its pid is an integer from 2 to 2^31-1, `kill(pid, 0)` answers
+   `ESRCH`, and the delete is conditional on the revision just read. The host
+   name alone is not enough, because two pid spaces under one host name would
+   each read the other's live pid as gone. A shim whose own `pidspace` cannot
+   be read reaps nothing, and a row with an empty or missing `pidspace` is
+   never reaped. Every other row falls to the 90s TTL. Each removal logs the
+   instance, pid and revision. The global presence row follows the same rule.
+   Then write presence as `idle`; warn on stderr if another instance of the
+   same id is present (R-49).
 4. Start the heartbeat: presence renewed every 30 seconds on the shim's own
    timer, independent of the model (R-56). The same tick carries the global
    presence row and re-attaches a hub that was down at start.

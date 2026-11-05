@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -119,10 +121,10 @@ func localKey(self Sender, inst string) string {
 	return "presence." + self.Team + "." + self.AgentID + "." + inst
 }
 
-func seedRec(self Sender, inst, host string, pid any) map[string]any {
+func seedRec(self Sender, inst, pidspace string, pid any) map[string]any {
 	rec := map[string]any{"agent_id": self.AgentID, "team": self.Team, "instance": inst, "state": "idle"}
-	if host != "" {
-		rec["host"] = host
+	if pidspace != "" {
+		rec["pidspace"] = pidspace
 	}
 	if pid != nil {
 		rec["pid"] = pid
@@ -185,13 +187,14 @@ func TestReapKeepsRowsItCannotProve(t *testing.T) {
 	b := r.bus(t, nil)
 	dead := reapedChildPid(t)
 	rows := map[string]map[string]any{
-		"other host":       seedRec(r.self, "I-OTHERHOST", "some-other-host", dead),
-		"no host field":    seedRec(r.self, "I-NOHOST", "", dead),
-		"pid zero":         seedRec(r.self, "I-ZERO", b.host, 0),
-		"pid one":          seedRec(r.self, "I-ONE", b.host, 1),
-		"pid above 32 bit": seedRec(r.self, "I-WIDE", b.host, int64(dead)+1<<32),
-		"no pid":           seedRec(r.self, "I-NOPID", b.host, nil),
-		"other agent id":   {"agent_id": "someone-else", "instance": "I-OTHERID", "host": b.host, "pid": dead},
+		"other pidspace":                  seedRec(r.self, "I-OTHERPS", "some-other-host|boot-x", dead),
+		"same host name, other pid space": seedRec(r.self, "I-SAMEHOST", hostPart(b.pidspace)+"|container-ns", dead),
+		"no pidspace field":               seedRec(r.self, "I-NOPS", "", dead),
+		"pid zero":                        seedRec(r.self, "I-ZERO", b.pidspace, 0),
+		"pid one":                         seedRec(r.self, "I-ONE", b.pidspace, 1),
+		"pid above 32 bit":                seedRec(r.self, "I-WIDE", b.pidspace, int64(dead)+1<<32),
+		"no pid":                          seedRec(r.self, "I-NOPID", b.pidspace, nil),
+		"other agent id":                  {"agent_id": "someone-else", "instance": "I-OTHERID", "pidspace": b.pidspace, "pid": dead},
 	}
 	for name, rec := range rows {
 		inst, _ := rec["instance"].(string)
@@ -229,7 +232,7 @@ func TestReapKeepsRowThatBeatsBetweenReadAndDelete(t *testing.T) {
 	b := r.bus(t, nil)
 	dead := reapedChildPid(t)
 	key := localKey(r.self, "I-RACE")
-	r.seed(t, r.kv, key, seedRec(r.self, "I-RACE", b.host, dead))
+	r.seed(t, r.kv, key, seedRec(r.self, "I-RACE", b.pidspace, dead))
 	n := b.reapDeadRows(r.ctx, &raceKV{KeyValue: r.kv}, "presence."+r.self.Team+"."+r.self.AgentID+".", nil)
 	if n != 0 || !r.has(t, r.kv, key) {
 		t.Fatalf("reaped %d, row present %v; a row whose revision moved must stay", n, r.has(t, r.kv, key))
@@ -253,10 +256,11 @@ func TestReapGlobalRowFollowsTheSameRules(t *testing.T) {
 		rec  map[string]any
 		gone bool
 	}{
-		"I-GDEAD":  {seedRec(r.self, "I-GDEAD", b.host, dead), true},
-		"I-GLIVE":  {seedRec(r.self, "I-GLIVE", b.host, live), false},
-		"I-GOTHER": {seedRec(r.self, "I-GOTHER", "some-other-host", dead), false},
-		"I-GNOHST": {seedRec(r.self, "I-GNOHST", "", dead), false},
+		"I-GDEAD":  {seedRec(r.self, "I-GDEAD", b.pidspace, dead), true},
+		"I-GLIVE":  {seedRec(r.self, "I-GLIVE", b.pidspace, live), false},
+		"I-GOTHER": {seedRec(r.self, "I-GOTHER", "some-other-host|boot-x", dead), false},
+		"I-GSAME":  {seedRec(r.self, "I-GSAME", hostPart(b.pidspace)+"|container-ns", dead), false},
+		"I-GNOPS":  {seedRec(r.self, "I-GNOPS", "", dead), false},
 	}
 	for inst, c := range rows {
 		r.seed(t, g.kv, g.cfg.presenceKey(inst), c.rec)
@@ -269,14 +273,53 @@ func TestReapGlobalRowFollowsTheSameRules(t *testing.T) {
 	}
 }
 
-func TestPresenceRowsCarryHost(t *testing.T) {
+func TestPresenceRowsCarryPidspace(t *testing.T) {
 	r := newReapRig(t)
 	b := r.bus(t, nil)
 	if _, err := b.setPresence(r.ctx, "idle"); err != nil {
 		t.Fatal(err)
 	}
 	rows, _ := b.roster(r.ctx)
-	if len(rows) != 1 || rows[0]["host"] != b.host || b.host == "" {
-		t.Fatalf("roster = %v, want one row with host %q", rows, b.host)
+	if len(rows) != 1 || rows[0]["pidspace"] != b.pidspace || b.pidspace == "" {
+		t.Fatalf("roster = %v, want one row with pidspace %q", rows, b.pidspace)
+	}
+}
+
+// hostPart is the host name inside a pidspace.
+func hostPart(ps string) string { return strings.SplitN(ps, "|", 2)[0] }
+
+// A shim whose own pid space is unreadable reaps nothing, even a provably dead row.
+func TestReapWithAnEmptyOwnPidspaceReapsNothing(t *testing.T) {
+	r := newReapRig(t)
+	b := r.bus(t, nil)
+	key := localKey(r.self, "I-DEADROW")
+	r.seed(t, r.kv, key, seedRec(r.self, "I-DEADROW", b.pidspace, reapedChildPid(t)))
+	b.pidspace = ""
+	if b.reapDeadRows(r.ctx, r.kv, "presence."+r.self.Team+"."+r.self.AgentID+".", nil) != 0 || !r.has(t, r.kv, key) {
+		t.Fatal("a shim with an empty pidspace reaped a row")
+	}
+}
+
+func TestPidspaceNeedsBothParts(t *testing.T) {
+	if got := pidspaceOf("kinu", "boot-1"); got != "kinu|boot-1" {
+		t.Fatalf("pidspaceOf = %q", got)
+	}
+	if pidspaceOf("", "boot-1") != "" || pidspaceOf("kinu", "") != "" {
+		t.Fatal("a missing part must give an empty pidspace")
+	}
+}
+
+// The linux reader runs against a fixture link, so it is tested on darwin too.
+func TestLinuxPidNamespaceReadsTheLinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "pid")
+	if err := os.Symlink("pid:[4026531836]", link); err != nil {
+		t.Fatal(err)
+	}
+	if got := linuxPidNamespace(link); got != "pid:[4026531836]" {
+		t.Fatalf("linuxPidNamespace = %q", got)
+	}
+	if got := linuxPidNamespace(filepath.Join(dir, "absent")); got != "" {
+		t.Fatalf("an unreadable link gave %q, want empty", got)
 	}
 }
