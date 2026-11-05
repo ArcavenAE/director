@@ -343,6 +343,9 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	out := map[string]any{"message": res.Env}
 	if res.Env == nil {
 		out["note"] = "no message within the window; this is silence, not failure"
+		if e := bus.expiredUnread(ctx); e != "" {
+			out["expired_unread"] = e
+		}
 	} else {
 		out["tier"] = res.Tier
 		if bus.handled != nil {
@@ -384,6 +387,9 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 	}
 	if len(items) == 0 {
 		out["note"] = "no message within the window; this is silence, not failure"
+		if e := bus.expiredUnread(ctx); e != "" {
+			out["expired_unread"] = e
+		}
 	} else {
 		out["remaining"] = bus.remaining(ctx)
 	}
