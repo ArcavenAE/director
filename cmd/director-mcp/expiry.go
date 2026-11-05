@@ -54,3 +54,6 @@ func (b *Bus) expiredUnread(ctx context.Context) string {
 	return fmt.Sprintf("mail addressed to this seat may have expired unread: stream sequences %d to %d are gone from AGENT_INBOX (its max age is %s), past this seat's last read at sequence %d. The gap also holds other seats' mail, so this is a window and not a count; a sender whose ask went unanswered should resend",
 		read+1, first-1, si.Config.MaxAge, read)
 }
+
+// expiredUnread is the global tier's check; see expiryWatch.
+func (g *globalTier) expiredUnread(ctx context.Context) string { return "" }
