@@ -228,6 +228,8 @@ func TestAFailedReplyWriteAcksNothingAndTheNextWaitGetsTheMail(t *testing.T) {
 	r := newPipeRig(t, false)
 	var logs lockedLog
 	bad := &Server{bus: r.bus, out: bufio.NewWriter(failWriter{err: errors.New("disk on fire")}), tools: toolCatalog(nil, false), log: logs.add}
+	entry := &callEntry{cancel: func() {}}
+	bad.calls = map[string]*callEntry{`"x"`: entry}
 	r.publish("m1")
 	req := &rpcRequest{JSONRPC: "2.0", ID: json.RawMessage(`"x"`), Method: "tools/call",
 		Params: json.RawMessage(`{"name":"wait_for_message","arguments":{"timeout_seconds":3,"max":1}}`)}
@@ -241,6 +243,9 @@ func TestAFailedReplyWriteAcksNothingAndTheNextWaitGetsTheMail(t *testing.T) {
 	}
 	if info.AckFloor.Stream != 0 {
 		t.Fatalf("ack floor = %d after a reply that never left, want 0", info.AckFloor.Stream)
+	}
+	if len(entry.items) != 0 || !entry.replied.IsZero() {
+		t.Fatalf("a reply that never left was recorded as answered: %d items", len(entry.items))
 	}
 	// The sticky error makes every later write fail too: the mail keeps coming back.
 	bad.callTool(r.ctx, req)
@@ -271,5 +276,20 @@ func TestASecondCancelOfAnAnsweredCallReturnsNothingMore(t *testing.T) {
 	}
 	if got := s.calls[`"c"`].items; len(got) != 0 {
 		t.Fatalf("the entry still holds %d items after they moved", len(got))
+	}
+}
+
+// m6 of the review: mail a wait took from the returned queue goes back on it
+// when the reply carrying it fails to write, asserted on the queue itself and
+// not only on the log line.
+func TestAFailedReplyWriteReturnsTheReturnedMailToTheQueue(t *testing.T) {
+	r := newPipeRig(t, false)
+	bad := &Server{bus: r.bus, out: bufio.NewWriter(failWriter{err: errors.New("disk on fire")}), tools: toolCatalog(nil, false), log: func(string, ...any) {}}
+	r.bus.returnMail([]drained{{Env: &Envelope{MessageID: "m1"}, Tier: "local", Seq: 1}}, "test", func(string, ...any) {})
+	req := &rpcRequest{JSONRPC: "2.0", ID: json.RawMessage(`"x"`), Method: "tools/call",
+		Params: json.RawMessage(`{"name":"wait_for_message","arguments":{"timeout_seconds":1,"max":1}}`)}
+	bad.callTool(r.ctx, req)
+	if n := r.bus.returnedCount(); n != 1 {
+		t.Fatalf("returned = %d after a failed write of the returned mail, want 1", n)
 	}
 }
