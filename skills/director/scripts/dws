@@ -573,6 +573,14 @@ def need(rows, slug):
     return rows[slug]
 
 
+def need_open(rows, slug):
+    """need, and a closed row is refused: the only way back is dws open (board lifecycle section 4)."""
+    r = need(rows, slug)
+    if r.get("closed_at"):
+        raise Refused(f"{slug!r} was closed {r['closed_at']}; dws open {slug} re-opens it, and no other verb takes a closed row")
+    return r
+
+
 def stage_name(s):
     if s not in STAGES:
         raise Refused(f"unknown stage {s!r}; stages are: {', '.join(STAGES)}")
@@ -631,7 +639,7 @@ def move(a, event, to):
         ev["reason"] = checked("reason", reason)
 
     def plan(rows, decisions):
-        r = need(rows, a.slug)
+        r = need_open(rows, a.slug)
         cur = r["stage"]
         if cur != a.from_:
             raise Refused(f"stale move: {a.slug!r} is in {cur!r}, not {a.from_!r}; re-read and retry")
@@ -718,7 +726,7 @@ def cmd_set(a):
         raise Refused("set needs at least one of --owner, --next, --blocked, --repos, --done-at, --from, --waits, --unwait")
 
     def plan(rows, decisions):
-        r = need(rows, a.slug)
+        r = need_open(rows, a.slug)
         events = [ev] if len(ev) > 2 or ask_link else []
         links = [l for l in ask_links if l not in r["links"]]
         if links:
@@ -772,7 +780,7 @@ def cmd_link(a):
         if not a.remove:
             decision_link_refused(link)
     ev = {"event": "link", "ws": a.slug, ("remove" if a.remove else "add"): a.links}
-    write(a.actor, ev, lambda rows: need(rows, a.slug))
+    write(a.actor, ev, lambda rows: need_open(rows, a.slug))
 
 
 # The links refresh reads. A bd id must start with a letter or digit, so it can

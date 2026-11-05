@@ -96,6 +96,7 @@ assert sorted(x['slug'] for x in d['done'])==['k1','k2','k3'], d['done']
 k=[x for x in d['done'] if x['slug']=='k1'][0]; assert k['kind']=='close' and k['at']=='2026-11-05T12:00:00Z' and k['done_at']=='merged', k
 " 2>"$root/e" && ok "show --json: a closed row leaves rows, and done is the fold-out" || bad "show --json split" "$(cat "$root/e")"
 out15="$(DWS_NOW=2026-11-20T12:00:01Z "$DWS" show)"; echo "$out15" | grep -qE 'k1|k2|k3' && bad "after 14 days the fold-out drops the row" || ok "after 14 days the fold-out drops the row"
+out14b="$(DWS_NOW=2026-11-19T12:00:01Z "$DWS" show)"; echo "$out14b" | grep -qE 'k1|k2|k3' && bad "one second past 14 days the row is gone" || ok "one second past 14 days the row is gone"
 out14="$(DWS_NOW=2026-11-19T12:00:00Z "$DWS" show)"; echo "$out14" | grep -q k1 && ok "at exactly 14 days the row is still listed" || bad "at 14 days still listed"
 if "$DWS" park k4 --from idea --reason "worker-g9-9 stalled" >/dev/null 2>&1; then bad "park --reason refuses an instance id"; else ok "park --reason refuses an instance id"; fi
 
@@ -131,6 +132,22 @@ bl=[r for r in d['rows'] if r['slug']=='bl'][0]; assert bl['stage']=='parked' an
 "$DWS" digest 2>/dev/null | grep -q 'bl (card' && bad "the digest lists a parked row as blocked on the operator" || ok "the digest does not list the parked row as blocked on the operator"
 "$DWS" open nb --title nb --stage building >/dev/null; "$DWS" park nb --from building >/dev/null 2>&1
 [[ "$(grep -c '"ws":"nb"' "$DIRECTOR_STATE/workstreams.jsonl")" == 2 ]] && ok "park of a row not blocked on the operator writes only the park" || bad "park of an unblocked row writes only the park"
+
+# --- F1: every verb but open refuses a closed row, and names the way back ------------------------------
+fresh 6
+"$DWS" open cz --title cz --stage building --link pr:o/r#1 >/dev/null
+"$DWS" close cz --from building >/dev/null
+n0="$(lines)"
+for verb in "stage cz merged --from building" "park cz --from building" "set cz --next x" "link cz bd:abc-1" "link cz --remove pr:o/r#1" "set cz --done-at deployed" "set cz --from ask:c9"; do
+  if "$DWS" $verb >/dev/null 2>"$root/e"; then bad "'dws $verb' refuses a closed row"
+  else grep -q 'dws open' "$root/e" && ok "'dws $verb' refuses a closed row and names dws open" || bad "'dws $verb' names dws open" "$(cat "$root/e")"; fi
+done
+[[ "$(lines)" == "$n0" ]] && ok "no refused verb appended a line to a closed row" || bad "no refused verb appended a line"
+"$DWS" open cz --title "cz again" >/dev/null 2>&1 && "$DWS" set cz --next "back" >/dev/null 2>&1 && ok "after dws open the row takes verbs again" || bad "after dws open the row takes verbs again"
+
+# --- F2: the sweep's Blocked on you read skips parked rows (SKILL.md) ------------------------------------
+grep -qE 'whose `blocked` is$' "$here/../SKILL.md" && sed -n '/whose `blocked` is$/,+1p' "$here/../SKILL.md" | grep -q 'stage` is not `parked`' && ok "SKILL.md takes Blocked on you from rows whose stage is not parked" || bad "SKILL.md filters parked rows from Blocked on you"
+grep -q 'FLIGHT = ("defined", "designed", "planned"' "$here/dash-writer" && ok "planned is in the dash-writer in-flight stages" || bad "planned in FLIGHT"
 
 echo "dws lifecycle: $pass passed, $fail failed"
 [[ $fail == 0 ]]
