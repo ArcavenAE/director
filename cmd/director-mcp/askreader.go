@@ -677,7 +677,7 @@ func runAskLookup(ctx context.Context, js jetstream.JetStream, cli cliArgs, out,
 }
 
 // markExpired is the sender's signal (aae-orc-t77rr, item 3): an open REQUEST
-// past alarmAfter that the inbox dropped before any covering durable read it is
+// past alarmAfter that the inbox dropped before any covering durable acked it is
 // marked once, and the existing alarm path then says so. It reads the stream and
 // its consumers once per pass, and only when a row needs the check.
 func (r *askReader) markExpired(ctx context.Context, now time.Time) {
