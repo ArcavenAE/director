@@ -314,9 +314,15 @@ func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
 		return
 	}
 	blob, _ := json.MarshalIndent(res, "", "  ")
-	s.reply(req.ID, map[string]any{
+	werr := s.reply(req.ID, map[string]any{
 		"content": []map[string]any{{"type": "text", "text": string(blob)}},
 	})
+	if werr != nil && al != nil {
+		// The reply did not leave, so nothing it carried is acked: the mail goes
+		// back unread, as for a cancelled call, and the broker redelivers it.
+		s.giveBack(al, "call "+callKey(req.ID)+" reply write failed ("+werr.Error()+")")
+		return
+	}
 	if al != nil {
 		items := al.items()
 		al.ack(s.bus, s.log)
@@ -429,21 +435,25 @@ func (s *Server) notifyCue(params map[string]any) {
 	s.write(map[string]any{"jsonrpc": "2.0", "method": "notifications/claude/channel", "params": params})
 }
 
-func (s *Server) reply(id json.RawMessage, result any) {
+func (s *Server) reply(id json.RawMessage, result any) error {
 	if len(id) == 0 {
-		return
+		return nil
 	}
-	s.write(rpcResponse{JSONRPC: "2.0", ID: id, Result: result})
+	return s.write(rpcResponse{JSONRPC: "2.0", ID: id, Result: result})
 }
 
 func (s *Server) replyErr(id json.RawMessage, code int, msg string) {
 	s.write(rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: msg}})
 }
 
-func (s *Server) write(v any) {
+// write sends one line and reports whether it left: a write or flush error
+// means the client did not get it, which callTool needs before it acks mail.
+func (s *Server) write(v any) error {
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
 	b, _ := json.Marshal(v)
-	fmt.Fprintf(s.out, "%s\n", b)
-	s.out.Flush()
+	if _, err := fmt.Fprintf(s.out, "%s\n", b); err != nil {
+		return err
+	}
+	return s.out.Flush()
 }

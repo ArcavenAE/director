@@ -316,17 +316,25 @@ delivered once more later.
 ```
 
 **When the ack happens.** Without `DIRECTOR_HANDLED=1`, the shim holds what a
-wait fetched and acks it only after the reply has been written to the client. A
-call cancelled before then gets no reply and its messages are Nak'd, so the
-broker redelivers them to the next wait. A `notifications/cancelled` can also
-arrive after the reply was written, when the client sent it before reading the
-reply. The shim keeps that call's envelopes for the `late_cancel_window` row of
-the threshold table (30 seconds unless `thresholds.json` sets it) and a cancel
-naming the call puts them on an in-process returned queue. The next wait
-returns them first, marked `returned`, and `inbox_summary` shows a `returned`
-count. Each move is logged with its `message_id`. A shim that exits while it
-holds returned mail loses that mail from the bus; the log names it. A cancel
-past the window changes nothing and is logged.
+wait fetched and acks it only after the reply has been written to the client.
+If the write fails, nothing is acked: the messages are Nak'd, the failure is
+logged, and the broker redelivers them. A call cancelled before the write gets
+no reply and its messages are Nak'd the same way, so the broker redelivers them
+to the next wait. A cancel that reaches the call after that check but before
+the write is not a Nak: the reply is written and acked, and the shim keeps an
+in-process copy for the returned queue below.
+
+A `notifications/cancelled` can also arrive after the reply was written, when
+the client sent it before reading the reply. The shim keeps that call's
+envelopes for the `late_cancel_window` row of the threshold table (30 seconds
+unless `thresholds.json` sets it), and a cancel naming the call puts them on an
+in-process returned queue. The next wait returns them first, marked `returned`,
+and `inbox_summary` shows a `returned` count. Each move is logged with its
+`message_id`. A shim that exits while it holds returned mail loses that mail
+from the bus; the log names it. A cancel past the window changes nothing and is
+logged while the call's entry is still held. The entries are pruned when the
+next answered call is recorded, so a cancel that arrives after its entry was
+pruned returns silently, without a log line.
 
 There is no peek mode on this tool. A fetch without an ack leaves the
 message pending on the session's durable, where it is redelivered after the

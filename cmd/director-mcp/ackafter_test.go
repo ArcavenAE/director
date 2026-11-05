@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -210,5 +213,63 @@ func TestTheLateCancelWindowIsAThresholdRow(t *testing.T) {
 	tab, notes, err := loadThresholdsNotes(dir)
 	if err != nil || tab[thresholdLateCancelWindow] != 30*time.Second || len(notes) != 1 {
 		t.Fatalf("bad value = %v, %v, notes %v; want the default and one note", tab[thresholdLateCancelWindow], err, notes)
+	}
+}
+
+type failWriter struct{ err error }
+
+func (w failWriter) Write([]byte) (int, error) { return 0, w.err }
+
+// F1 of the review: a reply that did not leave (a write or flush error other
+// than a closed pipe) must not ack the mail it carried. A second server on the
+// rig's bus writes to a failing writer; the mail goes back, and the real
+// server's next wait returns it.
+func TestAFailedReplyWriteAcksNothingAndTheNextWaitGetsTheMail(t *testing.T) {
+	r := newPipeRig(t, false)
+	var logs lockedLog
+	bad := &Server{bus: r.bus, out: bufio.NewWriter(failWriter{err: errors.New("disk on fire")}), tools: toolCatalog(nil, false), log: logs.add}
+	r.publish("m1")
+	req := &rpcRequest{JSONRPC: "2.0", ID: json.RawMessage(`"x"`), Method: "tools/call",
+		Params: json.RawMessage(`{"name":"wait_for_message","arguments":{"timeout_seconds":3,"max":1}}`)}
+	bad.callTool(r.ctx, req)
+	if !logs.has("reply write failed") || !logs.has("disk on fire") {
+		t.Fatalf("the failed write must be logged: %v", logs.all())
+	}
+	info, err := r.bus.cons().Info(r.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.AckFloor.Stream != 0 {
+		t.Fatalf("ack floor = %d after a reply that never left, want 0", info.AckFloor.Stream)
+	}
+	// The sticky error makes every later write fail too: the mail keeps coming back.
+	bad.callTool(r.ctx, req)
+	if info, _ = r.bus.cons().Info(r.ctx); info.AckFloor.Stream != 0 {
+		t.Fatalf("ack floor = %d after a second failed write, want 0", info.AckFloor.Stream)
+	}
+	r.wait(`1`, 5, 1)
+	m := r.next(6 * time.Second)
+	if idOf(m) != `1` || !strings.Contains(toolText(t, m), "m1") {
+		t.Fatalf("the next wait must get m1: %v", m)
+	}
+}
+
+// A cancel that reaches an answered call returns its mail once: the entry's
+// items are cleared when they move, so a second cancel cannot return them
+// again.
+func TestASecondCancelOfAnAnsweredCallReturnsNothingMore(t *testing.T) {
+	var logs lockedLog
+	s := &Server{bus: &Bus{}, log: logs.add}
+	s.calls = map[string]*callEntry{`"c"`: {
+		cancel: func() {},
+		items:  []drained{{Env: &Envelope{MessageID: "m1"}, Tier: "local", Seq: 1}},
+	}}
+	s.cancelCall(json.RawMessage(`{"requestId":"c"}`))
+	s.cancelCall(json.RawMessage(`{"requestId":"c"}`))
+	if n := s.bus.returnedCount(); n != 1 {
+		t.Fatalf("returned = %d after two cancels, want 1", n)
+	}
+	if got := s.calls[`"c"`].items; len(got) != 0 {
+		t.Fatalf("the entry still holds %d items after they moved", len(got))
 	}
 }
