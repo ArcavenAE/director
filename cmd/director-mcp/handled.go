@@ -78,6 +78,9 @@ var defaultThresholds = map[string]time.Duration{
 	thresholdPresenceLostAfterMax: 24 * time.Hour,
 	// a hub move is clusters going absent within this window (section 6)
 	thresholdPresenceHubMoveWindow: 2 * time.Minute,
+	// how long after a written reply a notifications/cancelled still returns
+	// that call's mail (ackafter.go); a soft row
+	thresholdLateCancelWindow: 30 * time.Second,
 }
 
 // defaultCounts are the whole-number rows of the threshold table, read by
@@ -93,6 +96,7 @@ var softThresholds = map[string]bool{
 	thresholdPresenceLostAfter:     true,
 	thresholdPresenceLostAfterMax:  true,
 	thresholdPresenceHubMoveWindow: true,
+	thresholdLateCancelWindow:      true,
 	thresholdPresenceHubMoveMin:    true,
 	thresholdPresenceAlertCap:      true,
 }

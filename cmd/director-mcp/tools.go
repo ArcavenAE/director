@@ -363,6 +363,13 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	}
 	defer release()
 	a := parseWaitArgs(raw)
+	// Mail whose reply nobody read (a late cancel) comes back first.
+	if items := bus.takeReturned(a.Max); len(items) > 0 {
+		if al := ackLaterFrom(ctx); al != nil {
+			al.carry(items)
+		}
+		return returnedResult(ctx, bus, a, items), nil
+	}
 	if a.Max > 1 {
 		return toolWaitBatch(ctx, bus, a)
 	}
@@ -397,6 +404,22 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		out["presence_notice"] = n
 	}
 	return out, nil
+}
+
+// returnedResult answers a wait from the returned queue, in the shape the
+// wait would have used.
+func returnedResult(ctx context.Context, bus *Bus, a waitArgs, items []drained) map[string]any {
+	note := "returned: the reply that first carried this mail was cancelled after it was written; it is not new mail"
+	if a.Max > 1 {
+		return map[string]any{
+			"messages": items, "count": len(items), "order": batchOrderNote,
+			"returned": len(items), "returned_note": note, "remaining": bus.remaining(ctx),
+		}
+	}
+	return map[string]any{
+		"message": items[0].Env, "tier": items[0].Tier,
+		"returned": true, "returned_note": note,
+	}
 }
 
 // toolWaitBatch is wait_for_message with max > 1. The single form keeps its
@@ -477,6 +500,10 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 	if len(res.MaybeConsumed) > 0 {
 		out["maybe_consumed"] = res.MaybeConsumed
 		out["maybe_consumed_note"] = "more messages were listed than the consumer reports waiting: some above the ack floor were already consumed out of order, and the summary cannot tell which, so counts and flags may include them"
+	}
+	if n := bus.returnedCount(); n > 0 {
+		out["returned"] = n
+		out["returned_note"] = "mail whose first reply was cancelled after it was written; the next wait_for_message returns it first, and it is not counted in the summary above"
 	}
 	if res.GlobalWarn != "" {
 		out["global_warning"] = res.GlobalWarn

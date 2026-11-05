@@ -315,6 +315,19 @@ delivered once more later.
 }
 ```
 
+**When the ack happens.** Without `DIRECTOR_HANDLED=1`, the shim holds what a
+wait fetched and acks it only after the reply has been written to the client. A
+call cancelled before then gets no reply and its messages are Nak'd, so the
+broker redelivers them to the next wait. A `notifications/cancelled` can also
+arrive after the reply was written, when the client sent it before reading the
+reply. The shim keeps that call's envelopes for the `late_cancel_window` row of
+the threshold table (30 seconds unless `thresholds.json` sets it) and a cancel
+naming the call puts them on an in-process returned queue. The next wait
+returns them first, marked `returned`, and `inbox_summary` shows a `returned`
+count. Each move is logged with its `message_id`. A shim that exits while it
+holds returned mail loses that mail from the bus; the log names it. A cancel
+past the window changes nothing and is logged.
+
 There is no peek mode on this tool. A fetch without an ack leaves the
 message pending on the session's durable, where it is redelivered after the
 ack wait and holds up the FIFO cursor. Looking without consuming is
@@ -641,7 +654,9 @@ unread message is still counted in `summary`.
 The ack wait for the mode is the `handled_ack_wait` row of the threshold
 table, 30 minutes unless `thresholds.json` in the state directory sets it
 (for example `{"handled_ack_wait": "45m"}`). A value that is not a positive
-duration, or a key the table does not have, stops the shim at start. So if other readers later add rows to this file, every handled shim built before those rows will refuse to start until it is upgraded.
+duration, or a key the table does not have, stops the shim at start. The
+`late_cancel_window` row is the one soft row here: a bad value keeps the 30
+second default and is logged. So if other readers later add rows to this file, every handled shim built before those rows will refuse to start until it is upgraded.
 
 ## Addresses and subjects
 

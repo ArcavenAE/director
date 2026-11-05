@@ -132,6 +132,11 @@ func pullNoWait(ctx context.Context, cons jetstream.Consumer, n int, tier string
 			continue
 		}
 		d := drained{Env: &e, Tier: tier, Seq: seq}
+		if al := ackLaterFrom(ctx); al != nil {
+			al.hold(m, &e, tier, seq) // acked by callTool after the reply is written
+			out = append(out, d)
+			continue
+		}
 		if err := m.DoubleAck(ctx); err != nil {
 			d.AckUnconfirmed = true
 			ackErrs = append(ackErrs, fmt.Errorf("ack %s sequence %d: %w", tier, seq, err))
@@ -200,7 +205,7 @@ func (g *globalTier) drainNoWait(ctx context.Context, n int, agentID, instance s
 		}
 		return out, disc, err
 	}, n)
-	if g.handled == nil { // with the mode on, acks are noted when they land
+	if g.handled == nil && ackLaterFrom(ctx) == nil { // with the mode on, acks are noted when they land
 		for _, it := range out {
 			g.noteAcked(it.Seq)
 		}

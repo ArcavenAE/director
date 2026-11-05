@@ -17,8 +17,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type rpcRequest struct {
@@ -66,13 +68,38 @@ type Server struct {
 	running atomic.Int32
 	callsMu sync.Mutex
 	calls   map[string]*callEntry
-	wg      sync.WaitGroup
+	// answered keeps the calls whose reply carried mail, for lateWindow.
+	answered   map[string]*callEntry
+	lateWindow time.Duration
+	// testBeforeReply runs after a call's tool returns and before its reply is
+	// written; tests use it to land a cancel there.
+	testBeforeReply func(context.Context)
+	wg              sync.WaitGroup
 }
 
-type callEntry struct{ cancel context.CancelFunc }
+// callEntry is one tools/call. After its reply is written, items holds the mail
+// the reply carried, so a notifications/cancelled that crosses the reply can
+// give it back (ackafter.go). cancelled is set under callsMu by a cancel that
+// reached the call while it ran.
+type callEntry struct {
+	cancel    context.CancelFunc
+	cancelled bool
+	replied   time.Time
+	items     []drained
+}
 
 func newServer(bus *Bus, logf func(string, ...any), cueOn bool) *Server {
 	s := &Server{bus: bus, out: bufio.NewWriter(os.Stdout), log: logf}
+	if dir, err := stateDir(); err == nil {
+		if table, notes, err := loadThresholdsNotes(dir); err == nil {
+			s.lateWindow = table[thresholdLateCancelWindow]
+			for _, n := range notes {
+				logf("%s", n)
+			}
+		} else {
+			logf("threshold table: %v; the late-cancel window keeps its default", err)
+		}
+	}
 	s.tools = withHoldTools(toolCatalogHandled(bus.globalCfg, cueOn, bus.handled != nil), bus.watch != nil)
 	return s
 }
@@ -136,6 +163,9 @@ func (s *Server) startCall(ctx context.Context, req *rpcRequest) {
 			if s.calls[key] == entry {
 				delete(s.calls, key)
 			}
+			if len(entry.items) > 0 {
+				s.rememberAnsweredLocked(key, entry)
+			}
 			s.callsMu.Unlock()
 			cancel()
 		}()
@@ -152,12 +182,37 @@ func (s *Server) cancelCall(params json.RawMessage) {
 	if err := json.Unmarshal(params, &p); err != nil || len(p.RequestID) == 0 {
 		return
 	}
+	key := callKey(p.RequestID)
 	s.callsMu.Lock()
-	e := s.calls[callKey(p.RequestID)]
-	s.callsMu.Unlock()
+	e := s.calls[key]
 	if e != nil {
+		e.cancelled = true
+		if len(e.items) > 0 {
+			// The reply is written: the client may have sent this cancel before
+			// it read it. The mail goes back to the next wait.
+			items := e.items
+			e.items = nil
+			s.callsMu.Unlock()
+			s.bus.returnMail(items, "late cancel of call "+key, s.log)
+			return
+		}
+		s.callsMu.Unlock()
 		e.cancel()
+		return
 	}
+	a := s.answered[key]
+	if a != nil {
+		delete(s.answered, key)
+	}
+	s.callsMu.Unlock()
+	if a == nil {
+		return
+	}
+	if time.Since(a.replied) <= s.lateCancelWindow() {
+		s.bus.returnMail(a.items, "late cancel of call "+key, s.log)
+		return
+	}
+	s.log("late cancel for call %s arrived %s after its reply, past the %s window; nothing changed (message_ids: %s)", key, time.Since(a.replied).Round(time.Second), s.lateCancelWindow(), idsOf(a.items))
 }
 
 // callKey is a request id in compact form, so 9 and "w1" match however the
@@ -224,16 +279,32 @@ func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
 		return
 	}
 	done := s.cueBefore(p.Name, p.Args)
-	res, err := dispatchTool(ctx, s.bus, p.Name, p.Args)
+	// A wait holds what it fetches and acks only after its reply is written
+	// (ackafter.go); the other tools ack nothing.
+	dctx, al := ctx, (*ackLater)(nil)
+	if p.Name == "wait_for_message" {
+		dctx, al = withAckLater(ctx)
+	}
+	res, err := dispatchTool(dctx, s.bus, p.Name, p.Args)
 	done(res)
+	if s.testBeforeReply != nil {
+		s.testBeforeReply(ctx)
+	}
+	if al != nil && ctx.Err() != nil {
+		// Cancelled before the reply was written: MCP says a cancelled request
+		// gets none, so the mail it fetched goes back unread and is redelivered.
+		s.giveBack(al, "call "+callKey(req.ID)+" cancelled before its reply")
+		return
+	}
 	if err != nil && ctx.Err() != nil {
 		// Cancelled: MCP 2025-06-18 says a cancelled request gets no response.
-		// A call that already holds a message returns it without an error and
-		// is answered below, so the cancel never loses a message (R-08).
 		s.log("call %s cancelled: %v", callKey(req.ID), err)
 		return
 	}
 	if err != nil {
+		if al != nil {
+			s.giveBack(al, "call "+callKey(req.ID)+" failed")
+		}
 		// A tool-level failure is reported inside the result with isError,
 		// per MCP, so the model sees the failure rather than an RPC fault.
 		s.reply(req.ID, map[string]any{
@@ -246,6 +317,80 @@ func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
 	s.reply(req.ID, map[string]any{
 		"content": []map[string]any{{"type": "text", "text": string(blob)}},
 	})
+	if al != nil {
+		items := al.items()
+		al.ack(s.bus, s.log)
+		s.afterReply(callKey(req.ID), items)
+	}
+}
+
+// giveBack hands a call's mail back when its reply will not be written: what it
+// fetched is Nak'd and the broker redelivers it, and what it took from the
+// returned queue goes back on it.
+func (s *Server) giveBack(al *ackLater, why string) {
+	n := al.nak()
+	al.mu.Lock()
+	carried := al.carried
+	al.carried = nil
+	al.mu.Unlock()
+	s.bus.returnMail(carried, why, s.log)
+	if n > 0 {
+		s.log("%s: %d fetched message(s) given back unacked", why, n)
+	}
+}
+
+// afterReply records what a written reply carried. A cancel that reached the
+// call after its pre-write check is honoured here: the client may have dropped
+// the reply, so the mail goes back to the next wait.
+func (s *Server) afterReply(key string, items []drained) {
+	if len(items) == 0 {
+		return
+	}
+	s.callsMu.Lock()
+	e := s.calls[key]
+	if e == nil {
+		s.callsMu.Unlock()
+		return
+	}
+	e.replied = time.Now()
+	if e.cancelled {
+		s.callsMu.Unlock()
+		s.bus.returnMail(items, "cancel crossed the reply of call "+key, s.log)
+		return
+	}
+	e.items = items
+	s.callsMu.Unlock()
+}
+
+// rememberAnsweredLocked keeps a replied call's entry for the late-cancel
+// window and drops the ones past it. callsMu is held.
+func (s *Server) rememberAnsweredLocked(key string, e *callEntry) {
+	if s.answered == nil {
+		s.answered = map[string]*callEntry{}
+	}
+	w := s.lateCancelWindow()
+	for k, a := range s.answered {
+		if time.Since(a.replied) > w {
+			delete(s.answered, k)
+		}
+	}
+	s.answered[key] = e
+}
+
+// lateCancelWindow is the late_cancel_window row of the threshold table.
+func (s *Server) lateCancelWindow() time.Duration {
+	if s.lateWindow > 0 {
+		return s.lateWindow
+	}
+	return defaultThresholds[thresholdLateCancelWindow]
+}
+
+func idsOf(items []drained) string {
+	var ids []string
+	for _, it := range items {
+		ids = append(ids, messageIDOf(it.Env))
+	}
+	return strings.Join(ids, ", ")
 }
 
 // cueBefore tells the cue about a tool call before it runs and returns what to

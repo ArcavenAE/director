@@ -281,9 +281,10 @@ func TestCancelBeforeTheAckRedelivers(t *testing.T) {
 	}
 }
 
-// A cancel that lands after the ack: the bus already took the message, so the
-// answer goes out anyway (R-08: a message the bus took must not vanish).
-func TestCancelAfterTheAckStillAnswers(t *testing.T) {
+// A cancel that lands after the fetch and before the reply is written: the
+// message was held, not acked, so it is Nak'd, the call gets no reply, and the
+// next wait receives it (aae-orc-nanyb; this pinned the opposite until then).
+func TestCancelAfterTheFetchIsNotAnsweredAndRedelivers(t *testing.T) {
 	r := newPipeRig(t, false)
 	var once sync.Once
 	r.bus.testAfterAck = func(ctx context.Context) {
@@ -304,15 +305,22 @@ func TestCancelAfterTheAckStillAnswers(t *testing.T) {
 		t.Fatal("the wait is not in flight")
 	}
 	r.publish("keep-me")
-	m := r.next(5 * time.Second)
-	if idOf(m) != `13` || !strings.Contains(toolText(t, m), "keep-me") {
-		t.Fatalf("a call cancelled after its ack must still answer with the message: %v", m)
+	if !r.untilInFlight(0, 3*time.Second) {
+		t.Fatalf("the cancelled wait is still in flight: %d", r.s.inFlight())
+	}
+	r.send(`{"jsonrpc":"2.0","id":"p13","method":"ping"}`)
+	if got := idOf(r.next(2 * time.Second)); got != `"p13"` {
+		t.Fatalf("a call cancelled after its fetch got an answer (%s)", got)
+	}
+	r.wait(`14`, 5, 1)
+	m := r.next(6 * time.Second)
+	if idOf(m) != `14` || !strings.Contains(toolText(t, m), "keep-me") {
+		t.Fatalf("the message was not redelivered to the next wait: %v", m)
 	}
 }
 
-// The same on the global tier: a cancel after the hub ack still answers. The
-// wait runs through receiveTiered, so this covers a blocking max wait too.
-func TestCancelAfterTheGlobalAckStillAnswers(t *testing.T) {
+// The same on the global tier.
+func TestCancelAfterTheGlobalFetchIsNotAnsweredAndRedelivers(t *testing.T) {
 	r := newPipeRig(t, true)
 	var once sync.Once
 	r.bus.global.testAfterAck = func(ctx context.Context) {
@@ -333,11 +341,18 @@ func TestCancelAfterTheGlobalAckStillAnswers(t *testing.T) {
 		t.Fatal("the wait is not in flight")
 	}
 	r.publishGlobal("keep-me-global")
-	// The global fetch starts only after the 5 s local slice (tierPollSlice),
-	// so a 5 s read bound sat within half a second of a pass.
-	m := r.next(10 * time.Second)
-	if idOf(m) != `23` || !strings.Contains(toolText(t, m), "keep-me-global") {
-		t.Fatalf("a call cancelled after the global ack must still answer with the message: %v", m)
+	// The global fetch starts only after the 5 s local slice (tierPollSlice).
+	if !r.untilInFlight(0, 12*time.Second) {
+		t.Fatalf("the cancelled wait is still in flight: %d", r.s.inFlight())
+	}
+	r.send(`{"jsonrpc":"2.0","id":"p23","method":"ping"}`)
+	if got := idOf(r.next(2 * time.Second)); got != `"p23"` {
+		t.Fatalf("a call cancelled after its global fetch got an answer (%s)", got)
+	}
+	r.wait(`24`, 12, 1)
+	m := r.next(14 * time.Second)
+	if idOf(m) != `24` || !strings.Contains(toolText(t, m), "keep-me-global") {
+		t.Fatalf("the message was not redelivered to the next wait: %v", m)
 	}
 }
 
