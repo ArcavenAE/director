@@ -98,8 +98,8 @@ func TestBrokerRoleSendWithNoHolderIsRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "holds role") {
 		t.Fatalf("send to a role nobody holds = %v; want a refusal naming the role", err)
 	}
-	if err := sendRole(ctx, sender, "role://ops/reviewer", "r2", "aae-orc"); err == nil {
-		t.Error("explicit workspace to a role mailbox no consumer filters was accepted without cold")
+	if err := sendRole(ctx, sender, "role://ops/reviewer", "r2", "aae-orc"); err == nil || !strings.Contains(err.Error(), "no consumer filters agent.aae-orc.ops.role.reviewer.inbox") {
+		t.Errorf("explicit workspace to a role mailbox no consumer filters = %v, want a refusal naming the subject", err)
 	}
 	cold := context.WithValue(ctx, coldSendKey{}, true)
 	if err := sendRole(cold, sender, "role://ops/reviewer", "r3", "aae-orc"); err != nil {
