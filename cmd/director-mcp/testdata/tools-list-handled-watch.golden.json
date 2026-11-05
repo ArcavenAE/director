@@ -6,7 +6,7 @@
       "inputSchema": {
         "properties": {
           "cold": {
-            "description": "optional. With workspace set, publish even when no consumer filters the subject yet, for mail to a seat that has not started; the result says no consumer filters it. Without cold, a hinted send to an unfiltered subject is refused.",
+            "description": "optional. With workspace set, publish even when no durable consumer filters the subject yet, for mail to a seat that has not started; the result says no consumer filters it, or that the check could not run. Without cold, a hinted send to an unfiltered subject is refused.",
             "type": "boolean"
           },
           "fail_fast": {
@@ -41,7 +41,7 @@
             "type": "string"
           },
           "workspace": {
-            "description": "optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known mailbox (no live presence) verbatim; the send is then refused unless a consumer filters that subject, or cold is true. Ignored for a global:// address, whose subject carries no workspace.",
+            "description": "optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known mailbox (no live presence) verbatim; the send is then refused unless a durable consumer filters that subject with that exact filter, or cold is true. Ignored for a global:// address, whose subject carries no workspace.",
             "type": "string"
           }
         },

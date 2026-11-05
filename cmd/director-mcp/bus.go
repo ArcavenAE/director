@@ -29,11 +29,14 @@ type Bus struct {
 	// violations.go); the global tier shares it because it shares nc.
 	violations *violationRing
 
-	nc       *nats.Conn
-	js       jetstream.JetStream
-	kv       jetstream.KeyValue
-	self     Sender
-	consumer jetstream.Consumer
+	nc *nats.Conn
+	js jetstream.JetStream
+	// inboxConsumers, when set, lists the AGENT_INBOX consumers in place of the
+	// broker. A test sets it to inject a list error.
+	inboxConsumers func(ctx context.Context) ([]jetstream.ConsumerConfig, error)
+	kv             jetstream.KeyValue
+	self           Sender
+	consumer       jetstream.Consumer
 
 	// The global tier (R-86), off unless the launcher set
 	// DIRECTOR_GLOBAL_DOMAIN. globalCfg is the validated configuration and is
@@ -906,50 +909,59 @@ func hintedVerdict(subject, addr string, filtered bool, ferr error, cold bool) (
 // subject no consumer filters yet (mail for a seat that has not started).
 type coldSendKey struct{}
 
-// subjectMatchesFilter reports whether a consumer filter subject covers a
-// subject, with the NATS wildcards: "*" is one token and a trailing ">" is one
-// or more.
-func subjectMatchesFilter(filter, subject string) bool {
-	f := strings.Split(filter, ".")
-	s := strings.Split(subject, ".")
-	for i, tok := range f {
-		if tok == ">" {
-			return i == len(f)-1 && len(s) > i
-		}
-		if i >= len(s) || (tok != "*" && tok != s[i]) {
-			return false
+// readsSubject reports whether a consumer is a mailbox for the subject: it is
+// durable (Config.Durable set) and one of its filter subjects equals the
+// subject literally. An unfiltered consumer and a wildcard filter ("*" or ">")
+// do not count: a reader of everything is a monitor, not somebody's mailbox,
+// and an ephemeral consumer ends with its session.
+func readsSubject(cfg jetstream.ConsumerConfig, subject string) bool {
+	if cfg.Durable == "" {
+		return false
+	}
+	for _, f := range filterSubjects(cfg) {
+		if f == subject {
+			return true
 		}
 	}
-	return len(f) == len(s)
+	return false
 }
 
-// subjectFiltered reports whether any durable consumer on AGENT_INBOX reads
-// the subject. A consumer with no filter reads every subject. An error means
-// the answer was not established, which the caller refuses on, as R-92 does
-// for an unreadable presence scan.
-func (b *Bus) subjectFiltered(ctx context.Context, subject string) (bool, error) {
+// inboxConsumerConfigs lists the consumers on AGENT_INBOX. Bus.inboxConsumers,
+// when set, replaces it so a test can inject a list error.
+func (b *Bus) inboxConsumerConfigs(ctx context.Context) ([]jetstream.ConsumerConfig, error) {
+	if b.inboxConsumers != nil {
+		return b.inboxConsumers(ctx)
+	}
 	st, err := b.js.Stream(ctx, "AGENT_INBOX")
+	if err != nil {
+		return nil, err
+	}
+	var cfgs []jetstream.ConsumerConfig
+	lister := st.ListConsumers(ctx)
+	for info := range lister.Info() {
+		cfgs = append(cfgs, info.Config)
+	}
+	if err := lister.Err(); err != nil {
+		return nil, err
+	}
+	return cfgs, nil
+}
+
+// subjectFiltered reports whether a durable consumer on AGENT_INBOX filters
+// the subject with that exact filter. An error means the answer was not
+// established, which the caller refuses on, as R-92 does for an unreadable
+// presence scan.
+func (b *Bus) subjectFiltered(ctx context.Context, subject string) (bool, error) {
+	cfgs, err := b.inboxConsumerConfigs(ctx)
 	if err != nil {
 		return false, err
 	}
-	lister := st.ListConsumers(ctx)
-	found := false
-	for info := range lister.Info() {
-		filters := filterSubjects(info.Config)
-		if len(filters) == 0 {
-			found = true
-			continue
-		}
-		for _, f := range filters {
-			if subjectMatchesFilter(f, subject) {
-				found = true
-			}
+	for _, cfg := range cfgs {
+		if readsSubject(cfg, subject) {
+			return true, nil
 		}
 	}
-	if err := lister.Err(); err != nil {
-		return false, err
-	}
-	return found, nil
+	return false, nil
 }
 
 // publish sends the envelope to its recipient subject and mirrors it to the
@@ -984,7 +996,7 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 	res := &sendResult{Tier: "local"}
 	// A hinted agent:// or role:// send skips the roster, so nothing has shown
 	// that anyone reads its subject. Refuse it unless a durable consumer filters
-	// the subject, or the sender said cold: true (mail for a seat that has not
+	// the subject with that exact filter, or the sender said cold: true (mail for a seat that has not
 	// started). A refusal here is audited like any other resolve-stage one.
 	if wsHint != "" && durable && !strings.HasPrefix(e.Recipient.Address, "broadcast://") {
 		filtered, ferr := b.subjectFiltered(ctx, subject)

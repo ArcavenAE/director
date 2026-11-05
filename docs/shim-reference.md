@@ -202,8 +202,8 @@ that stands in for a push the transport cannot make.
 | `refs` | no | pointers: `bd:`, `finding:`, `file:`, `url:`, `pr:` |
 | `in_reply_to` | no | the `message_id` being answered; also sets `correlation_id` so receipts correlate (R-88) |
 | `reply_by` | no | RFC 3339 deadline |
-| `workspace` | no | the recipient's workspace. Omit and it is resolved from the recipient's live presence; with no live presence the send is refused rather than misdelivered (R-92). Set it to address a known mailbox verbatim; the send is then refused unless a durable consumer on `AGENT_INBOX` filters that subject, or `cold` is true. Ignored for `global://` and `broadcast://`, whose address carries its own scope. |
-| `cold` | no | with `workspace` set, publish even when no consumer filters the subject yet, for mail to a seat that has not started. The result then carries a `cold` note saying no consumer filters it, and the message stays unread until a seat's durable does. Without `cold`, a hinted send to an unfiltered subject is refused before publish (a tool error, audited like any resolve-stage refusal), so a typo in the workspace, team or id is caught. |
+| `workspace` | no | the recipient's workspace. Omit and it is resolved from the recipient's live presence; with no live presence the send is refused rather than misdelivered (R-92). Set it to address a known mailbox verbatim; the send is then refused unless a durable consumer on `AGENT_INBOX` filters that subject with that exact filter (an unfiltered or wildcard consumer, and an ephemeral one, do not count), or `cold` is true. Ignored for `global://` and `broadcast://`, whose address carries its own scope. |
+| `cold` | no | with `workspace` set, publish even when no consumer filters the subject yet, for mail to a seat that has not started. The result then carries a `cold` note saying no consumer filters it, and the message stays unread until a seat's durable does. If the consumer list cannot be read, the result says the check could not run, with the error, and does not claim that no consumer filters the subject. Without `cold`, a hinted send to an unfiltered subject, or one whose consumer list cannot be read, is refused before publish (a tool error, audited like any resolve-stage refusal), so a typo in the workspace, team or id is caught. |
 
 A `broadcast://` address takes the same path as the `broadcast` tool (see
 below): one durable send per live seat in scope, the broadcast result shape,
@@ -671,7 +671,7 @@ before publish, as for an agent with no live presence; rows that could not
 be read are reported as not established, never as absence. An explicit
 workspace addresses the role's mailbox verbatim, as it does a cold agent
 mailbox, and is refused before publish unless a durable consumer filters the
-role subject or the send carries `cold: true`.
+role subject with that exact filter or the send carries `cold: true`.
 
 ## Streams and buckets
 
