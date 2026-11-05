@@ -534,7 +534,7 @@ const (
 // The fixtures use the seat layout, <dir>/<agent-instance>-<date>.md, in scratch.
 func TestDossierAcceptanceSwitch(t *testing.T) {
 	now := time.Now()
-	pred := "arcaven-architect-g6-1"
+	pred := "team-a-architect-g1-1"
 	type f struct {
 		name, body string
 		age        time.Duration
@@ -554,7 +554,7 @@ func TestDossierAcceptanceSwitch(t *testing.T) {
 			return "authored handoff present: " + filepath.Join(d, pred+"-2026-10-10.md") + "; this dossier does not back acceptance"
 		}},
 		"marker not last":          {[]f{{pred + "-2026-10-10.md", "HANDOFF-COMPLETE\nmore text\n", 0}}, func(string) string { return nonePhr }},
-		"another seat's file only": {[]f{{"arcaven-architect-g6-2-2026-10-10.md", hdOK, 0}, {"arcaven-architect-g6-1-2-2026-10-10.md", hdOK, 0}}, func(string) string { return nonePhr }},
+		"another seat's file only": {[]f{{"team-a-architect-g1-2-2026-10-10.md", hdOK, 0}, {"team-a-architect-g1-1-2-2026-10-10.md", hdOK, 0}}, func(string) string { return nonePhr }},
 		"no files":                 {nil, func(string) string { return nonePhr }},
 	} {
 		dir := filepath.Join(t.TempDir(), "handoff")
@@ -578,7 +578,7 @@ func TestDossierAcceptanceSwitch(t *testing.T) {
 
 // Could not look: never "may back acceptance".
 func TestDossierAcceptanceUnreadableFailsClosed(t *testing.T) {
-	pred := "arcaven-architect-g6-1"
+	pred := "team-a-architect-g1-1"
 	root := t.TempDir()
 	locked := filepath.Join(root, "locked")
 	_ = os.MkdirAll(locked, 0o700)
@@ -740,7 +740,7 @@ func TestDossierUnreadableHandoffFileFailsClosed(t *testing.T) {
 		t.Skip("root reads a mode 000 file")
 	}
 	root := t.TempDir()
-	pred := "arcaven-architect-g6-1"
+	pred := "team-a-architect-g1-1"
 	declared := putHandoff(t, filepath.Join(root, "s"), "handoff.md", hdOK, time.Now())
 	dir := filepath.Join(root, "handoff")
 	found := putHandoff(t, dir, pred+"-2026-10-10.md", hdOK, time.Now())
@@ -762,7 +762,7 @@ func TestDossierUnreadableHandoffFileFailsClosed(t *testing.T) {
 // "does not back acceptance", declared or found: a directory, a FIFO, a link,
 // a file at mode 000. None of them may read as absent.
 func TestDossierNonRegularHandoffFailsClosed(t *testing.T) {
-	pred := "arcaven-architect-g6-1"
+	pred := "team-a-architect-g1-1"
 	name := pred + "-2026-10-10.md"
 	mk := map[string]func(p string){
 		"directory": func(p string) { _ = os.MkdirAll(p, 0o700) },
