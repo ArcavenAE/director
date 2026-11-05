@@ -186,7 +186,10 @@ Slice M (`sim/design/unread-slice-m.md`):
    behind and a live seat's durable outlasts its mail.
 3. Before the first presence write, remove the row a dead shim of this seat
    left behind. Each presence row carries `pidspace`, the host name plus the
-   boot session (darwin) or the pid namespace (linux). A row of the same agent
+   boot session (darwin) or the boot id and the pid namespace link (linux). The
+   boot id tells two hosts apart and the link tells a container from its host,
+   because a container shares its host's boot id; neither alone covers both. A
+   row of the same agent
    id and another instance is deleted only when its `pidspace` equals this
    shim's, its pid is an integer from 2 to 2^31-1, `kill(pid, 0)` answers
    `ESRCH`, and the delete is conditional on the revision just read. The host
