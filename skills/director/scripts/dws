@@ -11,18 +11,29 @@ CLI and the instance-id refusal; W2 adds refresh; W3 adds the page and the read 
 
   dws [--actor A] open <slug> --title T [--owner O] [--stage S] [--repos R..]
                                        [--next N] [--blocked B [--ask ID]] [--link L..]
+                                       [--done-at merged|released|deployed|accepted]
+                                       [--from ask:ID|idea:REPO/PATH]
   dws [--actor A] stage <slug> <to> --from <current>
   dws [--actor A] set <slug> [--owner O] [--next N] [--blocked B [--ask ID]] [--repos R..]
   dws [--actor A] link <slug> [--remove] <link>...
-  dws [--actor A] park <slug> --from <current>
+  dws [--actor A] park <slug> --from <current> [--reason R]
+  dws [--actor A] close <slug> --from <current>
   dws refresh [<slug>...]
   dws show [--json]
   dws migrate-blocked-none [--dry-run]
   dws page [--out FILE] [--theme FILE] [--nav FILE] [--desk-url FILE]
   dws picks --file FILE
 
-Links are typed: pr:<owner>/<repo>#<n>, issue:<owner>/<repo>#<n>, bd:<id>
-and ask:<id>. refresh (W2) reads the first three; ask ids wait for W5, and an
+Board lifecycle (sim/design/board-lifecycle.md, BL1): a row declares done_at, the stage that
+finishes it (default merged), and from, the ruling or idea that started it; from also joins the
+links. `close` takes a row whose done_at is reached off the board and `park` stops one that will
+not finish; both fold out of `show` (text; --json lists closed rows only under "done") and the
+board page into "Done, last 14 days", counted from the close or park time. A park says why with
+--reason, else the stage it parked from. `open` on a closed slug re-opens it. The `planned` stage
+sits between designed and building.
+
+Links are typed: pr:<owner>/<repo>#<n>, issue:<owner>/<repo>#<n>, bd:<id>,
+idea:<repo>/<path> and ask:<id>. refresh (W2) reads the first three; ask ids wait for W5, and an
 untyped link is shown but never read. refresh names every link it does not
 read on stderr, so nothing is skipped silently.
 
@@ -148,8 +159,13 @@ THRESHOLD_HOURS = {"desk snapshot": 24}
 CLOSING_STATUSES = ("closed", "resolved", "withdrawn", "superseded", "relayed")
 
 # Section 3. The order is the sort order; parked sorts last.
-STAGES = ["idea", "defined", "designed", "building", "in review", "merged",
+STAGES = ["idea", "defined", "designed", "planned", "building", "in review", "merged",
           "released", "deployed", "accepted", "parked"]
+
+# Board lifecycle section 5: the stage a row declares as its last, and where it came from.
+# merged is the default; director names deployed for anything installed on a host.
+DONE_AT = ("merged", "released", "deployed", "accepted")
+FROM_ID = re.compile(r"^(ask:\S+|idea:[A-Za-z0-9_.-]+/\S+)$")
 
 # Section 6, the writer table. refresh may append observe events and the two
 # factual stage moves of section 5; anything not listed may append nothing.
@@ -337,6 +353,8 @@ def apply(rows, e):
         rows[slug] = {
             "slug": slug, "title": e.get("title", ""), "repos": e.get("repos", []),
             "owner": e.get("owner", ""), "stage": e.get("stage", "idea"),
+            "done_at": e.get("done_at", "merged"), "from": e.get("from", ""),
+            "closed_at": "", "parked_at": ts if e.get("stage") == "parked" else "", "parked_from": "", "reason": "",
             "last_moved": ts, "next": e.get("next", ""), "blocked": e.get("blocked", ""),
             "links": list(e.get("links", [])), "opened": ts,
             "hints": [], "observed": {}, "facts": [], "tags": {}, "consumed": [], "waits": [],
@@ -350,13 +368,22 @@ def apply(rows, e):
     # history, so it joins neither the tag tally nor (below) last moved.
     if not (ev == "set" and e.get("migrate")):
         count_tag(r, e)
-    if ev in ("stage", "park"):
+    if ev == "close":
+        # Board lifecycle section 4: a closed row folds out of the table; it stays here, and the
+        # event file keeps it. Only a new open on the slug brings it back.
+        r["closed_at"] = ts
+        r["last_moved"] = max(r["last_moved"], ts)
+    elif ev in ("stage", "park"):
+        if ev == "park":
+            r["parked_at"], r["parked_from"], r["reason"] = ts, e.get("from", ""), e.get("reason", "")
+        elif r["stage"] == "parked":
+            r["parked_at"], r["parked_from"], r["reason"] = "", "", ""
         r["stage"] = e.get("to", "parked" if ev == "park" else r["stage"])
         r["last_moved"] = max(r["last_moved"], ts)
         if e.get("actor") == "refresh" and e.get("fact"):
             r["facts"].append(e["fact"])
     elif ev == "set":
-        for k in ("owner", "next", "blocked", "repos"):
+        for k in ("owner", "next", "blocked", "repos", "done_at", "from"):
             if k in e:
                 r[k] = e[k]
         # R-197: an authored update counts as movement. It never moves the clock back. A set that
@@ -390,6 +417,11 @@ def apply(rows, e):
             r["observed"][e["link"]] = {"seen": e.get("seen", {}), "checked_at": e.get("checked_at", ts)}
         elif "hints" in e:
             r["hints"] = list(e["hints"])
+
+
+def finished(r):
+    """A row that has left the table: closed, or parked (board lifecycle section 6.2)."""
+    return bool(r.get("closed_at")) or r["stage"] == "parked"
 
 
 def sorted_rows(rows):
@@ -541,16 +573,40 @@ def need(rows, slug):
     return rows[slug]
 
 
+def need_open(rows, slug):
+    """need, and a closed row is refused: the only way back is dws open (board lifecycle section 4)."""
+    r = need(rows, slug)
+    if r.get("closed_at"):
+        raise Refused(f"{slug!r} was closed {r['closed_at']}; dws open {slug} re-opens it, and no other verb takes a closed row")
+    return r
+
+
 def stage_name(s):
     if s not in STAGES:
         raise Refused(f"unknown stage {s!r}; stages are: {', '.join(STAGES)}")
     return s
 
 
+def done_at_name(v):
+    if v not in DONE_AT:
+        raise Refused(f"unknown done_at {v!r}; a row's last stage is one of: {', '.join(DONE_AT)}")
+    return v
+
+
+def from_id(v):
+    if not FROM_ID.match(v):
+        raise Refused(f"--from {v!r} is not ask:<card id> or idea:<repo>/<path>")
+    return v
+
+
 def cmd_open(a):
     if not SLUG.match(a.slug):
         raise Refused(f"slug {a.slug!r} must be lower case letters, digits, '.', '_' or '-'")
     ev = {"event": "open", "ws": a.slug, "title": a.title, "stage": stage_name(a.stage)}
+    if a.done_at is not None:
+        ev["done_at"] = done_at_name(a.done_at)
+    if a.from_ is not None:
+        ev["from"] = from_id(a.from_)
     for field in ("owner", "next", "blocked"):
         v = getattr(a, field)
         if v is not None:
@@ -562,22 +618,28 @@ def cmd_open(a):
         ev["blocked"] = "operator"
     for link in a.link or []:
         decision_link_refused(link)
-        if link.startswith("intake:"):
+        if link.startswith(("intake:", "idea:")):
             typed_link(link)
-    if a.link or ask_link:
-        ev["links"] = list(a.link or []) + ([ask_link] if ask_link and ask_link not in (a.link or []) else [])
+    links = list(a.link or []) + ([ask_link] if ask_link and ask_link not in (a.link or []) else [])
+    if "from" in ev and ev["from"] not in links:
+        links.append(ev["from"])
+    if links:
+        ev["links"] = links
 
     def check(rows):
-        if a.slug in rows:
+        if a.slug in rows and not rows[a.slug].get("closed_at"):
             raise Refused(f"workstream {a.slug!r} is already open; use set, stage or link")
     write(a.actor, ev, check)
 
 
 def move(a, event, to):
     ev = {"event": event, "ws": a.slug, "from": stage_name(a.from_), "to": stage_name(to)}
+    reason = getattr(a, "reason", None)
+    if reason is not None:
+        ev["reason"] = checked("reason", reason)
 
     def plan(rows, decisions):
-        r = need(rows, a.slug)
+        r = need_open(rows, a.slug)
         cur = r["stage"]
         if cur != a.from_:
             raise Refused(f"stale move: {a.slug!r} is in {cur!r}, not {a.from_!r}; re-read and retry")
@@ -588,6 +650,10 @@ def move(a, event, to):
             for did in r.get("waits", []):
                 if decisions.get(did, {}).get("state") in DECISION_OPEN:
                     window_check(rows, decisions, did, a.slug, t_now)
+        if event == "park" and operator_blocked(r["blocked"]):
+            # A parked row stays in show --json rows, so it must not read as blocked on the operator
+            # there: the sweep's "Blocked on you" takes its rows from that list.
+            return [{"event": "set", "ws": a.slug, "blocked": ""}, ev]
         return [ev]
     write_plan(a.actor, plan)
 
@@ -598,6 +664,21 @@ def cmd_stage(a):
 
 def cmd_park(a):
     move(a, "park", "parked")
+
+
+def cmd_close(a):
+    """Board lifecycle section 6.2: director closes a row on evidence that its done_at stage is
+    reached. The row leaves the table for "Done, last 14 days"; nothing is deleted."""
+    ev = {"event": "close", "ws": a.slug, "from": stage_name(a.from_)}
+
+    def plan(rows, decisions):
+        r = need(rows, a.slug)
+        if r.get("closed_at"):
+            raise Refused(f"{a.slug!r} is already closed ({r['closed_at']}); open it again to re-open it")
+        if r["stage"] != a.from_:
+            raise Refused(f"stale move: {a.slug!r} is in {r['stage']!r}, not {a.from_!r}; re-read and retry")
+        return [ev]
+    write_plan(a.actor, plan)
 
 
 def wait_ids(values, flag):
@@ -616,13 +697,20 @@ def cmd_set(a):
         v = getattr(a, field)
         if v is not None:
             ev[field] = blocked_stored(field, checked(field, v))
+    if a.done_at is not None:
+        ev["done_at"] = done_at_name(a.done_at)
+    if a.from_ is not None:
+        ev["from"] = from_id(a.from_)
+        ask_links_from = [ev["from"]]
+    else:
+        ask_links_from = []
     if a.repos is not None:
         ev["repos"] = a.repos
     # --waits ask:<card> keeps K13 and stays a link; --waits decision:<id> is a wait edge.
     asks = [v for v in a.waits or [] if v.startswith("ask:")]
     waits = wait_ids([v for v in a.waits or [] if not v.startswith("ask:")], "--waits")
     unwaits = wait_ids(a.unwait, "--unwait")
-    ask_links = []
+    ask_links = list(ask_links_from)
     ask_link = blocked_on_operator(a.blocked, a.ask)
     if ask_link:
         ev["blocked"] = "operator"
@@ -635,10 +723,10 @@ def cmd_set(a):
         if v not in ask_links:
             ask_links.append(v)
     if len(ev) == 2 and not ask_links and not waits and not unwaits:
-        raise Refused("set needs at least one of --owner, --next, --blocked, --repos, --waits, --unwait")
+        raise Refused("set needs at least one of --owner, --next, --blocked, --repos, --done-at, --from, --waits, --unwait")
 
     def plan(rows, decisions):
-        r = need(rows, a.slug)
+        r = need_open(rows, a.slug)
         events = [ev] if len(ev) > 2 or ask_link else []
         links = [l for l in ask_links if l not in r["links"]]
         if links:
@@ -664,6 +752,7 @@ RELAY_LINK = re.compile(r"^relay:R-[0-9]+$")
 MSG_LINK = re.compile(r"^msg:[A-Za-z0-9][A-Za-z0-9._:-]*$")
 INTAKE_ID = re.compile(r"^I-[0-9]+$")
 INTAKE_LINK = re.compile(r"^intake:I-[0-9]+$")
+IDEA_LINK = re.compile(r"^idea:[A-Za-z0-9_.-]+/\S+$")
 
 
 def typed_link(link):
@@ -675,6 +764,8 @@ def typed_link(link):
         raise Refused(f"link {link!r} is not msg:<message id>")
     if link.startswith("intake:") and not INTAKE_LINK.match(link):
         raise Refused(f"link {link!r} is not intake:I-<n>")
+    if link.startswith("idea:") and not IDEA_LINK.match(link):
+        raise Refused(f"link {link!r} is not idea:<repo>/<path>")
     return link
 
 
@@ -689,7 +780,7 @@ def cmd_link(a):
         if not a.remove:
             decision_link_refused(link)
     ev = {"event": "link", "ws": a.slug, ("remove" if a.remove else "add"): a.links}
-    write(a.actor, ev, lambda rows: need(rows, a.slug))
+    write(a.actor, ev, lambda rows: need_open(rows, a.slug))
 
 
 # The links refresh reads. A bd id must start with a letter or digit, so it can
@@ -1364,7 +1455,7 @@ def approved_at(d):
 
 def cmd_waiting_write(a):
     rows, _ = fold()
-    prs = sorted({(m.group(2), m.group(3)) for r in rows.values() if r["stage"] != "parked"
+    prs = sorted({(m.group(2), m.group(3)) for r in rows.values() if not finished(r)
                   for m in (LINK.match(l) for l in r["links"]) if m and m.group(1) == "pr"})
     waiting, errors = [], []
     for repo, num in prs:
@@ -1402,18 +1493,49 @@ def cmd_show(a):
     rows, torn = fold(tally=total, decisions=decisions)
     for r in rows.values():
         r["waits_state"] = {did: waits_state(decisions.get(did, {}).get("state")) for did in r["waits"]}
-    ordered = sorted_rows(rows)
+    # --json keeps parked rows in "rows" (dash-writer and the seat-decision checks read them there);
+    # a closed row is only in "done". The text table and board-html fold both out.
+    done = done_rows(rows, parse_time(now()))
     if a.json:
-        json.dump({"ledger": LEDGER, "torn": torn, "tags": total, "last_refresh": last_refresh(), "rows": ordered}, sys.stdout, indent=2, ensure_ascii=False)
+        ordered = [r for r in sorted_rows(rows) if not r.get("closed_at")]
+        json.dump({"ledger": LEDGER, "torn": torn, "tags": total, "last_refresh": last_refresh(), "rows": ordered,
+                   "done": done}, sys.stdout, indent=2, ensure_ascii=False)
         print()
     else:
+        ordered = [r for r in sorted_rows(rows) if not finished(r)]
         cols = ("stage", "workstream", "owner", "last moved", "blocked on", "next action", "links")
         table = [cols] + [(r["stage"], r["slug"], r["owner"], r["last_moved"], r["blocked"], r["next"], " ".join(r["links"])) for r in ordered]
         widths = [max(len(str(row[i])) for row in table) for i in range(len(cols))]
         for row in table:
             print("  ".join(str(c).ljust(w) for c, w in zip(row, widths)).rstrip())
+        if done:
+            print()
+            print(f"Done, last {DONE_DAYS} days")
+            for d in done:
+                print(f"{d['slug']}  {'closed' if d['kind'] == 'close' else 'parked'} {d['at']}  {d['detail']}")
     if torn:
         print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped, not repaired", file=sys.stderr)
+
+
+DONE_DAYS = 14
+
+
+def done_rows(rows, t_now):
+    """Closed and parked rows from the last DONE_DAYS days, newest first, counted from the close or
+    park event's own time. A closed row says the stage that finishes it; a parked one says why,
+    or the stage it parked from when no reason was given."""
+    out = []
+    for r in rows.values():
+        if r.get("closed_at"):
+            kind, at, detail = "close", r["closed_at"], f"done_at {r['done_at']}"
+        elif r["stage"] == "parked" and r.get("parked_at"):
+            kind, at = "park", r["parked_at"]
+            detail = r["reason"] or f"parked from {r['parked_from'] or 'unknown'}"
+        else:
+            continue
+        if (t_now - parse_time(at)).total_seconds() <= DONE_DAYS * 86400:
+            out.append({"slug": r["slug"], "kind": kind, "at": at, "done_at": r["done_at"], "detail": detail})
+    return sorted(out, key=lambda d: (d["at"], d["slug"]), reverse=True)
 
 # K19: the board's generated state section (sim/design/director-functions-redesign.md,
 # section 4, "Board"). `board-state` rewrites only the text between the two markers
@@ -2332,7 +2454,7 @@ def reconcile_report():
         for slug, row in sorted(rows.items()):
             cards = [l[4:] for l in row["links"] if ASK.match(l)]
             open_cards = [c for c in cards if c in desk_open]
-            if operator_blocked(row["blocked"]) and not open_cards and row["stage"] != "parked":
+            if operator_blocked(row["blocked"]) and not open_cards and not finished(row):
                 proposals.append({"kind": "blocked-no-open-card", "subject": slug,
                                   "why": "blocked on the operator and no linked ask is open on the Desk",
                                   "evidence": {"links": row["links"], "desk_read_at": snap["read_at"]}})
@@ -2656,7 +2778,7 @@ def cmd_decision_confirm(a):
 
 def dependents(rows, did):
     """Card 4: the rows with an edge to the decision whose stage is not parked."""
-    return [r for r in rows.values() if did in r.get("waits", []) and r["stage"] != "parked"]
+    return [r for r in rows.values() if did in r.get("waits", []) and not finished(r)]
 
 
 def affected(rows, did):
@@ -3338,6 +3460,8 @@ def main(argv):
     o.add_argument("--blocked")
     o.add_argument("--ask")
     o.add_argument("--link", nargs="+")
+    o.add_argument("--done-at", dest="done_at", help="the stage that finishes the row: " + ", ".join(DONE_AT) + " (default merged)")
+    o.add_argument("--from", dest="from_", metavar="ask:CARD|idea:REPO/PATH", help="the ruling or idea that started the row; also joins the links")
     o.set_defaults(fn=cmd_open)
 
     s = sub.add_parser("stage")
@@ -3349,7 +3473,13 @@ def main(argv):
     k = sub.add_parser("park")
     k.add_argument("slug")
     k.add_argument("--from", dest="from_", required=True)
+    k.add_argument("--reason", help="why the work stops; shown in Done, last 14 days (optional)")
     k.set_defaults(fn=cmd_park)
+
+    cl = sub.add_parser("close", help="close a row whose done_at stage is reached; it folds into Done, last 14 days")
+    cl.add_argument("slug")
+    cl.add_argument("--from", dest="from_", required=True)
+    cl.set_defaults(fn=cmd_close)
 
     t = sub.add_parser("set")
     t.add_argument("slug")
@@ -3358,6 +3488,8 @@ def main(argv):
     t.add_argument("--blocked")
     t.add_argument("--ask")
     t.add_argument("--repos", nargs="+")
+    t.add_argument("--done-at", dest="done_at", help="the stage that finishes the row: " + ", ".join(DONE_AT))
+    t.add_argument("--from", dest="from_", metavar="ask:CARD|idea:REPO/PATH", help="the ruling or idea that started the row; also joins the links")
     t.add_argument("--waits", action="append", metavar="decision:ID|ask:CARD", help="the row waits on a seat decision (D2, held to the window) or an open Desk card (K13)")
     t.add_argument("--unwait", action="append", metavar="decision:ID", help="drop a decision edge; refused before the decision is answered (D2)")
     t.set_defaults(fn=cmd_set)

@@ -135,7 +135,7 @@ and that complaint is a requirement.
 
 When `$DIRECTOR_STATE/workstreams.jsonl` exists, take Blocked on you from the
 ledger: run `${DIRECTOR_HOME:-$HOME/.director}/bin/dws show --json` and list the rows whose `blocked` is
-`operator`, oldest `last_moved` first, each as `<owner> - <workstream>: <next action>`,
+`operator` and whose `stage` is not `parked`, oldest `last_moved` first, each as `<owner> - <workstream>: <next action>`,
 from the row's `owner`, `slug` and `next`, with the owner in the session slot.
 The other blocks are unchanged. With no ledger, or no CLI, build the list from
 the board and the roster as above.

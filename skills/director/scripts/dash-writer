@@ -65,8 +65,8 @@ import tempfile
 HOME = os.path.expanduser("~")
 STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
 HERE = os.path.dirname(os.path.realpath(__file__))
-STAGES = ["idea", "defined", "designed", "building", "in review", "merged", "released", "deployed", "accepted", "parked"]
-FLIGHT = ("defined", "designed", "building", "in review")
+STAGES = ["idea", "defined", "designed", "planned", "building", "in review", "merged", "released", "deployed", "accepted", "parked"]
+FLIGHT = ("defined", "designed", "planned", "building", "in review")
 DOC_CAP = 256 * 1024
 MAX_WRITES = 50
 FLOOR_MIN = 30
