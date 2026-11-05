@@ -331,3 +331,155 @@ func TestThePresenceTimerIsTheOnlyClock(t *testing.T) {
 		t.Fatalf("beats with no tick = %d, want 0: the beat has no clock of its own", n)
 	}
 }
+
+// ---- F1 of the review: no test can reach a real marvel ----
+
+func TestShimEnvDropsTheFourMarvelKeysAndKeepsTheRest(t *testing.T) {
+	t.Setenv(marvelSocketEnv, "/real/socket")
+	t.Setenv(marvelSessionEnv, "real-session")
+	t.Setenv(heartbeatTokenEnv, "real-token")
+	t.Setenv(heartbeatTokenFile, "/real/token")
+	t.Setenv("DIRECTOR_TEST_KEEP", "1")
+	env := shimEnv("EXTRA=1")
+	have := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		have[k] = v
+	}
+	for _, k := range []string{marvelSocketEnv, marvelSessionEnv, heartbeatTokenEnv, heartbeatTokenFile} {
+		if _, ok := have[k]; ok {
+			t.Fatalf("%s reached the child environment", k)
+		}
+	}
+	if have["DIRECTOR_TEST_KEEP"] != "1" || have["EXTRA"] != "1" {
+		t.Fatalf("the rest of the environment was not kept: %v", have)
+	}
+}
+
+// The check that matters: a seat's own MARVEL_* environment, set here, must not
+// make a shim started by a test beat anything.
+func TestAShimStartedByATestNeverBeatsTheMarvelOfItsParent(t *testing.T) {
+	f := newFakeMarvel(t)
+	t.Setenv(marvelSocketEnv, f.sock)
+	t.Setenv(marvelSessionEnv, "real-session")
+	t.Setenv(heartbeatTokenEnv, "real-token")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	kv, _ := js.KeyValue(ctx, "AGENT_STATE")
+	bin := buildShim(t, t.TempDir(), true)
+	startShim(t, ctx, bin, url, Sender{AgentID: "nobeat", Workspace: "w", Team: "t"}, kv)
+	time.Sleep(1500 * time.Millisecond)
+	if n := f.count(); n != 0 {
+		t.Fatalf("a shim started by a test sent %d bus.beat request(s) to its parent's marvel", n)
+	}
+}
+
+// ---- F2 of the review: mutants the first tests let live ----
+
+// the presence bucket passes Put through and counts the ones that landed.
+type countingPutKV struct {
+	jetstream.KeyValue
+	puts *putCounter
+}
+
+func (k *countingPutKV) Put(ctx context.Context, key string, v []byte) (uint64, error) {
+	rev, err := k.KeyValue.Put(ctx, key, v)
+	if err == nil {
+		k.puts.add()
+	}
+	return rev, err
+}
+
+// (a) the connect beat follows a presence write that landed, and only that.
+func TestTheConnectBeatComesAfterThePutAndOnlyWhenItLanded(t *testing.T) {
+	f := newFakeMarvel(t)
+	b, ctx := newBeatBus(t, f)
+	key := "presence." + b.self.Team + "." + b.self.AgentID + "." + b.instance
+	if _, err := b.kv.Get(ctx, key); err == nil {
+		t.Fatal("the presence row exists before announce: the order check below would prove nothing")
+	}
+	var mu sync.Mutex
+	rowAtBeat := []bool{}
+	f.reply = func(beatRequest) string {
+		_, err := b.kv.Get(ctx, key)
+		mu.Lock()
+		rowAtBeat = append(rowAtBeat, err == nil)
+		mu.Unlock()
+		return `{}`
+	}
+	if _, err := b.announce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	got := append([]bool(nil), rowAtBeat...)
+	mu.Unlock()
+	if len(got) != 1 || !got[0] {
+		t.Fatalf("presence row seen at the connect beat = %v, want one beat with the row already written", got)
+	}
+
+	// A Put that fails sends nothing at connect.
+	f2 := newFakeMarvel(t)
+	b2, ctx2 := newBeatBus(t, f2)
+	b2.kv = &failingPutKV{KeyValue: b2.kv, puts: &putCounter{}}
+	if _, err := b2.announce(ctx2); err == nil {
+		t.Fatal("announce did not report the failed Put")
+	}
+	if n := f2.count(); n != 0 {
+		t.Fatalf("a connect beat went out after a failed Put: %d", n)
+	}
+}
+
+// (b) exactly one beat per successful tick, not two.
+func TestExactlyOneBeatPerSuccessfulTick(t *testing.T) {
+	f := newFakeMarvel(t)
+	b, ctx := newBeatBus(t, f)
+	puts := &putCounter{}
+	b.kv = &countingPutKV{KeyValue: b.kv, puts: puts}
+	hctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { b.heartbeat(hctx, 200*time.Millisecond, func(string, ...any) {}); close(done) }()
+	end := time.Now().Add(10 * time.Second)
+	for f.count() < 3 && time.Now().Before(end) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The next tick is about 200 ms away; a second beat of the same tick, if
+	// there were one, lands well inside this pause.
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	<-done
+	if beats, p := f.count(), puts.n(); p < 3 || beats != p {
+		t.Fatalf("beats = %d, successful presence writes = %d; want equal and at least 3", beats, p)
+	}
+}
+
+// (c) a marvel that takes the request and never answers cannot hold the
+// heartbeat goroutine past the beat's own limit.
+func TestAHungMarvelCannotHoldTheHeartbeatPastTheBeatLimit(t *testing.T) {
+	f := newFakeMarvel(t)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	f.reply = func(beatRequest) string { <-release; return `{}` }
+	b, ctx := newBeatBus(t, f)
+	puts := &putCounter{}
+	b.kv = &countingPutKV{KeyValue: b.kv, puts: puts}
+	hctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { b.heartbeat(hctx, 40*time.Millisecond, func(string, ...any) {}); close(done) }()
+	for i := 0; i < 100 && f.count() == 0; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if f.count() == 0 {
+		t.Fatal("the beat never reached the hung marvel")
+	}
+	if puts.n() < 1 {
+		t.Fatal("presence was not written before the beat")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(busBeatTimeout + time.Second):
+		t.Fatal("the heartbeat goroutine is still held by a marvel that never answers")
+	}
+}
