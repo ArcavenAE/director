@@ -8,9 +8,8 @@ import (
 // inboxMaxAge is how long the inbox keeps mail, as the setup instructions
 // declare it (docs/getting-started.md; TestLocalInactiveOutlastsInboxMaxAge
 // pins that value). A REQUEST unanswered for longer than this may have
-// expired unread. staleAfter in askledger.go is a 72h figure that predates the
-// 168h declaration and also bounds the ledger's own retention, so it is left
-// alone here.
+// expired unread. staleAfter in askledger.go is a different figure for a
+// different thing, the ledger's own staleness and Seen-pruning window.
 const inboxMaxAge = 168 * time.Hour
 
 // askLookup is the answer to "what became of message <id>?".
