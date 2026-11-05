@@ -25,7 +25,7 @@ const (
 	// interval late, and presence outlives its last beat by the TTL.
 	resolveMargin = askPassInterval + presenceTTL
 	alarmAfter    = 15 * time.Minute // the one threshold table (design section 7)
-	staleAfter    = 72 * time.Hour   // the inbox's own max age
+	staleAfter    = 72 * time.Hour   // the ledger's staleness and Seen-pruning window, not the inbox age (inboxMaxAge)
 	closedKeep    = 30 * 24 * time.Hour
 	idKeep        = 30 * 24 * time.Hour
 	lineMax       = 120
@@ -1007,7 +1007,7 @@ func (l *askLedger) chains(rows []*askRow, now time.Time) []askChain {
 }
 
 // asksUsage and asksHelp are the read command's usage and help text.
-const asksUsage = "director-mcp asks [--json] [--all] [--help]"
+const asksUsage = "director-mcp asks [--json] [--all] [--id <message_id>] [--help]"
 
 func asksHelp() string {
 	return asksUsage + `
@@ -1031,5 +1031,12 @@ not lost mail.
 
 --json carries every row and the rollups; --all also lists stale rows among
 the alarms.
+
+--id <message_id> answers one question and exits: what became of that
+message. It finds the ask by its own id or any id in its thread and says
+whether the owner replied, still has not acknowledged it, or has not for
+longer than the inbox keeps mail (168h), in which case it may have expired
+unread and should be resent. A reply is the recipient's own message and not a
+read receipt. Only a REQUEST opens a row.
 `
 }
