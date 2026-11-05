@@ -88,7 +88,8 @@ func (g *globalTier) expiredUnread(ctx context.Context) string {
 }
 
 // globalExpiredUnread is the note for a poll that found nothing on the global
-// tier, "" when the tier is off or not attached yet.
+// tier. It is "" when the tier is off or the attach fails; with the tier on it
+// attaches on first use through globalReady, the same attach the poll makes.
 func (b *Bus) globalExpiredUnread(ctx context.Context) string {
 	if b.globalCfg == nil {
 		return ""

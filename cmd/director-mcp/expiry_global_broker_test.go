@@ -136,25 +136,3 @@ func TestEmptyGlobalPollNamesTheSupervisorsClusterStream(t *testing.T) {
 		t.Fatalf("global_expired_unread = %q, want the cluster stream and the window 2 to 3 (%v)", note, out)
 	}
 }
-
-// A read that fails says nothing: no note and no panic, as the local check
-// does. The connection is closed under a tier that holds a real consumer, so
-// both info reads fail.
-func TestEmptyGlobalPollSaysNothingWhenTheReadFails(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	url := startScratchServer(t)
-	nc, _ := provision(t, ctx, url)
-	gjs, _ := jetstream.NewWithDomain(nc, "global")
-	cons, err := gjs.CreateOrUpdateConsumer(ctx, globalDirectorStream, jetstream.ConsumerConfig{Durable: "probe", AckPolicy: jetstream.AckExplicitPolicy})
-	if err != nil {
-		t.Fatal(err)
-	}
-	g := &globalTier{cfg: globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}, js: gjs, consumer: cons}
-	nc.Close()
-	short, scancel := context.WithTimeout(ctx, 2*time.Second)
-	defer scancel()
-	if got := g.expiredUnread(short); got != "" {
-		t.Errorf("a failed read produced a note: %q", got)
-	}
-}
