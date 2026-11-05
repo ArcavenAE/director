@@ -46,8 +46,9 @@ two are required. The role is one of exactly two words.
 
 With `DIRECTOR_GLOBAL_DOMAIN` unset the global tier is off, which is correct for
 a worker. A seat that holds the director role (`DIRECTOR_GLOBAL_ROLE=director`
-or `DIRECTOR_ROLE=director`) with the tier off gets a `WARNING` on stderr at
-start naming what is missing and what still works: it reaches no hub, shows
+or `DIRECTOR_ROLE=director`) or asks for the global supervisor role
+(`DIRECTOR_GLOBAL_ROLE=supervisor`; `DIRECTOR_ROLE=supervisor` alone does not
+count) with the tier off gets a `WARNING` on stderr at start naming what is missing and what still works: it reaches no hub, shows
 local seats only, and refuses `global://` sends, while local mail is
 unaffected. The shim warns and does not refuse; a worker or any other role
 starts silently.
