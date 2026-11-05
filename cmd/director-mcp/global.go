@@ -899,6 +899,13 @@ func (g *globalTier) fetchOne(ctx context.Context, timeout time.Duration) (env *
 				continue
 			}
 			if g.handled == nil {
+				if al := ackLaterFrom(ctx); al != nil {
+					al.hold(m, &e, "global", seq)
+					if g.testAfterAck != nil {
+						g.testAfterAck(ctx)
+					}
+					return &e, seq, false, nil
+				}
 				_ = m.Ack()
 				g.noteAcked(seq)
 				if g.testAfterAck != nil {

@@ -366,9 +366,9 @@ func TestLinuxPlatformPidspaceNeedsBothFiles(t *testing.T) {
 	}
 }
 
-// g23-0's case: the same host name and the same namespace link (the initial
-// namespace reads the same on every kernel) with a different boot id are two
-// hosts, so the row stays.
+// The same host name and the same namespace link (the initial namespace reads
+// the same on every kernel) with a different boot id are two hosts, so the row
+// stays.
 func TestReapKeepsRowWithSameHostNameAndNsButAnotherBootId(t *testing.T) {
 	r := newReapRig(t)
 	b := r.bus(t, nil)

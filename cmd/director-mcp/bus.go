@@ -31,6 +31,11 @@ type Bus struct {
 	waitMu    sync.Mutex
 	waitSince time.Time
 
+	// returned is mail whose reply nobody read (a late cancel), returned first
+	// by the next wait (ackafter.go).
+	retMu    sync.Mutex
+	returned []drained
+
 	// violations holds the broker's recent publish permission violations (see
 	// violations.go); the global tier shares it because it shares nc.
 	violations *violationRing
@@ -1140,6 +1145,14 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 				seq = md.Sequence.Stream
 			}
 			if b.handled == nil {
+				if al := ackLaterFrom(ctx); al != nil {
+					// Held, not acked: callTool acks after the reply is written.
+					al.hold(m, &e, "local", seq)
+					if b.testAfterAck != nil {
+						b.testAfterAck(ctx)
+					}
+					return &e, seq, nil
+				}
 				_ = m.Ack()
 				b.noteLocalAcked(seq)
 				if b.testAfterAck != nil {

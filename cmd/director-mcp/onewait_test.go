@@ -45,11 +45,20 @@ func TestASecondWaitIsRefusedAndTheFirstKeepsTheMessages(t *testing.T) {
 			if idOf(m) != `1` || isErr(m) || !strings.Contains(toolText(t, m), "m1") || strings.Contains(toolText(t, m), "m2") {
 				t.Fatalf("the first wait must return m1 only: %v", m)
 			}
-			// m2 is still on the durable.
-			r.send(`{"jsonrpc":"2.0","id":"s","method":"tools/call","params":{"name":"inbox_summary","arguments":{}}}`)
-			m = r.next(3 * time.Second)
-			if !strings.Contains(toolText(t, m), `"local": 1`) {
-				t.Fatalf("m2 should still be waiting: %s", toolText(t, m))
+			// m2 is still on the durable. The reply is read before m1's ack lands
+			// (the ack follows the write), so a summary in that gap counts both:
+			// poll until m1's ack has landed, bounded.
+			var last string
+			for i := 0; i < 100; i++ {
+				r.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":"s%d","method":"tools/call","params":{"name":"inbox_summary","arguments":{}}}`, i))
+				last = toolText(t, r.next(3*time.Second))
+				if strings.Contains(last, `"local": 1`) {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if !strings.Contains(last, `"local": 1`) {
+				t.Fatalf("m2 should still be waiting, alone: %s", last)
 			}
 		})
 	}
