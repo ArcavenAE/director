@@ -686,6 +686,19 @@ func sortDurables(r *unreadReport) {
 	})
 }
 
+// holdsUnreadMail selects the live rows whose oldest unread message counts
+// toward an age check: a live row in behind or durable-idle with mail waiting.
+// applyThreshold and applyBound both select through it, so a change to what
+// counts is made once. Reads-outside-durable rows are never selected, since
+// their pending mail was answered and is not unread mail. State is set only on
+// a live row, and OldestSeq only when mail is pending (which a reading row is
+// not), so the live check is stated for the reader and does not change which
+// rows pass.
+func holdsUnreadMail(row *unreadDurable) bool {
+	return row.Live && (row.State == stateBehind || row.State == stateDurableIdle) &&
+		row.OldestSeq != 0
+}
+
 // applyThreshold marks each behind or durable-idle row whose oldest unread
 // message is older than d (M4). reads-outside-durable rows are never counted.
 // It changes the report only; the exit code stays 0 (ADR-007).
@@ -697,8 +710,7 @@ func applyThreshold(r *unreadReport, d time.Duration) {
 	r.OverThresholdCount = 0
 	for i := range r.Durables {
 		row := &r.Durables[i]
-		row.OverThreshold = (row.State == stateBehind || row.State == stateDurableIdle) &&
-			row.OldestSeq != 0 && row.OldestAgeSeconds > d.Seconds()
+		row.OverThreshold = holdsUnreadMail(row) && row.OldestAgeSeconds > d.Seconds()
 		if row.OverThreshold {
 			r.OverThresholdCount++
 		}
@@ -713,8 +725,7 @@ func applyThreshold(r *unreadReport, d time.Duration) {
 func applyBound(r *unreadReport, bound time.Duration) {
 	for i := range r.Durables {
 		row := &r.Durables[i]
-		row.OverBound = row.Live && row.State != stateReadsOutside &&
-			row.OldestSeq != 0 && row.OldestAgeSeconds > bound.Seconds()
+		row.OverBound = holdsUnreadMail(row) && row.OldestAgeSeconds > bound.Seconds()
 	}
 }
 
