@@ -107,7 +107,8 @@ func flagsOfAge(row map[string]any) []string {
 }
 
 // flagLocalRows adds "durable" (present, missing or unknown), "unread" (the
-// durable's own count, when present) and "flags" to each local roster row. The
+// durable's undelivered count, NumPending, when present), "ack_pending" (mail
+// fetched and not yet acked) and "flags" to each local roster row. The
 // lookups run under one deadline (flagRows), so a hub that does not answer
 // marks the rows unknown instead of holding the roster.
 func (b *Bus) flagLocalRows(ctx context.Context, rows []map[string]any) {
@@ -164,7 +165,7 @@ func (g *globalTier) flagGlobalRows(ctx context.Context, rows []map[string]any) 
 var durableCheck = checkDurable
 
 // checkDurable looks one durable up under streamReadTimeout and records what the
-// broker said on the row: present with its unread count, missing (the broker
+// broker said on the row: present with its unread and ack-pending counts, missing (the broker
 // answered not found), or unknown (anything else).
 func checkDurable(ctx context.Context, js jetstream.JetStream, stream, durable string, row map[string]any, flags *[]string) {
 	rctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
