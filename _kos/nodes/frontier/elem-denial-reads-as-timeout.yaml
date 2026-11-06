@@ -1,0 +1,69 @@
+id: elem-denial-reads-as-timeout
+type: element
+confidence: frontier
+title: "A broker denial of a JetStream publish reaches the caller as a timeout, so the shim must name it"
+tags: [director, delivery, permissions, errors]
+content: |
+  Placed 2026-11-06. Until now this pattern lived only as prose in
+  finding-005 (section Q3) and finding-008 (section 0). Filed in frontier;
+  promotion to bedrock waits on the operator (SOUL section 8).
+
+  ## The pattern
+
+  When the broker refuses a JetStream publish on permissions, the publisher
+  gets no ack, so the call fails under its own context as
+  `context deadline exceeded`. The server's named refusal,
+  `Permissions Violation for Publish to "<subject>"`, arrives separately, on
+  the connection's async error handler. A caller that reads only the
+  publish's return value sees a slow or absent broker where there is a
+  credential decision, and looks in the wrong place.
+
+  ## Evidence
+
+  - R-109 (sim/requirements.md): a team-scoped seat's cross-team publish
+    returned `context deadline exceeded` three times. R-109 records these
+    as the reproductions it was earned by.
+  - finding-005: a publish from one team to another team's inbox failed the
+    same way; the finding calls it "a permissions denial wearing a
+    timeout's clothes".
+  - finding-008, P3: with per-seat credentials on scratch brokers, every
+    refusal came back as `context deadline exceeded` after 3001 to 3002 ms,
+    with the named violation on the async error handler inside that
+    window. Nothing refused was stored.
+
+  ## What holds on main
+
+  - R-109 (RULED 2026-09-24): a denied cross-team or cross-cluster publish
+    fails loud as a named permission refusal, never as a timeout.
+  - director#313 (merged 2026-10-16) makes the shim meet it. `dial()`
+    registers an error handler that keeps recent publish violations by
+    subject and time (`cmd/director-mcp/violations.go`), and a failed
+    publish in `bus.go` and `global.go` is wrapped with the violation for
+    its subject. The wrap still unwraps to the deadline error, so
+    `errors.Is(err, context.DeadlineExceeded)` holds for existing callers.
+    `publish_violation_test.go` covers a denied local send and a denied hub
+    publish, each with an allowed send as the positive control.
+
+  ## Not covered here
+
+  - A client other than the director shim that publishes with JetStream
+    meets the same broker behaviour and needs the same handler; #313
+    changes only the shim.
+  - #313 names as separate, with no owner, a log-reader pattern for the old
+    timeout text.
+edges:
+  - target: finding-008-leaf-fabric-probe
+    type: derives
+    note: "P3 measured the refusal arriving as a timeout, with the named error only on the async handler"
+  - target: finding-005-workforce-organization-model
+    type: derives
+    note: "Q3 names the pattern for a cross-team publish"
+provenance:
+  created_by: agent
+  reviewed_by: null
+  session: 2026-11-06 knowledge-graph placement, team arcaven author seat
+  created_at: "2026-11-06"
+  notes: >
+    Every statement is drawn from finding-005, finding-008, R-109 in
+    sim/requirements.md, or the director#313 body and its files at
+    origin/main 4c994ca.
