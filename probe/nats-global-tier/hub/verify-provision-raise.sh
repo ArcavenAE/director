@@ -82,6 +82,8 @@ run_case() {
   local changes; changes="$(printf '%s\n' "$out1" | /usr/bin/grep -c ' raised ' || true)"
   [[ "$changes" == "2" ]] && ok "$label: one line per change (2 on the first run)" || bad "$label: one line per change (2 on the first run)" "got $changes: $out1"
   printf '%s\n' "$out2" | /usr/bin/grep -q ' raised ' && bad "$label: the second run changes nothing" "$out2" || ok "$label: the second run changes nothing"
+  # c1 and c2 were named: neither run may call them "found on the hub (not named)".
+  printf '%s\n%s\n' "$out1" "$out2" | /usr/bin/grep -q '^stream GLOBAL_TO_c[12] found on the hub' && bad "$label: a named stream is not reported as found, on either run" "$out1 $out2" || ok "$label: a named stream is not reported as found, on either run"
 }
 
 # free_port: a random loopback port that is not the hub's or the local broker's.
@@ -119,6 +121,8 @@ run_noarg() {
     "${N[@]}" stream info "GLOBAL_TO_$s" >/dev/null 2>&1 && ok "$label: GLOBAL_TO_$s exists after the run" || bad "$label: GLOBAL_TO_$s exists after the run" "$out1"
   done
   printf '%s\n' "$out2" | /usr/bin/grep -q ' raised ' && bad "$label: the second no-argument run changes nothing" "$out2" || ok "$label: the second no-argument run changes nothing"
+  # kinu and mokuzai are named by the bootstrap list: on neither run are they "found".
+  printf '%s\n%s\n' "$out1" "$out2" | /usr/bin/grep -q '^stream GLOBAL_TO_\(kinu\|mokuzai\) found on the hub' && bad "$label: a named stream is not reported as found, on either run" "$out1 $out2" || ok "$label: a named stream is not reported as found, on either run"
 }
 
 # The real script.
@@ -254,6 +258,8 @@ mutant_with run_noarg hardcoded-default '"\$listing"' '"[]"'
 mutant_with run_badlist print-and-carry-on 'stream ls failed" >\&2; exit 1;' 'stream ls failed" >\&2; listing=null;'
 # A listing that is not an array of names is read as empty instead of an error.
 mutant_with run_badlist shape-unchecked 'else error("stream ls did not return an array of names")' 'else empty'
+# The match string is joined under the newline IFS again, so no named stream matches.
+mutant_with run_noarg newline-joined-match 'case "\$named" in' 'case " ${clusters[*]} " in'
 # The unnamed streams are visited before the presence bucket again.
 mutant_with run_unnamed_fail visit-before-bucket '^if "\${A\[@\]}" kv info' 'for c in ${extra[@]+"${extra[@]}"}; do add_stream "GLOBAL_TO_$c" x; done; if "${A[@]}" kv info'
 

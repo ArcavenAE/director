@@ -90,11 +90,14 @@ found="$(printf '%s' "$listing" | jq -r 'if . == null then empty elif (type == "
 extra=()
 # Split on newlines only, with globbing off, so a name with a glob character is not
 # expanded against the files here (and no here-string, which bash 3.2 writes to a file).
+# The list to match against is built first, while IFS is still the default: under a
+# newline IFS, "${clusters[*]}" would join with newlines and match nothing.
+named=" ${clusters[*]} "
 old_ifs="$IFS"; IFS=$'\n'; set -f
 for s in $found; do
   c="${s#GLOBAL_TO_}"
   if [[ -z "$c" ]]; then echo "stream $s has no cluster name, not visited"; continue; fi
-  case " ${clusters[*]} ${extra[*]:-} " in *" "$c" "*) ;; *) extra+=("$c");; esac
+  case "$named" in *" "$c" "*) ;; *) extra+=("$c"); named="$named$c ";; esac
 done
 IFS="$old_ifs"; set +f
 add_stream GLOBAL_TO_DIRECTOR 'global.director.>'
