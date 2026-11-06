@@ -35,7 +35,7 @@ Nothing else changes: an unset configuration selects bd, and each caller keeps i
 
 The tests stub bd per script: `verify-dws-refresh.sh` writes a `bin/bd` that answers from `bd-<id>.json` fixtures (lines 50-53), and `verify-idle-shadow.sh` has its own stub that refuses a call without `--json` (line 48).
 
-So bd is named at nine lines across three scripts: `dws` 789, 877 and 2692 to 2703; `idle-shadow` 86, 196 and 211; `dbi` 51 and 248. The label lookup at `idle-shadow` 241-251 is a tenth coupling, to one orchestrator's file layout. `run_json` cannot tell a missing binary (`FileNotFoundError`, an `OSError`) from a refusal (a nonzero exit with stderr) once `refresh` catches both, and `dbi` returns the same `None` for every failure.
+So bd is named at nine lines across three scripts: `dws` 789, 877, 2692 and 2703; `idle-shadow` 86, 196 and 211; `dbi` 51 and 248. The label lookup at `idle-shadow` 241-251 is a tenth coupling, to one orchestrator's file layout. `run_json` cannot tell a missing binary (`FileNotFoundError`, an `OSError`) from a refusal (a nonzero exit with stderr) once `refresh` catches both, and `dbi` returns the same `None` for every failure.
 
 ## 2. The surface
 
@@ -48,7 +48,7 @@ One executable, `skills/director/scripts/trk`, installed beside the others in th
 | `trk read <ref> [--timeout S]` | one item (below) |
 | `trk ready [--label L]... [--exclude-label L]... [--timeout S]` | a JSON array of items. Optional: an adapter with `ready: false` exits 3 |
 
-**Capabilities.** The names cover the read calls and the write calls a later version might add (`note`, `create`, `claim`), so a caller can ask before it tries. In this version every write capability is `false`. A capability that is absent or `false` means UNREAD: a caller reports the read as not done, never as an empty answer. This is the rule `skills/director/reference/adapters.md:6-10` sets for harness adapters ("An adapter declares what IT supplies").
+**Capabilities.** The names cover the read calls and the write calls a later version might add (`note`, `create`, `claim`), so a caller can ask before it tries. In this version every write capability is `false`. A capability that is absent or `false` means UNREAD: a caller reports the read as not done, never as an empty answer. This is this design's own rule (TA-5). It follows the spirit of `skills/director/reference/adapters.md:6-10` for harness adapters ("An adapter declares what IT supplies"), which does not itself state the UNREAD reading.
 
 **The ref.** `trk:<adapter>:<id>`. `<adapter>` matches `[a-z][a-z0-9-]*`. `<id>` keeps today's bd grammar, `[A-Za-z0-9][A-Za-z0-9._-]*`, whose first character keeps an id from ever reaching a CLI as an option (`dws:786-788`). The `files` adapter also refuses an id that is `.` or `..`, so an id can never name a path outside its root. `bd:<id>` is an alias for `trk:bd:<id>`, and `parse` returns the long form, so existing rows and cards keep working unchanged. A ref that names an adapter other than the configured one exits 3, naming both. It is never read through the configured adapter instead.
 
@@ -77,7 +77,7 @@ One executable, `skills/director/scripts/trk`, installed beside the others in th
 
 **The files format** is the item shape of section 2, plus optional `title` and `blocked_by` (a list of ids), one file per item, named `<id>.json`. The adapter never writes it. A team whose files use another shape gets a variant adapter later; this design does not guess at formats it has not read.
 
-**One test double.** Because `files` is a real adapter, a caller's test points `trk` at a fixture directory and needs no bd stub. The per-script stubs in `verify-dws-refresh.sh` and `verify-idle-shadow.sh` can then go. The bd adapter keeps one stub of its own, in `trk`'s own verify script.
+**One test double, where a ref allows it.** Because `files` is a real adapter, a caller's test can point `trk` at a fixture directory instead of stubbing bd. That works for `idle-shadow`, whose `ready` read names no adapter, and for `dws` cases that use `trk:files:` refs. It does not work for a stored `bd:` row: `bd:` is an alias for `trk:bd:`, and a ref naming another adapter exits 3 rather than being read through the configured one (section 2). So `verify-dws-refresh.sh` keeps its bd stub for `bd:` rows. That stub moves into `trk`'s own verify script, backed by the recorded bd fixtures (section 4), once the bd adapter has them. The `idle-shadow` stub can go when its cases move to the files double.
 
 ## 4. Failure classes
 
@@ -101,7 +101,7 @@ A third cause the report names: the binary is present but its client environment
 **One thing to measure before the build.** Telling refused from not_found depends on bd's exit code and stderr text for an unknown id, against a server that refuses or is unreachable. I have not run bd for this design. The builder's first step is to capture both cases from a scratch bd and pin them as fixtures. Where they cannot be told apart, the adapter reports `refused` with the detail, never `not_found`, because a dangling reference reads as an answer and a refusal must not.
 
 **What the callers print.**
-- `dws refresh` keeps its warning line and adds the class: `<slug>: trk:bd:x unreadable (refused: <detail>)`, or `(missing_binary: bd is not on PATH)`.
+- `dws refresh` keeps its warning line and adds the class: `<slug>: trk:bd:x unreadable (refused: <detail>)`, or `(missing_binary: bd is not on PATH; set DIRECTOR_TRACKER=none if this team has no tracker)`.
 - A not_found ref becomes a dangling-reference hint, as `dbi` already treats a PR that `gh` cannot find.
 - `idle-shadow` gaps name the class: `items: tracker ready failed (missing_binary)`, or `items: no tracker (adapter none)`. A team with adapter `none` gets a gap that says so, never a failure.
 - `dbi` passes the class through, where it now returns `None`.
@@ -194,11 +194,12 @@ Every F case is a gate. F1 against F2 is the report's item 7: a missing binary a
 
 ### 8.4 Callers
 
-D1 to D3 and D5 to D7 are gates. D4's gap text is a gate; the count of items it would have read is a report.
+D1, D1b, D2, D3 and D5 to D7 are gates. D4's gap text is a gate; the count of items it would have read is a report.
 
 | case | caller | given | then |
 |---|---|---|---|
-| D1 | `dws refresh` | a stored row with `bd:<id>` observed `open`, and the files double answering `open` | no move recorded (R3) |
+| D1 | `dws refresh` | adapter `bd`; a stored row with `bd:<id>` observed `open` before the change; the bd stub answering `status: open` | no move recorded, and the stored observation keeps `kind: bd` with state `open` (R3) |
+| D1b | `dws refresh` | adapter `files`; a stored row with `trk:files:<id>` observed `open`; the files double answering `open` | no move recorded |
 | D2 | `dws refresh` | adapter `bd` with a missing binary | the warning carries `missing_binary`, and no observation is written for the link (R1) |
 | D3 | `dws refresh` | adapter `none`, a row with a `bd:` link | the warning says not configured, and the row is otherwise refreshed |
 | D4 | `idle-shadow` | adapter `none` | gap `items: no tracker (adapter none)`, exit status as for any gap run, and the marry step reports not run (R6) |
@@ -210,7 +211,7 @@ D1 to D3 and D5 to D7 are gates. D4's gap text is a gate; the count of items it 
 
 - P0 cases (C4 to C7, F1 to F3, D1, D2, D5) pass before merge, structural checks under the fleet's diagnostic-not-gate rule: they ask whether the scripts are correct, not whether a tracker is healthy.
 - No case reaches a real bd server, the network or the real director state. The bd fixtures come from one recorded scratch run, with the bd version that produced them written beside them.
-- `bash -n` on every changed bash file, and the existing `verify-dws-*.sh` and `verify-idle-shadow.sh` suites pass unchanged, apart from the stubs they drop for the files double.
+- `bash -n` on every changed bash file, and the existing `verify-dws-*.sh` and `verify-idle-shadow.sh` suites pass unchanged, apart from the `idle-shadow` stub once its cases move to the files double. The `dws` bd stub stays until the bd adapter's recorded fixtures replace it (section 3).
 
 ### 8.6 For the relay-log follow-up
 
@@ -222,4 +223,4 @@ When `relay-log --bead` is built on `trk parse`: the flag refuses a value with a
 - **TA-2** (provisional; source: the call-site read, `refresh` 945-949 and `dbi` 246-254). A tracker read that fails reports one of the named classes, and a missing binary, a refusal and an unknown id never share a class.
 - **TA-3** (provisional; source: independence). A team with no tracker runs every director script, with gaps that say so.
 - **TA-4** (provisional; source: `idle-shadow` 241-247). No script finds its configuration by its working directory.
-- **TA-5** (provisional; source: `reference/adapters.md:6-10`, the research report section 3). An adapter declares the capabilities it supplies, and an undeclared capability reads as UNREAD, never as an empty answer.
+- **TA-5** (provisional; source: this design, after the research report section 3; in the spirit of `reference/adapters.md:6-10`). An adapter declares the capabilities it supplies, and an undeclared capability reads as UNREAD, never as an empty answer.
