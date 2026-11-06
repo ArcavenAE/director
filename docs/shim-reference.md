@@ -287,6 +287,15 @@ mail, and it is reported once per gap. An idle seat in a busy fleet sees it
 whether or not any of its own mail was lost. A sender whose ask went
 unanswered resends.
 
+With global mode on, an empty poll also carries `global_expired_unread` when
+the hub stream this seat reads (`GLOBAL_TO_<cluster>`, or `GLOBAL_TO_DIRECTOR`
+for the director) has aged past the seat's last read position there. It reads
+the same way: a window of stream sequences, not a count, reported once per
+gap, with the stream's max age in the text. It uses only the seat's own
+consumer info and the stream's info, so it needs no consumer listing, and a
+read that fails adds nothing. The sender's side of a global send is not
+covered.
+
 With global mode on, the poll first takes a message already waiting, from
 the tier whose turn it is and then the other, flipping the turn every call,
 so a backlog on one tier cannot starve the other. With nothing waiting it
