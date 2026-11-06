@@ -188,7 +188,7 @@ marry_cases() {
   [[ "$rc" == 0 ]] && ok "$tag 1 exits 0" || bad "$tag 1 exit $rc" "$(out)"
   [[ "$(wc -l <"$FIX/dmcp.log" | tr -d ' ')" == 1 && "$(sed -e 's|--input .*|--input FILE|' "$FIX/dmcp.log")" == "marry --input FILE" ]] \
     && ok "$tag 1 director-mcp was called once, as marry --input FILE, and nothing else" || bad "$tag 1 director-mcp calls" "$(cat "$FIX/dmcp.log" 2>&1)"
-  [[ "$(cat "$FIX/dmcp.env")" == "MARVEL_SOCKET=unset MARVEL_HOME=unset" ]] && ok "$tag 1 marvel is run with no MARVEL_SOCKET and no MARVEL_HOME of the script's making" || bad "$tag 1 env" "$(cat "$FIX/dmcp.env")"
+  [[ "$(cat "$FIX/dmcp.env")" == "MARVEL_SOCKET=unset MARVEL_HOME=unset" ]] && ok "$tag 1 director-mcp is run with no MARVEL_SOCKET and no MARVEL_HOME of the script's making" || bad "$tag 1 env" "$(cat "$FIX/dmcp.env")"
   [[ "$cl" == *"would-pair 1"* && "$cl" == *"leases sent 0"* ]] && ok "$tag 1 would-pair 1, leases sent 0" || bad "$tag 1 count" "$cl"
   [[ "$(wc -l <"$st/would-pair.jsonl" | tr -d ' ')" == 1 ]] && ok "$tag 1 exactly one would-pair row" || bad "$tag 1 rows" "$(cat "$st/would-pair.jsonl")"
   [[ "$(jq -r '[.item, .seat, .lease] | join(" ")' "$st/would-pair.jsonl")" == "e-1 agent://crew/b1 $RUN_ID/e-1" ]] && ok "$tag 1 the row names the item, the seat and the lease" || bad "$tag 1 row" "$(cat "$st/would-pair.jsonl")"
@@ -364,17 +364,17 @@ marry_cases() {
     canned '{"pairs":[{"item":"e-1","seat":"role://crew/builder","lease":"x/e-1"}],"count":{"would_pair":1}}'
     runm "$B"
     [[ "$rc" == 0 && ! -s "$st/would-pair.jsonl" ]] && has "- GAP marry: " && ok "$tag 9 a row naming anything but an agent:// seat is refused, never written" || bad "$tag 9 role row" "$(cat "$st/would-pair.jsonl"; out)"
-    # no marvel on PATH: director-mcp marry answers, the run prints its count line and its
-    # would-pair rows, and nothing asks marvel (ADR-005: each tool runs without the others)
+    # no marvel used: director-mcp marry answers, the run prints its count line and its
+    # would-pair rows, and nothing asks marvel (ADR-005: each tool runs without the others).
+    # The marvel stub stays first on PATH and logs any call as forbidden, so a marvel installed
+    # on the host cannot answer in its place: a marry step that calls marvel fails this case.
     reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"
     canned '{"pairs":[{"item":"e-1","seat":"agent://crew/b1","lease":"'"$RUN_ID"'/e-1"}],"count":{"ready":1,"eligible":1,"free":1,"would_pair":1}}'
-    mv "$root/bin/marvel" "$root/bin/marvel.off"
     runm "$B"
-    mv "$root/bin/marvel.off" "$root/bin/marvel"
     cl="$(count_line)"
     [[ "$rc" == 0 && "$cl" == *"would-pair 1"* ]] && has "- would-pair e-1 agent://crew/b1 (lease $RUN_ID/e-1; shadow, nothing is sent)" \
       && ! has "marry: marvel marry failed" && ! has "- GAP marry" && [[ ! -e "$FIX/forbidden.log" ]] \
-      && ok "$tag 12 with no marvel on PATH the run pairs through director-mcp, with no marry GAP" || bad "$tag 12 no marvel" "$cl $(out) $(cat "$FIX/forbidden.log" 2>&1)"
+      && ok "$tag 12 with marvel unusable the run pairs through director-mcp, with no marry GAP" || bad "$tag 12 no marvel" "$cl $(out) $(cat "$FIX/forbidden.log" 2>&1)"
   fi
 }
 

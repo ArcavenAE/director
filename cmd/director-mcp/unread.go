@@ -225,7 +225,7 @@ func parseArgs(args []string) (cliArgs, error) {
 		}
 		return out, nil
 	}
-	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage, dossierUsage)
+	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage, dossierUsage, marryUsage)
 }
 
 type unreadPresence struct {

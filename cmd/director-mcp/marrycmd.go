@@ -12,6 +12,11 @@ import (
 
 const marryUsage = "director-mcp marry --input FILE"
 
+// marryInputMax bounds what the subcommand reads. The pinned vectors' inputs are
+// a few kilobytes; an input past this is an error, not a reason to hold the
+// process's memory.
+const marryInputMax = 4 << 20
+
 // runMarryCmd reads one marry.Input from the file, runs the marrying step and
 // prints the answer as JSON. It is read-only and shadow only: it sends nothing,
 // connects to no bus and needs no identity, so a host without marvel can pair
@@ -24,15 +29,21 @@ func runMarryCmd(cli cliArgs, stdout, stderr io.Writer) int {
 	}
 	// "-" reads the input from stdin, as marvel's verb does, so the pinned
 	// vectors can be piped through it.
-	var b []byte
-	var err error
-	if cli.file == "-" {
-		b, err = io.ReadAll(os.Stdin)
-	} else {
-		b, err = os.ReadFile(cli.file)
+	var src io.Reader = os.Stdin
+	if cli.file != "-" {
+		f, err := os.Open(cli.file)
+		if err != nil {
+			return fail(err)
+		}
+		defer f.Close()
+		src = f
 	}
+	b, err := io.ReadAll(io.LimitReader(src, marryInputMax+1))
 	if err != nil {
 		return fail(err)
+	}
+	if len(b) > marryInputMax {
+		return fail(fmt.Errorf("marry input is larger than %d bytes", marryInputMax))
 	}
 	var in marry.Input
 	dec := json.NewDecoder(bytes.NewReader(b))

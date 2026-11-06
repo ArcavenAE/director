@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const marryCmdInput = `{"run_id":"r1","now":"2026-11-06T12:00:00Z",
@@ -88,5 +89,50 @@ func TestRunMarryCmdReadsStdinForDash(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := runMarryCmd(cliArgs{mode: "marry", file: "-"}, &out, &errb); code != 0 || !strings.Contains(out.String(), `"lease":"r1/item-1"`) {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// An input past the bound is refused, from a file and from stdin, and the read
+// stops at the bound: a producer that never ends does not make the command hold
+// everything it writes.
+func TestRunMarryCmdBoundsItsInput(t *testing.T) {
+	big := strings.Repeat(" ", marryInputMax+1)
+	f := filepath.Join(t.TempDir(), "big.json")
+	if err := os.WriteFile(f, []byte(big), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := runMarryCmd(cliArgs{mode: "marry", file: f}, &out, &errb); code == 0 || !strings.Contains(errb.String(), "larger than") {
+		t.Errorf("file: exit %d, stderr %q", code, errb.String())
+	}
+
+	// stdin from a writer that never stops
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		chunk := []byte(strings.Repeat(" ", 64<<10))
+		for {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}()
+	old := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = old; r.Close(); w.Close() }()
+	out.Reset()
+	errb.Reset()
+	done := make(chan int, 1)
+	go func() { done <- runMarryCmd(cliArgs{mode: "marry", file: "-"}, &out, &errb) }()
+	select {
+	case code := <-done:
+		if code == 0 || !strings.Contains(errb.String(), "larger than") {
+			t.Errorf("stdin: exit %d, stderr %q", code, errb.String())
+		}
+	case <-time.After(10 * time.Second):
+		r.Close() // lets the stuck read end so the test can report
+		t.Fatal("stdin: the read did not stop at the bound")
 	}
 }

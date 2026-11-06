@@ -88,7 +88,7 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    checkout the sweep starts in or at `IDLE_SHADOW_LABEL_CONVENTION`); if that file cannot be read it prints `- GAP components` and the component
    reading is GAP, never a guess from the label's shape.
    Until items carry `class:` labels the expected reading is `would-pair 0` and every item unmatched as "no class"; that is a
-   reading, not an error. Pairing is marvel's `marvel marry` verb (read only, it sends nothing); a `- GAP marry: ...` line says it could not run
+   reading, not an error. Pairing is director's own `director-mcp marry` subcommand (read only, it sends nothing, and it needs no marvel); a `- GAP marry: ...` line says it could not run
    (a marvel without the verb, an unread input, a failed call), and `- GAP seat-eligibility` says the optional seat classes, scopes and duty
    cells file is absent or malformed, which is the expected reading until the register scope cell ships; show both. A `- would-pair ...`
    line is a shadow row: nothing was sent. It exits 0 whether it finds nothing or a lot, so read its lines, never its exit code.
