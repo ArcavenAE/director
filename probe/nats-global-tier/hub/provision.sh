@@ -2,6 +2,16 @@
 # Provision the global hub's streams and presence bucket (idempotent).
 # Runs as the hub admin NKey. The hub is bare until this runs (finding-166).
 #
+# A run visits every GLOBAL_TO_ stream that exists on the hub, plus GLOBAL_TO_DIRECTOR
+# and the clusters it is told to create. The arguments (kinu and mokuzai when there
+# are none) only name streams to create; a stream found on the hub that was not named
+# is visited too and printed as such, so a cluster added later is never skipped
+# without a word (aae-orc-acasl). Those come after GLOBAL_PRESENCE, so a failure on
+# one cannot stop the streams or the bucket the script always provisioned. A stream
+# listing that fails, or is not exactly one JSON array of names, stops the run before
+# anything is created. A consumer listing on a stream that is not one is a stop too,
+# naming the stream, instead of a durable left at its old threshold (aae-orc-1jbrn).
+#
 # A stream that does not exist is created with the declared max age. One that
 # does exist is only ever RAISED: a finite max age shorter than the declared one
 # is edited up to it (max_age and nothing else), and a longer one, or 0
@@ -12,7 +22,7 @@
 # raised to it, a longer one or none (0) is left alone. Nothing
 # here lowers a value, and each change prints one line. A durable is kept above
 # its stream's max age so a live seat's durable outlasts its mail
-# (aae-orc-t77rr).
+# (aae-orc-t77rr, aae-orc-acasl).
 #
 # start.sh runs this once the server answers, so a hub restart applies it. It
 # can also be run by hand with the admin NKey on the hub host.
@@ -39,14 +49,29 @@ DURABLE_INACTIVE_NS=$(( ${DURABLE_INACTIVE%h} * 3600 * 1000000000 ))
 clusters=("$@")
 [[ ${#clusters[@]} -gt 0 ]] || clusters=(kinu mokuzai)
 hours() { awk -v n="$1" 'BEGIN { if (n == 0) print "unlimited"; else printf "%gh", n / 3600000000000 }'; }
+# bad_shape LABEL: stop the run, naming the listing whose shape was wrong. Falling
+# through would leave something unraised and exit 0, which is the silent skip.
+bad_shape() { echo "$1 returned something other than a JSON array of names" >&2; exit 1; }
+# names_in LISTING PREFIX: the names in LISTING that start with PREFIX, one per line.
+# LISTING must be exactly one JSON document, either null (a bare hub lists null) or an
+# array of strings. No document, several documents, a non-string, an object or text
+# that is not JSON all fail, and the caller turns that into bad_shape. jq -s reads the
+# whole listing as an array of documents, so an empty listing and a listing of two
+# arrays are both a count other than one.
+names_in() {
+  printf '%s' "$1" | jq -rs --arg p "$2" 'if length != 1 then error("not one document") elif .[0] == null then empty elif (.[0] | type == "array" and all(.[]; type == "string")) then .[0][] | select(startswith($p)) else error("not an array of names") end'
+}
 # raise_durables lifts every consumer on one stream whose name starts with
 # mcp_global_, which is how the shim names each session's durable. The test is a
 # name prefix and nothing more, so a hand-made consumer that happened to carry
 # that prefix would be raised too; one without it is not this script's to change.
 raise_durables() {
-  local stream="$1" names c info cur
+  local stream="$1" names durables c info cur old_ifs="$IFS"
   names="$("${A[@]}" consumer ls "$stream" --names --json)" || { echo "consumer ls $stream failed" >&2; exit 1; }
-  for c in $(printf '%s' "$names" | jq -r '.[]? | select(startswith("mcp_global_"))'); do
+  durables="$(names_in "$names" mcp_global_)" || bad_shape "consumer ls $stream"
+  # Newlines only, globbing off: a name with a glob character is read as written.
+  IFS=$'\n'; set -f
+  for c in $durables; do
     info="$("${A[@]}" consumer info "$stream" "$c" --json)" || { echo "consumer info $stream $c failed" >&2; exit 1; }
     cur="$(printf '%s' "$info" | jq -r '.config.inactive_threshold // 0')"
     if (( cur > 0 && cur < DURABLE_INACTIVE_NS )); then
@@ -54,6 +79,7 @@ raise_durables() {
       echo "durable $c on $stream inactive_threshold raised $(hours "$cur") -> $DURABLE_INACTIVE"
     fi
   done
+  IFS="$old_ifs"; set +f
 }
 add_stream() {
   local name="$1" subj="$2" info cur
@@ -72,7 +98,32 @@ add_stream() {
     --max-age "$STREAM_MAX_AGE" --max-msg-size 65536 --dupe-window 2m --defaults >/dev/null
   echo "stream $name created ($subj)"
 }
+# Every GLOBAL_TO_ stream already on the hub is visited, named or not. A failed
+# listing stops the run, and so does one that is not exactly one JSON array of names
+# (a bare hub lists null): falling back to the bootstrap list would be the silent skip.
+listing="$("${A[@]}" stream ls --names --json)" || { echo "stream ls failed" >&2; exit 1; }
+found="$(names_in "$listing" GLOBAL_TO_)" || bad_shape "stream ls"
+extra=()
+# Split on newlines only, with globbing off, so a name with a glob character is not
+# expanded against the files here (and no here-string, which bash 3.2 writes to a file).
+# The list to match against is built first, while IFS is still the default: under a
+# newline IFS, "${clusters[*]}" would join with newlines and match nothing.
+named=" ${clusters[*]} "
+old_ifs="$IFS"; IFS=$'\n'; set -f
+for s in $found; do
+  if [[ "$s" == GLOBAL_TO_DIRECTOR ]]; then continue; fi
+  c="${s#GLOBAL_TO_}"
+  if [[ -z "$c" ]]; then echo "stream $s has no cluster name, not visited"; continue; fi
+  case "$named" in *" "$c" "*) ;; *) extra+=("$c"); named="$named$c ";; esac
+done
+IFS="$old_ifs"; set +f
 add_stream GLOBAL_TO_DIRECTOR 'global.director.>'
 for c in "${clusters[@]}"; do add_stream "GLOBAL_TO_$c" "global.$c.>"; done
 if "${A[@]}" kv info GLOBAL_PRESENCE >/dev/null 2>&1; then echo "kv GLOBAL_PRESENCE exists"; else
   "${A[@]}" kv add GLOBAL_PRESENCE --ttl 90s --storage file >/dev/null; echo "kv GLOBAL_PRESENCE created (ttl 90s)"; fi
+# The streams found but not named come last, so a failure on one of them cannot stop
+# the streams above or GLOBAL_PRESENCE from being provisioned.
+for c in ${extra[@]+"${extra[@]}"}; do
+  echo "stream GLOBAL_TO_$c found on the hub (not named), visited"
+  add_stream "GLOBAL_TO_$c" "global.$c.>"
+done

@@ -65,8 +65,8 @@ import tempfile
 HOME = os.path.expanduser("~")
 STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
 HERE = os.path.dirname(os.path.realpath(__file__))
-STAGES = ["idea", "defined", "designed", "building", "in review", "merged", "released", "deployed", "accepted", "parked"]
-FLIGHT = ("defined", "designed", "building", "in review")
+STAGES = ["idea", "defined", "designed", "planned", "building", "in review", "merged", "released", "deployed", "accepted", "parked"]
+FLIGHT = ("defined", "designed", "planned", "building", "in review")
 DOC_CAP = 256 * 1024
 MAX_WRITES = 50
 FLOOR_MIN = 30
@@ -81,7 +81,7 @@ READER = "dws show --json; marvel get sessions; freebusy health.jsonl"
 
 ID_RE = re.compile(r"[a-z0-9.-]{1,80}")
 STATE_RE = re.compile(r"(pending|running|limited|succeeded|failed|crashloop-backoff|crashed)(?: \((.*)\))?", re.S)
-HEALTH_RE = re.compile(r"(alive|healthy|unhealthy|unknown)( \(stalled\))?(?: (\(logged-out\)|\(parked(?:: .*)?\)))?", re.S)
+HEALTH_RE = re.compile(r"(alive|healthy|unhealthy|unknown)( \(stalled\))?(?: (\(logged-out\)|\(unwatched\)|\(parked(?:: .*)?\)))?", re.S)
 AGE_WORD = r"(?:[0-9]{1,4}[smhd]|[0-9]{1,3}h[0-9]{1,2}m)"
 ACTIVE_RE = re.compile(r"(?:[-\u2013\u2014]|" + AGE_WORD + r"|stale(?: " + AGE_WORD + r")?)\*?")
 PATH_RE = re.compile(r"(~/|/Users/|/home/|/private/|/tmp/|/var/|(?:^|\s)/[^\s/]*/)")
@@ -309,7 +309,7 @@ def clean_state(cell):
 
 
 def clean_health(cell):
-    if re.search(r"\(parked.*\(stalled\)", cell, re.S) or "\n" in cell:
+    if re.search(r"\(parked.*\((?:stalled|unwatched)\)", cell, re.S) or "\n" in cell:
         return None
     m = HEALTH_RE.fullmatch(cell)
     if not m:

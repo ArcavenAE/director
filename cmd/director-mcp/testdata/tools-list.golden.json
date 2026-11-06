@@ -54,7 +54,7 @@
     },
     {
       "name": "wait_for_message",
-      "description": "Block up to timeout_seconds for the next message addressed to this session, then return it. This is a poll: the model must call it. The server cannot push a message into context on its own. With max greater than 1 it returns every waiting message up to max in one call, oldest first, and consumes them as the single form does; run inbox_summary first to see what is waiting without consuming it.",
+      "description": "Block up to timeout_seconds for the next message addressed to this session, then return it. This is a poll: the model must call it. The server cannot push a message into context on its own. One wait at a time per session: a second open wait is refused and reads nothing. With max greater than 1 it returns every waiting message up to max in one call, oldest first, and consumes them as the single form does; run inbox_summary first to see what is waiting without consuming it.",
       "inputSchema": {
         "properties": {
           "max": {

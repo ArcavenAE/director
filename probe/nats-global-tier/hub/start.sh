@@ -19,8 +19,9 @@ nats-server --config "$conf" -t
 # provision.sh only raises, and it uses the admin key under $DIRECTOR_GLOBAL_HOME/keys
 # that the header above names. It runs in the background, started before the
 # exec below, so the server is still this script's process; it retries while the
-# server comes up. A provision that never succeeds logs one line to
-# log/provision.log and never stops the hub from serving: start does not regress.
+# server comes up. A provision that never succeeds logs one failure line to
+# log/provision.log, followed by the last 20 lines the final attempt printed (its own
+# reason), and never stops the hub from serving: start does not regress.
 # Needs jq (provision.sh reads the stream and durable configs with it); without
 # it the hub starts anyway and the skip is logged. DIRECTOR_GLOBAL_PROVISION and
 # DIRECTOR_PROVISION_TRIES exist so verify-start-provision.sh can stand in a
@@ -32,7 +33,7 @@ plog="$DIRECTOR_GLOBAL_HOME/log/provision.log"
 stamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 if command -v jq >/dev/null 2>&1; then
   (
-    rc=0
+    rc=0; out=""
     for _ in $(seq 1 "$tries"); do
       if out="$(bash "$provision" 2>&1)"; then
         printf '%s provision ok\n%s\n' "$(stamp)" "$out" >> "$plog"
@@ -43,6 +44,9 @@ if command -v jq >/dev/null 2>&1; then
       sleep 2
     done
     printf '%s provision failed after %s tries (last exit %s); the hub keeps serving\n' "$(stamp)" "$tries" "$rc" >> "$plog"
+    # provision.sh says why it failed (a bad key, a failed stream listing); keep the
+    # last attempt's last 20 lines under the failure line, indented.
+    if [[ -n "$out" ]]; then printf '%s\n' "$out" | tail -n 20 | sed 's/^/  /' >> "$plog"; fi
   ) > /dev/null 2>&1 &
 else
   printf '%s jq not on PATH: provision skipped, the hub starts without it\n' "$(stamp)" >> "$plog"

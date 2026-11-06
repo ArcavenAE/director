@@ -1,0 +1,17 @@
+id: grv-marvel-watchdog-reads-director-bus
+type: graveyard
+confidence: graveyard
+title: "Marvel's watchdog reading director's bus"
+content: |
+  Harvested 2026-11-05 with finding-director-97gz. Marvel's watchdog does
+  not read director's bus, so that the components stay independent;
+  director may read marvel, not the reverse (finding-director-gmah section 3).
+graveyard:
+  approach: "marvel's watchdog reads director's bus to find stalled seats"
+  ruling: "Marvel's watchdog does not read director's bus, so that the components stay independent; director may read marvel, not the reverse (finding-director-gmah section 3)."
+  reopener: "An amended component-independence decision."
+provenance:
+  created_by: agent
+  reviewed_by: null
+  session: 2026-11-05 finding-director-97gz
+  created_at: "2026-11-05"

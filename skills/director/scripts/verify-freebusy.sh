@@ -91,6 +91,11 @@ if [[ "$*" == "unread --json --older-than 300s" ]]; then
   if [[ -e "$FB_FIX/unread.junk" ]]; then echo "not json at all"; exit 0; fi
   cat "$FB_FIX/unread.json"; exit 0
 fi
+if [[ "$*" == "unread --json --global" ]]; then
+  if [[ -e "$FB_FIX/global.fail" ]]; then echo "director-mcp unread: hub unreachable" >&2; exit 1; fi
+  if [[ -e "$FB_FIX/global.json" ]]; then cat "$FB_FIX/global.json"; else echo '{"reports":[]}'; fi
+  exit 0
+fi
 if [[ "$*" != "asks --json" ]]; then echo "stub director-mcp: unexpected $*" >&2; exit 2; fi
 if [[ -e "$FB_FIX/asks.old" ]]; then echo "director-mcp: unknown mode asks" >&2; exit 2; fi
 cat "$FB_FIX/asks.json"
@@ -116,7 +121,7 @@ teams() { # teams FILE LINES...
   { echo 'WORKSPACE  TEAM  ROLE  REPLICAS  RUNTIME'; printf '%s\n' "$@"; } >"$f"
 }
 fixtures() {
-  rm -f "$FIX"/config.list* "$FIX"/*.exclude "$FIX"/marvel.env "$FIX"/forbidden.log "$FIX"/*.slept "$FIX"/*.teamsfail "$FIX"/*.down "$FIX"/*.slow "$FIX"/*.noturn "$FIX"/*.turn "$FIX"/asks.old "$FIX"/*.log "$FIX/slow.pids" "$FIX"/*.version "$FIX"/marvel.rb "$FIX"/unread.*; rm -rf "$FIX/cap"; mkdir -p "$FIX/cap"
+  rm -f "$FIX"/config.list* "$FIX"/*.exclude "$FIX"/marvel.env "$FIX"/forbidden.log "$FIX"/*.slept "$FIX"/*.teamsfail "$FIX"/*.down "$FIX"/*.slow "$FIX"/*.noturn "$FIX"/*.turn "$FIX"/asks.old "$FIX"/*.log "$FIX/slow.pids" "$FIX"/*.version "$FIX"/marvel.rb "$FIX"/unread.* "$FIX"/global.*; rm -rf "$FIX/cap"; mkdir -p "$FIX/cap"
   sess alpha.sessions \
     'wsa crew builder crew-builder-1 6s* 100%* running healthy' \
     'wsa crew builder crew-builder-2 4m 0% running healthy' \
@@ -289,7 +294,7 @@ case_no_writes() {
   [[ "$(grep -c '^get ' "$FIX/marvel.log")" == "$(grep -c '^get .*--cluster ' "$FIX/marvel.log")" ]] && ok "7  every get names its cluster" || bad "7  a get without --cluster"
   grep -q -- '--socket' "$FIX/marvel.log" && bad "7  a call carried --socket" || ok "7  no call carries --socket"
   [[ "$(sort -u "$FIX/marvel.env")" == "MARVEL_SOCKET=unset MARVEL_HOME=unset" ]] && ok "7  marvel saw no MARVEL_SOCKET or MARVEL_HOME that the script set" || bad "7  marvel env" "$(sort -u "$FIX/marvel.env")"
-  [[ "$(sort -u "$FIX/mcp.log")" == "$(printf '%s\n' 'asks --json' 'unread --json --older-than 300s')" ]] && ok "7  director-mcp was only asked for asks --json and unread --json --older-than 300s" || bad "7  mcp" "$(cat "$FIX/mcp.log")"
+  [[ "$(sort -u "$FIX/mcp.log")" == "$(printf '%s\n' 'asks --json' 'unread --json --global' 'unread --json --older-than 300s')" ]] && ok "7  director-mcp was only asked for asks --json, unread --json --global and unread --json --older-than 300s" || bad "7  mcp" "$(cat "$FIX/mcp.log")"
   if grep -vE '^[[:space:]]*#' "$FB" | grep -qE 'MARVEL_SOCKET|MARVEL_HOME|--socket'; then bad "7  the script text sets or names MARVEL_SOCKET, MARVEL_HOME or --socket"; else ok "7  the script text never sets MARVEL_SOCKET, MARVEL_HOME or --socket"; fi
   # the script text: no bus send, inject, bd write or gh call (comments excluded)
   local code hits
@@ -651,12 +656,31 @@ daemon  0.1.0-alpha.2 (alpha) commit def456 pid 11 started 2026-10-20T00:00:00Z'
   grep -q 'GAP version: cluster gamma' <<<"$out" && ok "V1 a cluster whose daemon build cannot be read prints a GAP" || bad "V1 daemon gap" "$out"
 }
 
+case_over_bound() {
+  fixtures; new_state; conf3
+  local base=(FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")
+  out="$(run "${base[@]}")"
+  ! grep -q 'OVER-BOUND' <<<"$out" && ok "B1 no over-bound line when no durable is over the bound" || bad "B1 quiet" "$out"
+  jq -n -c '{durables: [{agent_id: "crew-builder-1", live: true, over_bound: true, oldest_unread_age_seconds: 700.4}, {agent_id: "crew-architect-1", live: true, oldest_unread_age_seconds: 50}]}' >"$FIX/unread.json"
+  echo '{"reports":[{"cluster":"hub","durables":[{"agent_id":"ops-supervisor-1","over_bound":true,"oldest_unread_age_seconds":900}]}]}' >"$FIX/global.json"
+  out="$(run "${base[@]}")"
+  grep -q -- '- OVER-BOUND local crew-builder-1 700s' <<<"$out" && ok "B2 a local seat over the bound is named with its age" || bad "B2 local" "$out"
+  grep -q -- '- OVER-BOUND global ops-supervisor-1 900s' <<<"$out" && ok "B2 a global seat over the bound is named with its age" || bad "B2 global" "$out"
+  ! grep -q 'OVER-BOUND local crew-architect-1' <<<"$out" && ok "B2 a seat under the bound is not named" || bad "B2 under" "$out"
+  [[ "$(cat "$root/rc")" == 0 ]] && ok "B2 the exit status is unchanged" || bad "B2 rc" "$(cat "$root/rc")"
+  touch "$FIX/global.fail"
+  out="$(run "${base[@]}")"
+  grep -q 'GAP mail: director-mcp unread --global exited 1' <<<"$out" && ok "B3 a failed global read prints a GAP" || bad "B3 gap" "$out"
+  grep -q -- '- OVER-BOUND local crew-builder-1 700s' <<<"$out" && ok "B3 and the local rows stay" || bad "B3 local kept" "$out"
+  [[ "$(cat "$root/rc")" == 0 ]] && ok "B3 the exit status is unchanged" || bad "B3 rc" "$(cat "$root/rc")"
+}
+
 for FB_BASH in $BASHES; do
   export FB_BASH
   echo "== $FB_BASH =="
   if ! "$FB_BASH" -n "$FB"; then bad "0  bash -n ($FB_BASH)"; else ok "0  bash -n passes ($FB_BASH)"; fi
   case_all_read; case_parked; case_cluster_down; case_asks; case_modes
-  case_no_writes; case_health; case_concurrent; case_hung_read; case_flow_and_turn; case_conf; case_formats; case_lock_age; case_empty_list; case_discovery; case_lock_min
+  case_no_writes; case_health; case_concurrent; case_hung_read; case_flow_and_turn; case_conf; case_formats; case_lock_age; case_empty_list; case_discovery; case_lock_min; case_over_bound
 done
 
 echo "$pass passed, $fail failed"

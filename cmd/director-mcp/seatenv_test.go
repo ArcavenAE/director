@@ -44,10 +44,10 @@ func TestResolveSeatEnv(t *testing.T) {
 		{
 			name: "managed: marvel's stamps and its own credentials",
 			env: map[string]string{
-				"MARVEL_SESSION": "aae-orc-builder-g9-0", "MARVEL_TEAM": "aae-orc", "MARVEL_WORKSPACE": "aae",
-				"DIRECTOR_NATS_USER": "aae-orc", "DIRECTOR_NATS_PASS": "from-marvel",
+				"MARVEL_SESSION": "team-a-builder-g1-0", "MARVEL_TEAM": "team-a", "MARVEL_WORKSPACE": "aae",
+				"DIRECTOR_NATS_USER": "team-a", "DIRECTOR_NATS_PASS": "from-marvel",
 			},
-			id: "aae-orc-builder-g9-0", team: "aae-orc", ws: "aae",
+			id: "team-a-builder-g1-0", team: "team-a", ws: "aae",
 		},
 		{
 			name: "explicit DIRECTOR_* wins over marvel's stamps",

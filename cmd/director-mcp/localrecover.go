@@ -173,7 +173,7 @@ func (b *Bus) pullLocalNoWait(ctx context.Context, n int) ([]drained, int, error
 				continue
 			}
 		}
-		if b.handled == nil {
+		if b.handled == nil && ackLaterFrom(ctx) == nil {
 			for _, it := range out {
 				if !it.AckUnconfirmed {
 					b.noteLocalAcked(it.Seq)

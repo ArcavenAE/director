@@ -26,6 +26,16 @@ import (
 )
 
 type Bus struct {
+	// waitMu guards waitSince, the start of the one open wait_for_message
+	// (zero when none). A second wait is refused while it is set (toolWait).
+	waitMu    sync.Mutex
+	waitSince time.Time
+
+	// returned is mail whose reply nobody read (a late cancel), returned first
+	// by the next wait (ackafter.go).
+	retMu    sync.Mutex
+	returned []drained
+
 	// violations holds the broker's recent publish permission violations (see
 	// violations.go); the global tier shares it because it shares nc.
 	violations *violationRing
@@ -58,6 +68,9 @@ type Bus struct {
 	// collapse into one (R-50). pid is recorded for the roster.
 	instance string
 	pid      int
+	// pidspace names the pid space this shim runs in, written beside pid so a
+	// later shim reaps only rows whose pid it can probe (reap.go).
+	pidspace string
 
 	// state is the last presence state the model set; the heartbeat re-writes
 	// it on the shim's own timer (R-56), never on a model tool call.
@@ -236,7 +249,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		nc.Close()
 		return nil, herr
 	}
-	b := &Bus{violations: ring, nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), state: "idle", globalCfg: gcfg, handled: h}
+	b := &Bus{violations: ring, nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), pidspace: thisPidspace(), state: "idle", globalCfg: gcfg, handled: h}
 	if h != nil {
 		h.streamOf = b.streamFor
 		h.onAck = b.noteTierAcked
@@ -1216,6 +1229,14 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 				seq = md.Sequence.Stream
 			}
 			if b.handled == nil {
+				if al := ackLaterFrom(ctx); al != nil {
+					// Held, not acked: callTool acks after the reply is written.
+					al.hold(m, &e, "local", seq)
+					if b.testAfterAck != nil {
+						b.testAfterAck(ctx)
+					}
+					return &e, seq, nil
+				}
 				_ = m.Ack()
 				b.noteLocalAcked(seq)
 				if b.testAfterAck != nil {
@@ -1526,7 +1547,10 @@ func (b *Bus) writeGlobalPresenceView(ctx context.Context, state string, view pr
 	if err != nil {
 		return err.Error()
 	}
-	if err := g.writePresenceWith(ctx, b.self, b.instance, b.pid, state, view.fields); err != nil {
+	if err := g.writePresenceWith(ctx, b.self, b.instance, b.pid, state, func(rec map[string]any) {
+		view.fields(rec)
+		rec["pidspace"] = b.pidspace
+	}); err != nil {
 		return fmt.Sprintf("global presence write failed: %v", err)
 	}
 	return ""
@@ -1597,6 +1621,7 @@ func (b *Bus) writePresenceView(ctx context.Context, state string, view presence
 		"workspace": b.self.Workspace,
 		"instance":  b.instance,
 		"pid":       b.pid,
+		"pidspace":  b.pidspace,
 		"state":     state,
 		"ts":        time.Now().UTC().Format(time.RFC3339),
 		// The shim revision this session runs, from the binary's own build

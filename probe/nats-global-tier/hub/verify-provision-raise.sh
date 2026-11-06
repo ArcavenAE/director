@@ -3,12 +3,16 @@
 # max age below 168h is raised to it, a longer one and an unlimited one are
 # left alone, the director's own durables (mcp_global_*) below 192h are raised to
 # it, and a longer threshold, none, and a durable of someone else's are left
-# alone. Then the same cases run against two mutants of provision.sh that LOWER a
-# value, and each must go red.
+# alone. A run with no arguments also visits a GLOBAL_TO_ stream the script was never
+# told about (aae-orc-acasl), and a stream listing that fails or is not a JSON array
+# of names stops it before it creates anything. Then the same
+# cases run against mutants of provision.sh, each of which breaks one of those, and
+# each must go red.
 #
 # Runs against a throwaway nats-server of its own on a random loopback port. It
 # never dials the hub or the local broker, and refuses a port in the hub's or the
-# local broker's set. Run it under a localhost-only profile with a scratch home.
+# local broker's set. Run it under a localhost-only profile that also denies those
+# ports (the refusal cannot see a port the kernel never draws), with a scratch home.
 #
 # Usage: probe/nats-global-tier/hub/verify-provision-raise.sh   Exit nonzero on any miss.
 set -euo pipefail
@@ -28,12 +32,21 @@ trap cleanup EXIT
 
 hour=3600000000000
 
+# free_port: a random loopback port that is not one a bus or hub listens on. The
+# kernel hands out 49152 and up, so these cannot come back from bind(0); the refusal
+# is a backstop, and the real protection is a sandbox profile that denies the ports.
+free_port() {
+  local port
+  port="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  case "$port" in 3307|4222|4242|6785|7422|7442|8222|8242) echo "refusing port $port" >&2; exit 2;; esac
+  echo "$port"
+}
+
 # run_case SCRIPT: a fresh broker, the cases built, SCRIPT run twice. Prints
 # PASS/FAIL lines for the real script; returns the number of misses in $misses.
 run_case() {
   local script="$1" label="$2" port
-  port="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-  case "$port" in 4222|4242|7422|7442) echo "refusing port $port"; exit 2;; esac
+  port="$(free_port)"
   local dir="$work/$label"; mkdir -p "$dir/store"
   printf 'listen: 127.0.0.1:%s\njetstream { store_dir: "%s" }\n' "$port" "$dir/store" > "$dir/nats.conf"
   nats-server -c "$dir/nats.conf" -l "$dir/broker.log" &
@@ -79,10 +92,204 @@ run_case() {
   local changes; changes="$(printf '%s\n' "$out1" | /usr/bin/grep -c ' raised ' || true)"
   [[ "$changes" == "2" ]] && ok "$label: one line per change (2 on the first run)" || bad "$label: one line per change (2 on the first run)" "got $changes: $out1"
   printf '%s\n' "$out2" | /usr/bin/grep -q ' raised ' && bad "$label: the second run changes nothing" "$out2" || ok "$label: the second run changes nothing"
+  # c1 and c2 were named: neither run may call them "found on the hub (not named)".
+  printf '%s\n%s\n' "$out1" "$out2" | /usr/bin/grep -q '^stream GLOBAL_TO_c[12] found on the hub' && bad "$label: a named stream is not reported as found, on either run" "$out1 $out2" || ok "$label: a named stream is not reported as found, on either run"
+}
+
+# run_noarg SCRIPT LABEL: a fresh broker holding GLOBAL_TO_DIRECTOR and GLOBAL_TO_c3
+# (c3 is in no hard-coded list), both at 72h. SCRIPT runs with no arguments, twice.
+run_noarg() {
+  local script="$1" label="$2" port dir out1 out2
+  port="$(free_port)"
+  dir="$work/$label"; mkdir -p "$dir/store"
+  printf 'listen: 127.0.0.1:%s\njetstream { store_dir: "%s" }\n' "$port" "$dir/store" > "$dir/nats.conf"
+  nats-server -c "$dir/nats.conf" -l "$dir/broker.log" &
+  pids+=($!)
+  local i; for i in $(seq 1 50); do nats -s "nats://127.0.0.1:$port" server check connection >/dev/null 2>&1 && break; sleep 0.2; done
+
+  local N=(nats -s "nats://127.0.0.1:$port")
+  "${N[@]}" stream add GLOBAL_TO_DIRECTOR --subjects 'global.director.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+  "${N[@]}" stream add GLOBAL_TO_c3 --subjects 'global.c3.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+  # a stream whose name only contains the prefix is not a GLOBAL_TO_ stream and is never visited.
+  "${N[@]}" stream add XGLOBAL_TO_c4 --subjects 'x.c4.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+  # on the unnamed stream: a director durable at 25h (raise) and one that is not the director's (leave).
+  "${N[@]}" consumer add GLOBAL_TO_c3 mcp_global_z_1 --filter 'global.c3.>' --pull --ack explicit --deliver all --defaults --inactive-threshold 25h >/dev/null
+  "${N[@]}" consumer add GLOBAL_TO_c3 hand_made --filter 'global.c3.>' --pull --ack explicit --deliver all --defaults --inactive-threshold 25h >/dev/null
+
+  out1="$(DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" 2>&1)" || { bad "$label: a no-argument run exits 0" "$out1"; return; }
+  ok "$label: a no-argument run exits 0"
+  out2="$(DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" 2>&1)" || { bad "$label: a second no-argument run exits 0" "$out2"; return; }
+
+  local age; age="$("${N[@]}" stream info GLOBAL_TO_c3 --json | jq -r '.config.max_age')"
+  [[ "$age" == "$((168*hour))" ]] && ok "$label: a stream named in no list is raised to 168h" || bad "$label: a stream named in no list is raised to 168h" "got $age"
+  printf '%s\n' "$out1" | /usr/bin/grep -q '^stream GLOBAL_TO_c3 found on the hub (not named), visited$' && ok "$label: the run says it found GLOBAL_TO_c3" || bad "$label: the run says it found GLOBAL_TO_c3" "$out1"
+  printf '%s\n' "$out1" | /usr/bin/grep -q '^stream GLOBAL_TO_c3 max_age raised ' && ok "$label: the run prints a raised line for GLOBAL_TO_c3" || bad "$label: the run prints a raised line for GLOBAL_TO_c3" "$out1"
+  local s; for s in kinu mokuzai; do
+    "${N[@]}" stream info "GLOBAL_TO_$s" >/dev/null 2>&1 && ok "$label: GLOBAL_TO_$s exists after the run" || bad "$label: GLOBAL_TO_$s exists after the run" "$out1"
+  done
+  printf '%s\n' "$out2" | /usr/bin/grep -q ' raised ' && bad "$label: the second no-argument run changes nothing" "$out2" || ok "$label: the second no-argument run changes nothing"
+  # the director's own stream and the bootstrap list are named: on neither run are they "found".
+  printf '%s\n%s\n' "$out1" "$out2" | /usr/bin/grep -q '^stream GLOBAL_TO_\(DIRECTOR\|kinu\|mokuzai\) found on the hub' && bad "$label: a named stream is not reported as found, on either run" "$out1 $out2" || ok "$label: a named stream is not reported as found, on either run"
+  local th; th() { "${N[@]}" consumer info "$1" "$2" --json | jq -r '.config.inactive_threshold // 0'; }
+  [[ "$(th GLOBAL_TO_c3 mcp_global_z_1)" == "$((192*hour))" ]] && ok "$label: a director durable on an unnamed stream is raised to 192h" || bad "$label: a director durable on an unnamed stream is raised to 192h" "got $(th GLOBAL_TO_c3 mcp_global_z_1)"
+  [[ "$(th GLOBAL_TO_c3 hand_made)" == "$((25*hour))" ]] && ok "$label: a durable that is not the director's, on an unnamed stream, is left alone" || bad "$label: a durable that is not the director's, on an unnamed stream, is left alone" "got $(th GLOBAL_TO_c3 hand_made)"
+  # the exact set of streams: nothing is created that nobody named (the presence bucket's
+  # own stream, KV_GLOBAL_PRESENCE, does not start with GLOBAL_TO_ and is not visited).
+  local set; set="$("${N[@]}" stream ls --names --json | jq -r '.[]' | LC_ALL=C sort | paste -sd, -)"
+  [[ "$set" == "GLOBAL_TO_DIRECTOR,GLOBAL_TO_c3,GLOBAL_TO_kinu,GLOBAL_TO_mokuzai,KV_GLOBAL_PRESENCE,XGLOBAL_TO_c4" ]] && ok "$label: the hub holds exactly the expected streams after two runs" || bad "$label: the hub holds exactly the expected streams after two runs" "got $set"
+}
+
+# run_withargs SCRIPT LABEL: arguments choose which streams to create, and do not stop
+# an existing stream from being visited. A broker holding GLOBAL_TO_c3 at 72h; the run
+# is told only kinu.
+run_withargs() {
+  local script="$1" label="$2" port dir out
+  port="$(free_port)"
+  dir="$work/$label"; mkdir -p "$dir/store"
+  printf 'listen: 127.0.0.1:%s\njetstream { store_dir: "%s" }\n' "$port" "$dir/store" > "$dir/nats.conf"
+  nats-server -c "$dir/nats.conf" -l "$dir/broker.log" &
+  pids+=($!)
+  local i; for i in $(seq 1 50); do nats -s "nats://127.0.0.1:$port" server check connection >/dev/null 2>&1 && break; sleep 0.2; done
+  local N=(nats -s "nats://127.0.0.1:$port")
+  "${N[@]}" stream add GLOBAL_TO_c3 --subjects 'global.c3.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+  out="$(DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" kinu 2>&1)" || { bad "$label: a run with arguments exits 0" "$out"; return; }
+  local age; age="$("${N[@]}" stream info GLOBAL_TO_c3 --json | jq -r '.config.max_age')"
+  [[ "$age" == "$((168*hour))" ]] && ok "$label: a run with arguments still raises an unnamed stream" || bad "$label: a run with arguments still raises an unnamed stream" "got $age"
+  "${N[@]}" stream info GLOBAL_TO_kinu >/dev/null 2>&1 && ok "$label: the named stream is created" || bad "$label: the named stream is created" "$out"
+  "${N[@]}" stream info GLOBAL_TO_mokuzai >/dev/null 2>&1 && bad "$label: arguments replace the bootstrap list" "mokuzai was created" || ok "$label: arguments replace the bootstrap list"
 }
 
 # The real script.
 run_case "$here/provision.sh" real
+run_noarg "$here/provision.sh" real-noarg
+run_withargs "$here/provision.sh" real-withargs
+
+# A stand-in nats ahead of the real one on PATH. It passes every call through except
+# the one named in STANDIN_MATCH, which prints STANDIN_OUT and exits STANDIN_RC. That
+# keeps every other call working, so a script that carries on after the failure would
+# create streams, and the cases below can tell.
+real_nats="$(command -v nats)"
+mkdir -p "$work/bin"
+# (printf, not a here document: bash 3.2 writes those under /tmp, which a scratch-only
+# sandbox refuses.)
+printf '%s\n' '#!/usr/bin/env bash' \
+  'if [[ -n "${STANDIN_MATCH:-}" && "$*" == *"$STANDIN_MATCH"* ]]; then' \
+  '  printf "%s" "${STANDIN_OUT:-}"; exit "${STANDIN_RC:-1}"' \
+  'fi' \
+  "exec \"$real_nats\" \"\$@\"" > "$work/bin/nats"
+chmod +x "$work/bin/nats"
+
+# run_standin SCRIPT LABEL MATCH OUT RC: a bare broker, SCRIPT run with no arguments
+# and the stand-in in force. Leaves the run's exit status in $standin_rc, its
+# output in $standin_out, and the port in $standin_port.
+run_standin() {
+  local script="$1" label="$2" match="$3" out="$4" rc="$5" dir
+  standin_port="$(free_port)"
+  dir="$work/$label"; mkdir -p "$dir/store"
+  printf 'listen: 127.0.0.1:%s\njetstream { store_dir: "%s" }\n' "$standin_port" "$dir/store" > "$dir/nats.conf"
+  nats-server -c "$dir/nats.conf" -l "$dir/broker.log" &
+  pids+=($!)
+  local i; for i in $(seq 1 50); do nats -s "nats://127.0.0.1:$standin_port" server check connection >/dev/null 2>&1 && break; sleep 0.2; done
+  if [[ -n "${standin_setup:-}" ]]; then "$standin_setup" "$standin_port"; fi
+  standin_out="$(cd "${standin_cwd:-$PWD}" && PATH="$work/bin:$PATH" STANDIN_MATCH="$match" STANDIN_OUT="$out" STANDIN_RC="$rc" DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$standin_port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" 2>&1)" && standin_rc=0 || standin_rc=$?
+}
+
+# run_badlist SCRIPT LABEL: the stream listing fails, or comes back as something that is
+# not a JSON array of names. The stand-in leaves stream add working, so only a script
+# that stops at the listing leaves the hub bare. Each case needs a nonzero exit, the
+# problem named, and nothing created.
+run_badlist() {
+  local script="$1" label="$2" name out rc
+  local -a names=(failed notjson truncated number error-object empty blank two-documents)
+  local -a outs=("" "not json{" '["GLOBAL_TO_c3"' '[1]' '{"error":"no responders"}' "" $'  \n\t\n' '["GLOBAL_TO_c3"]["GLOBAL_TO_c4"]')
+  local -a rcs=(1 0 0 0 0 0 0 0)
+  local n
+  for n in 0 1 2 3 4 5 6 7; do
+    name="${names[$n]}"
+    run_standin "$script" "$label-$name" "stream ls" "${outs[$n]}" "${rcs[$n]}"
+    local made; made="$(nats -s "nats://127.0.0.1:$standin_port" stream ls --names --json 2>&1)"
+    if (( standin_rc != 0 )); then ok "$label: a $name listing fails the run"; else bad "$label: a $name listing fails the run" "exit 0: $standin_out"; fi
+    if printf '%s\n' "$standin_out" | /usr/bin/grep -q 'stream ls \(failed\|returned something other than a JSON array of names\)'; then ok "$label: a $name listing is named"; else bad "$label: a $name listing is named" "$standin_out"; fi
+    if [[ "$made" == "null" ]]; then ok "$label: a $name listing creates nothing"; else bad "$label: a $name listing creates nothing" "$made"; fi
+  done
+}
+
+# A failure on an unnamed stream must not stop the bucket the script always provisions.
+run_unnamed_fail() {
+  local script="$1" label="$2" N
+  local dir="$work/$label-pre"
+  # c3 exists on the hub and is in no list; listing its consumers fails.
+  standin_port="$(free_port)"; mkdir -p "$dir/store"
+  printf 'listen: 127.0.0.1:%s\njetstream { store_dir: "%s" }\n' "$standin_port" "$dir/store" > "$dir/nats.conf"
+  nats-server -c "$dir/nats.conf" -l "$dir/broker.log" &
+  pids+=($!)
+  local i; for i in $(seq 1 50); do nats -s "nats://127.0.0.1:$standin_port" server check connection >/dev/null 2>&1 && break; sleep 0.2; done
+  N=(nats -s "nats://127.0.0.1:$standin_port")
+  "${N[@]}" stream add GLOBAL_TO_c3 --subjects 'global.c3.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+  local out rc
+  out="$(PATH="$work/bin:$PATH" STANDIN_MATCH="consumer ls GLOBAL_TO_c3" STANDIN_OUT= STANDIN_RC=1 DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$standin_port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" 2>&1)" && rc=0 || rc=$?
+  (( rc != 0 )) && ok "$label: a failure on an unnamed stream still fails the run" || bad "$label: a failure on an unnamed stream still fails the run" "$out"
+  local s; for s in GLOBAL_TO_DIRECTOR GLOBAL_TO_kinu GLOBAL_TO_mokuzai; do
+    "${N[@]}" stream info "$s" >/dev/null 2>&1 && ok "$label: $s is provisioned before the unnamed stream" || bad "$label: $s is provisioned before the unnamed stream" "$out"
+  done
+  "${N[@]}" kv info GLOBAL_PRESENCE >/dev/null 2>&1 && ok "$label: GLOBAL_PRESENCE is provisioned before the unnamed stream" || bad "$label: GLOBAL_PRESENCE is provisioned before the unnamed stream" "$out"
+}
+
+# A stream named GLOBAL_TO_ with nothing after it has no cluster to visit; the run says
+# so and carries on.
+run_emptysuffix() {
+  local script="$1" label="$2"
+  run_standin "$script" "$label" "stream ls" '["GLOBAL_TO_"]' 0
+  if (( standin_rc == 0 )); then ok "$label: an empty cluster name does not fail the run"; else bad "$label: an empty cluster name does not fail the run" "$standin_out"; fi
+  if printf '%s\n' "$standin_out" | /usr/bin/grep -q '^stream GLOBAL_TO_ has no cluster name, not visited$'; then ok "$label: an empty cluster name is reported"; else bad "$label: an empty cluster name is reported" "$standin_out"; fi
+}
+
+# A stream name with a glob character is visited as written, and never expanded
+# against the files in the directory the script runs from.
+run_glob() {
+  local script="$1" label="$2" made
+  mkdir -p "$work/globcwd"; : > "$work/globcwd/GLOBAL_TO_axb"
+  standin_cwd="$work/globcwd" run_standin "$script" "$label" "stream ls" '["GLOBAL_TO_a?b"]' 0
+  made="$(nats -s "nats://127.0.0.1:$standin_port" stream ls --names --json 2>&1)"
+  if (( standin_rc == 0 )) && printf '%s' "$made" | /usr/bin/grep -q '"GLOBAL_TO_a?b"' && ! printf '%s' "$made" | /usr/bin/grep -q 'GLOBAL_TO_axb'; then
+    ok "$label: a name with a glob character is visited as written"
+  else
+    bad "$label: a name with a glob character is visited as written" "rc=$standin_rc made=$made out=$standin_out"
+  fi
+}
+
+# setup_durable PORT: a stream GLOBAL_TO_c3 at 72h holding a director durable at 25h.
+setup_durable() {
+  local N=(nats -s "nats://127.0.0.1:$1")
+  "${N[@]}" stream add GLOBAL_TO_c3 --subjects 'global.c3.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+  "${N[@]}" consumer add GLOBAL_TO_c3 mcp_global_z_1 --filter 'global.c3.>' --pull --ack explicit --deliver all --defaults --inactive-threshold 25h >/dev/null
+}
+
+# run_badconsumers SCRIPT LABEL: the consumer listing on a stream is empty, not JSON,
+# an object, an array holding a non-string, or two arrays. The stand-in leaves every
+# other call working. Each must exit nonzero, name the stream and the shape, and leave
+# the durable at 25h: without the check the run exits 0 and the durable is never raised.
+run_badconsumers() {
+  local script="$1" label="$2" name n
+  local -a names=(empty notjson object non-string two-documents)
+  local -a outs=("" "not json{" '{"error":"no responders"}' '["mcp_global_z_1",1]' '["mcp_global_z_1"]["mcp_global_z_1"]')
+  for n in 0 1 2 3 4; do
+    name="${names[$n]}"
+    standin_setup=setup_durable run_standin "$script" "$label-$name" "consumer ls GLOBAL_TO_c3" "${outs[$n]}" 0
+    local th; th="$(nats -s "nats://127.0.0.1:$standin_port" consumer info GLOBAL_TO_c3 mcp_global_z_1 --json | jq -r '.config.inactive_threshold // 0')"
+    if (( standin_rc != 0 )); then ok "$label: a $name consumer listing fails the run"; else bad "$label: a $name consumer listing fails the run" "exit 0: $standin_out"; fi
+    if printf '%s\n' "$standin_out" | /usr/bin/grep -q 'consumer ls GLOBAL_TO_c3 returned something other than a JSON array of names'; then ok "$label: a $name consumer listing is named, with its stream"; else bad "$label: a $name consumer listing is named, with its stream" "$standin_out"; fi
+    [[ "$th" == "$((25*hour))" ]] && ok "$label: a $name consumer listing leaves the durable where it was" || bad "$label: a $name consumer listing leaves the durable where it was" "got $th"
+  done
+}
+# Both listings, for a mutant of the shared shape check.
+run_badshapes() { run_badlist "$1" "$2"; run_badconsumers "$1" "$2"; }
+
+run_badlist "$here/provision.sh" real-badlist
+run_badconsumers "$here/provision.sh" real-badconsumer
+run_glob "$here/provision.sh" real-glob
+run_emptysuffix "$here/provision.sh" real-emptysuffix
+run_unnamed_fail "$here/provision.sh" real-unnamed
 
 # Mutants: each LOWERS a value, so the cases above must fail against it. A
 # mutant's own PASS/FAIL lines go to a file and its counters are put back; the
@@ -105,6 +312,55 @@ mutant() {
 mutant lowering-stream 'cur > 0 \&\& cur < STREAM_MAX_AGE_NS' 'cur > 0 \&\& cur != STREAM_MAX_AGE_NS'
 # A durable edit that lowers.
 mutant lowering-durable 'cur > 0 \&\& cur < DURABLE_INACTIVE_NS' 'cur > 0 \&\& cur != DURABLE_INACTIVE_NS'
+
+# mutant_with RUNNER LABEL FROM TO: a mutant judged by RUNNER alone (run_noarg,
+# run_badlist or run_unnamed_fail), because run_case names every stream it builds and
+# would not notice. The mutant's own PASS/FAIL lines go to a file and its counters are
+# put back; the only result that counts is whether the cases noticed.
+mutant_with() {
+  local runner="$1" label="$2" from="$3" to="$4" file="$work/provision-$2.sh" p0 f0
+  sed "s~$from~$to~" "$here/provision.sh" > "$file"
+  if cmp -s "$file" "$here/provision.sh"; then echo "mutant $label changed nothing"; exit 2; fi
+  p0=$pass; f0=$fail
+  "$runner" "$file" "$label" > "$work/$label.out" 2>&1 || true
+  if (( fail > f0 )); then
+    pass=$p0; fail=$f0
+    ok "mutant $label goes red; failing: $(/usr/bin/grep '^FAIL' "$work/$label.out" | sed -e "s/^FAIL $label[a-z-]*: //" | cut -c1-90 | paste -sd ';' - )"
+  else
+    pass=$p0; fail=$f0
+    bad "mutant $label goes red" "every case still passed"
+  fi
+}
+# Discovery removed: the listing is read as an empty array.
+mutant_with run_noarg hardcoded-default '"\$listing"' '"[]"'
+# A failed listing prints its message and carries on with an empty listing.
+mutant_with run_badlist print-and-carry-on 'stream ls failed" >\&2; exit 1;' 'stream ls failed" >\&2; listing=null;'
+# A listing that is not an array of names is read as empty instead of an error.
+mutant_with run_badlist shape-unchecked 'else error("not an array of names")' 'else empty'
+# The prefix filter is gone, so the presence bucket's own stream is visited as a cluster.
+mutant_with run_noarg prefix-filter-removed 'select(startswith(\$p))' 'select(true)'
+# A named stream is no longer deduplicated against the list.
+mutant_with run_noarg no-dedupe 'in \*" "\$c" "\*) ;; \*) extra+=("\$c"); named="\$named\$c ";; esac' 'in *) extra+=("$c");; esac'
+# GLOBAL_TO_DIRECTOR is no longer excluded from discovery.
+mutant_with run_noarg director-not-excluded '"\$s" == GLOBAL_TO_DIRECTOR' '"$s" == GLOBAL_TO_NOPE'
+# Discovery runs only when no arguments were given.
+mutant_with run_withargs discovery-only-without-args 'for s in \$found; do' 'for s in $( [ "$#" -eq 0 ] \&\& printf "%s\\n" "$found" ); do'
+# The durables of an unnamed stream are not raised.
+mutant_with run_noarg unnamed-durables-skipped '^    raise_durables "\$name"' '    if [[ "$name" == GLOBAL_TO_DIRECTOR || " ${clusters[*]} " == *" ${name#GLOBAL_TO_} "* ]]; then raise_durables "$name"; fi'
+# An empty or blank listing is let through as if it were null.
+mutant_with run_badlist empty-listing-allowed 'length != 1' 'length > 1'
+# The glob guard is off, so a name with a glob character expands against the files here.
+mutant_with run_glob glob-unguarded '; set -f$' ';'
+# The consumer listing's shape is no longer checked: the loop runs on whatever it got.
+mutant_with run_badconsumers unchecked-consumer-loop '|| bad_shape "consumer ls \$stream"' '|| true'
+# A listing of several documents is read as its first one.
+mutant_with run_badshapes two-documents-allowed 'length != 1' 'length < 1'
+# The prefix test only looks for the prefix anywhere in the name.
+mutant_with run_noarg contains-not-startswith 'select(startswith(\$p))' 'select(contains(\$p))'
+# The match string is joined under the newline IFS again, so no named stream matches.
+mutant_with run_noarg newline-joined-match 'case "\$named" in' 'case " ${clusters[*]} " in'
+# The unnamed streams are visited before the presence bucket again.
+mutant_with run_unnamed_fail visit-before-bucket '^if "\${A\[@\]}" kv info' 'for c in ${extra[@]+"${extra[@]}"}; do add_stream "GLOBAL_TO_$c" x; done; if "${A[@]}" kv info'
 
 echo "$pass passed, $fail failed"
 (( fail == 0 ))
