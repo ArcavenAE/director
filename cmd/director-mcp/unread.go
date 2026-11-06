@@ -96,6 +96,7 @@ type cliArgs struct {
 	global      bool          // unread: the hub streams instead of AGENT_INBOX (M3)
 	byRole      bool          // unread: one line per team and role (M5)
 	olderThan   time.Duration // unread: mark rows older than this; 0 is unset (M4)
+	durables    []string      // unread --global: durable names to read by name when the hub cannot be listed
 	once        bool          // ask-reader: run one pass and exit
 	interval    time.Duration // ask-reader: the pass interval; 0 means the 30s default
 	file        string        // ask-reader: the JSON file it rewrites after each pass
@@ -113,7 +114,7 @@ const askReaderUsage = "director-mcp ask-reader [--once] [--file <path>] [--inte
 
 const dossierUsage = "director-mcp dossier --role TEAM/ROLE [--predecessor AGENT-INSTANCE] [--predecessor-state DIR] [--handoff-path PATH] [--handoff-marker TEXT] [--pointer PATH]... [--json]"
 
-const unreadUsage = "director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <duration>]"
+const unreadUsage = "director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <duration>] [--durable NAME]..."
 
 func parseArgs(args []string) (cliArgs, error) {
 	switch {
@@ -205,6 +206,12 @@ func parseArgs(args []string) (cliArgs, error) {
 				out.global = true
 			case a == "--by-role":
 				out.byRole = true
+			case a == "--durable":
+				if i+1 >= len(rest) {
+					return cliArgs{}, fmt.Errorf("unread: --durable needs a durable name (usage: %s)", unreadUsage)
+				}
+				i++
+				out.durables = append(out.durables, rest[i])
 			case a == "--older-than" || strings.HasPrefix(a, "--older-than="):
 				v, ok := strings.CutPrefix(a, "--older-than=")
 				if !ok {
@@ -317,6 +324,10 @@ type unreadReport struct {
 	OlderThan          string          `json:"older_than,omitempty"`
 	OverThresholdCount int             `json:"over_threshold_count,omitempty"`
 	Roles              []unreadRole    `json:"roles,omitempty"`
+	// Partial marks a report read by name, not by listing (aae-orc-e6otm): it
+	// holds only the rows the reader could name, and its Warnings say what it
+	// could not see. It is never a count of the stream's durables.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // The live states (M2).
@@ -343,12 +354,19 @@ var (
 // latest entry is a delete or purge marker (Get reports those as not found).
 // It returns no error for an empty bucket.
 func quietKeys(ctx context.Context, js jetstream.JetStream, bucket string, kv jetstream.KeyValue) ([]string, error) {
+	return quietKeysUnder(ctx, js, bucket, kv, "")
+}
+
+// quietKeysUnder is quietKeys limited to the keys that start with keyPrefix, by
+// a subject filter on the stream info, so a reader that may see one cluster's
+// presence asks for nothing else.
+func quietKeysUnder(ctx context.Context, js jetstream.JetStream, bucket string, kv jetstream.KeyValue, keyPrefix string) ([]string, error) {
 	stream, err := js.Stream(ctx, "KV_"+bucket)
 	if err != nil {
 		return nil, err
 	}
 	prefix := "$KV." + bucket + "."
-	info, err := stream.Info(ctx, jetstream.WithSubjectFilter(prefix+">"))
+	info, err := stream.Info(ctx, jetstream.WithSubjectFilter(prefix+keyPrefix+">"))
 	if err != nil {
 		return nil, err
 	}
@@ -417,6 +435,48 @@ func readUnread(ctx context.Context, js jetstream.JetStream, now time.Time) (unr
 	return r, nil
 }
 
+// durableRow is the part of a durable's row that one consumer info and the
+// presence map decide: counts, filters, who holds it and whether it is live.
+// The oldest unread message and the live state need more reads and are added by
+// the caller that is allowed them.
+func durableRow(info *jetstream.ConsumerInfo, rest string, presence map[string]unreadPresence, withRev bool) unreadDurable {
+	d := unreadDurable{
+		Durable:    info.Name,
+		Pending:    info.NumPending + uint64(info.NumAckPending),
+		AckPending: info.NumAckPending,
+		AckFloor:   info.AckFloor.Stream,
+		Filters:    info.Config.FilterSubjects,
+		Delivered:  info.Delivered.Consumer,
+		created:    info.Created,
+	}
+	if !info.Created.IsZero() {
+		d.Created = info.Created.UTC().Format(time.RFC3339)
+	}
+	if len(d.Filters) == 0 && info.Config.FilterSubject != "" {
+		d.Filters = []string{info.Config.FilterSubject}
+	}
+	// <agent>_<instance>: the instance is a ULID and carries no "_",
+	// so the last "_" splits it from an agent id that may.
+	if i := strings.LastIndex(rest, "_"); i > 0 {
+		d.AgentID, d.Instance = rest[:i], rest[i+1:]
+	} else {
+		d.AgentID = rest
+	}
+	d.Team, d.Role = teamAndRole(d.AgentID, d.Filters)
+	if p, ok := presence[d.AgentID+"."+d.Instance]; ok {
+		pp := p
+		d.Presence = &pp
+		d.Live = true
+		d.DurableState, d.RebuildsOK, d.RebuildsFailed = pp.durableState, pp.rebuildsOK, pp.rebuildsFailed
+		if withRev && pp.Rev == "" {
+			d.Note = "presence carries no rev: the seat runs a shim older than LR-3"
+		}
+	} else {
+		d.Note = "no presence: this durable belongs to a session that is not live"
+	}
+	return d
+}
+
 // readDurables appends one row per durable that name accepts, with its pending
 // count, ack floor, oldest unread message and presence. name returns the
 // <agent>_<instance> part of an accepted durable name. withRev says whether
@@ -428,40 +488,7 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 		if !ok {
 			continue
 		}
-		d := unreadDurable{
-			Durable:    info.Name,
-			Pending:    info.NumPending + uint64(info.NumAckPending),
-			AckPending: info.NumAckPending,
-			AckFloor:   info.AckFloor.Stream,
-			Filters:    info.Config.FilterSubjects,
-			Delivered:  info.Delivered.Consumer,
-			created:    info.Created,
-		}
-		if !info.Created.IsZero() {
-			d.Created = info.Created.UTC().Format(time.RFC3339)
-		}
-		if len(d.Filters) == 0 && info.Config.FilterSubject != "" {
-			d.Filters = []string{info.Config.FilterSubject}
-		}
-		// <agent>_<instance>: the instance is a ULID and carries no "_",
-		// so the last "_" splits it from an agent id that may.
-		if i := strings.LastIndex(rest, "_"); i > 0 {
-			d.AgentID, d.Instance = rest[:i], rest[i+1:]
-		} else {
-			d.AgentID = rest
-		}
-		d.Team, d.Role = teamAndRole(d.AgentID, d.Filters)
-		if p, ok := presence[d.AgentID+"."+d.Instance]; ok {
-			pp := p
-			d.Presence = &pp
-			d.Live = true
-			d.DurableState, d.RebuildsOK, d.RebuildsFailed = pp.durableState, pp.rebuildsOK, pp.rebuildsFailed
-			if withRev && pp.Rev == "" {
-				d.Note = "presence carries no rev: the seat runs a shim older than LR-3"
-			}
-		} else {
-			d.Note = "no presence: this durable belongs to a session that is not live"
-		}
+		d := durableRow(info, rest, presence, withRev)
 		var ageNote string
 		if d.Pending > 0 {
 			// The first message the durable has not acked: after its ack floor,
@@ -866,6 +893,10 @@ func printUnread(w io.Writer, r unreadReport, o unreadOpts) {
 		_ = enc.Encode(r)
 		return
 	}
+	if r.Partial {
+		printPartialUnread(w, r)
+		return
+	}
 	_, _ = fmt.Fprintf(w, "%s unread, read %s\n", r.Stream, r.ReadAt)
 	switch {
 	case o.ByRole:
@@ -1034,14 +1065,23 @@ func hubAnswered(err error) bool {
 // the hub is reachable and this credential may not list; if not, the hub is
 // reported unreachable as before.
 func hubListError(ctx context.Context, gjs jetstream.JetStream, domain string, err error) error {
-	if errors.Is(err, nats.ErrNoResponders) {
-		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		defer cancel()
-		if _, nerr := gjs.Stream(pctx, "KV_"+globalPresenceBucket); nerr == nil || hubAnswered(nerr) {
-			return fmt.Errorf("hub in domain %q answers named reads, but this credential may not list streams (the leaf allow-list omits the list verbs, finding-006), so unread --global needs an admin credential: %w", domain, err)
-		}
+	if listVerbMissing(ctx, gjs, err) {
+		return fmt.Errorf("hub in domain %q answers named reads, but this credential may not list streams (the leaf allow-list omits the list verbs, finding-006), so unread --global needs an admin credential: %w", domain, err)
 	}
 	return fmt.Errorf("hub in domain %q not reachable: %w", domain, err)
+}
+
+// listVerbMissing reports whether the stream-list request failed with no
+// responders while the hub answers a named read: the hub is up and this
+// credential reaches it through a leaf that does not carry the list verbs.
+func listVerbMissing(ctx context.Context, gjs jetstream.JetStream, err error) bool {
+	if !errors.Is(err, nats.ErrNoResponders) {
+		return false
+	}
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	_, nerr := gjs.Stream(pctx, "KV_"+globalPresenceBucket)
+	return nerr == nil || hubAnswered(nerr)
 }
 
 // readUnreadGlobal builds one report per hub stream (GLOBAL_TO_*), through the
@@ -1050,6 +1090,13 @@ func hubListError(ctx context.Context, gjs jetstream.JetStream, domain string, e
 // stream, since a supervisor's answer to director lands on GLOBAL_TO_DIRECTOR,
 // not on the stream its own durable reads.
 func readUnreadGlobal(ctx context.Context, nc *nats.Conn, domain string, now time.Time) ([]unreadReport, error) {
+	return readUnreadGlobalWith(ctx, nc, domain, now, nil)
+}
+
+// readUnreadGlobalWith is readUnreadGlobal with the durable names an operator
+// gave by --durable, which the partial read uses when the leaf will not name
+// the presence instances.
+func readUnreadGlobalWith(ctx context.Context, nc *nats.Conn, domain string, now time.Time, durables []string) ([]unreadReport, error) {
 	gjs, err := jetstream.NewWithDomain(nc, domain)
 	if err != nil {
 		return nil, fmt.Errorf("global JetStream domain %q: %w", domain, err)
@@ -1062,6 +1109,9 @@ func readUnreadGlobal(ctx context.Context, nc *nats.Conn, domain string, now tim
 		}
 	}
 	if err := lister.Err(); err != nil {
+		if cluster := sessionCluster(); cluster != "" && listVerbMissing(ctx, gjs, err) {
+			return readUnreadGlobalPartial(ctx, gjs, cluster, durables, now)
+		}
 		return nil, hubListError(ctx, gjs, domain, err)
 	}
 	sort.Strings(names)
@@ -1140,6 +1190,9 @@ func runUnreadCmd(ctx context.Context, url string, cli cliArgs, domain string, o
 	defer nc.Close()
 	opts := unreadOpts{JSON: cli.json, All: cli.all, ByRole: cli.byRole}
 	finish := func(r *unreadReport) {
+		if r.Partial {
+			return // a partial read has no totals to threshold or roll up
+		}
 		applyThreshold(r, cli.olderThan)
 		applyBound(r, pendingAgeBound)
 		if cli.byRole {
@@ -1148,7 +1201,7 @@ func runUnreadCmd(ctx context.Context, url string, cli cliArgs, domain string, o
 	}
 	if cli.global {
 		g := globalUnread{Domain: domain}
-		reports, err := readUnreadGlobal(ctx, nc, domain, time.Now())
+		reports, err := readUnreadGlobalWith(ctx, nc, domain, time.Now(), cli.durables)
 		if err != nil {
 			g.Error = err.Error()
 		}
