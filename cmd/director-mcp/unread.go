@@ -1014,6 +1014,24 @@ func printTrailer(w io.Writer, r unreadReport) {
 	}
 }
 
+// hubListError words the failure of the stream-list request. A cluster
+// credential reaches the hub through a leaf whose allow-list answers named reads
+// and leaves the list verbs without a responder (finding-006), so "no
+// responders" on that request does not mean the hub is down. It asks for one
+// named stream (the presence bucket's) to tell the two apart: if that answers,
+// the hub is reachable and this credential may not list; if not, the hub is
+// reported unreachable as before.
+func hubListError(ctx context.Context, gjs jetstream.JetStream, domain string, err error) error {
+	if errors.Is(err, nats.ErrNoResponders) {
+		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		if _, nerr := gjs.Stream(pctx, "KV_"+globalPresenceBucket); nerr == nil {
+			return fmt.Errorf("hub in domain %q answers named reads, but this credential may not list streams (the leaf allow-list omits the list verbs, finding-006), so unread --global needs an admin credential: %w", domain, err)
+		}
+	}
+	return fmt.Errorf("hub in domain %q not reachable: %w", domain, err)
+}
+
 // readUnreadGlobal builds one report per hub stream (GLOBAL_TO_*), through the
 // hub's JetStream domain over the leaf, with presence from GLOBAL_PRESENCE
 // (M3). It reuses the local rules unchanged; the reply scan covers every hub
@@ -1032,7 +1050,7 @@ func readUnreadGlobal(ctx context.Context, nc *nats.Conn, domain string, now tim
 		}
 	}
 	if err := lister.Err(); err != nil {
-		return nil, fmt.Errorf("hub in domain %q not reachable: %w", domain, err)
+		return nil, hubListError(ctx, gjs, domain, err)
 	}
 	sort.Strings(names)
 	presence := map[string]unreadPresence{}
