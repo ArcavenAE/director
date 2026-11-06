@@ -2,6 +2,12 @@
 # Provision the global hub's streams and presence bucket (idempotent).
 # Runs as the hub admin NKey. The hub is bare until this runs (finding-166).
 #
+# A run visits every GLOBAL_TO_ stream that exists on the hub, plus GLOBAL_TO_DIRECTOR
+# and the clusters it is told to create. The arguments (kinu and mokuzai when there
+# are none) only name streams to create; a stream found on the hub that was not named
+# is visited too and printed as such, so a cluster added later is never skipped
+# without a word (aae-orc-acasl).
+#
 # A stream that does not exist is created with the declared max age. One that
 # does exist is only ever RAISED: a finite max age shorter than the declared one
 # is edited up to it (max_age and nothing else), and a longer one, or 0
@@ -12,7 +18,7 @@
 # raised to it, a longer one or none (0) is left alone. Nothing
 # here lowers a value, and each change prints one line. A durable is kept above
 # its stream's max age so a live seat's durable outlasts its mail
-# (aae-orc-t77rr).
+# (aae-orc-t77rr, aae-orc-acasl).
 #
 # start.sh runs this once the server answers, so a hub restart applies it. It
 # can also be run by hand with the admin NKey on the hub host.
@@ -72,7 +78,18 @@ add_stream() {
     --max-age "$STREAM_MAX_AGE" --max-msg-size 65536 --dupe-window 2m --defaults >/dev/null
   echo "stream $name created ($subj)"
 }
+# Every GLOBAL_TO_ stream already on the hub is visited, named or not. A failed
+# listing stops the run: falling back to the bootstrap list would be the silent skip.
+listing="$("${A[@]}" stream ls --names --json)" || { echo "stream ls failed" >&2; exit 1; }
+extra=()
+for c in $(printf '%s' "$listing" | jq -r '.[]? | select(startswith("GLOBAL_TO_") and . != "GLOBAL_TO_DIRECTOR") | ltrimstr("GLOBAL_TO_") | select(length > 0)'); do
+  case " ${clusters[*]} ${extra[*]:-} " in *" $c "*) ;; *) extra+=("$c");; esac
+done
 add_stream GLOBAL_TO_DIRECTOR 'global.director.>'
 for c in "${clusters[@]}"; do add_stream "GLOBAL_TO_$c" "global.$c.>"; done
+for c in ${extra[@]+"${extra[@]}"}; do
+  echo "stream GLOBAL_TO_$c found on the hub (not named), visited"
+  add_stream "GLOBAL_TO_$c" "global.$c.>"
+done
 if "${A[@]}" kv info GLOBAL_PRESENCE >/dev/null 2>&1; then echo "kv GLOBAL_PRESENCE exists"; else
   "${A[@]}" kv add GLOBAL_PRESENCE --ttl 90s --storage file >/dev/null; echo "kv GLOBAL_PRESENCE created (ttl 90s)"; fi

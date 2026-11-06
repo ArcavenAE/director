@@ -3,8 +3,10 @@
 # max age below 168h is raised to it, a longer one and an unlimited one are
 # left alone, the director's own durables (mcp_global_*) below 192h are raised to
 # it, and a longer threshold, none, and a durable of someone else's are left
-# alone. Then the same cases run against two mutants of provision.sh that LOWER a
-# value, and each must go red.
+# alone. A run with no arguments also visits a GLOBAL_TO_ stream the script was never
+# told about (aae-orc-acasl), and a failed stream listing stops it. Then the same
+# cases run against mutants of provision.sh, each of which breaks one of those, and
+# each must go red.
 #
 # Runs against a throwaway nats-server of its own on a random loopback port. It
 # never dials the hub or the local broker, and refuses a port in the hub's or the
@@ -81,8 +83,56 @@ run_case() {
   printf '%s\n' "$out2" | /usr/bin/grep -q ' raised ' && bad "$label: the second run changes nothing" "$out2" || ok "$label: the second run changes nothing"
 }
 
+# free_port: a random loopback port that is not the hub's or the local broker's.
+free_port() {
+  local port
+  port="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  case "$port" in 4222|4242|7422|7442) echo "refusing port $port" >&2; exit 2;; esac
+  echo "$port"
+}
+
+# run_noarg SCRIPT LABEL: a fresh broker holding GLOBAL_TO_DIRECTOR and GLOBAL_TO_c3
+# (c3 is in no hard-coded list), both at 72h. SCRIPT runs with no arguments, twice.
+run_noarg() {
+  local script="$1" label="$2" port dir out1 out2
+  port="$(free_port)"
+  dir="$work/$label"; mkdir -p "$dir/store"
+  printf 'listen: 127.0.0.1:%s\njetstream { store_dir: "%s" }\n' "$port" "$dir/store" > "$dir/nats.conf"
+  nats-server -c "$dir/nats.conf" -l "$dir/broker.log" &
+  pids+=($!)
+  local i; for i in $(seq 1 50); do nats -s "nats://127.0.0.1:$port" server check connection >/dev/null 2>&1 && break; sleep 0.2; done
+
+  local N=(nats -s "nats://127.0.0.1:$port")
+  "${N[@]}" stream add GLOBAL_TO_DIRECTOR --subjects 'global.director.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+  "${N[@]}" stream add GLOBAL_TO_c3 --subjects 'global.c3.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+
+  out1="$(DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" 2>&1)" || { bad "$label: a no-argument run exits 0" "$out1"; return; }
+  ok "$label: a no-argument run exits 0"
+  out2="$(DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" 2>&1)" || { bad "$label: a second no-argument run exits 0" "$out2"; return; }
+
+  local age; age="$("${N[@]}" stream info GLOBAL_TO_c3 --json | jq -r '.config.max_age')"
+  [[ "$age" == "$((168*hour))" ]] && ok "$label: a stream named in no list is raised to 168h" || bad "$label: a stream named in no list is raised to 168h" "got $age"
+  printf '%s\n' "$out1" | /usr/bin/grep -q '^stream GLOBAL_TO_c3 found on the hub (not named), visited$' && ok "$label: the run says it found GLOBAL_TO_c3" || bad "$label: the run says it found GLOBAL_TO_c3" "$out1"
+  printf '%s\n' "$out1" | /usr/bin/grep -q '^stream GLOBAL_TO_c3 max_age raised ' && ok "$label: the run prints a raised line for GLOBAL_TO_c3" || bad "$label: the run prints a raised line for GLOBAL_TO_c3" "$out1"
+  local s; for s in kinu mokuzai; do
+    "${N[@]}" stream info "GLOBAL_TO_$s" >/dev/null 2>&1 && ok "$label: GLOBAL_TO_$s exists after the run" || bad "$label: GLOBAL_TO_$s exists after the run" "$out1"
+  done
+  printf '%s\n' "$out2" | /usr/bin/grep -q ' raised ' && bad "$label: the second no-argument run changes nothing" "$out2" || ok "$label: the second no-argument run changes nothing"
+}
+
 # The real script.
 run_case "$here/provision.sh" real
+run_noarg "$here/provision.sh" real-noarg
+
+# A hub that cannot list its streams: the run must fail and say so, not fall back
+# to the bootstrap list. Nothing listens on the port and no broker is started.
+dead_port="$(free_port)"
+dead_out="$(DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$dead_port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$work" bash "$here/provision.sh" 2>&1)" && dead_rc=0 || dead_rc=$?
+if (( dead_rc != 0 )) && printf '%s\n' "$dead_out" | /usr/bin/grep -q 'stream ls failed'; then
+  ok "a hub that cannot list streams fails the run and names stream ls failed"
+else
+  bad "a hub that cannot list streams fails the run and names stream ls failed" "rc=$dead_rc: $dead_out"
+fi
 
 # Mutants: each LOWERS a value, so the cases above must fail against it. A
 # mutant's own PASS/FAIL lines go to a file and its counters are put back; the
@@ -105,6 +155,25 @@ mutant() {
 mutant lowering-stream 'cur > 0 \&\& cur < STREAM_MAX_AGE_NS' 'cur > 0 \&\& cur != STREAM_MAX_AGE_NS'
 # A durable edit that lowers.
 mutant lowering-durable 'cur > 0 \&\& cur < DURABLE_INACTIVE_NS' 'cur > 0 \&\& cur != DURABLE_INACTIVE_NS'
+
+# Mutant: the discovery is gone, so a no-argument run reverts to the bootstrap list.
+# Judged on run_noarg alone, since run_case names every stream it builds.
+mutant_noarg() {
+  local label="$1" from="$2" to="$3" file="$work/provision-$1.sh" p0 f0
+  sed "s|$from|$to|" "$here/provision.sh" > "$file"
+  if cmp -s "$file" "$here/provision.sh"; then echo "mutant $label changed nothing"; exit 2; fi
+  p0=$pass; f0=$fail
+  run_noarg "$file" "$label" > "$work/$label.out" 2>&1 || true
+  if (( fail > f0 )); then
+    pass=$p0; fail=$f0
+    ok "mutant $label goes red; failing: $(/usr/bin/grep '^FAIL' "$work/$label.out" | sed -e "s/^FAIL $label: //" | paste -sd ';' - )"
+  else
+    pass=$p0; fail=$f0
+    bad "mutant $label goes red" "every case still passed"
+  fi
+}
+# Discovery removed: the listing is read as an empty array.
+mutant_noarg hardcoded-default '"\$listing"' '"[]"'
 
 echo "$pass passed, $fail failed"
 (( fail == 0 ))
