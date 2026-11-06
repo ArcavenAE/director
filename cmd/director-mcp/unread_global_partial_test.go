@@ -390,3 +390,42 @@ func TestUnreadGlobalProbesADownHubOnce(t *testing.T) {
 		t.Errorf("the hub was probed %d times, want 1", n)
 	}
 }
+
+// jsCountingKV hands out a store that counts every get, whatever opens it.
+type jsCountingKV struct {
+	jetstream.JetStream
+	gets map[string]int
+}
+
+func (j *jsCountingKV) KeyValue(ctx context.Context, bucket string) (jetstream.KeyValue, error) {
+	kv, err := j.JetStream.KeyValue(ctx, bucket)
+	if err != nil {
+		return nil, err
+	}
+	return &countingKV{KeyValue: kv, gets: j.gets}, nil
+}
+
+// The partial read gets each presence key once end to end: a second get in its
+// own loop, after the key helper has made one, fails here.
+func TestUnreadGlobalPartialGetsEachPresenceKeyOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	lgjs, err := jetstream.NewWithDomain(dialLeaf(t, leafURL), "global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := &jsCountingKV{JetStream: lgjs, gets: map[string]int{}}
+	reports, err := readUnreadGlobalPartial(ctx, counted, "mokuzai", nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 1 || len(reports[0].Durables) != 1 {
+		t.Fatalf("reports = %+v, want the one mokuzai seat read", reports)
+	}
+	key := "presence.mokuzai.supervisor." + partialInstA
+	if counted.gets[key] != 1 || len(counted.gets) != 1 {
+		t.Errorf("gets = %v, want exactly one get of %s", counted.gets, key)
+	}
+}
