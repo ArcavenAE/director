@@ -1,7 +1,7 @@
 # finding-director-gnr2: a seat cannot diagnose the traps that stop it taking a turn, and the checks that see them are built in five places no one command reaches
 
 - **Date:** 2026-10-30
-- **Session:** research pass, stream 3 of operator ruling I-29 (aae-orc-wria0)
+- **Session:** research pass, stream 3 of the operator's ruling (aae-orc-wria0)
 - **Subject:** the director seat's startup and self-check path
 - **Confidence:** read-only. Code read at director 35bf9fa and marvel 04c258f; host state read on one host; no seat launched, nothing published
 

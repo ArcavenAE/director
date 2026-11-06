@@ -488,7 +488,7 @@ for v in 0 true yes; do
   fi
 done
 
-# --- I-190: the cue is the default for supervisor casts (operator ruling 2026-11-05)
+# --- the cue is the default for supervisor casts (operator ruling 2026-11-05)
 # It replaces the 2026-10-01 opt-in for supervisors only. A set DIRECTOR_CUE
 # always wins, director casts are not included, and a headless launch (-p or
 # --print) cannot use a channel, so it gets none.
@@ -532,7 +532,7 @@ if cast builder; then
     && ok "builder, cue unset: still no channel flag" \
     || bad "builder, cue unset: still no channel flag"
 else
-  bad "builder cast, cue unset (I-190)" "$(cat "$root/out/stderr")"
+  bad "builder cast, cue unset, supervisor default" "$(cat "$root/out/stderr")"
 fi
 if cast director; then
   no_cue_flag \
