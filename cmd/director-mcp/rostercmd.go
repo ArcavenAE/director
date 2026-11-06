@@ -54,17 +54,19 @@ func readRosterRows(ctx context.Context, js jetstream.JetStream, now time.Time) 
 		if parts := strings.Split(k, "."); len(parts) != 4 || parts[0] != "presence" {
 			continue
 		}
-		e, err := kv.Get(ctx, k)
-		if err != nil {
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: unreadable: %v", k, err))
-			continue
-		}
 		var rec map[string]any
-		if err := json.Unmarshal(e.Value(), &rec); err != nil {
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: the presence record is not JSON", k))
-			continue
+		why := ""
+		if e, err := kv.Get(ctx, k); err != nil {
+			why = fmt.Sprintf("%s: unreadable: %v, so it is not fresh", k, err)
+		} else if err := json.Unmarshal(e.Value(), &rec); err != nil {
+			rec, why = nil, fmt.Sprintf("%s: the presence record is not JSON, so it is not fresh", k)
 		}
+		// the row is built from the key either way, so an unreadable record is a
+		// seat that is not fresh, never one that is missing
 		row, warn := rosterRowFromKey(k, rec, now)
+		if why != "" {
+			warn = why
+		}
 		if warn != "" {
 			rep.Warnings = append(rep.Warnings, warn)
 		}

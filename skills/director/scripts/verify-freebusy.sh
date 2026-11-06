@@ -697,13 +697,17 @@ case_no_marvel() {
   jq -n -c '{read_at: "2026-10-21T00:05:00Z", rows: [
     {agent_id: "crew-builder-1", team: "crew", role: "builder", instance: "01A", age_seconds: 12, fresh: true},
     {agent_id: "crew-builder-2", team: "crew", role: "builder", instance: "01B", age_seconds: 20, fresh: true},
-    {agent_id: "ops-envoy-1", team: "ops", role: "envoy", instance: "01C", age_seconds: 600, fresh: false}]}' >"$FIX/roster.json"
+    {agent_id: "ops-envoy-1", team: "ops", role: "envoy", instance: "01C", age_seconds: 600, fresh: false},
+    {agent_id: "crew-builder-3", team: "crew", role: "builder", instance: "01D", age_seconds: 5, fresh: true}],
+    warnings: ["presence.ops.ops-envoy-1.01C: the presence record is not JSON, so it is not fresh"]}' >"$FIX/roster.json"
   jq -n -c '{durables: [{agent_id: "crew-builder-1", instance: "01A", live: true, pending: 3}, {agent_id: "crew-builder-2", instance: "01B", live: true, pending: 0}]}' >"$FIX/unread.plain.json"
   out="$(run PATH="$nb:/usr/bin:/bin" "${base[@]}")"
   [[ "$(cat "$root/rc")" == 0 ]] && ok "E1 exits 0 with no marvel on PATH" || bad "E1 rc" "$(cat "$root/rc")"
   grep -q 'source: roster' <<<"$out" && ok "E1 the summary says source: roster" || bad "E1 summary" "$out"
   [[ "$(seat seats crew-builder-1)" == busy ]] && ok "E1 a seat with unread mail waiting reads busy" || bad "E1 busy" "$(seat seats crew-builder-1)"
   [[ "$(seat seats crew-builder-2)" == free ]] && ok "E1 a fresh seat with nothing waiting reads free" || bad "E1 free" "$(seat seats crew-builder-2)"
+  [[ "$(seat seats crew-builder-3)" == unknown ]] && ok "E1 a fresh seat with no unread row is unknown, never free" || bad "E1 no unread row" "$(seat seats crew-builder-3)"
+  grep -q 'GAP roster: presence.ops.ops-envoy-1.01C' <<<"$out" && ok "E1 a roster warning is printed as a GAP" || bad "E1 roster warning" "$out"
   [[ "$(seat seats ops-envoy-1)" == unknown ]] && ok "E1 a seat with old presence is unknown, never free" || bad "E1 old" "$(seat seats ops-envoy-1)"
   [[ "$(jq -r 'select(.name=="crew-builder-2") | .source' "$state/freebusy/seats.jsonl")" == roster ]] && ok "E1 every roster row says source: roster" || bad "E1 row source" "$(cat "$state/freebusy/seats.jsonl")"
   grep -q 'duty cells absent' <<<"$out" && ok "E1 the count line says the duty cells are absent" || bad "E1 duty note" "$out"

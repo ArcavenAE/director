@@ -81,7 +81,7 @@ func TestRunRosterCmdListsPresenceWithAge(t *testing.T) {
 }
 
 // A broker that cannot be reached prints nothing on stdout and a reason on
-// stderr, exits 0 (a diagnostic), and is never an empty roster.
+// stderr, exits 1, and is never an empty roster.
 func TestRunRosterCmdUnreachableIsNotAnEmptyRoster(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -89,5 +89,43 @@ func TestRunRosterCmdUnreachableIsNotAnEmptyRoster(t *testing.T) {
 	code := runRosterCmd(ctx, "nats://127.0.0.1:1", cliArgs{mode: "roster", json: true}, &out, &errb)
 	if code == 0 || out.Len() != 0 || !strings.Contains(errb.String(), "connect") {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A presence record that cannot be read stays in the roster as a row that is not
+// fresh, with a warning; it is never dropped, so it cannot read as no seat.
+func TestRunRosterCmdKeepsAnUnreadableRowAsNotFresh(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	url := startScratchServerNoStreamList(t)
+	_, js := provision(t, ctx, url)
+	kv, err := js.KeyValue(ctx, "AGENT_STATE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kv.Put(ctx, "presence.crew.crew-builder-g1-0.01AAA", []byte("not json")); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := runRosterCmd(ctx, url, cliArgs{mode: "roster", json: true}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errb.String())
+	}
+	var got rosterReport
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rows) != 1 || got.Rows[0].Fresh || got.Rows[0].AgentID != "crew-builder-g1-0" || got.Rows[0].Instance != "01AAA" {
+		t.Fatalf("rows = %+v, want the one row, not fresh, named from its key", got.Rows)
+	}
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "not JSON") {
+		t.Errorf("warnings = %v, want one saying the record is not JSON", got.Warnings)
+	}
+}
+
+// The unknown-arguments error lists every mode, roster included.
+func TestUnknownArgumentsUsageListsRoster(t *testing.T) {
+	_, err := parseArgs([]string{"nonsense"})
+	if err == nil || !strings.Contains(err.Error(), rosterUsage) {
+		t.Fatalf("err = %v, want the usage list to name %q", err, rosterUsage)
 	}
 }

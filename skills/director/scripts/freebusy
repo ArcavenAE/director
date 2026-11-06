@@ -484,6 +484,10 @@ if [[ "$roster_mode" == 1 ]]; then
       gap "roster: director-mcp roster printed no roster ($(first_line "$tmp/roster.err")), so no seat was listed"
     else
       roster_ok=1
+      # a row the roster could not read is kept as not fresh (so unknown); say so, once per warning
+      while IFS= read -r rw; do
+        if [[ -n "$rw" ]]; then gap "roster: $(printf '%s' "$rw" | tr -d '[:cntrl:]')"; fi
+      done < <(jq -r '(.warnings // [])[]' "$tmp/roster.out" 2>/dev/null)
     fi
     unread_ok=0
     if [[ ! -f "$tmp/roster-unread.rc" ]]; then
@@ -499,9 +503,11 @@ if [[ "$roster_mode" == 1 ]]; then
         ($u[0].durables // []) as $d
         | .rows[]
         | . as $r
-        | ([ $d[] | select(.agent_id == $r.agent_id and .instance == $r.instance) | (.pending // 0) ] | add // 0) as $pending
+        | ([ $d[] | select(.agent_id == $r.agent_id and .instance == $r.instance) ]) as $m
+        | ($m | map(.pending // 0) | add // 0) as $pending
         | (if $r.fresh != true then ["unknown", "presence old or unreadable"]
            elif $uok != 1 then ["unknown", "unread not read"]
+           elif ($m | length) == 0 then ["unknown", "no unread row for this seat"]
            elif $pending > 0 then ["busy", "unread pending"]
            else ["free", "fresh presence, nothing waiting; no activity reading"] end) as $sr
         | {at: $at, cluster: "roster", workspace: ($r.workspace // ""), team: $r.team, role: $r.role, name: $r.agent_id,
