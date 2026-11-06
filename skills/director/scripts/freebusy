@@ -49,6 +49,15 @@
 # memory and only the class word, the seat and the times are kept.
 # It sends nothing on the bus, injects nothing, writes no bd record and calls no gh.
 #
+# Without marvel: when marvel is not on PATH there is no cluster to read, so the seats come from
+# director's own roster (director-mcp roster --json: the presence rows, with each row's age and
+# whether it is fresh, no older than presenceTTL (cmd/director-mcp/askledger.go, 90 s today; the roster command sets fresh from that constant, so change it there only)). A fresh seat
+# with mail waiting (director-mcp unread --json, pending above 0) is busy; a fresh seat with nothing
+# waiting is free, which here means only that nothing waits for it, since no activity reading exists;
+# a seat with old presence, and every seat when unread cannot be read, is unknown, never free. Lanes
+# are still busy on open asks. Every such row says source: roster, the duty cells are absent so
+# every candidate reads ask-first, and the count line says so.
+#
 # States: free, busy, waiting, unknown. A seat is busy when its ACTIVE% is above 0,
 # free when it is 0, waiting when its role is parked (REPLICAS 0), the harness parked it,
 # or its account is limited,
@@ -232,6 +241,16 @@ wait_jobs() {
 # --- clusters ---------------------------------------------------------------
 if [[ -e "$legacy_conf" ]]; then note "clusters: freebusy-clusters.conf is no longer read"; fi
 
+# No marvel on PATH: there is no cluster to read, and the seats come from the roster below.
+roster_mode=0
+if ! command -v marvel >/dev/null 2>&1; then
+  roster_mode=1
+  note "clusters: marvel is not on PATH; the seats come from director's roster (source: roster)"
+fi
+
+cfgnames=()
+cfg_ok=0
+if [[ "$roster_mode" == 0 ]]; then
 set -m
 (
   set +e
@@ -242,8 +261,6 @@ cpid=$!
 set +m
 wait_jobs "$cpid"
 
-cfgnames=()
-cfg_ok=0
 if [[ ! -f "$tmp/cfg.rc" ]]; then
   gap "clusters: marvel config list failed (no answer within ${call_timeout}s)"
 elif [[ "$(cat "$tmp/cfg.rc")" != 0 ]]; then
@@ -259,6 +276,8 @@ else
     fi
   done < <(awk '$1 == "NAME" { next } { n = $1; if (n == "*") n = $2; else if (substr(n, 1, 1) == "*") n = substr(n, 2); if (n != "") print n }' "$tmp/cfg.out")
   if [[ ${#cfgnames[@]} -eq 0 && ! -s "$gaps" ]]; then gap "clusters: marvel config list names no cluster"; fi
+fi
+
 fi
 
 excluded=()
@@ -423,6 +442,76 @@ else
       gap "asks: the ledger is ${age}s old (limit ${max_age}s), the ask reader may be down"
     else
       asks_json="$(jq -c '.rollup_by_owner' "$tmp/asks.out")"
+    fi
+  fi
+fi
+
+# --- roster path: the seats when there is no marvel --------------------------
+# One roster read and one unread read, side by side, each bounded by the call timeout. A seat is
+# fresh when the roster says so (presence no older than the presence TTL). Fresh and with mail
+# waiting is busy; fresh with nothing waiting is free (nothing waits for it; no activity reading
+# exists); old presence is unknown; and when unread cannot be read nothing reads free.
+roster_note=""
+if [[ "$roster_mode" == 1 ]]; then
+  roster_note="source: roster (no marvel on PATH; duty cells absent, so every candidate reads ask-first)"
+  if [[ ! -x "$mcp" ]]; then
+    gap "roster: director-mcp not found at $mcp, so no seat was listed"
+  else
+    pids=()
+    set -m
+    (
+      set +e
+      "$mcp" roster --json </dev/null >"$tmp/roster.out" 2>"$tmp/roster.err"
+      echo $? >"$tmp/roster.rc"
+    ) &
+    pids+=("$!")
+    set +m
+    set -m
+    (
+      set +e
+      "$mcp" unread --json </dev/null >"$tmp/roster-unread.out" 2>"$tmp/roster-unread.err"
+      echo $? >"$tmp/roster-unread.rc"
+    ) &
+    pids+=("$!")
+    set +m
+    wait_jobs "${pids[@]}"
+    roster_ok=0
+    if [[ ! -f "$tmp/roster.rc" ]]; then
+      gap "roster: director-mcp roster gave no answer within ${call_timeout}s, so no seat was listed"
+    elif [[ "$(cat "$tmp/roster.rc")" != 0 ]]; then
+      gap "roster: director-mcp roster exited $(cat "$tmp/roster.rc") ($(first_line "$tmp/roster.err")), so no seat was listed"
+    elif ! jq -e '(.rows | type) == "array"' "$tmp/roster.out" >/dev/null 2>&1; then
+      gap "roster: director-mcp roster printed no roster ($(first_line "$tmp/roster.err")), so no seat was listed"
+    else
+      roster_ok=1
+      # a row the roster could not read is kept as not fresh (so unknown); say so, once per warning
+      while IFS= read -r rw; do
+        if [[ -n "$rw" ]]; then gap "roster: $(printf '%s' "$rw" | tr -d '[:cntrl:]')"; fi
+      done < <(jq -r '(.warnings // [])[]' "$tmp/roster.out" 2>/dev/null)
+    fi
+    unread_ok=0
+    if [[ ! -f "$tmp/roster-unread.rc" ]]; then
+      gap "roster: director-mcp unread gave no answer within ${call_timeout}s, so no seat reads free"
+    elif [[ "$(cat "$tmp/roster-unread.rc")" != 0 ]] || ! jq -e '(.durables | type) == "array"' "$tmp/roster-unread.out" >/dev/null 2>&1; then
+      gap "roster: director-mcp unread was not read ($(first_line "$tmp/roster-unread.err")), so no seat reads free"
+    else
+      unread_ok=1
+    fi
+    if [[ "$roster_ok" == 1 ]]; then
+      if [[ "$unread_ok" != 1 ]]; then echo '{"durables":[]}' >"$tmp/roster-unread.out"; fi
+      jq -c --arg at "$at" --argjson uok "$unread_ok" --slurpfile u "$tmp/roster-unread.out" '
+        ($u[0].durables // []) as $d
+        | .rows[]
+        | . as $r
+        | ([ $d[] | select(.agent_id == $r.agent_id and .instance == $r.instance) ]) as $m
+        | ($m | map(.pending // 0) | add // 0) as $pending
+        | (if $r.fresh != true then ["unknown", "presence old or unreadable"]
+           elif $uok != 1 then ["unknown", "unread not read"]
+           elif ($m | length) == 0 then ["unknown", "no unread row for this seat"]
+           elif $pending > 0 then ["busy", "unread pending"]
+           else ["free", "fresh presence, nothing waiting; no activity reading"] end) as $sr
+        | {at: $at, cluster: "roster", workspace: ($r.workspace // ""), team: $r.team, role: $r.role, name: $r.agent_id,
+           state: $sr[0], reason: $sr[1], last_active: null, active: null, last_turn: null, source: "roster"}' "$tmp/roster.out" >>"$seats_new"
     fi
   fi
 fi
@@ -668,7 +757,7 @@ fi
 vrow() { jq -n -c --arg at "$at" --arg h "$1" --arg v "$2" --arg s "$3" '{kind: "version", at: $at, host: $h, version: $v, source: $s}'; }
 vok() { [[ "$1" =~ ^[A-Za-z0-9._+-]{1,80}$ ]]; }
 v="$(awk 'NR == 1 && $1 == "marvel" { print $2; exit }' "$tmp/ver.client" 2>/dev/null || true)"
-if vok "$v"; then vrow client "$v" "marvel version" >>"$tmp/health.new"; else gap "version: the marvel client build could not be read"; fi
+if vok "$v"; then vrow client "$v" "marvel version" >>"$tmp/health.new"; elif [[ "$roster_mode" == 0 ]]; then gap "version: the marvel client build could not be read"; fi
 while IFS= read -r n; do
   [[ -n "$n" ]] || continue
   v="$(awk '$1 == "daemon" { print $2; exit }' "$tmp/ver.$n" 2>/dev/null || true)"
@@ -691,15 +780,19 @@ mv "$lanes_new" "$dir/lanes.jsonl"
 mv "$tmp/health.new" "$dir/health.jsonl"
 chmod 600 "$dir/seats.jsonl" "$dir/lanes.jsonl" "$dir/health.jsonl"
 jq -n -c --arg at "$at" --argjson read "$read_ok" --argjson total "$total" --arg unlisted "$unlisted" --arg asks "$asks_note" \
-  --arg seats "$seat_counts" --arg lanes "$lane_counts" \
+  --arg seats "$seat_counts" --arg lanes "$lane_counts" --arg source "${roster_note:+roster}" \
   '{at: $at, clusters_read: $read, clusters_total: $total, clusters_not_listed: ($unlisted | split(",") | map(select(. != ""))),
-    asks: $asks, seats: $seats, lanes: $lanes}' >>"$dir/flow.jsonl"
+    asks: $asks, seats: $seats, lanes: $lanes} + (if $source != "" then {source: $source} else {} end)' >>"$dir/flow.jsonl"
 chmod 600 "$dir/flow.jsonl"
 
 cat "$gaps"
 cat "$notes"
 cat "$overbound"
-line="freebusy: clusters: $read_ok of $total read; seats: $seat_counts; lanes: $lane_counts; asks: $asks_note; health: $health_counts"
+if [[ "$roster_mode" == 1 ]]; then
+  line="freebusy: $roster_note; seats: $seat_counts; lanes: $lane_counts; asks: $asks_note; health: $health_counts"
+else
+  line="freebusy: clusters: $read_ok of $total read; seats: $seat_counts; lanes: $lane_counts; asks: $asks_note; health: $health_counts"
+fi
 if [[ -n "$unlisted" ]]; then line="$line; not listed: $unlisted"; fi
 echo "$line"
 exit 0

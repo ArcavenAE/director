@@ -149,6 +149,11 @@ func parseArgs(args []string) (cliArgs, error) {
 			return cliArgs{}, fmt.Errorf("asks: --id needs a message id (usage: %s)", asksUsage)
 		}
 		return out, nil
+	case args[0] == "roster":
+		if len(args) != 2 || args[1] != "--json" {
+			return cliArgs{}, fmt.Errorf("roster: usage: %s", rosterUsage)
+		}
+		return cliArgs{mode: "roster", json: true}, nil
 	case args[0] == "ask-reader":
 		out := cliArgs{mode: "ask-reader"}
 		rest := args[1:]
@@ -235,7 +240,7 @@ func parseArgs(args []string) (cliArgs, error) {
 		}
 		return out, nil
 	}
-	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage, dossierUsage, marryUsage)
+	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage, dossierUsage, marryUsage, rosterUsage)
 }
 
 type unreadPresence struct {
