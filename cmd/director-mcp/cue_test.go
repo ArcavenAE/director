@@ -47,6 +47,7 @@ type cueRig struct {
 	src    *fakeSource
 	cues   []map[string]any
 	warns  []string
+	gaveUp []string
 	nonces int
 	c      *cue
 }
@@ -62,6 +63,7 @@ func newCueRig(t *testing.T) *cueRig {
 		func() time.Time { return r.now },
 		func() string { r.nonces++; return fmt.Sprintf("nonce%d", r.nonces) },
 	)
+	r.c.giveUp = func(ids []string, state string) { r.gaveUp = append(r.gaveUp, strings.Join(ids, ",")+" "+state) }
 	return r
 }
 
@@ -282,30 +284,99 @@ func TestAReconnectCuesOnceIfAnythingIsWaiting(t *testing.T) {
 
 // ---- C-3: receipt ---------------------------------------------------------
 
-func TestAnUnansweredCueWarnsRecuesOnceThenStops(t *testing.T) {
+// The back-off (I-69 D-9, operator answer "Back off for 24 hours, then notify
+// director"): the two warnings and the first re-cue stay as they were; after
+// the second W the cue is re-sent at 4W and 8W, then hourly, until 24 hours
+// after the first cue, when one INFORM goes to director and the cue stops.
+func TestAnUnansweredCueBacksOffForADayThenInformsDirector(t *testing.T) {
 	r := newCueRig(t)
 	r.started()
 	r.cues = nil
 	r.src.n = 1
 	r.step(2 * time.Second)
-	r.step(299 * time.Second)
-	if len(r.warns) != 0 {
-		t.Fatalf("no warning inside W: %v", r.warns)
+	t0 := r.now
+	W := r.c.cfg.Window
+	at := func(d time.Duration) {
+		r.now = t0.Add(d)
+		r.c.tick(context.Background())
 	}
-	r.step(2 * time.Second)
+	at(W - time.Second)
+	if len(r.warns) != 0 || len(r.mailCues()) != 1 {
+		t.Fatalf("inside W: no warning and the first cue only, got %v / %d cues", r.warns, len(r.mailCues()))
+	}
+	at(W + time.Second)
 	if len(r.warns) != 1 || len(r.mailCues()) != 2 {
-		t.Fatalf("after W: want 1 warning and 1 re-cue, got %v / %d cues", r.warns, len(r.mailCues()))
+		t.Fatalf("after W: 1 warning and 1 re-cue, got %v / %d cues", r.warns, len(r.mailCues()))
 	}
-	if !strings.HasPrefix(r.warns[0], "m1 ") {
-		t.Fatalf("the warning names the message: %q", r.warns[0])
-	}
-	r.step(301 * time.Second)
+	at(2*W + 2*time.Second)
 	if len(r.warns) != 2 || len(r.mailCues()) != 2 {
-		t.Fatalf("after a second W: a second warning and no third cue, got %v / %d cues", r.warns, len(r.mailCues()))
+		t.Fatalf("at 2W unanswered: a second warning and the next re-cue still ahead, got %v / %d cues", r.warns, len(r.mailCues()))
 	}
-	r.step(900 * time.Second)
-	if len(r.warns) != 2 || len(r.mailCues()) != 2 {
-		t.Fatalf("then it stops: %v / %d cues", r.warns, len(r.mailCues()))
+	at(4*W - time.Second)
+	if len(r.mailCues()) != 2 {
+		t.Fatalf("no re-cue before 4W, got %d cues", len(r.mailCues()))
+	}
+	at(4*W + time.Second)
+	if len(r.mailCues()) != 3 {
+		t.Fatalf("a re-cue at 4W, got %d cues", len(r.mailCues()))
+	}
+	at(8*W + time.Second)
+	if len(r.mailCues()) != 4 {
+		t.Fatalf("a re-cue at 8W, got %d cues", len(r.mailCues()))
+	}
+	at(8*W + time.Hour - time.Second)
+	if len(r.mailCues()) != 4 {
+		t.Fatalf("no re-cue before the hour after 8W, got %d cues", len(r.mailCues()))
+	}
+	at(8*W + time.Hour + time.Second)
+	if len(r.mailCues()) != 5 {
+		t.Fatalf("then hourly: a re-cue an hour after 8W, got %d cues", len(r.mailCues()))
+	}
+	for h := 2; h <= 22; h++ {
+		at(8*W + time.Duration(h)*time.Hour + time.Second)
+	}
+	if len(r.gaveUp) != 0 {
+		t.Fatalf("no give-up inside 24 h: %v", r.gaveUp)
+	}
+	at(24*time.Hour + time.Second)
+	if len(r.gaveUp) != 1 || !strings.HasPrefix(r.gaveUp[0], "m1 ") {
+		t.Fatalf("at 24 h one INFORM naming the message, got %v", r.gaveUp)
+	}
+	cuesAtEnd := len(r.mailCues())
+	at(24*time.Hour + 2*time.Hour)
+	at(48 * time.Hour)
+	if len(r.gaveUp) != 1 || len(r.mailCues()) != cuesAtEnd {
+		t.Fatalf("after the INFORM no further cue and no second INFORM: %v / %d cues (was %d)", r.gaveUp, len(r.mailCues()), cuesAtEnd)
+	}
+	if len(r.warns) != 2 {
+		t.Fatalf("the back-off adds no further warning, got %v", r.warns)
+	}
+}
+
+func TestADrainDuringTheBackOffStopsTheReCues(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.cues = nil
+	r.src.n = 1
+	r.step(2 * time.Second)
+	t0 := r.now
+	W := r.c.cfg.Window
+	for _, d := range []time.Duration{W + time.Second, 4*W + time.Second} {
+		r.now = t0.Add(d)
+		r.c.tick(context.Background())
+	}
+	if len(r.mailCues()) != 3 {
+		t.Fatalf("setup: the re-cue at 4W, got %d cues", len(r.mailCues()))
+	}
+	r.src.n = 0
+	r.now = t0.Add(4*W + 10*time.Second)
+	r.c.tick(context.Background())
+	for _, d := range []time.Duration{8 * W, 10 * time.Hour, 25 * time.Hour} {
+		r.now = t0.Add(d + time.Second)
+		r.c.tick(context.Background())
+	}
+	if len(r.mailCues()) != 3 || len(r.gaveUp) != 0 {
+		t.Fatalf("a drained cue is answered: no more cues and no INFORM, got %d cues, %v", len(r.mailCues()), r.gaveUp)
 	}
 }
 
