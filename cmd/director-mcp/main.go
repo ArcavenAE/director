@@ -103,6 +103,10 @@ func main() {
 		cancel()
 		os.Exit(code)
 	}
+	// marry is a pure computation over a file: no bus, no identity.
+	if cli.mode == "marry" {
+		os.Exit(runMarryCmd(cli, os.Stdout, os.Stderr))
+	}
 	// asks is a read of the ask ledger's store; ask-reader keeps it. Neither
 	// needs an identity of its own.
 	if cli.mode == "asks" {
