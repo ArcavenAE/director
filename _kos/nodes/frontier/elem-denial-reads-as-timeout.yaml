@@ -1,11 +1,12 @@
 id: elem-denial-reads-as-timeout
 type: element
-confidence: bedrock
+confidence: frontier
 title: "A broker denial of a JetStream publish reaches the caller as a timeout, so the shim must name it"
 tags: [director, delivery, permissions, errors]
 content: |
   Placed 2026-11-06. Until now this pattern lived only as prose in
-  finding-005 (section Q3) and finding-008 (section 0).
+  finding-005 (section Q3) and finding-008 (section 0). Filed in frontier;
+  promotion to bedrock waits on the operator (SOUL section 8).
 
   ## The pattern
 
@@ -19,9 +20,9 @@ content: |
 
   ## Evidence
 
-  - finding-006: a team-scoped seat's cross-team publish returned
-    `context deadline exceeded` three times. R-109 records these as the
-    reproductions it was earned by.
+  - R-109 (sim/requirements.md): a team-scoped seat's cross-team publish
+    returned `context deadline exceeded` three times. R-109 records these
+    as the reproductions it was earned by.
   - finding-005: a publish from one team to another team's inbox failed the
     same way; the finding calls it "a permissions denial wearing a
     timeout's clothes".
@@ -54,9 +55,6 @@ edges:
   - target: finding-008-leaf-fabric-probe
     type: derives
     note: "P3 measured the refusal arriving as a timeout, with the named error only on the async handler"
-  - target: finding-006-global-tier-has-no-per-agent-address
-    type: derives
-    note: "the three cross-team reproductions R-109 rests on"
   - target: finding-005-workforce-organization-model
     type: derives
     note: "Q3 names the pattern for a cross-team publish"
@@ -66,6 +64,6 @@ provenance:
   session: 2026-11-06 knowledge-graph placement, team arcaven author seat
   created_at: "2026-11-06"
   notes: >
-    Every statement is drawn from finding-005, finding-006, finding-008,
-    R-109 in sim/requirements.md, or the director#313 body and its files at
+    Every statement is drawn from finding-005, finding-008, R-109 in
+    sim/requirements.md, or the director#313 body and its files at
     origin/main 4c994ca.
