@@ -1009,6 +1009,18 @@ func printTrailer(w io.Writer, r unreadReport) {
 	}
 }
 
+// hubAnswered reports whether err is the hub's own reply to a named read, such
+// as 404 stream not found. A reply is proof the hub is reachable, so it counts the
+// same as success when telling a list-verb gap from a down hub.
+func hubAnswered(err error) bool {
+	var apiErr *jetstream.APIError
+	if errors.As(err, &apiErr) {
+		return true
+	}
+	var jsErr jetstream.JetStreamError
+	return errors.As(err, &jsErr) && jsErr.APIError() != nil
+}
+
 // hubListError words the failure of the stream-list request. A cluster
 // credential reaches the hub through a leaf whose allow-list answers named reads
 // and leaves the list verbs without a responder (finding-006), so "no
@@ -1020,7 +1032,7 @@ func hubListError(ctx context.Context, gjs jetstream.JetStream, domain string, e
 	if errors.Is(err, nats.ErrNoResponders) {
 		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
-		if _, nerr := gjs.Stream(pctx, "KV_"+globalPresenceBucket); nerr == nil {
+		if _, nerr := gjs.Stream(pctx, "KV_"+globalPresenceBucket); nerr == nil || hubAnswered(nerr) {
 			return fmt.Errorf("hub in domain %q answers named reads, but this credential may not list streams (the leaf allow-list omits the list verbs, finding-006), so unread --global needs an admin credential: %w", domain, err)
 		}
 	}
