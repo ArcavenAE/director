@@ -102,6 +102,8 @@ type Bus struct {
 	// (localrecover.go), and the cue watcher reads it on another goroutine.
 	localMu sync.Mutex
 	local   localState
+	// dh counts the local durable's rebuilds (durablehealth.go).
+	dh durableHealth
 	// lookup is a test seam for the broker lookup of the local durable; nil in
 	// production (localrecover.go lookupLocal).
 	lookup func(ctx context.Context, durable string) error
@@ -1491,11 +1493,12 @@ type presenceView struct {
 	cueOn     bool
 	cue       string
 	cueReason string
+	durable   durableSummary
 }
 
 func (b *Bus) presenceView(ctx context.Context) presenceView {
 	age, tier := b.pending.oldest(time.Now())
-	v := presenceView{oldestS: int64(age / time.Second)}
+	v := presenceView{oldestS: int64(age / time.Second), durable: b.durableSummary()}
 	if b.cueState == nil {
 		return v
 	}
@@ -1509,12 +1512,39 @@ func (b *Bus) presenceView(ctx context.Context) presenceView {
 		}
 		v.cueReason = joinReason(stalledReason(id, age, b.pending.oldestUnacked(time.Now())), v.cueReason)
 	}
+	if v.durable.Reason != "" {
+		v.cueReason = joinReason(v.cueReason, v.durable.Reason)
+	}
 	return v
+}
+
+// durableSummary folds the local tier's rebuild health with the global one's,
+// when this seat has the global tier up.
+func (b *Bus) durableSummary() durableSummary {
+	parts := []durableSummary{b.dh.summary("local")}
+	b.globalMu.Lock()
+	g := b.global
+	b.globalMu.Unlock()
+	if g != nil {
+		parts = append(parts, g.dh.summary("global"))
+	}
+	return mergeDurable(parts...)
 }
 
 // fields puts the view into a presence record.
 func (v presenceView) fields(rec map[string]any) {
 	rec["oldest_pending_s"] = v.oldestS
+	// Only once a durable has been lost: a healthy seat's row is unchanged, and a
+	// reader treats the fields' absence as present (or a shim older than P6).
+	if v.durable.State != "" && v.durable.State != durablePresent {
+		rec["durable_state"] = v.durable.State
+		rec["rebuilds_ok"] = v.durable.OK
+		rec["rebuilds_failed"] = v.durable.Failed
+	}
+	if v.durable.Reason != "" {
+		// Carried whether or not the cue is on; with the cue on it is also in cue_reason.
+		rec["durable_reason"] = v.durable.Reason
+	}
 	if v.cueOn {
 		rec["cue"] = v.cue
 		if v.cueReason != "" {

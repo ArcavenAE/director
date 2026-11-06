@@ -129,8 +129,11 @@ func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 	}
 	cons, err := b.js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", cfg)
 	if err != nil {
-		return false, fmt.Errorf("the broker has lost this session's local durable %s and recreating it failed: %w", durable, err)
+		ferr := fmt.Errorf("the broker has lost this session's local durable %s and recreating it failed: %w", durable, err)
+		b.dh.rebuildFailed(ferr)
+		return false, ferr
 	}
+	b.dh.rebuilt()
 	msg := fmt.Sprintf("the broker had lost this session's local durable %s; it was recreated", durable)
 	if start > 0 {
 		msg += fmt.Sprintf(" to resume at stream sequence %d, so mail already read does not replay and mail sent while it was missing is delivered", start)
