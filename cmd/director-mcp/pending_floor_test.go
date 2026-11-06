@@ -82,7 +82,13 @@ func TestFanoutConsumedUnackedLabelled(t *testing.T) {
 }
 
 // TestFailedReadIsUnverifiedNotZero: a tier read that fails marks the tier
-// unverified with its reason, and the age is kept, never reset to 0.
+// unverified with its reason, and the age is kept, never reset to 0. This is
+// the bus-level check on the local tier. The rest is pinned by director#297's
+// tests and not repeated here: TestTrackerAFailedReadIsUnverifiedAndKeepsTheAge
+// (the mark, its reason, the kept batches and the next good sample clearing it),
+// TestAnUnverifiedTierIsNeverStalled (the cue reads unverified), and
+// TestADeniedStreamReadIsFastAndUnverified (the presence row carries cue
+// unverified with the reason, beside an oldest_pending_s that keeps the age).
 func TestFailedReadIsUnverifiedNotZero(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
