@@ -87,9 +87,19 @@ content: |
   `wait_for_message` returned local messages plus a `global_warning` (no
   responders). The product seat's report of silence is not reconciled with
   it; which build and which call each used is the question to answer.
+
+  HARVEST 2026-11-06:
+  - finding-director-0adz: the supervisor-first trial (2026-09-26 to
+    2026-09-28) never ran its core loop, because supervisors on the
+    operator's cluster held no global-tier presence until each restarted.
+    Director stayed the relay for every cross-cluster review, and the
+    recorded delays all sit on that hop.
 edges:
   - target: finding-009-hub-grant-reload-misses-existing-leaf
     type: derives
+  - target: finding-director-0adz-supervisor-first-trial
+    type: supports
+    note: "reach was the first gap the supervisor-first trial hit, and it stopped the trial's core loop"
   - target: finding-022-a-hub-reload-closes-a-removed-users-live-client-connection
     type: supports
   - target: finding-024-a-leaf-seat-sees-two-global-outages-the-same-way-and-loses-no-sends
