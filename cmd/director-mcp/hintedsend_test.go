@@ -97,6 +97,24 @@ func TestHintedSendToAFilteredSubjectIsAccepted(t *testing.T) {
 	}
 }
 
+// A raw send that carries cold decodes into sendArgs with Cold set, so a
+// check that refuses arguments sendArgs does not declare still accepts it.
+func TestSendArgsDeclareCold(t *testing.T) {
+	raw := json.RawMessage(`{"to":"agent://ops/newseat","performative":"INFORM","text":"hi","workspace":"aae-orc","cold":true}`)
+	var a sendArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		t.Fatalf("a send carrying cold did not decode: %v", err)
+	}
+	if !a.Cold {
+		t.Errorf("cold: true decoded to Cold=false: %+v", a)
+	}
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&sendArgs{}); err != nil {
+		t.Errorf("a strict decode of a cold send was refused: %v", err)
+	}
+}
+
 // cold: true keeps mail-before-first-start: it publishes as before, and the
 // result says no consumer filters the subject yet.
 func TestColdHintedSendPublishesAndSaysNoConsumer(t *testing.T) {
