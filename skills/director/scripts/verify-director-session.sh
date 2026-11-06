@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prove director-session, the installed launcher for a hand-started director
-# session (ask I-91; the ID-A launcher promoted out of probe/).
+# session (the ID-A launcher promoted out of probe/).
 #
 # Broker-free: claude and the shim are stubs, nothing connects. The stub claude
 # records its argv, one word per line, and the directory it ran from.

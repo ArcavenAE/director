@@ -27,7 +27,7 @@
 #                  works from each seat durable's ack floor, creates no consumer, acks nothing and
 #                  writes no presence row; a row with over_threshold true is a live seat holding mail
 #                  older than the 300 s receipt window. This script never opens a bus connection itself
-#     over-bound   the same reader's pending-age bound (I-190:1), read twice: once as above, once more
+#     over-bound   the same reader's pending-age bound, read twice: once as above, once more
 #                  with --global, because one call returns only one tier. A row with over_bound true is
 #                  a live seat whose oldest unread message is older than the reader's bound (600 s by
 #                  default, DIRECTOR_PENDING_AGE_BOUND to override), whatever --older-than says. Each is
