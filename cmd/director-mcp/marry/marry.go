@@ -79,6 +79,13 @@ type Item struct {
 	Assignee string   `json:"assignee,omitempty"`
 }
 
+// seatKey is the identity of a seat: its cluster and its address. One seat name
+// can run on two clusters, and each is its own seat. NotMatchable and the lease
+// ledger name an address alone, so they apply to the name on every cluster.
+type seatKey struct{ cluster, address string }
+
+func keyOf(s Seat) seatKey { return seatKey{s.Cluster, s.Address} }
+
 // Seat is one seat's row of the availability table.
 type Seat struct {
 	Address      string       `json:"address"`
@@ -249,12 +256,12 @@ func Run(in Input) (Output, error) {
 	// One item, one holder starts at the input: a repeated item would get two
 	// leases with one id, and a repeated seat two items. A client-scope item is
 	// skipped here too, so none of its fields is read.
-	seenSeat := map[string]bool{}
+	seenSeat := map[seatKey]bool{}
 	for _, s := range in.Seats {
-		if seenSeat[s.Address] {
+		if seenSeat[keyOf(s)] {
 			return Output{}, fmt.Errorf("marry: seat %s is listed twice", s.Address)
 		}
-		seenSeat[s.Address] = true
+		seenSeat[keyOf(s)] = true
 	}
 	seenItem := map[string]bool{}
 	for _, it := range in.Items {
@@ -271,6 +278,9 @@ func Run(in Input) (Output, error) {
 	validUntil := in.Now.Add(time.Duration(in.LeaseMinutes) * time.Minute)
 
 	heldItem := map[string]Lease{}
+	// A ledger lease names the seat by address only, so it holds that name on
+	// every cluster: a block that can only keep a seat out of a pair, never
+	// double-book one.
 	heldSeat := map[string]bool{}
 	for _, l := range in.Ledger {
 		switch {
@@ -340,7 +350,7 @@ func Run(in Input) (Output, error) {
 		}
 	}
 
-	used := map[string]bool{}
+	used := map[seatKey]bool{}
 	for _, it := range items {
 		if _, ok := heldItem[it.ID]; ok {
 			out.Count.Held++
@@ -390,7 +400,7 @@ func Run(in Input) (Output, error) {
 		}
 		var free []candidate
 		for _, c := range cands {
-			if strictlyFree(in, c.seat) && !heldSeat[c.seat.Address] && !used[c.seat.Address] {
+			if strictlyFree(in, c.seat) && !heldSeat[c.seat.Address] && !used[keyOf(c.seat)] {
 				free = append(free, c)
 			}
 		}
@@ -415,7 +425,7 @@ func Run(in Input) (Output, error) {
 		switch {
 		case placedAt >= 0:
 			s := free[placedAt].seat
-			used[s.Address] = true
+			used[keyOf(s)] = true
 			l := Lease{ID: in.RunID + "/" + it.ID, Item: it.ID, Seat: s.Address, ValidUntil: validUntil, State: LeaseOpen}
 			out.Leases = append(out.Leases, l)
 			out.Pairs = append(out.Pairs, Pair{Item: it.ID, Seat: s.Address, Lease: l.ID})
