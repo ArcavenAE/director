@@ -231,7 +231,7 @@ type sendArgs struct {
 }
 
 // sendArgNames are the send_message arguments, in the order the schema lists them.
-const sendArgNames = "to, performative, text, refs, in_reply_to, reply_by, workspace, fail_fast"
+const sendArgNames = "to, performative, text, refs, in_reply_to, reply_by, workspace, cold, fail_fast"
 
 // sendArgsError names an unknown argument. A misspelled one used to be dropped
 // silently, so the caller read "content.data is empty for type text" and went
