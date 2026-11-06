@@ -148,6 +148,11 @@ func parseArgs(args []string) (cliArgs, error) {
 			return cliArgs{}, fmt.Errorf("asks: --id needs a message id (usage: %s)", asksUsage)
 		}
 		return out, nil
+	case args[0] == "roster":
+		if len(args) != 2 || args[1] != "--json" {
+			return cliArgs{}, fmt.Errorf("roster: usage: %s", rosterUsage)
+		}
+		return cliArgs{mode: "roster", json: true}, nil
 	case args[0] == "ask-reader":
 		out := cliArgs{mode: "ask-reader"}
 		rest := args[1:]

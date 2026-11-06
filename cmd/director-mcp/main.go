@@ -111,6 +111,14 @@ func main() {
 		cancel()
 		os.Exit(code)
 	}
+	// roster lists the presence rows for a script; like unread it needs no
+	// identity of its own.
+	if cli.mode == "roster" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		code := runRosterCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, os.Stdout, os.Stderr)
+		cancel()
+		os.Exit(code)
+	}
 	// dossier reads the bus and the state directory and writes only its own
 	// files under dossier/; it needs no identity of its own.
 	if cli.mode == "dossier" {
