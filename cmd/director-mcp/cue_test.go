@@ -284,7 +284,7 @@ func TestAReconnectCuesOnceIfAnythingIsWaiting(t *testing.T) {
 
 // ---- C-3: receipt ---------------------------------------------------------
 
-// The back-off (I-69 D-9, operator answer "Back off for 24 hours, then notify
+// The back-off (aae-orc-u90tt, operator answer "Back off for 24 hours, then notify
 // director"): the two warnings and the first re-cue stay as they were; after
 // the second W the cue is re-sent at 4W and 8W, then hourly, until 24 hours
 // after the first cue, when one INFORM goes to director and the cue stops.

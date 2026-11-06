@@ -2,7 +2,7 @@
 
 - **Date:** 2026-11-05
 - **Subject:** director: how quickly its own session answers, and how a directive reaches the front of another seat's queue
-- **Asked by:** the operator (ask I-69), through director
+- **Asked by:** the operator, through director
 - **Confidence:** read-only. Code read at director origin/main ff0d94c. Nothing was run against a live bus.
 
 ## Why this matters
@@ -37,7 +37,7 @@ The operator asked for director's actions to move into subagents so its session 
 3. Build subagents (D-2) for the long non-judgement tick steps, only if the baseline shows busy turns are a real share of delay. A director subagent's tool list carries no director-mcp tool.
 4. The lane: decide how director gets a credential of its own; then a directive subject only that credential can publish, ranked first by arrival subject, bounded to directives that carry a ref to an operator ask or ruling or name a MUST-wake item.
 
-Every step reports or reorders. None types into a pane, preempts a turn or acts on silence, and none requires marvel. Director is never on another seat's critical path (operator ruling I-194).
+Every step reports or reorders. None types into a pane, preempts a turn or acts on silence, and none requires marvel. Director is never on another seat's critical path (operator ruling, 2026-11-05).
 
 ## 5. Graveyard (harvested with this finding)
 

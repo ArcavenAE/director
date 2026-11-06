@@ -100,8 +100,8 @@ type pendingCue struct {
 }
 
 // cueBackOffLimit is how long after the first cue an unanswered cue is re-sent
-// before one INFORM goes to director and the cue stops (I-69 D-9, the
-// operator's answer on card i69-4: "Back off for 24 hours, then notify
+// before one INFORM goes to director and the cue stops (aae-orc-u90tt, the
+// operator's answer: "Back off for 24 hours, then notify
 // director"). Both numbers are proposals.
 const cueBackOffLimit = 24 * time.Hour
 
