@@ -85,8 +85,12 @@ add_stream() {
 # listing stops the run, and so does one that is not a JSON array of names (a bare
 # hub lists null): falling back to the bootstrap list would be the silent skip.
 listing="$("${A[@]}" stream ls --names --json)" || { echo "stream ls failed" >&2; exit 1; }
+bad_shape() { echo "stream ls returned something other than a JSON array of names" >&2; exit 1; }
+# Nothing at all on stdout is not the null a bare hub lists: jq would read no input,
+# print nothing and exit 0, which is the silent skip.
+if [[ -z "${listing//[[:space:]]/}" ]]; then bad_shape; fi
 found="$(printf '%s' "$listing" | jq -r 'if . == null then empty elif (type == "array" and all(.[]; type == "string")) then .[] | select(startswith("GLOBAL_TO_") and . != "GLOBAL_TO_DIRECTOR") else error("stream ls did not return an array of names") end')" \
-  || { echo "stream ls returned something other than a JSON array of names" >&2; exit 1; }
+  || bad_shape
 extra=()
 # Split on newlines only, with globbing off, so a name with a glob character is not
 # expanded against the files here (and no here-string, which bash 3.2 writes to a file).

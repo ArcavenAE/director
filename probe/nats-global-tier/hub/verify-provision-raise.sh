@@ -110,6 +110,8 @@ run_noarg() {
   local N=(nats -s "nats://127.0.0.1:$port")
   "${N[@]}" stream add GLOBAL_TO_DIRECTOR --subjects 'global.director.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
   "${N[@]}" stream add GLOBAL_TO_c3 --subjects 'global.c3.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+  # a stream whose name only contains the prefix is not a GLOBAL_TO_ stream and is never visited.
+  "${N[@]}" stream add XGLOBAL_TO_c4 --subjects 'x.c4.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
   # on the unnamed stream: a director durable at 25h (raise) and one that is not the director's (leave).
   "${N[@]}" consumer add GLOBAL_TO_c3 mcp_global_z_1 --filter 'global.c3.>' --pull --ack explicit --deliver all --defaults --inactive-threshold 25h >/dev/null
   "${N[@]}" consumer add GLOBAL_TO_c3 hand_made --filter 'global.c3.>' --pull --ack explicit --deliver all --defaults --inactive-threshold 25h >/dev/null
@@ -134,7 +136,7 @@ run_noarg() {
   # the exact set of streams: nothing is created that nobody named (the presence bucket's
   # own stream, KV_GLOBAL_PRESENCE, does not start with GLOBAL_TO_ and is not visited).
   local set; set="$("${N[@]}" stream ls --names --json | jq -r '.[]' | LC_ALL=C sort | paste -sd, -)"
-  [[ "$set" == "GLOBAL_TO_DIRECTOR,GLOBAL_TO_c3,GLOBAL_TO_kinu,GLOBAL_TO_mokuzai,KV_GLOBAL_PRESENCE" ]] && ok "$label: the hub holds exactly the expected streams after two runs" || bad "$label: the hub holds exactly the expected streams after two runs" "got $set"
+  [[ "$set" == "GLOBAL_TO_DIRECTOR,GLOBAL_TO_c3,GLOBAL_TO_kinu,GLOBAL_TO_mokuzai,KV_GLOBAL_PRESENCE,XGLOBAL_TO_c4" ]] && ok "$label: the hub holds exactly the expected streams after two runs" || bad "$label: the hub holds exactly the expected streams after two runs" "got $set"
 }
 
 # run_withargs SCRIPT LABEL: arguments choose which streams to create, and do not stop
@@ -188,7 +190,7 @@ run_standin() {
   nats-server -c "$dir/nats.conf" -l "$dir/broker.log" &
   pids+=($!)
   local i; for i in $(seq 1 50); do nats -s "nats://127.0.0.1:$standin_port" server check connection >/dev/null 2>&1 && break; sleep 0.2; done
-  standin_out="$(PATH="$work/bin:$PATH" STANDIN_MATCH="$match" STANDIN_OUT="$out" STANDIN_RC="$rc" DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$standin_port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" 2>&1)" && standin_rc=0 || standin_rc=$?
+  standin_out="$(cd "${standin_cwd:-$PWD}" && PATH="$work/bin:$PATH" STANDIN_MATCH="$match" STANDIN_OUT="$out" STANDIN_RC="$rc" DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$standin_port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" 2>&1)" && standin_rc=0 || standin_rc=$?
 }
 
 # run_badlist SCRIPT LABEL: the stream listing fails, or comes back as something that is
@@ -197,11 +199,11 @@ run_standin() {
 # problem named, and nothing created.
 run_badlist() {
   local script="$1" label="$2" name out rc
-  local -a names=(failed notjson truncated number error-object)
-  local -a outs=("" "not json{" '["GLOBAL_TO_c3"' '[1]' '{"error":"no responders"}')
-  local -a rcs=(1 0 0 0 0)
+  local -a names=(failed notjson truncated number error-object empty blank)
+  local -a outs=("" "not json{" '["GLOBAL_TO_c3"' '[1]' '{"error":"no responders"}' "" $'  \n\t\n')
+  local -a rcs=(1 0 0 0 0 0 0)
   local n
-  for n in 0 1 2 3 4; do
+  for n in 0 1 2 3 4 5 6; do
     name="${names[$n]}"
     run_standin "$script" "$label-$name" "stream ls" "${outs[$n]}" "${rcs[$n]}"
     local made; made="$(nats -s "nats://127.0.0.1:$standin_port" stream ls --names --json 2>&1)"
@@ -241,7 +243,22 @@ run_emptysuffix() {
   if printf '%s\n' "$standin_out" | /usr/bin/grep -q '^stream GLOBAL_TO_ has no cluster name, not visited$'; then ok "$label: an empty cluster name is reported"; else bad "$label: an empty cluster name is reported" "$standin_out"; fi
 }
 
+# A stream name with a glob character is visited as written, and never expanded
+# against the files in the directory the script runs from.
+run_glob() {
+  local script="$1" label="$2" made
+  mkdir -p "$work/globcwd"; : > "$work/globcwd/GLOBAL_TO_axb"
+  standin_cwd="$work/globcwd" run_standin "$script" "$label" "stream ls" '["GLOBAL_TO_a?b"]' 0
+  made="$(nats -s "nats://127.0.0.1:$standin_port" stream ls --names --json 2>&1)"
+  if (( standin_rc == 0 )) && printf '%s' "$made" | /usr/bin/grep -q '"GLOBAL_TO_a?b"' && ! printf '%s' "$made" | /usr/bin/grep -q 'GLOBAL_TO_axb'; then
+    ok "$label: a name with a glob character is visited as written"
+  else
+    bad "$label: a name with a glob character is visited as written" "rc=$standin_rc made=$made out=$standin_out"
+  fi
+}
+
 run_badlist "$here/provision.sh" real-badlist
+run_glob "$here/provision.sh" real-glob
 run_emptysuffix "$here/provision.sh" real-emptysuffix
 run_unnamed_fail "$here/provision.sh" real-unnamed
 
@@ -301,6 +318,12 @@ mutant_with run_noarg director-not-excluded ' and . != "GLOBAL_TO_DIRECTOR"' ''
 mutant_with run_withargs discovery-only-without-args 'for s in \$found; do' 'for s in $( [ "$#" -eq 0 ] \&\& printf "%s\\n" "$found" ); do'
 # The durables of an unnamed stream are not raised.
 mutant_with run_noarg unnamed-durables-skipped '^    raise_durables "\$name"' '    if [[ "$name" == GLOBAL_TO_DIRECTOR || " ${clusters[*]} " == *" ${name#GLOBAL_TO_} "* ]]; then raise_durables "$name"; fi'
+# An empty or blank listing is let through as if it were null.
+mutant_with run_badlist empty-listing-allowed 'then bad_shape; fi' 'then :; fi'
+# The glob guard is off, so a name with a glob character expands against the files here.
+mutant_with run_glob glob-unguarded '; set -f$' ';'
+# The prefix test only looks for the prefix anywhere in the name.
+mutant_with run_noarg contains-not-startswith 'select(startswith("GLOBAL_TO_") and ' 'select(contains("GLOBAL_TO_") and '
 # The match string is joined under the newline IFS again, so no named stream matches.
 mutant_with run_noarg newline-joined-match 'case "\$named" in' 'case " ${clusters[*]} " in'
 # The unnamed streams are visited before the presence bucket again.
