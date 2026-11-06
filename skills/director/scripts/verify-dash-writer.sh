@@ -107,6 +107,12 @@ rows = [
     ["arcaven", "worker", "arcaven-worker-g5-11", "running", "alive", "2m"],
     ["arcaven", "worker", "arcaven-worker-g5-12", "running", "alive (stalled) (parked: x y)", "4m"],
     ["arcaven", "worker", "arcaven-worker-g5-10", "running", "healthy", "stale soon"],
+    ["arcaven", "worker", "arcaven-worker-g5-13", "running", "healthy (unwatched)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-14", "running", "unhealthy (stalled) (unwatched)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-15", "running", "healthy (unwatched) (parked: x)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-16", "running", "healthy (parked: x) (unwatched)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-17", "running", "healthy (unwatched) (logged-out)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-18", "running", "healthy (unwatched) (stalled)", "2m"],
     ["arcaven", "worker", "arcaven-bartholomew-g5-9", "running", "healthy", "1m"],
 ]
 open(os.path.join(d, "alpha"), "w").write(table(H, rows))
@@ -290,9 +296,14 @@ assert rows["arcaven-worker-g5-7"]["last_active"] == "unreadable", "5 fortnights
 assert rows["arcaven-worker-g5-8"]["last_active"] == "2h5m" and rows["arcaven-worker-g5-9"]["last_active"] == "stale 5m*", (rows["arcaven-worker-g5-8"], rows["arcaven-worker-g5-9"])
 assert rows["arcaven-worker-g5-11"]["health"] == "alive" and rows["arcaven-worker-g5-12"]["health"] == "alive (stalled) (parked)", (rows.get("arcaven-worker-g5-11"), rows.get("arcaven-worker-g5-12"))
 assert rows["arcaven-worker-g5-10"]["last_active"] == "unreadable", "stale takes an age word or nothing"
+assert rows["arcaven-worker-g5-13"]["health"] == "healthy (unwatched)", rows["arcaven-worker-g5-13"]
+assert rows["arcaven-worker-g5-14"]["health"] == "unhealthy (stalled) (unwatched)", "(unwatched) follows (stalled)"
+for n in (15, 16, 17):
+    assert rows["arcaven-worker-g5-%d" % n]["health"] == "unreadable", "(unwatched) never appears with (parked) or (logged-out), in either order: %d" % n
+assert rows["arcaven-worker-g5-18"]["health"] == "unreadable", "(unwatched) before (stalled) is the wrong order"
 assert "arcaven-bartholomew-g5-9" not in rows, "a withheld name in a session name drops the row"
 ref = [x["data"]["refusal"] for x in d["writes"] if x["doc_id"] == "sessions" and x["collection"] == "dash_panels"][0]
-assert ref.get("health:grammar") == 1 and ref.get("last_active:unreadable") == 3 and ref.get("stage:grammar") == 1 and ref.get("id:charset") == 1, ref
+assert ref.get("health:grammar") == 5 and ref.get("last_active:unreadable") == 3 and ref.get("stage:grammar") == 1 and ref.get("id:charset") == 1, ref
 ' && ok "state and health are matched to marvel's grammar: parked reasons dropped, exit codes as printed, failed tagged terminal, wrong order and long cells unreadable, a bad state drops the row" || bad "session grammar"
 grep -q 'secret\|budget exceeded' "$root/out.json" && bad "free text after a session cell never lands" || ok "free text inside a session cell never lands"
 

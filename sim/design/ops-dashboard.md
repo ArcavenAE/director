@@ -127,12 +127,19 @@ the session row builder, and `internal/api` for the values):
 - HEALTH is one base word, `alive`, `healthy`, `unhealthy` or `unknown` (`alive` is what a process-alive role reads once marvel#968 merges), then in
   this order, each at most once:
   - ` (stalled)`;
-  - then at most one of ` (logged-out)` or ` (parked: <reason>)`. marvel
-    sets them from one harness reading, so both never appear. The reason is
-    free text and runs to the last `)` of the cell; the writer drops it and
-    writes ` (parked)`.
+  - then at most one of ` (logged-out)`, ` (unwatched)` or ` (parked: <reason>)`.
+    marvel sets them from one harness reading or one coverage reading, so two
+    of them never appear together. The writer refuses `(stalled)` or
+    `(unwatched)` after a parked reason, and `(unwatched)` or `(logged-out)`
+    followed by another member. A `(logged-out)` after a parked reason is not
+    refused: the reason runs to the last `)` of the cell, so it is read as
+    part of the reason and written as ` (parked)`, as before.
+    ` (unwatched)` marks a seat that no watcher covers, or whose control check
+    failed. The reason after `parked` is free text and runs to the last
+    `)` of the cell; the writer drops it and writes ` (parked)`.
   So `healthy (stalled) (parked: <reason>)` is written as
-  `healthy (stalled) (parked)`.
+  `healthy (stalled) (parked)`, and `unhealthy (stalled) (unwatched)` is
+  written as printed.
 - A suffix marvel adds later, or any other order, fails the grammar.
 
 Refused in any free-text value (`id`, `title`, `last_active`):
@@ -300,8 +307,10 @@ not part of this build.
    - STATE `crashed (exit 3)` is written as printed, `failed (budget)` as
      `failed (terminal)`, and `running (exit 3)` fails the grammar and drops
      the row.
-   - A HEALTH of `healthy (parked: x) (stalled)` (wrong order) writes
-     `unreadable`; a `last_active` over 40 characters writes `unreadable`; an
+   - A HEALTH of `healthy (parked: x) (stalled)` (wrong order), of
+     `healthy (unwatched) (parked: x)` or `healthy (parked: x) (unwatched)`
+     (two members of the one slot), or of `healthy (unwatched) (stalled)`
+     (wrong order) writes `unreadable`; a `last_active` over 40 characters writes `unreadable`; an
      unknown area writes `unlabelled`. Each is counted in `refusal`, and the
      page never shows the failed text.
 3. **Header check and split.**
