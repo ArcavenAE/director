@@ -1,0 +1,17 @@
+id: grv-escalation-acts-on-timeout
+type: graveyard
+confidence: graveyard
+title: "Escalation that acts on an ack timeout"
+content: |
+  Harvested 2026-11-05 with finding-director-97gz. Escalation that acts on
+  an ack timeout is ruled out; an unacked MUST-wake ask moves up as a
+  message only (R-113 as narrowed 2026-10-15).
+graveyard:
+  approach: "Escalation that acts on an ack timeout"
+  ruling: "Ruled out; an unacked MUST-wake ask moves up as a message only (R-113 as narrowed 2026-10-15)."
+  reopener: "An operator ruling naming one action and its bound."
+provenance:
+  created_by: agent
+  reviewed_by: null
+  session: 2026-11-05 finding-director-97gz
+  created_at: "2026-11-05"

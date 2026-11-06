@@ -190,7 +190,9 @@ arrives. Arrivals within a few seconds of each other fold into one notice,
 which carries a count and the sender, performative and message id of the
 oldest waiting message (never the body). No notice is sent while the seat has
 a `wait_for_message` open, since that call delivers the message; a notice
-nobody answers is sent once more after five minutes. The notice starts a turn, and
+nobody answers is sent again after five minutes, after twenty, after forty, and
+then hourly until 24 hours after the first, when one INFORM goes to director and
+the cue stops for those messages. The notice starts a turn, and
 the model then drains with `wait_for_message` as before, so order and acks do
 not change. Two settings turn it on, both per seat:
 

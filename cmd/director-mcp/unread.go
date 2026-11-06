@@ -255,6 +255,10 @@ type unreadDurable struct {
 	Evidence      *unreadEvidence `json:"evidence,omitempty"`
 	ScanTruncated bool            `json:"scan_truncated,omitempty"`
 	OverThreshold bool            `json:"over_threshold,omitempty"`
+	// OverBound is set on a live row whose oldest unread message is older than
+	// the pending-age bound (pendingage.go). It is the reading, not a filter, so
+	// --older-than does not hide it.
+	OverBound bool `json:"over_bound,omitempty"`
 
 	created    time.Time
 	pendingIDs map[string]bool
@@ -429,6 +433,7 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 		} else {
 			d.Note = "no presence: this durable belongs to a session that is not live"
 		}
+		var ageNote string
 		if d.Pending > 0 {
 			// The first message the durable has not acked: after its ack floor,
 			// and never before where a resumed durable started.
@@ -447,9 +452,15 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 				if d.OldestSeq == 0 || m.Sequence < d.OldestSeq {
 					d.OldestSeq = m.Sequence
 					d.OldestAt = m.Time.UTC().Format(time.RFC3339)
-					d.OldestAgeSeconds = now.Sub(m.Time).Seconds()
+					d.OldestAgeSeconds, ageNote = ageOnBrokerClock(brokerClock(info, now), now, m.Time)
 				}
 			}
+		}
+		if ageNote != "" {
+			if d.Note != "" {
+				d.Note += "; "
+			}
+			d.Note += ageNote
 		}
 		if d.Live {
 			d.State = liveState(d, now)
@@ -462,6 +473,23 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 	if err := lister.Err(); err != nil {
 		r.Warnings = append(r.Warnings, "consumer listing incomplete: "+err.Error())
 	}
+}
+
+// brokerClock is the broker's time as the consumer info reports it. A variable
+// so a test that simulates passing time by advancing the reader's clock can say
+// the broker agrees with it; nothing in the program reassigns it.
+var brokerClock = func(info *jetstream.ConsumerInfo, _ time.Time) time.Time { return info.TimeStamp }
+
+// ageOnBrokerClock ages a stored message as the broker's clock (the consumer
+// info TimeStamp) minus the message's stored time, so a reader host with a
+// skewed clock does not misreport how old the mail is. Where the server leaves
+// the time zero it falls back to the reader's clock and returns a note saying
+// so, for the row.
+func ageOnBrokerClock(brokerNow, readerNow, stored time.Time) (float64, string) {
+	if brokerNow.IsZero() {
+		return readerNow.Sub(stored).Seconds(), "age uses the reader clock: the broker gave no consumer info time"
+	}
+	return brokerNow.Sub(stored).Seconds(), ""
 }
 
 // liveState names a live row (M2). The anchor is the durable's Created: the
@@ -682,6 +710,19 @@ func sortDurables(r *unreadReport) {
 	})
 }
 
+// holdsUnreadMail selects the live rows whose oldest unread message counts
+// toward an age check: a live row in behind or durable-idle with mail waiting.
+// applyThreshold and applyBound both select through it, so a change to what
+// counts is made once. Reads-outside-durable rows are never selected, since
+// their pending mail was answered and is not unread mail. State is set only on
+// a live row, and OldestSeq only when mail is pending (which a reading row is
+// not), so the live check is stated for the reader and does not change which
+// rows pass.
+func holdsUnreadMail(row *unreadDurable) bool {
+	return row.Live && (row.State == stateBehind || row.State == stateDurableIdle) &&
+		row.OldestSeq != 0
+}
+
 // applyThreshold marks each behind or durable-idle row whose oldest unread
 // message is older than d (M4). reads-outside-durable rows are never counted.
 // It changes the report only; the exit code stays 0 (ADR-007).
@@ -693,11 +734,22 @@ func applyThreshold(r *unreadReport, d time.Duration) {
 	r.OverThresholdCount = 0
 	for i := range r.Durables {
 		row := &r.Durables[i]
-		row.OverThreshold = (row.State == stateBehind || row.State == stateDurableIdle) &&
-			row.OldestSeq != 0 && row.OldestAgeSeconds > d.Seconds()
+		row.OverThreshold = holdsUnreadMail(row) && row.OldestAgeSeconds > d.Seconds()
 		if row.OverThreshold {
 			r.OverThresholdCount++
 		}
+	}
+}
+
+// applyBound marks each live row whose oldest unread message is older than the
+// pending-age bound (I-190:1). Unlike applyThreshold it runs whatever
+// --older-than says, and reads-outside-durable rows are never marked, since
+// their pending mail was answered and is not unread mail. It changes the report
+// only; the exit code stays 0 (ADR-007, R-113).
+func applyBound(r *unreadReport, bound time.Duration) {
+	for i := range r.Durables {
+		row := &r.Durables[i]
+		row.OverBound = holdsUnreadMail(row) && row.OldestAgeSeconds > bound.Seconds()
 	}
 }
 
@@ -830,6 +882,11 @@ func printRow(w io.Writer, d unreadDurable) {
 	mark := ""
 	if d.OverThreshold {
 		mark = "! "
+	}
+	if d.OverBound {
+		defer func() {
+			_, _ = fmt.Fprintf(w, "    over the %d s pending-age bound: %s\n", int64(pendingAgeBound.Seconds()), d.Durable)
+		}()
 	}
 	state := d.State
 	if !d.Live {
@@ -990,6 +1047,7 @@ func runUnreadCmd(ctx context.Context, url string, cli cliArgs, domain string, o
 	opts := unreadOpts{JSON: cli.json, All: cli.all, ByRole: cli.byRole}
 	finish := func(r *unreadReport) {
 		applyThreshold(r, cli.olderThan)
+		applyBound(r, pendingAgeBound)
 		if cli.byRole {
 			rollupRoles(r)
 		}

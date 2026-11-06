@@ -167,6 +167,9 @@ TA="1 ok 2 ok 3 ok 4 no 5 ok 6 ok 7 ok 8 ok" refuses "paths refuses a path whose
 TB="1 ok" refuses "paths refuses a second path whose test is not eight oks" "eight" paths $P1 card-1
 EV=" " refuses "paths refuses blank evidence" "evidence" paths $P1 card-1
 RA=nosuch refuses "paths refuses a row that does not exist" "no workstream" paths $P1 card-1
+row pd; "$DWS" close pd --from building >/dev/null 2>&1
+RB=pd refuses "paths refuses a closed row and names dws open" "dws open" paths $P1 card-1
+RA=pd refuses "paths refuses a closed row in the first place too" "dws open" paths $P1 card-1
 RB=pa refuses "paths refuses the same row twice" "two rows" paths $P1 card-1
 accepts "paths records two paths" paths $P1 card-1
 [[ "$(state_of $P1)" == "paths-open" ]] && ok "the record is paths-open" || bad "the record is paths-open" "$(state_of $P1)"

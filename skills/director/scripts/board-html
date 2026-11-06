@@ -196,7 +196,8 @@ def ledger_html(data: dict, board_text: str, decisions=None) -> str:
     and never from prose, except the Uncaptured lines board.md carries."""
     e = htmlmod.escape
     now = now_utc()
-    rows = data["rows"]
+    done = data.get("done", [])
+    rows = [r for r in data["rows"] if r["stage"] != "parked"]
     blocked = sorted((r for r in rows if r.get("blocked") == "operator"), key=lambda r: (r["last_moved"], r["slug"]))
     flagged = {r["slug"]: unmoved_text(r, now) for r in rows}
     n_unmoved = sum(1 for v in flagged.values() if v)
@@ -226,7 +227,11 @@ def ledger_html(data: dict, board_text: str, decisions=None) -> str:
         moved = e(r["last_moved"]) + (f' <span class="unmoved">{flag}</span>' if flag else "")
         out.append(f'<tr data-slug="{e(r["slug"], quote=True)}"><td>{e(r["stage"])}</td><td>{e(r["slug"])}</td><td>{e(r["owner"])}</td>'
                    f'<td>{moved}</td><td>{e(r["blocked"])}</td><td>{e(r["next"])}</td><td>{e(" ".join(r.get("links", [])))}</td></tr>')
-    out.append("</tbody></table></div></section>")
+    out.append("</tbody></table></div>")
+    out.append(f'<h2>Done, last 14 days</h2><ul id="done-last-14">')
+    out += [f"<li>{e(d['slug'])} | {'closed' if d['kind'] == 'close' else 'parked'} {e(d['at'])} | {e(d['detail'])}</li>"
+            for d in done] or ['<li class="none">none</li>']
+    out.append("</ul></section>")
     if decisions is not None:
         out.append(seat_decisions_html(decisions, now))
     out.append("<script>(function(){var el=document.getElementById('page-age');if(!el)return;"

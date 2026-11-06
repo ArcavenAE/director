@@ -162,9 +162,12 @@ So:
 
 - after W with the cued messages still pending, the shim emits
   `cue.unanswered` (a warning naming the message ids and the seat's cue
-  state) to director, and re-cues once;
-- after a second W it emits `cue.unanswered` again and stops cueing those
-  messages; the seat is back on today's manual wake for them;
+  state) to director, and re-cues;
+- after a second W it emits `cue.unanswered` again, and the cue backs off: a
+  re-cue at 4W and 8W, then hourly, until 24 hours after the first cue (the
+  proposed limit, I-69 D-9). Then one INFORM (`cue.gave_up`) goes to director
+  and the cue stops for those messages; the seat is back on today's manual wake
+  for them. A drain at any point ends the back-off;
 - it never reports the seat dead or the message lost. R-89's fail-loud half
   is this warning; liveness stays with marvel's pane checks.
 
@@ -216,7 +219,8 @@ path is unchanged (golden `initialize` and `tools/list`); `server/discover`
 gets `-32601`; a rise in `NumPending` with no open wait emits one cue with
 metadata only and no body; with an open wait, none; three arrivals inside the
 floor emit one cue with `count = 3`; an unanswered cue emits
-`cue.unanswered` after W, re-cues once, then stops; a drain inside W emits
+`cue.unanswered` after W and re-cues, warns again after a second W, backs off
+(4W, 8W, then hourly) and sends one `cue.gave_up` INFORM at 24 hours, then stops; a drain inside W emits
 nothing; the self-test sets `live` only on an `inbox_summary` whose `cue_ack`
 equals this start's nonce; a drain with no `cue_ack` (both `inbox_summary`
 and `wait_for_message`) inside the window leaves `unverified`; a `cue_ack`

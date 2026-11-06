@@ -107,6 +107,12 @@ rows = [
     ["arcaven", "worker", "arcaven-worker-g5-11", "running", "alive", "2m"],
     ["arcaven", "worker", "arcaven-worker-g5-12", "running", "alive (stalled) (parked: x y)", "4m"],
     ["arcaven", "worker", "arcaven-worker-g5-10", "running", "healthy", "stale soon"],
+    ["arcaven", "worker", "arcaven-worker-g5-13", "running", "healthy (unwatched)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-14", "running", "unhealthy (stalled) (unwatched)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-15", "running", "healthy (unwatched) (parked: x)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-16", "running", "healthy (parked: x) (unwatched)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-17", "running", "healthy (unwatched) (logged-out)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-18", "running", "healthy (unwatched) (stalled)", "2m"],
     ["arcaven", "worker", "arcaven-bartholomew-g5-9", "running", "healthy", "1m"],
 ]
 open(os.path.join(d, "alpha"), "w").write(table(H, rows))
@@ -158,6 +164,7 @@ TOK="ghp_""$(python3 -c 'print("Z"*30)')"
   openev idea-a "idea" "an idea" "" '[]' 2026-10-05T06:00:00Z
   openev idea-b "idea" "another idea" "" '[]' 2026-10-09T06:00:00Z
   openev done-a "merged" "merged one" "" '["pr:o/r#11"]' 2026-10-10T06:00:00Z
+  openev plan-a "planned" "planned one" "" '["bd:x-1"]' 2026-10-10T07:00:00Z
   printf '{"ts":"2026-10-20T10:00:00Z","actor":"refresh","tag":"mirror","event":"refresh-run","at":"2026-10-20T10:00:00Z","rows":14,"links":3,"warnings":0}\n'
 } >"$root/ledger.lines"
 seed <"$root/ledger.lines"
@@ -265,8 +272,10 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 c = {x["doc_id"]: x["data"]["counts"] for x in d["writes"] if x["collection"] == "dash_panels"}["where-work-sits"]
 assert c["idea"] == 2 and c["merged"] == 1 and c["ideas_oldest_opened"] == "2026-10-05", c
+assert c["planned"] == 1, c
 f = [x["data"]["rows"] for x in d["writes"] if x["collection"] == "dash_panels" and x["doc_id"] == "in-flight"][0]
 assert not any(r["id"] in ("idea-a", "idea-b", "done-a") for r in f), "ideas and merged are not in flight"
+assert any(r["id"] == "plan-a" and r["stage"] == "planned" for r in f), "a planned row is in flight"
 ' && ok "ideas and merged rows are counts only, never listed in flight" || bad "ideas and merged"
 
 # ---------------------------------------------------------------- sessions
@@ -287,9 +296,14 @@ assert rows["arcaven-worker-g5-7"]["last_active"] == "unreadable", "5 fortnights
 assert rows["arcaven-worker-g5-8"]["last_active"] == "2h5m" and rows["arcaven-worker-g5-9"]["last_active"] == "stale 5m*", (rows["arcaven-worker-g5-8"], rows["arcaven-worker-g5-9"])
 assert rows["arcaven-worker-g5-11"]["health"] == "alive" and rows["arcaven-worker-g5-12"]["health"] == "alive (stalled) (parked)", (rows.get("arcaven-worker-g5-11"), rows.get("arcaven-worker-g5-12"))
 assert rows["arcaven-worker-g5-10"]["last_active"] == "unreadable", "stale takes an age word or nothing"
+assert rows["arcaven-worker-g5-13"]["health"] == "healthy (unwatched)", rows["arcaven-worker-g5-13"]
+assert rows["arcaven-worker-g5-14"]["health"] == "unhealthy (stalled) (unwatched)", "(unwatched) follows (stalled)"
+for n in (15, 16, 17):
+    assert rows["arcaven-worker-g5-%d" % n]["health"] == "unreadable", "(unwatched) never appears with (parked) or (logged-out), in either order: %d" % n
+assert rows["arcaven-worker-g5-18"]["health"] == "unreadable", "(unwatched) before (stalled) is the wrong order"
 assert "arcaven-bartholomew-g5-9" not in rows, "a withheld name in a session name drops the row"
 ref = [x["data"]["refusal"] for x in d["writes"] if x["doc_id"] == "sessions" and x["collection"] == "dash_panels"][0]
-assert ref.get("health:grammar") == 1 and ref.get("last_active:unreadable") == 3 and ref.get("stage:grammar") == 1 and ref.get("id:charset") == 1, ref
+assert ref.get("health:grammar") == 5 and ref.get("last_active:unreadable") == 3 and ref.get("stage:grammar") == 1 and ref.get("id:charset") == 1, ref
 ' && ok "state and health are matched to marvel's grammar: parked reasons dropped, exit codes as printed, failed tagged terminal, wrong order and long cells unreadable, a bad state drops the row" || bad "session grammar"
 grep -q 'secret\|budget exceeded' "$root/out.json" && bad "free text after a session cell never lands" || ok "free text inside a session cell never lands"
 

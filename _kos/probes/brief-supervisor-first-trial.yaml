@@ -79,6 +79,11 @@ content: |
 
   predicted_confidence is the author's prior at filing, recorded before the
   trial starts so the finding can be scored against it.
+
+  HARVEST 2026-11-06: complete. finding-director-0adz records that the
+  core loop never ran (supervisors lacked global reach), that none of the
+  four measures was recorded as specified, and the gaps by class. Result
+  `redirects` against the predicted 0.6.
 edges: []
 provenance:
   created_by: agent

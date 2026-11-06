@@ -9,10 +9,12 @@ package main
 // drains a backlog in one call (drain.go).
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -27,7 +29,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 	toDesc := "recipient address: agent://{team}/{id}, role://{team}/{role}, or broadcast://{workspace}[/{team}]"
 	sendDesc := "Send a director envelope to another session or role. Returns accepted-for-delivery with a message_id; this is a send acknowledgement, not a delivery or read receipt."
-	waitDesc := "Block up to timeout_seconds for the next message addressed to this session, then return it. This is a poll: the model must call it. The server cannot push a message into context on its own. With max greater than 1 it returns every waiting message up to max in one call, oldest first, and consumes them as the single form does; run inbox_summary first to see what is waiting without consuming it."
+	waitDesc := "Block up to timeout_seconds for the next message addressed to this session, then return it. This is a poll: the model must call it. The server cannot push a message into context on its own. One wait at a time per session: a second open wait is refused and reads nothing. With max greater than 1 it returns every waiting message up to max in one call, oldest first, and consumes them as the single form does; run inbox_summary first to see what is waiting without consuming it."
 	summaryDesc := "Summarize the messages waiting for this session without consuming any: counts by sender and by performative, the REQUEST, FAILURE and QUERY messages and any that set reply_by, say they hold custody, or await a reply, and the waiting sequence numbers oldest first. Acks nothing; drain in order afterwards with wait_for_message max=N."
 	rosterDesc := "List the sessions currently present, from the presence store. Absence means silence, not a negative report."
 	if gcfg != nil {
@@ -219,9 +221,32 @@ type sendArgs struct {
 	ReplyBy      string `json:"reply_by"`
 	Workspace    string `json:"workspace"`
 	Refs         []string
+	// FailFast is the presence watch's extra argument (presencewatch_shim.go).
+	// toolSend reads it from the raw arguments; it is declared here only so the
+	// strict decode in buildSendEnvelope does not count it as unknown.
+	FailFast bool `json:"fail_fast"`
 	// Cold is read by toolSend from the raw args; it is declared here so a
 	// send that carries it passes an unknown-argument check on sendArgs.
 	Cold bool `json:"cold"`
+}
+
+// sendArgNames are the send_message arguments, in the order the schema lists them.
+const sendArgNames = "to, performative, text, refs, in_reply_to, reply_by, workspace, cold, fail_fast"
+
+// sendArgsError names an unknown argument. A misspelled one used to be dropped
+// silently, so the caller read "content.data is empty for type text" and went
+// looking at an envelope field it never set. Other decode errors pass through.
+func sendArgsError(err error) error {
+	name, ok := strings.CutPrefix(err.Error(), "json: unknown field ")
+	if !ok {
+		return err
+	}
+	name = strings.Trim(name, `"`)
+	switch name {
+	case "content", "body", "message", "data":
+		return fmt.Errorf("send_message: unknown argument %q (want text)", name)
+	}
+	return fmt.Errorf("send_message: unknown argument %q (valid: %s)", name, sendArgNames)
 }
 
 // buildSendEnvelope parses and validates send_message args into an envelope,
@@ -230,8 +255,15 @@ type sendArgs struct {
 // correlation), is testable without a broker.
 func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, error) {
 	var a sendArgs
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, "", err
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&a); err != nil {
+		return nil, "", sendArgsError(err)
+	}
+	// json.Unmarshal refused data after the object; a Decoder reads one value
+	// and stops, so check the rest is empty.
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, "", errors.New("send_message: unexpected data after the arguments")
 	}
 	e := newEnvelope(self)
 	e.Recipient.Address = a.To
@@ -345,8 +377,45 @@ func parseWaitArgs(raw json.RawMessage) waitArgs {
 	return a
 }
 
+// openWait takes the session's one wait slot. A wait acks what it reads, so a
+// second open wait would consume mail whose reply nobody may read; the second
+// is refused before any fetch. The release is deferred, so a timeout, a message
+// and a cancel all free the slot.
+func (b *Bus) openWait() (release func(), since time.Time, ok bool) {
+	b.waitMu.Lock()
+	defer b.waitMu.Unlock()
+	if !b.waitSince.IsZero() {
+		return nil, b.waitSince, false
+	}
+	b.waitSince = time.Now()
+	return func() {
+		b.waitMu.Lock()
+		b.waitSince = time.Time{}
+		b.waitMu.Unlock()
+	}, b.waitSince, true
+}
+
+// waitIsOpen reports whether a wait holds the slot, for the cue bracket.
+func (b *Bus) waitIsOpen() bool {
+	b.waitMu.Lock()
+	defer b.waitMu.Unlock()
+	return !b.waitSince.IsZero()
+}
+
 func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
+	release, since, ok := bus.openWait()
+	if !ok {
+		return nil, fmt.Errorf("another wait_for_message is already open in this session (since %s); nothing was read. Wait for its result, then call again.", since.UTC().Format(time.RFC3339))
+	}
+	defer release()
 	a := parseWaitArgs(raw)
+	// Mail whose reply nobody read (a late cancel) comes back first.
+	if items := bus.takeReturned(a.Max); len(items) > 0 {
+		if al := ackLaterFrom(ctx); al != nil {
+			al.carry(items)
+		}
+		return returnedResult(ctx, bus, a, items), nil
+	}
 	if a.Max > 1 {
 		return toolWaitBatch(ctx, bus, a)
 	}
@@ -384,6 +453,22 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		out["presence_notice"] = n
 	}
 	return out, nil
+}
+
+// returnedResult answers a wait from the returned queue, in the shape the
+// wait would have used.
+func returnedResult(ctx context.Context, bus *Bus, a waitArgs, items []drained) map[string]any {
+	note := "returned: the reply that first carried this mail was cancelled after it was written; it is not new mail"
+	if a.Max > 1 {
+		return map[string]any{
+			"messages": items, "count": len(items), "order": batchOrderNote,
+			"returned": len(items), "returned_note": note, "remaining": bus.remaining(ctx),
+		}
+	}
+	return map[string]any{
+		"message": items[0].Env, "tier": items[0].Tier,
+		"returned": true, "returned_note": note,
+	}
 }
 
 // toolWaitBatch is wait_for_message with max > 1. The single form keeps its
@@ -467,6 +552,10 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 	if len(res.MaybeConsumed) > 0 {
 		out["maybe_consumed"] = res.MaybeConsumed
 		out["maybe_consumed_note"] = "more messages were listed than the consumer reports waiting: some above the ack floor were already consumed out of order, and the summary cannot tell which, so counts and flags may include them"
+	}
+	if n := bus.returnedCount(); n > 0 {
+		out["returned"] = n
+		out["returned_note"] = "mail whose first reply was cancelled after it was written; the next wait_for_message returns it first, and it is not counted in the summary above"
 	}
 	if res.GlobalWarn != "" {
 		out["global_warning"] = res.GlobalWarn

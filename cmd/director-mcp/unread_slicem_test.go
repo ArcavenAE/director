@@ -179,6 +179,7 @@ func mustRead(t *testing.T, ctx context.Context, js jetstream.JetStream, now tim
 // waiting is durable-idle once its durable is past the window, never "not
 // unread mail"; the window counts from the durable's Created, not presence.
 func TestUnreadDeafSeatIsDurableIdle(t *testing.T) {
+	simulateAgreeingBrokerClock(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
@@ -352,6 +353,7 @@ func TestUnreadTruncatedScanNeverUpgrades(t *testing.T) {
 // its durable with mail waiting is behind with an age, a drained one is
 // reading, and the threshold marks behind and durable-idle rows only.
 func TestUnreadBehindReadingAndThreshold(t *testing.T) {
+	simulateAgreeingBrokerClock(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)

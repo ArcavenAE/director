@@ -46,8 +46,9 @@ two are required. The role is one of exactly two words.
 
 With `DIRECTOR_GLOBAL_DOMAIN` unset the global tier is off, which is correct for
 a worker. A seat that holds the director role (`DIRECTOR_GLOBAL_ROLE=director`
-or `DIRECTOR_ROLE=director`) with the tier off gets a `WARNING` on stderr at
-start naming what is missing and what still works: it reaches no hub, shows
+or `DIRECTOR_ROLE=director`) or asks for the global supervisor role
+(`DIRECTOR_GLOBAL_ROLE=supervisor`; `DIRECTOR_ROLE=supervisor` alone does not
+count) with the tier off gets a `WARNING` on stderr at start naming what is missing and what still works: it reaches no hub, shows
 local seats only, and refuses `global://` sends, while local mail is
 unaffected. The shim warns and does not refuse; a worker or any other role
 starts silently.
@@ -150,6 +151,12 @@ Slice M (`sim/design/unread-slice-m.md`):
 - **`--older-than <dur>`** marks `behind` and `durable-idle` rows older than
   the threshold (`!` in text, `over_threshold` in JSON) and counts them.
   Exit stays 0.
+- **`over_bound`** (JSON) and an `over the N s pending-age bound` line (text)
+  mark a live durable whose oldest unread message has waited longer than the
+  pending-age bound, with no flag needed. The bound is twice the cue window
+  (600 s); `DIRECTOR_PENDING_AGE_BOUND` (a Go duration) overrides it, and an
+  unparsable or non-positive value is reported on stderr and ignored. A
+  durable that only reads outside its own subjects is not marked. Exit stays 0.
 - **`--global`** reads every `mcp_global_` durable on each `GLOBAL_TO_*`
   stream through the hub's domain (`DIRECTOR_GLOBAL_DOMAIN`, default
   `global`), with presence from `GLOBAL_PRESENCE`, one section per stream.
@@ -178,8 +185,22 @@ Slice M (`sim/design/unread-slice-m.md`):
    durable carries an 8 day inactive threshold, above the inbox's 168h max
    age, so a superseded instance's durable is cleaned up rather than left
    behind and a live seat's durable outlasts its mail.
-3. Write presence as `idle`; warn on stderr if another instance of the same
-   id is present (R-49).
+3. Before the first presence write, remove the row a dead shim of this seat
+   left behind. Each presence row carries `pidspace`, the host name plus the
+   boot session (darwin) or the boot id and the pid namespace link (linux). The
+   boot id tells two hosts apart and the link tells a container from its host,
+   because a container shares its host's boot id; neither alone covers both. A
+   row of the same agent
+   id and another instance is deleted only when its `pidspace` equals this
+   shim's, its pid is an integer from 2 to 2^31-1, `kill(pid, 0)` answers
+   `ESRCH`, and the delete is conditional on the revision just read. The host
+   name alone is not enough, because two pid spaces under one host name would
+   each read the other's live pid as gone. A shim whose own `pidspace` cannot
+   be read reaps nothing, and a row with an empty or missing `pidspace` is
+   never reaped. Every other row falls to the 90s TTL. Each removal logs the
+   instance, pid and revision. The global presence row follows the same rule.
+   Then write presence as `idle`; warn on stderr if another instance of the
+   same id is present (R-49).
 4. Start the heartbeat: presence renewed every 30 seconds on the shim's own
    timer, independent of the model (R-56). The same tick carries the global
    presence row and re-attaches a hub that was down at start.
@@ -243,6 +264,8 @@ success. See "Refusal records" below.
 |---|---|---|
 | `timeout_seconds` | 30 (max 120) | how long to block when nothing is already waiting |
 | `max` | 1 (max 50) | most messages to return in one call |
+
+One wait at a time per session; a second open wait is refused and reads nothing.
 
 Result with a message:
 
@@ -316,6 +339,27 @@ delivered once more later.
   "remaining": { "local": 0, "global": 0 }
 }
 ```
+
+**When the ack happens.** Without `DIRECTOR_HANDLED=1`, the shim holds what a
+wait fetched and acks it only after the reply has been written to the client.
+If the write fails, nothing is acked: the messages are Nak'd, the failure is
+logged, and the broker redelivers them. A call cancelled before the write gets
+no reply and its messages are Nak'd the same way, so the broker redelivers them
+to the next wait. A cancel that reaches the call after that check but before
+the write is not a Nak: the reply is written and acked, and the shim keeps an
+in-process copy for the returned queue below.
+
+A `notifications/cancelled` can also arrive after the reply was written, when
+the client sent it before reading the reply. The shim keeps that call's
+envelopes for the `late_cancel_window` row of the threshold table (30 seconds
+unless `thresholds.json` sets it), and a cancel naming the call puts them on an
+in-process returned queue. The next wait returns them first, marked `returned`,
+and `inbox_summary` shows a `returned` count. Each move is logged with its
+`message_id`. A shim that exits while it holds returned mail loses that mail
+from the bus; the log names it. A cancel past the window changes nothing and is
+logged while the call's entry is still held. The entries are pruned when the
+next answered call is recorded, so a cancel that arrives after its entry was
+pruned returns silently, without a log line.
 
 There is no peek mode on this tool. A fetch without an ack leaves the
 message pending on the session's durable, where it is redelivered after the
@@ -392,13 +436,16 @@ from both tiers are merged with a `tier` column, and global rows carry
 `cluster` and `role`.
 
 Each local row also says what its session's durable on `AGENT_INBOX` shows:
-`durable` is `present`, `missing` or `unknown`, `unread` is the durable's own
-count when it is present, and `flags` lists what is wrong or could not be
+`durable` is `present`, `missing` or `unknown`, `unread` is the durable's
+undelivered count (`NumPending`) when it is present, `ack_pending` is the count
+of mail the session fetched and has not acked, and `flags` lists what is wrong or could not be
 established. `no-durable` means the broker answered that the session has no
 durable, so mail sent to it has no reader. `durable-unchecked` means the lookup
 failed or timed out, or the row names no instance, which is unknown and not
 missing. `pending-age-unreported` means the row carries no `oldest_pending_s`,
-as from a shim older than that field. Global rows carry the same fields: the
+as from a shim older than that field. `pending-age-over` means the age is over
+the same bound as `over_bound` above, and the row's `pending_age_note` says how
+long the oldest unread message has waited. Global rows carry the same fields: the
 durable is looked up on the hub stream of the row's cluster (`GLOBAL_TO_<cluster>`,
 or `GLOBAL_TO_DIRECTOR` for a director). A cluster credential that may not read
 another cluster's consumers, or a leaf link that does not answer, gives
@@ -641,7 +688,9 @@ unread message is still counted in `summary`.
 The ack wait for the mode is the `handled_ack_wait` row of the threshold
 table, 30 minutes unless `thresholds.json` in the state directory sets it
 (for example `{"handled_ack_wait": "45m"}`). A value that is not a positive
-duration, or a key the table does not have, stops the shim at start. So if other readers later add rows to this file, every handled shim built before those rows will refuse to start until it is upgraded.
+duration, or a key the table does not have, stops the shim at start. The
+`late_cancel_window` row is the one soft row here: a bad value keeps the 30
+second default and is logged. So if other readers later add rows to this file, every handled shim built before those rows will refuse to start until it is upgraded.
 
 ## Addresses and subjects
 

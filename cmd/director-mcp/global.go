@@ -96,33 +96,44 @@ func loadGlobalConfig() (*globalConfig, error) {
 	return cfg, nil
 }
 
+// supervisorHeld names the role in the supervisor warning; the director case keeps its own advice.
+const supervisorHeld = "the global supervisor role"
+
 // globalOffWarning is the start-up warning for a seat that holds the director
-// role with the global tier off. DIRECTOR_GLOBAL_DOMAIN unset is a valid off
-// case, and the right one for a worker (R-94), so the shim stays silent for
-// every seat but this one. For a director it is a seat whose whole job is
+// role, or asks for the global supervisor role, with the global tier off.
+// DIRECTOR_GLOBAL_DOMAIN unset is a valid off case, and the right one for a
+// worker (R-94), so the shim stays silent for every other seat. For a director it is a seat whose whole job is
 // cross-cluster coordination running local-only without a word: list_roster
 // shows local seats only and a global:// send is refused (aae-orc-d408k). The
 // role is read from either lever, since a seat can be launched with either set
-// and the domain missing. It warns and does not refuse: whether a director seat
-// may start local-only is the operator's call, not the shim's. It returns ""
-// when the tier is on or the seat is not a director.
+// and the domain missing. A supervisor is named by DIRECTOR_GLOBAL_ROLE only: the
+// local role lever never carries a global role, so DIRECTOR_ROLE=supervisor alone
+// stays silent. It warns and does not refuse: whether such a seat may start
+// local-only is the operator's call, not the shim's. It returns "" when the tier
+// is on or the seat is neither.
 func globalOffWarning(cfg *globalConfig, globalRole, role string) string {
 	if cfg != nil {
 		return ""
 	}
-	var trigger string
+	var trigger, held string
 	switch {
 	case globalRole == roleDirector:
-		trigger = "DIRECTOR_GLOBAL_ROLE=" + roleDirector
+		trigger, held = "DIRECTOR_GLOBAL_ROLE="+roleDirector, "the director role"
 	case role == roleDirector:
-		trigger = "DIRECTOR_ROLE=" + roleDirector
+		trigger, held = "DIRECTOR_ROLE="+roleDirector, "the director role"
+	case globalRole == roleSupervisor:
+		trigger, held = "DIRECTOR_GLOBAL_ROLE="+roleSupervisor, supervisorHeld
 	default:
 		return ""
 	}
-	return "this seat holds the director role (" + trigger + ") but DIRECTOR_GLOBAL_DOMAIN is unset, so the global tier is off: " +
+	set := "DIRECTOR_GLOBAL_DOMAIN, DIRECTOR_CLUSTER and DIRECTOR_GLOBAL_ROLE=" + roleDirector
+	if held == supervisorHeld {
+		set = "DIRECTOR_GLOBAL_DOMAIN and DIRECTOR_CLUSTER"
+	}
+	return "this seat holds " + held + " (" + trigger + ") but DIRECTOR_GLOBAL_DOMAIN is unset, so the global tier is off: " +
 		"it reaches no hub, list_roster shows local seats only, and a global:// send is refused. " +
 		"Local mail and agent:// sends to local seats still work. " +
-		"To turn the tier on set DIRECTOR_GLOBAL_DOMAIN, DIRECTOR_CLUSTER and DIRECTOR_GLOBAL_ROLE=director (R-86, R-94)"
+		"To turn the tier on set " + set + " (R-86, R-94)"
 }
 
 // validate checks the three levers before any subject is built. The domain and
@@ -902,6 +913,13 @@ func (g *globalTier) fetchOne(ctx context.Context, timeout time.Duration) (env *
 				continue
 			}
 			if g.handled == nil {
+				if al := ackLaterFrom(ctx); al != nil {
+					al.hold(m, &e, "global", seq)
+					if g.testAfterAck != nil {
+						g.testAfterAck(ctx)
+					}
+					return &e, seq, false, nil
+				}
 				_ = m.Ack()
 				g.noteAcked(seq)
 				if g.testAfterAck != nil {

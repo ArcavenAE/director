@@ -92,6 +92,8 @@ func main() {
 		fmt.Println(versionLine())
 		return
 	}
+	// The pending-age bound is read once, where the reader runs (I-190:1).
+	pendingAgeBound = loadPendingAgeBound(os.Getenv, os.Stderr)
 	preflightMode := cli.mode == "preflight"
 	// unread is a read-only report over every seat's durable: it needs no
 	// identity of its own and never registers one (LR-3).
@@ -191,6 +193,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer bus.close()
+	// Remove rows a dead predecessor left, before the first write, so the
+	// roster never lists this seat twice (aae-orc-4unyk).
+	bus.reapDeadPredecessors(ctx, logf)
 	// Announce presence on start so a roster lists us immediately.
 	globalWarn, _ := bus.setPresence(ctx, "idle")
 	bus.reportGlobalWarn(globalWarn, logf)
@@ -215,6 +220,7 @@ func main() {
 		c := newCue(cueCfg, busCueSource{bus}, srv.notifyCue, func(ids []string, state string) {
 			warnUnanswered(ctx, bus, logf, ids, state)
 		}, time.Now, randomNonce)
+		c.giveUp = func(ids []string, state string) { informGaveUp(ctx, bus, logf, ids, state) }
 		c.logf = logf
 		srv.cue = c
 		bus.attachCue(c)

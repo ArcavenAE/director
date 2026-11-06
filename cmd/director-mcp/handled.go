@@ -78,6 +78,9 @@ var defaultThresholds = map[string]time.Duration{
 	thresholdPresenceLostAfterMax: 24 * time.Hour,
 	// a hub move is clusters going absent within this window (section 6)
 	thresholdPresenceHubMoveWindow: 2 * time.Minute,
+	// how long after a written reply a notifications/cancelled still returns
+	// that call's mail (ackafter.go); a soft row
+	thresholdLateCancelWindow: 30 * time.Second,
 }
 
 // defaultCounts are the whole-number rows of the threshold table, read by
@@ -93,6 +96,7 @@ var softThresholds = map[string]bool{
 	thresholdPresenceLostAfter:     true,
 	thresholdPresenceLostAfterMax:  true,
 	thresholdPresenceHubMoveWindow: true,
+	thresholdLateCancelWindow:      true,
 	thresholdPresenceHubMoveMin:    true,
 	thresholdPresenceAlertCap:      true,
 }
@@ -661,7 +665,7 @@ func parseMarkArgs(raw json.RawMessage) (markArgs, error) {
 		return a, fmt.Errorf("mark_handled: tier must be local or global, got %q", a.Tier)
 	}
 	switch a.Disposition {
-	case "handled":
+	case "handled", "no_reply":
 	case "forwarded":
 		if a.ForwardID == "" {
 			return a, errors.New("mark_handled: forwarded needs forward_id, the message id of the forward")
@@ -671,7 +675,7 @@ func parseMarkArgs(raw json.RawMessage) (markArgs, error) {
 			return a, errors.New("mark_handled: parked needs reason, one line on why it waits")
 		}
 	default:
-		return a, fmt.Errorf("mark_handled: disposition must be handled, forwarded or parked, got %q", a.Disposition)
+		return a, fmt.Errorf("mark_handled: disposition must be handled, no_reply, forwarded or parked, got %q", a.Disposition)
 	}
 	return a, nil
 }
@@ -734,13 +738,13 @@ func toolCatalogHandled(gcfg *globalConfig, cueOn, handledOn bool) []toolDef {
 		// readOnlyHint false: it writes a ledger record, then acks (aae-orc-r675b).
 		Name:        "mark_handled",
 		Annotations: &toolAnnotations{ReadOnlyHint: false},
-		Description: "Record what you did with a message you read, then ack it. The record is written first and the ack second. handled: you acted. forwarded: you passed it on (give the forward's message_id). parked: it waits (give a one-line reason); a parked message is acked and stays visible through the ledger. Offered only when the handled mode is on.",
+		Description: "Record what you did with a message you read, then ack it. The record is written first and the ack second. handled: you acted. no_reply: you read it and no reply is owed (it was for another seat, or asked for no action); it is acked and leaves your pending count, so no cue names it. forwarded: you passed it on (give the forward's message_id). parked: it waits (give a one-line reason); a parked message is acked and stays visible through the ledger. Offered only when the handled mode is on.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"message_id":  str("the envelope's message_id"),
 				"tier":        str("local or global: the tier wait_for_message named"),
-				"disposition": str("handled | forwarded | parked"),
+				"disposition": str("handled | no_reply | forwarded | parked"),
 				"forward_id":  str("for forwarded: the message_id of the forward"),
 				"reason":      str("for parked: one line on why it waits"),
 			},

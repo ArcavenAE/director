@@ -32,6 +32,10 @@ const (
 	// flagPendingAgeUnreported: the row carries no oldest_pending_s, as from a
 	// shim older than the field, so how long mail has waited is not known.
 	flagPendingAgeUnreported = "pending-age-unreported"
+	// flagPendingAgeOver: the row's oldest_pending_s is over the pending-age
+	// bound (pendingAgeBound). The row's pending_age_note names the age.
+	// Diagnostic only: nothing waits on it.
+	flagPendingAgeOver = "pending-age-over"
 )
 
 // inboxDurableName is the name of a local session's durable on AGENT_INBOX.
@@ -82,16 +86,29 @@ func flagRows(ctx context.Context, rows []map[string]any, check func(ctx context
 	}
 }
 
-// flagsOfAge is the age flag alone, for a row that was not looked up.
+// flagsOfAge is the age flag alone, for a row that was not looked up. A row
+// with no oldest_pending_s is unreported; a row whose age is over the bound is
+// flagged pending-age-over, with the age in the row's pending_age_note. A row at
+// the bound is not over it.
 func flagsOfAge(row map[string]any) []string {
-	if _, ok := row["oldest_pending_s"]; !ok {
+	v, ok := row["oldest_pending_s"]
+	if !ok {
 		return []string{flagPendingAgeUnreported}
+	}
+	age, ok := ageSeconds(v)
+	if !ok {
+		return []string{flagPendingAgeUnreported}
+	}
+	if bound := pendingAgeBound; age > bound.Seconds() {
+		row["pending_age_note"] = fmt.Sprintf("oldest unread message has waited %d s, over the %d s bound", int64(age), int64(bound.Seconds()))
+		return []string{flagPendingAgeOver}
 	}
 	return nil
 }
 
 // flagLocalRows adds "durable" (present, missing or unknown), "unread" (the
-// durable's own count, when present) and "flags" to each local roster row. The
+// durable's undelivered count, NumPending, when present), "ack_pending" (mail
+// fetched and not yet acked) and "flags" to each local roster row. The
 // lookups run under one deadline (flagRows), so a hub that does not answer
 // marks the rows unknown instead of holding the roster.
 func (b *Bus) flagLocalRows(ctx context.Context, rows []map[string]any) {
@@ -148,7 +165,7 @@ func (g *globalTier) flagGlobalRows(ctx context.Context, rows []map[string]any) 
 var durableCheck = checkDurable
 
 // checkDurable looks one durable up under streamReadTimeout and records what the
-// broker said on the row: present with its unread count, missing (the broker
+// broker said on the row: present with its unread and ack-pending counts, missing (the broker
 // answered not found), or unknown (anything else).
 func checkDurable(ctx context.Context, js jetstream.JetStream, stream, durable string, row map[string]any, flags *[]string) {
 	rctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
@@ -166,7 +183,11 @@ func checkDurable(ctx context.Context, js jetstream.JetStream, stream, durable s
 	default:
 		row["durable"] = "present"
 		if info := cons.CachedInfo(); info != nil {
-			row["unread"] = info.NumPending + uint64(info.NumAckPending)
+			// Mail a seat fetched and has not acked is held, not unread: it
+			// is reported under its own field. The cue's count (pending.go)
+			// still counts both, and is not changed by this.
+			row["unread"] = info.NumPending
+			row["ack_pending"] = uint64(info.NumAckPending)
 		}
 	}
 }

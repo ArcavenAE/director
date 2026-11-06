@@ -135,7 +135,7 @@ and that complaint is a requirement.
 
 When `$DIRECTOR_STATE/workstreams.jsonl` exists, take Blocked on you from the
 ledger: run `${DIRECTOR_HOME:-$HOME/.director}/bin/dws show --json` and list the rows whose `blocked` is
-`operator`, oldest `last_moved` first, each as `<owner> - <workstream>: <next action>`,
+`operator` and whose `stage` is not `parked`, oldest `last_moved` first, each as `<owner> - <workstream>: <next action>`,
 from the row's `owner`, `slug` and `next`, with the owner in the session slot.
 The other blocks are unchanged. With no ledger, or no CLI, build the list from
 the board and the roster as above.
@@ -488,6 +488,9 @@ is "very likely" acting for the user. codex, opencode and crush inject nothing.
 That borrowed safety is an artifact of the substrate, not a property of the
 fleet, and it is one of the reasons director must not be built on the feature:
 `../../sim/specs/vendor-injected-receiver-policy.md`.
+
+A correction or addendum to an order already sent names that order as
+"FRAGO to <message id>" (`reference/relay-template.md`).
 
 ## Capture triggers
 
