@@ -48,17 +48,18 @@ func readUnreadGlobalPartial(ctx context.Context, gjs jetstream.JetStream, clust
 			durables = append(durables, d)
 		}
 	}
-	var keys []string
+	var reads []keyRead
 	kv, err := gjs.KeyValue(ctx, globalPresenceBucket)
 	if err == nil {
-		keys, err = quietKeysUnder(ctx, gjs, globalPresenceBucket, kv, keyPrefix)
+		reads, err = readKeysUnder(ctx, gjs, globalPresenceBucket, kv, keyPrefix)
 	}
 	if err != nil {
 		r.Warnings = append(r.Warnings, fmt.Sprintf("GAP presence instances not listed: %v; pass --durable NAME for each durable to read", err))
 	}
-	for _, k := range keys {
-		e, err := kv.Get(ctx, k)
+	for _, kr := range reads {
+		k, e, err := kr.key, kr.entry, kr.err
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			r.Warnings = append(r.Warnings, fmt.Sprintf("unseen (not found): %s", k))
 			continue
 		}
 		if err != nil {

@@ -230,6 +230,9 @@ func parseArgs(args []string) (cliArgs, error) {
 				return cliArgs{}, fmt.Errorf("unread: unknown argument %q (usage: %s)", a, unreadUsage)
 			}
 		}
+		if len(out.durables) > 0 && !out.global {
+			return cliArgs{}, fmt.Errorf("unread: --durable names hub durables, so it needs --global; refused rather than ignored (usage: %s)", unreadUsage)
+		}
 		return out, nil
 	}
 	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage, dossierUsage, marryUsage)
@@ -357,10 +360,21 @@ func quietKeys(ctx context.Context, js jetstream.JetStream, bucket string, kv je
 	return quietKeysUnder(ctx, js, bucket, kv, "")
 }
 
-// quietKeysUnder is quietKeys limited to the keys that start with keyPrefix, by
-// a subject filter on the stream info, so a reader that may see one cluster's
-// presence asks for nothing else.
-func quietKeysUnder(ctx context.Context, js jetstream.JetStream, bucket string, kv jetstream.KeyValue, keyPrefix string) ([]string, error) {
+// keyRead is one key a stream-info subject filter named, with the one get made
+// for it: the entry, or the error that get returned (not found for a key whose
+// latest entry is a delete or purge marker).
+type keyRead struct {
+	key   string
+	entry jetstream.KeyValueEntry
+	err   error
+}
+
+// readKeysUnder names the keys that start with keyPrefix from the stream info
+// of the bucket's stream, by a subject filter, so a reader that may see one
+// cluster's presence asks for nothing else. It makes one get per key and
+// returns each result in key order, so a caller that needs the entry does not
+// get the key a second time.
+func readKeysUnder(ctx context.Context, js jetstream.JetStream, bucket string, kv jetstream.KeyValue, keyPrefix string) ([]keyRead, error) {
 	stream, err := js.Stream(ctx, "KV_"+bucket)
 	if err != nil {
 		return nil, err
@@ -372,13 +386,30 @@ func quietKeysUnder(ctx context.Context, js jetstream.JetStream, bucket string, 
 	}
 	var keys []string
 	for subj := range info.State.Subjects {
-		k := strings.TrimPrefix(subj, prefix)
-		if _, err := kv.Get(ctx, k); errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		keys = append(keys, k)
+		keys = append(keys, strings.TrimPrefix(subj, prefix))
 	}
 	sort.Strings(keys)
+	reads := make([]keyRead, 0, len(keys))
+	for _, k := range keys {
+		e, err := kv.Get(ctx, k)
+		reads = append(reads, keyRead{key: k, entry: e, err: err})
+	}
+	return reads, nil
+}
+
+// quietKeysUnder is quietKeys limited to the keys that start with keyPrefix.
+func quietKeysUnder(ctx context.Context, js jetstream.JetStream, bucket string, kv jetstream.KeyValue, keyPrefix string) ([]string, error) {
+	reads, err := readKeysUnder(ctx, js, bucket, kv, keyPrefix)
+	if err != nil {
+		return nil, err
+	}
+	var keys []string
+	for _, r := range reads {
+		if errors.Is(r.err, jetstream.ErrKeyNotFound) {
+			continue
+		}
+		keys = append(keys, r.key)
+	}
 	return keys, nil
 }
 
@@ -1064,8 +1095,8 @@ func hubAnswered(err error) bool {
 // named stream (the presence bucket's) to tell the two apart: if that answers,
 // the hub is reachable and this credential may not list; if not, the hub is
 // reported unreachable as before.
-func hubListError(ctx context.Context, gjs jetstream.JetStream, domain string, err error) error {
-	if listVerbMissing(ctx, gjs, err) {
+func hubListError(domain string, err error, listMissing bool) error {
+	if listMissing {
 		return fmt.Errorf("hub in domain %q answers named reads, but this credential may not list streams (the leaf allow-list omits the list verbs, finding-006), so unread --global needs an admin credential: %w", domain, err)
 	}
 	return fmt.Errorf("hub in domain %q not reachable: %w", domain, err)
@@ -1109,10 +1140,11 @@ func readUnreadGlobalWith(ctx context.Context, nc *nats.Conn, domain string, now
 		}
 	}
 	if err := lister.Err(); err != nil {
-		if cluster := sessionCluster(); cluster != "" && listVerbMissing(ctx, gjs, err) {
+		missing := listVerbMissing(ctx, gjs, err) // one probe, so a down hub costs 3 s, not 6
+		if cluster := sessionCluster(); cluster != "" && missing {
 			return readUnreadGlobalPartial(ctx, gjs, cluster, durables, now)
 		}
-		return nil, hubListError(ctx, gjs, domain, err)
+		return nil, hubListError(domain, err, missing)
 	}
 	sort.Strings(names)
 	presence := map[string]unreadPresence{}
