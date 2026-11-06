@@ -219,6 +219,9 @@ type sendArgs struct {
 	ReplyBy      string `json:"reply_by"`
 	Workspace    string `json:"workspace"`
 	Refs         []string
+	// Cold is read by toolSend from the raw args; it is declared here so a
+	// send that carries it passes an unknown-argument check on sendArgs.
+	Cold bool `json:"cold"`
 }
 
 // buildSendEnvelope parses and validates send_message args into an envelope,
