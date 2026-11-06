@@ -6,7 +6,10 @@
 # and the clusters it is told to create. The arguments (kinu and mokuzai when there
 # are none) only name streams to create; a stream found on the hub that was not named
 # is visited too and printed as such, so a cluster added later is never skipped
-# without a word (aae-orc-acasl).
+# without a word (aae-orc-acasl). Those come after GLOBAL_PRESENCE, so a failure on
+# one cannot stop the streams or the bucket the script always provisioned. A stream
+# listing that fails, or is not a JSON array of names, stops the run before anything
+# is created.
 #
 # A stream that does not exist is created with the declared max age. One that
 # does exist is only ever RAISED: a finite max age shorter than the declared one
@@ -79,17 +82,28 @@ add_stream() {
   echo "stream $name created ($subj)"
 }
 # Every GLOBAL_TO_ stream already on the hub is visited, named or not. A failed
-# listing stops the run: falling back to the bootstrap list would be the silent skip.
+# listing stops the run, and so does one that is not a JSON array of names (a bare
+# hub lists null): falling back to the bootstrap list would be the silent skip.
 listing="$("${A[@]}" stream ls --names --json)" || { echo "stream ls failed" >&2; exit 1; }
+found="$(printf '%s' "$listing" | jq -r 'if . == null then empty elif (type == "array" and all(.[]; type == "string")) then .[] | select(startswith("GLOBAL_TO_") and . != "GLOBAL_TO_DIRECTOR") else error("stream ls did not return an array of names") end')" \
+  || { echo "stream ls returned something other than a JSON array of names" >&2; exit 1; }
 extra=()
-for c in $(printf '%s' "$listing" | jq -r '.[]? | select(startswith("GLOBAL_TO_") and . != "GLOBAL_TO_DIRECTOR") | ltrimstr("GLOBAL_TO_") | select(length > 0)'); do
-  case " ${clusters[*]} ${extra[*]:-} " in *" $c "*) ;; *) extra+=("$c");; esac
+# Split on newlines only, with globbing off, so a name with a glob character is not
+# expanded against the files here (and no here-string, which bash 3.2 writes to a file).
+old_ifs="$IFS"; IFS=$'\n'; set -f
+for s in $found; do
+  c="${s#GLOBAL_TO_}"
+  if [[ -z "$c" ]]; then echo "stream $s has no cluster name, not visited"; continue; fi
+  case " ${clusters[*]} ${extra[*]:-} " in *" "$c" "*) ;; *) extra+=("$c");; esac
 done
+IFS="$old_ifs"; set +f
 add_stream GLOBAL_TO_DIRECTOR 'global.director.>'
 for c in "${clusters[@]}"; do add_stream "GLOBAL_TO_$c" "global.$c.>"; done
+if "${A[@]}" kv info GLOBAL_PRESENCE >/dev/null 2>&1; then echo "kv GLOBAL_PRESENCE exists"; else
+  "${A[@]}" kv add GLOBAL_PRESENCE --ttl 90s --storage file >/dev/null; echo "kv GLOBAL_PRESENCE created (ttl 90s)"; fi
+# The streams found but not named come last, so a failure on one of them cannot stop
+# the streams above or GLOBAL_PRESENCE from being provisioned.
 for c in ${extra[@]+"${extra[@]}"}; do
   echo "stream GLOBAL_TO_$c found on the hub (not named), visited"
   add_stream "GLOBAL_TO_$c" "global.$c.>"
 done
-if "${A[@]}" kv info GLOBAL_PRESENCE >/dev/null 2>&1; then echo "kv GLOBAL_PRESENCE exists"; else
-  "${A[@]}" kv add GLOBAL_PRESENCE --ttl 90s --storage file >/dev/null; echo "kv GLOBAL_PRESENCE created (ttl 90s)"; fi
