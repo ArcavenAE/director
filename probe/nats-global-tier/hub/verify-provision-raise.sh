@@ -11,7 +11,8 @@
 #
 # Runs against a throwaway nats-server of its own on a random loopback port. It
 # never dials the hub or the local broker, and refuses a port in the hub's or the
-# local broker's set. Run it under a localhost-only profile with a scratch home.
+# local broker's set. Run it under a localhost-only profile that also denies those
+# ports (the refusal cannot see a port the kernel never draws), with a scratch home.
 #
 # Usage: probe/nats-global-tier/hub/verify-provision-raise.sh   Exit nonzero on any miss.
 set -euo pipefail
@@ -31,12 +32,21 @@ trap cleanup EXIT
 
 hour=3600000000000
 
+# free_port: a random loopback port that is not one a bus or hub listens on. The
+# kernel hands out 49152 and up, so these cannot come back from bind(0); the refusal
+# is a backstop, and the real protection is a sandbox profile that denies the ports.
+free_port() {
+  local port
+  port="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  case "$port" in 3307|4222|4242|6785|7422|7442|8222|8242) echo "refusing port $port" >&2; exit 2;; esac
+  echo "$port"
+}
+
 # run_case SCRIPT: a fresh broker, the cases built, SCRIPT run twice. Prints
 # PASS/FAIL lines for the real script; returns the number of misses in $misses.
 run_case() {
   local script="$1" label="$2" port
-  port="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-  case "$port" in 3307|4222|4242|7422|7442) echo "refusing port $port"; exit 2;; esac
+  port="$(free_port)"
   local dir="$work/$label"; mkdir -p "$dir/store"
   printf 'listen: 127.0.0.1:%s\njetstream { store_dir: "%s" }\n' "$port" "$dir/store" > "$dir/nats.conf"
   nats-server -c "$dir/nats.conf" -l "$dir/broker.log" &
@@ -86,14 +96,6 @@ run_case() {
   printf '%s\n%s\n' "$out1" "$out2" | /usr/bin/grep -q '^stream GLOBAL_TO_c[12] found on the hub' && bad "$label: a named stream is not reported as found, on either run" "$out1 $out2" || ok "$label: a named stream is not reported as found, on either run"
 }
 
-# free_port: a random loopback port that is not the hub's or the local broker's.
-free_port() {
-  local port
-  port="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-  case "$port" in 3307|4222|4242|7422|7442) echo "refusing port $port" >&2; exit 2;; esac
-  echo "$port"
-}
-
 # run_noarg SCRIPT LABEL: a fresh broker holding GLOBAL_TO_DIRECTOR and GLOBAL_TO_c3
 # (c3 is in no hard-coded list), both at 72h. SCRIPT runs with no arguments, twice.
 run_noarg() {
@@ -108,6 +110,9 @@ run_noarg() {
   local N=(nats -s "nats://127.0.0.1:$port")
   "${N[@]}" stream add GLOBAL_TO_DIRECTOR --subjects 'global.director.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
   "${N[@]}" stream add GLOBAL_TO_c3 --subjects 'global.c3.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+  # on the unnamed stream: a director durable at 25h (raise) and one that is not the director's (leave).
+  "${N[@]}" consumer add GLOBAL_TO_c3 mcp_global_z_1 --filter 'global.c3.>' --pull --ack explicit --deliver all --defaults --inactive-threshold 25h >/dev/null
+  "${N[@]}" consumer add GLOBAL_TO_c3 hand_made --filter 'global.c3.>' --pull --ack explicit --deliver all --defaults --inactive-threshold 25h >/dev/null
 
   out1="$(DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" 2>&1)" || { bad "$label: a no-argument run exits 0" "$out1"; return; }
   ok "$label: a no-argument run exits 0"
@@ -121,13 +126,41 @@ run_noarg() {
     "${N[@]}" stream info "GLOBAL_TO_$s" >/dev/null 2>&1 && ok "$label: GLOBAL_TO_$s exists after the run" || bad "$label: GLOBAL_TO_$s exists after the run" "$out1"
   done
   printf '%s\n' "$out2" | /usr/bin/grep -q ' raised ' && bad "$label: the second no-argument run changes nothing" "$out2" || ok "$label: the second no-argument run changes nothing"
-  # kinu and mokuzai are named by the bootstrap list: on neither run are they "found".
-  printf '%s\n%s\n' "$out1" "$out2" | /usr/bin/grep -q '^stream GLOBAL_TO_\(kinu\|mokuzai\) found on the hub' && bad "$label: a named stream is not reported as found, on either run" "$out1 $out2" || ok "$label: a named stream is not reported as found, on either run"
+  # the director's own stream and the bootstrap list are named: on neither run are they "found".
+  printf '%s\n%s\n' "$out1" "$out2" | /usr/bin/grep -q '^stream GLOBAL_TO_\(DIRECTOR\|kinu\|mokuzai\) found on the hub' && bad "$label: a named stream is not reported as found, on either run" "$out1 $out2" || ok "$label: a named stream is not reported as found, on either run"
+  local th; th() { "${N[@]}" consumer info "$1" "$2" --json | jq -r '.config.inactive_threshold // 0'; }
+  [[ "$(th GLOBAL_TO_c3 mcp_global_z_1)" == "$((192*hour))" ]] && ok "$label: a director durable on an unnamed stream is raised to 192h" || bad "$label: a director durable on an unnamed stream is raised to 192h" "got $(th GLOBAL_TO_c3 mcp_global_z_1)"
+  [[ "$(th GLOBAL_TO_c3 hand_made)" == "$((25*hour))" ]] && ok "$label: a durable that is not the director's, on an unnamed stream, is left alone" || bad "$label: a durable that is not the director's, on an unnamed stream, is left alone" "got $(th GLOBAL_TO_c3 hand_made)"
+  # the exact set of streams: nothing is created that nobody named (the presence bucket's
+  # own stream, KV_GLOBAL_PRESENCE, does not start with GLOBAL_TO_ and is not visited).
+  local set; set="$("${N[@]}" stream ls --names --json | jq -r '.[]' | LC_ALL=C sort | paste -sd, -)"
+  [[ "$set" == "GLOBAL_TO_DIRECTOR,GLOBAL_TO_c3,GLOBAL_TO_kinu,GLOBAL_TO_mokuzai,KV_GLOBAL_PRESENCE" ]] && ok "$label: the hub holds exactly the expected streams after two runs" || bad "$label: the hub holds exactly the expected streams after two runs" "got $set"
+}
+
+# run_withargs SCRIPT LABEL: arguments choose which streams to create, and do not stop
+# an existing stream from being visited. A broker holding GLOBAL_TO_c3 at 72h; the run
+# is told only kinu.
+run_withargs() {
+  local script="$1" label="$2" port dir out
+  port="$(free_port)"
+  dir="$work/$label"; mkdir -p "$dir/store"
+  printf 'listen: 127.0.0.1:%s\njetstream { store_dir: "%s" }\n' "$port" "$dir/store" > "$dir/nats.conf"
+  nats-server -c "$dir/nats.conf" -l "$dir/broker.log" &
+  pids+=($!)
+  local i; for i in $(seq 1 50); do nats -s "nats://127.0.0.1:$port" server check connection >/dev/null 2>&1 && break; sleep 0.2; done
+  local N=(nats -s "nats://127.0.0.1:$port")
+  "${N[@]}" stream add GLOBAL_TO_c3 --subjects 'global.c3.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+  out="$(DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" kinu 2>&1)" || { bad "$label: a run with arguments exits 0" "$out"; return; }
+  local age; age="$("${N[@]}" stream info GLOBAL_TO_c3 --json | jq -r '.config.max_age')"
+  [[ "$age" == "$((168*hour))" ]] && ok "$label: a run with arguments still raises an unnamed stream" || bad "$label: a run with arguments still raises an unnamed stream" "got $age"
+  "${N[@]}" stream info GLOBAL_TO_kinu >/dev/null 2>&1 && ok "$label: the named stream is created" || bad "$label: the named stream is created" "$out"
+  "${N[@]}" stream info GLOBAL_TO_mokuzai >/dev/null 2>&1 && bad "$label: arguments replace the bootstrap list" "mokuzai was created" || ok "$label: arguments replace the bootstrap list"
 }
 
 # The real script.
 run_case "$here/provision.sh" real
 run_noarg "$here/provision.sh" real-noarg
+run_withargs "$here/provision.sh" real-withargs
 
 # A stand-in nats ahead of the real one on PATH. It passes every call through except
 # the one named in STANDIN_MATCH, which prints STANDIN_OUT and exits STANDIN_RC. That
@@ -240,7 +273,7 @@ mutant lowering-durable 'cur > 0 \&\& cur < DURABLE_INACTIVE_NS' 'cur > 0 \&\& c
 # put back; the only result that counts is whether the cases noticed.
 mutant_with() {
   local runner="$1" label="$2" from="$3" to="$4" file="$work/provision-$2.sh" p0 f0
-  sed "s|$from|$to|" "$here/provision.sh" > "$file"
+  sed "s~$from~$to~" "$here/provision.sh" > "$file"
   if cmp -s "$file" "$here/provision.sh"; then echo "mutant $label changed nothing"; exit 2; fi
   p0=$pass; f0=$fail
   "$runner" "$file" "$label" > "$work/$label.out" 2>&1 || true
@@ -258,6 +291,16 @@ mutant_with run_noarg hardcoded-default '"\$listing"' '"[]"'
 mutant_with run_badlist print-and-carry-on 'stream ls failed" >\&2; exit 1;' 'stream ls failed" >\&2; listing=null;'
 # A listing that is not an array of names is read as empty instead of an error.
 mutant_with run_badlist shape-unchecked 'else error("stream ls did not return an array of names")' 'else empty'
+# The prefix filter is gone, so the presence bucket's own stream is visited as a cluster.
+mutant_with run_noarg prefix-filter-removed 'select(startswith("GLOBAL_TO_") and ' 'select('
+# A named stream is no longer deduplicated against the list.
+mutant_with run_noarg no-dedupe 'in \*" "\$c" "\*) ;; \*) extra+=("\$c"); named="\$named\$c ";; esac' 'in *) extra+=("$c");; esac'
+# GLOBAL_TO_DIRECTOR is no longer excluded from discovery.
+mutant_with run_noarg director-not-excluded ' and . != "GLOBAL_TO_DIRECTOR"' ''
+# Discovery runs only when no arguments were given.
+mutant_with run_withargs discovery-only-without-args 'for s in \$found; do' 'for s in $( [ "$#" -eq 0 ] \&\& printf "%s\\n" "$found" ); do'
+# The durables of an unnamed stream are not raised.
+mutant_with run_noarg unnamed-durables-skipped '^    raise_durables "\$name"' '    if [[ "$name" == GLOBAL_TO_DIRECTOR || " ${clusters[*]} " == *" ${name#GLOBAL_TO_} "* ]]; then raise_durables "$name"; fi'
 # The match string is joined under the newline IFS again, so no named stream matches.
 mutant_with run_noarg newline-joined-match 'case "\$named" in' 'case " ${clusters[*]} " in'
 # The unnamed streams are visited before the presence bucket again.
