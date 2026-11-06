@@ -489,6 +489,9 @@ That borrowed safety is an artifact of the substrate, not a property of the
 fleet, and it is one of the reasons director must not be built on the feature:
 `../../sim/specs/vendor-injected-receiver-policy.md`.
 
+A correction or addendum to an order already sent names that order as
+"FRAGO to <message id>" (`reference/relay-template.md`).
+
 ## Capture triggers
 
 You are the wizard standing in for software that does not exist yet. The
