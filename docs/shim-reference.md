@@ -426,8 +426,9 @@ from both tiers are merged with a `tier` column, and global rows carry
 `cluster` and `role`.
 
 Each local row also says what its session's durable on `AGENT_INBOX` shows:
-`durable` is `present`, `missing` or `unknown`, `unread` is the durable's own
-count when it is present, and `flags` lists what is wrong or could not be
+`durable` is `present`, `missing` or `unknown`, `unread` is the durable's
+undelivered count (`NumPending`) when it is present, `ack_pending` is the count
+of mail the session fetched and has not acked, and `flags` lists what is wrong or could not be
 established. `no-durable` means the broker answered that the session has no
 durable, so mail sent to it has no reader. `durable-unchecked` means the lookup
 failed or timed out, or the row names no instance, which is unknown and not

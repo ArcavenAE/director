@@ -208,11 +208,11 @@
     },
     {
       "name": "mark_handled",
-      "description": "Record what you did with a message you read, then ack it. The record is written first and the ack second. handled: you acted. forwarded: you passed it on (give the forward's message_id). parked: it waits (give a one-line reason); a parked message is acked and stays visible through the ledger. Offered only when the handled mode is on.",
+      "description": "Record what you did with a message you read, then ack it. The record is written first and the ack second. handled: you acted. no_reply: you read it and no reply is owed (it was for another seat, or asked for no action); it is acked and leaves your pending count, so no cue names it. forwarded: you passed it on (give the forward's message_id). parked: it waits (give a one-line reason); a parked message is acked and stays visible through the ledger. Offered only when the handled mode is on.",
       "inputSchema": {
         "properties": {
           "disposition": {
-            "description": "handled | forwarded | parked",
+            "description": "handled | no_reply | forwarded | parked",
             "type": "string"
           },
           "forward_id": {
