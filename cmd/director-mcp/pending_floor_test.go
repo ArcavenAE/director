@@ -16,7 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// I-100 P5 (aae-orc-mjckm): a seat that has consumed and acked all its mail
+// aae-orc-mjckm (P5): a seat that has consumed and acked all its mail
 // reads 0 pending with an oldest pending age of 0 on its next sample.
 
 // TestDrainedSeatPendingIsZero is the O-2128 shape: 18 messages delivered,

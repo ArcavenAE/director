@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// I-100 P6 (aae-orc-tchxl): the shim counts its durable rebuilds and says when
+// aae-orc-tchxl (P6): the shim counts its durable rebuilds and says when
 // one failed; the counts ride in its presence record, and `director-mcp unread`
 // copies them onto the seat's row and marks a live seat whose durable the broker
 // no longer has as missing. A report is a diagnostic: it always exits 0.

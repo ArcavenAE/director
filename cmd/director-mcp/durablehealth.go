@@ -1,6 +1,6 @@
 package main
 
-// Durable health (I-100 P6, aae-orc-tchxl). A shim rebuilds a durable the broker
+// Durable health (aae-orc-tchxl, P6). A shim rebuilds a durable the broker
 // lost (localrecover.go, and global.go restore) and used to say so once, in a
 // notice. This keeps the count: how many rebuilds worked, how many failed, and
 // whether the durable is back. It rides in the presence record and in
