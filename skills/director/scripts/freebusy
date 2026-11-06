@@ -51,7 +51,7 @@
 #
 # Without marvel: when marvel is not on PATH there is no cluster to read, so the seats come from
 # director's own roster (director-mcp roster --json: the presence rows, with each row's age and
-# whether it is fresh, no older than the presence TTL of 90 s that AGENT_STATE applies). A fresh seat
+# whether it is fresh, no older than presenceTTL (cmd/director-mcp/askledger.go, 90 s today; the roster command sets fresh from that constant, so change it there only)). A fresh seat
 # with mail waiting (director-mcp unread --json, pending above 0) is busy; a fresh seat with nothing
 # waiting is free, which here means only that nothing waits for it, since no activity reading exists;
 # a seat with old presence, and every seat when unread cannot be read, is unknown, never free. Lanes
