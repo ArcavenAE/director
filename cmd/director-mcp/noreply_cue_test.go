@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// I-100 P5 (aae-orc-mjckm), test 4: a message marked read with no reply owed
+// aae-orc-mjckm (P5), test 4: a message marked read with no reply owed
 // leaves the pending count and fires no cue.unanswered. TestNoReplyAckClearsPending
 // pins the count; this pins the warning, through a real cue over a real bus.
 
