@@ -20,6 +20,12 @@ import (
 const (
 	routingVectorsSHA256 = "4cb6a7295845ace0a9456d8723013675907b0def798b016ad7e265ad540a6be4"
 	marryVectorsSHA256   = "3783fe0af988f1505b708ff0ab92837dd3aabbde853b26ef4870fcbce8086f92"
+
+	// marryVectorsGrepSkips is how many grep steps the pinned marry vectors
+	// carry. Those steps read marvel's Go source, so director skips them; the
+	// count is pinned so a re-pin that adds one is a visible change, not a
+	// silent gap in what director checks.
+	marryVectorsGrepSkips = 4
 )
 
 // strictDecode decodes b into v and refuses an unknown field, so a vector that
@@ -101,6 +107,12 @@ func TestMarryVectorsPassInDirector(t *testing.T) {
 		if ran[op] == 0 {
 			t.Errorf("the pinned vectors ran no %s step", op)
 		}
+	}
+	skips := ran["grep (marvel only)"]
+	t.Logf("steps run by op: marry %d, take %d, recheck %d, address %d; grep steps skipped (marvel only): %d",
+		ran["marry"], ran["take"], ran["recheck"], ran["address"], skips)
+	if skips != marryVectorsGrepSkips {
+		t.Errorf("the pinned marry vectors carry %d grep steps, which director skips; this test pins %d. A changed count means the vectors were re-pinned: read the new steps before changing the pin", skips, marryVectorsGrepSkips)
 	}
 }
 
