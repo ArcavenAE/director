@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prove lane-ledger: C1 of the flow pages regenerates from freebusy's files, the Desk
-# snapshot and a marvel marry output; withholds every team not on the show list; prints
+# snapshot and a director-mcp marry output; withholds every team not on the show list; prints
 # GAP with a fix for each missing source; and gives the same bytes for the same inputs.
 #
 # Usage: skills/director/scripts/verify-lane-ledger.sh   Exit nonzero on any miss.
