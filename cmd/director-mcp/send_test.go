@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -82,7 +84,7 @@ func TestSendArgsRefuseUnknownArgumentListsValidNames(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown argument alongside valid ones was accepted")
 	}
-	want := `send_message: unknown argument "priority" (valid: to, performative, text, refs, in_reply_to, reply_by, workspace)`
+	want := `send_message: unknown argument "priority" (valid: to, performative, text, refs, in_reply_to, reply_by, workspace, fail_fast)`
 	if err.Error() != want {
 		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
@@ -111,5 +113,82 @@ func TestSendArgsAcceptFailFast(t *testing.T) {
 
 	if _, _, err := buildSendEnvelope(self, raw); err != nil {
 		t.Fatalf("a send carrying fail_fast was refused: %v", err)
+	}
+}
+
+// Data after the closing brace was refused when args went through
+// json.Unmarshal, and the strict decode keeps refusing it.
+func TestSendArgsRefuseDataAfterTheObject(t *testing.T) {
+	self := Sender{AgentID: "builder", Team: "fleet", Workspace: "ops2"}
+	for _, raw := range []string{
+		`{"to":"agent://fleet/director","performative":"INFORM","text":"hi"} {"text":"again"}`,
+		`{"to":"agent://fleet/director","performative":"INFORM","text":"hi"} x`,
+	} {
+		if _, _, err := buildSendEnvelope(self, json.RawMessage(raw)); err == nil || !strings.Contains(err.Error(), "unexpected data after the arguments") {
+			t.Errorf("args %q: err = %v, want unexpected data after the arguments", raw, err)
+		}
+	}
+}
+
+// Every argument any tools-list golden file advertises for send_message must
+// decode, so a new argument added to the schema without a field on sendArgs
+// fails here, in CI, and not on main once two PRs have each added one.
+func TestEverySendMessageSchemaPropertyDecodes(t *testing.T) {
+	self := Sender{AgentID: "builder", Team: "fleet", Workspace: "ops2"}
+	files := []string{"testdata/tools-list.golden.json", "testdata/tools-list-handled-watch.golden.json"}
+	seen := map[string]bool{}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Tools []struct {
+				Name        string `json:"name"`
+				InputSchema struct {
+					Properties map[string]struct {
+						Type string `json:"type"`
+					} `json:"properties"`
+				} `json:"inputSchema"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal(b, &doc); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		found := false
+		for _, tool := range doc.Tools {
+			if tool.Name != "send_message" {
+				continue
+			}
+			found = true
+			if len(tool.InputSchema.Properties) == 0 {
+				t.Fatalf("%s: send_message lists no properties", f)
+			}
+			for name, p := range tool.InputSchema.Properties {
+				seen[name] = true
+				val := `"x"`
+				switch p.Type {
+				case "boolean":
+					val = `true`
+				case "array":
+					val = `[]`
+				}
+				raw := json.RawMessage(`{"to":"agent://fleet/director","performative":"INFORM","text":"hi",` + `"` + name + `":` + val + `}`)
+				if name == "to" || name == "performative" || name == "text" {
+					raw = json.RawMessage(`{"to":"agent://fleet/director","performative":"INFORM","text":"hi"}`)
+				}
+				if _, _, err := buildSendEnvelope(self, raw); err != nil && strings.Contains(err.Error(), "unknown argument") {
+					t.Errorf("%s advertises send_message argument %q, but it is refused: %v", f, name, err)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("%s lists no send_message tool", f)
+		}
+	}
+	for _, want := range []string{"to", "performative", "text", "fail_fast"} {
+		if !seen[want] {
+			t.Errorf("the golden files never advertised %q: the test did not read them as intended", want)
+		}
 	}
 }

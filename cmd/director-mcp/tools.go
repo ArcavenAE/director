@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -226,7 +227,7 @@ type sendArgs struct {
 }
 
 // sendArgNames are the send_message arguments, in the order the schema lists them.
-const sendArgNames = "to, performative, text, refs, in_reply_to, reply_by, workspace"
+const sendArgNames = "to, performative, text, refs, in_reply_to, reply_by, workspace, fail_fast"
 
 // sendArgsError names an unknown argument. A misspelled one used to be dropped
 // silently, so the caller read "content.data is empty for type text" and went
@@ -254,6 +255,11 @@ func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, err
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&a); err != nil {
 		return nil, "", sendArgsError(err)
+	}
+	// json.Unmarshal refused data after the object; a Decoder reads one value
+	// and stops, so check the rest is empty.
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, "", errors.New("send_message: unexpected data after the arguments")
 	}
 	e := newEnvelope(self)
 	e.Recipient.Address = a.To
