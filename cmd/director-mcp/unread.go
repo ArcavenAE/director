@@ -742,7 +742,7 @@ func applyThreshold(r *unreadReport, d time.Duration) {
 }
 
 // applyBound marks each live row whose oldest unread message is older than the
-// pending-age bound. Unlike applyThreshold it runs whatever
+// pending-age bound (I-190:1). Unlike applyThreshold it runs whatever
 // --older-than says, and reads-outside-durable rows are never marked, since
 // their pending mail was answered and is not unread mail. It changes the report
 // only; the exit code stays 0 (ADR-007, R-113).
