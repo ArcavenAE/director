@@ -9,10 +9,12 @@ package main
 // drains a backlog in one call (drain.go).
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -218,6 +220,29 @@ type sendArgs struct {
 	ReplyBy      string `json:"reply_by"`
 	Workspace    string `json:"workspace"`
 	Refs         []string
+	// FailFast is the presence watch's extra argument (presencewatch_shim.go).
+	// toolSend reads it from the raw arguments; it is declared here only so the
+	// strict decode in buildSendEnvelope does not count it as unknown.
+	FailFast bool `json:"fail_fast"`
+}
+
+// sendArgNames are the send_message arguments, in the order the schema lists them.
+const sendArgNames = "to, performative, text, refs, in_reply_to, reply_by, workspace, fail_fast"
+
+// sendArgsError names an unknown argument. A misspelled one used to be dropped
+// silently, so the caller read "content.data is empty for type text" and went
+// looking at an envelope field it never set. Other decode errors pass through.
+func sendArgsError(err error) error {
+	name, ok := strings.CutPrefix(err.Error(), "json: unknown field ")
+	if !ok {
+		return err
+	}
+	name = strings.Trim(name, `"`)
+	switch name {
+	case "content", "body", "message", "data":
+		return fmt.Errorf("send_message: unknown argument %q (want text)", name)
+	}
+	return fmt.Errorf("send_message: unknown argument %q (valid: %s)", name, sendArgNames)
 }
 
 // buildSendEnvelope parses and validates send_message args into an envelope,
@@ -226,8 +251,15 @@ type sendArgs struct {
 // correlation), is testable without a broker.
 func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, error) {
 	var a sendArgs
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, "", err
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&a); err != nil {
+		return nil, "", sendArgsError(err)
+	}
+	// json.Unmarshal refused data after the object; a Decoder reads one value
+	// and stops, so check the rest is empty.
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, "", errors.New("send_message: unexpected data after the arguments")
 	}
 	e := newEnvelope(self)
 	e.Recipient.Address = a.To
