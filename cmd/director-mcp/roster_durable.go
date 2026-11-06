@@ -182,7 +182,11 @@ func checkDurable(ctx context.Context, js jetstream.JetStream, stream, durable s
 	default:
 		row["durable"] = "present"
 		if info := cons.CachedInfo(); info != nil {
-			row["unread"] = info.NumPending + uint64(info.NumAckPending)
+			// Mail a seat fetched and has not acked is held, not unread: it
+			// is reported under its own field. The cue's count (pending.go)
+			// still counts both, and is not changed by this.
+			row["unread"] = info.NumPending
+			row["ack_pending"] = uint64(info.NumAckPending)
 		}
 	}
 }

@@ -126,7 +126,7 @@ in local or private state.
   `DIRECTOR_HANDLED=1`, also `handled.jsonl` beside the seat's state.
 - **Writers:** the director-mcp shim (`cmd/director-mcp`). With the mode off,
   `wait_for_message` acks on read. With it on, `mark_handled` appends
-  handled, forwarded or parked, fsyncs, and only then acks, and a failed
+  handled, no_reply, forwarded or parked, fsyncs, and only then acks, and a failed
   append never acks (`handled.go`). Enforced in code. The mode is off by
   default, and turning it on for director's seat is a launch step.
 - **Readers:** director, through `wait_for_message` and `inbox_summary`.
