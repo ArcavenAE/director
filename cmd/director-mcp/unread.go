@@ -433,6 +433,7 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 		} else {
 			d.Note = "no presence: this durable belongs to a session that is not live"
 		}
+		var ageNote string
 		if d.Pending > 0 {
 			// The first message the durable has not acked: after its ack floor,
 			// and never before where a resumed durable started.
@@ -451,9 +452,15 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 				if d.OldestSeq == 0 || m.Sequence < d.OldestSeq {
 					d.OldestSeq = m.Sequence
 					d.OldestAt = m.Time.UTC().Format(time.RFC3339)
-					d.OldestAgeSeconds = now.Sub(m.Time).Seconds()
+					d.OldestAgeSeconds, ageNote = ageOnBrokerClock(brokerClock(info, now), now, m.Time)
 				}
 			}
+		}
+		if ageNote != "" {
+			if d.Note != "" {
+				d.Note += "; "
+			}
+			d.Note += ageNote
 		}
 		if d.Live {
 			d.State = liveState(d, now)
@@ -466,6 +473,23 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 	if err := lister.Err(); err != nil {
 		r.Warnings = append(r.Warnings, "consumer listing incomplete: "+err.Error())
 	}
+}
+
+// brokerClock is the broker's time as the consumer info reports it. A variable
+// so a test that simulates passing time by advancing the reader's clock can say
+// the broker agrees with it; nothing in the program reassigns it.
+var brokerClock = func(info *jetstream.ConsumerInfo, _ time.Time) time.Time { return info.TimeStamp }
+
+// ageOnBrokerClock ages a stored message as the broker's clock (the consumer
+// info TimeStamp) minus the message's stored time, so a reader host with a
+// skewed clock does not misreport how old the mail is. Where the server leaves
+// the time zero it falls back to the reader's clock and returns a note saying
+// so, for the row.
+func ageOnBrokerClock(brokerNow, readerNow, stored time.Time) (float64, string) {
+	if brokerNow.IsZero() {
+		return readerNow.Sub(stored).Seconds(), "age uses the reader clock: the broker gave no consumer info time"
+	}
+	return brokerNow.Sub(stored).Seconds(), ""
 }
 
 // liveState names a live row (M2). The anchor is the durable's Created: the
