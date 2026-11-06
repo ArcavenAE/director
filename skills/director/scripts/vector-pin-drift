@@ -28,6 +28,15 @@ files=(marry-vectors.json routing-vectors.json)
 sha_of() { shasum -a 256 | cut -d' ' -f1; }
 one_line() { tr -d '[:cntrl:]' | cut -c1-160; }
 
+# One private scratch directory for the whole run. Without one nothing can be
+# compared, which is a GAP and not a pass, and the exit is still 0.
+scratch_root="${TMPDIR:-/tmp}"
+if ! work="$(mktemp -d "$scratch_root/vpd.XXXXXX" 2>/dev/null)" || [[ -z "$work" ]]; then
+  echo "GAP vector-pin-drift: no scratch directory could be made under $scratch_root, so no pin was compared"
+  exit 0
+fi
+trap 'rm -rf "$work"' EXIT
+
 for f in "${files[@]}"; do
   if [[ ! -r "$dir/$f" ]]; then
     echo "GAP vector-pin-drift: $f: the pinned copy is not readable at $dir"
@@ -38,18 +47,17 @@ for f in "${files[@]}"; do
   rc=0
   perl -e 'alarm shift; exec @ARGV or die "exec $ARGV[0]: $!\n"' "$limit" \
     "$gh_bin" api -H 'Accept: application/vnd.github.raw' \
-    "repos/$repo/contents/contracts/readiness/$f?ref=$ref" </dev/null >"${TMPDIR:-/tmp}/vpd.$$.out" 2>"${TMPDIR:-/tmp}/vpd.$$.err" || rc=$?
+    "repos/$repo/contents/contracts/readiness/$f?ref=$ref" </dev/null >"$work/out" 2>"$work/err" || rc=$?
   if [[ "$rc" != 0 ]]; then
-    why="$(head -n 1 "${TMPDIR:-/tmp}/vpd.$$.err" | one_line)"
+    why="$(head -n 1 "$work/err" 2>/dev/null | one_line || true)"
     echo "GAP vector-pin-drift: $f: marvel $ref was not read (exit $rc${why:+: $why})"
-  elif [[ ! -s "${TMPDIR:-/tmp}/vpd.$$.out" ]]; then
+  elif [[ ! -s "$work/out" ]]; then
     echo "GAP vector-pin-drift: $f: marvel $ref answered with nothing"
   else
-    theirs="$(sha_of <"${TMPDIR:-/tmp}/vpd.$$.out")"
+    theirs="$(sha_of <"$work/out")"
     if [[ "$theirs" != "$pinned" ]]; then
       echo "vector-pin-drift: $f differs: pinned $pinned, marvel $ref $theirs"
     fi
   fi
-  rm -f "${TMPDIR:-/tmp}/vpd.$$.out" "${TMPDIR:-/tmp}/vpd.$$.err"
 done
 exit 0

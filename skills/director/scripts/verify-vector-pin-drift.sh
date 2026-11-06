@@ -13,7 +13,7 @@ pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 
-root="$(mktemp -d)"
+root="$(mktemp -d "${TMPDIR:-/tmp}/vpd-test.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/pin" "$root/up" "$root/tmp"
 printf '%s\n' '{"vectors":["marry"]}' >"$root/pin/marry-vectors.json"
@@ -73,6 +73,14 @@ run VECTOR_PIN_GH="$root/no-such-gh"
 printf '%s\n' '{"x":1}' >"$root/up/marry-vectors.json"; printf '%s\n' '{"y":2}' >"$root/up/routing-vectors.json"
 run
 [[ "$rc" == 0 && "$(wc -l <"$root/out" | tr -d ' ')" == 2 ]] && ok "8 two differing files print two lines and still exit 0" || bad "8 both differ" "rc=$rc $(cat "$root/out")"
+
+# 9 an unwritable or missing TMPDIR is a GAP and exit 0, never a silent exit 1
+run TMPDIR="$root/no-such-dir"
+[[ "$rc" == 0 && "$(cat "$root/out")" == "GAP vector-pin-drift: no scratch directory could be made under $root/no-such-dir, so no pin was compared" ]] \
+  && ok "9 a missing TMPDIR prints a GAP and exits 0" || bad "9 tmpdir" "rc=$rc out=$(cat "$root/out") err=$(head -c 200 "$root/err")"
+mkdir -p "$root/ro"; chmod 500 "$root/ro"; run TMPDIR="$root/ro"; chmod 700 "$root/ro"
+[[ "$rc" == 0 && "$(head -n 1 "$root/out")" == "GAP vector-pin-drift: no scratch directory could be made under $root/ro, so no pin was compared" ]] \
+  && ok "9 an unwritable TMPDIR prints a GAP and exits 0" || bad "9 tmpdir ro" "rc=$rc out=$(cat "$root/out")"
 
 echo "pass $pass fail $fail"
 [[ "$fail" == 0 ]] || exit 1
