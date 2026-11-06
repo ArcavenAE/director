@@ -228,6 +228,12 @@ type unreadPresence struct {
 	State string `json:"state"`
 	TS    string `json:"ts"`
 	Rev   string `json:"rev"`
+
+	// The durable health the shim put in its presence record (durablehealth.go).
+	// Empty on a shim older than that, which then shows no state.
+	durableState   string
+	rebuildsOK     int64
+	rebuildsFailed int64
 }
 
 type unreadDurable struct {
@@ -243,6 +249,15 @@ type unreadDurable struct {
 	OldestAgeSeconds float64         `json:"oldest_unread_age_seconds,omitempty"`
 	Presence         *unreadPresence `json:"presence"`
 	Note             string          `json:"note,omitempty"`
+
+	// DurableState is rebuilt (lost and recreated) or missing (lost, and the
+	// last rebuild failed, or no durable on the broker for a live seat); it is
+	// empty for a seat that never lost one, and for a shim older than P6. RebuildsOK and RebuildsFailed are the shim's own counts. All three
+	// come from the seat's presence record, and missing is also set here when a
+	// live seat has no durable. Diagnostic only: the exit code stays 0.
+	DurableState   string `json:"durable_state,omitempty"`
+	RebuildsOK     int64  `json:"rebuilds_ok,omitempty"`
+	RebuildsFailed int64  `json:"rebuilds_failed,omitempty"`
 
 	// Slice M. Live is presence present. State is set on live rows only:
 	// reading, behind, durable-idle or reads-outside-durable (M2).
@@ -372,6 +387,13 @@ func readUnread(ctx context.Context, js jetstream.JetStream, now time.Time) (unr
 					p.State, _ = rec["state"].(string)
 					p.TS, _ = rec["ts"].(string)
 					p.Rev, _ = rec["rev"].(string)
+					p.durableState, _ = rec["durable_state"].(string)
+					if v, ok := rec["rebuilds_ok"].(float64); ok {
+						p.rebuildsOK = int64(v)
+					}
+					if v, ok := rec["rebuilds_failed"].(float64); ok {
+						p.rebuildsFailed = int64(v)
+					}
 				}
 			}
 			presence[parts[2]+"."+parts[3]] = p
@@ -384,6 +406,7 @@ func readUnread(ctx context.Context, js jetstream.JetStream, now time.Time) (unr
 		return strings.TrimPrefix(name, "mcp_"), true
 	}
 	readDurables(ctx, stream, local, presence, true, now, &r)
+	addMissingDurables(presence, &r)
 	classify(ctx, []jetstream.Stream{stream}, now, &r)
 	sortDurables(&r)
 	return r, nil
@@ -427,6 +450,7 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 			pp := p
 			d.Presence = &pp
 			d.Live = true
+			d.DurableState, d.RebuildsOK, d.RebuildsFailed = pp.durableState, pp.rebuildsOK, pp.rebuildsFailed
 			if withRev && pp.Rev == "" {
 				d.Note = "presence carries no rev: the seat runs a shim older than LR-3"
 			}
@@ -472,6 +496,41 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 	}
 	if err := lister.Err(); err != nil {
 		r.Warnings = append(r.Warnings, "consumer listing incomplete: "+err.Error())
+	}
+}
+
+// addMissingDurables adds a row, durable_state missing, for each seat whose
+// presence is live on the local broker but which has no durable on AGENT_INBOX:
+// a lost durable has no consumer to list, so it would otherwise show nothing.
+// It adds nothing when the consumer listing was incomplete, since a durable not
+// listed is then not known to be gone. Local tier only: the hub keeps one stream
+// per cluster, so a durable absent from one stream says nothing about the seat.
+func addMissingDurables(presence map[string]unreadPresence, r *unreadReport) {
+	for _, w := range r.Warnings {
+		if strings.HasPrefix(w, "consumer listing incomplete") || strings.HasPrefix(w, "presence ") {
+			return
+		}
+	}
+	have := map[string]bool{}
+	for _, d := range r.Durables {
+		have[d.AgentID+"."+d.Instance] = true
+	}
+	for key, p := range presence {
+		if have[key] {
+			continue
+		}
+		i := strings.LastIndex(key, ".")
+		if i <= 0 {
+			continue
+		}
+		pp := p
+		d := unreadDurable{
+			AgentID: key[:i], Instance: key[i+1:], Presence: &pp, Live: true,
+			DurableState: durableMissing, RebuildsOK: pp.rebuildsOK, RebuildsFailed: pp.rebuildsFailed,
+			Note: "presence is live but the broker has no durable for this seat",
+		}
+		d.Team, _ = teamAndRole(d.AgentID, nil)
+		r.Durables = append(r.Durables, d)
 	}
 }
 
