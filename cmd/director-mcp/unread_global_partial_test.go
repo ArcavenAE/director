@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,6 +31,14 @@ import (
 // permission violation, so a read that strays past the allowed verbs fails.
 func startLeafLikeServer(t *testing.T, refuseGet bool) (adminURL, leafURL string) {
 	t.Helper()
+	return startLeafLikeServerMapping(t, refuseGet, "")
+}
+
+// startLeafLikeServerMapping is startLeafLikeServer with one more account
+// mapping, written as `"from": "to"`, so a test can send one request to a
+// subject it listens on or that nobody serves.
+func startLeafLikeServerMapping(t *testing.T, refuseGet bool, extraMap string) (adminURL, leafURL string) {
+	t.Helper()
 	bin, err := exec.LookPath("nats-server")
 	if err != nil {
 		t.Skip("nats-server not on PATH")
@@ -44,6 +53,9 @@ func startLeafLikeServer(t *testing.T, refuseGet bool) (adminURL, leafURL string
 	mapGet := ""
 	if refuseGet {
 		mapGet = `, "$JS.global.API.DIRECT.GET.>": "dead.direct.get.>", "$JS.global.API.STREAM.MSG.GET.>": "dead.msg.get.>"`
+	}
+	if extraMap != "" {
+		mapGet += ", " + extraMap
 	}
 	body := fmt.Sprintf(`listen: 127.0.0.1:%d
 jetstream { store_dir: %q, domain: global }
@@ -60,7 +72,7 @@ accounts {
           "$JS.global.API.DIRECT.GET.>",
           "$JS.global.API.STREAM.MSG.GET.>",
           "$JS.API.STREAM.INFO.>", "$JS.API.CONSUMER.INFO.>", "$JS.API.DIRECT.GET.>",
-          "dead.stream.names", "dead.direct.get.>", "dead.msg.get.>"]},
+          "dead.stream.names", "dead.direct.get.>", "dead.msg.get.>", "dead.probe.>"]},
         subscribe: {allow: ["_INBOX.>"]}}}
     ]
     mappings: { "$JS.global.API.STREAM.NAMES": "dead.stream.names"%s }
@@ -262,5 +274,119 @@ func TestParseArgsUnreadDurable(t *testing.T) {
 	}
 	if _, err := parseArgs([]string{"unread", "--durable"}); err == nil {
 		t.Error("--durable with no name was accepted")
+	}
+	// --durable names hub durables: without --global it would be ignored.
+	if _, err := parseArgs([]string{"unread", "--durable", "mcp_global_a_1"}); err == nil || !strings.Contains(err.Error(), "needs --global") {
+		t.Errorf("--durable without --global: err = %v, want a refusal naming --global", err)
+	}
+	// Order does not matter: --global after --durable is accepted.
+	if got, err := parseArgs([]string{"unread", "--durable", "mcp_global_a_1", "--global"}); err != nil || !got.global {
+		t.Errorf("--global after --durable: %+v, %v", got, err)
+	}
+}
+
+// A presence key that the stream info names but whose get says not found (its
+// latest entry is a delete marker) is printed as unseen, never skipped without
+// a word (director ruling on review 5807160110, low 1).
+func TestUnreadGlobalPartialNamesAKeyThatIsNotFound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	t.Setenv("DIRECTOR_CLUSTER", "mokuzai")
+	nc, err := nats.Connect(adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	kv, err := gjs.KeyValue(ctx, globalPresenceBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "presence.mokuzai.supervisor." + partialInstA
+	if err := kv.Delete(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+
+	reports, err := readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := reports[0]
+	if len(r.Durables) != 0 {
+		t.Fatalf("durables = %+v, want none: the only presence key is deleted", r.Durables)
+	}
+	if want := "unseen (not found): " + key; !strings.Contains(strings.Join(r.Warnings, "\n"), want) {
+		t.Errorf("warnings %q do not say %q", r.Warnings, want)
+	}
+}
+
+type countingKV struct {
+	jetstream.KeyValue
+	gets map[string]int
+}
+
+func (c *countingKV) Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	c.gets[key]++
+	return c.KeyValue.Get(ctx, key)
+}
+
+// The keys under a prefix are each got once, and the entry travels with the key.
+func TestReadKeysUnderGetsEachKeyOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, _ := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	nc, err := nats.Connect(adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	kv, err := gjs.KeyValue(ctx, globalPresenceBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ckv := &countingKV{KeyValue: kv, gets: map[string]int{}}
+	reads, err := readKeysUnder(ctx, gjs, globalPresenceBucket, ckv, "presence.mokuzai.supervisor.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "presence.mokuzai.supervisor." + partialInstA
+	if len(reads) != 1 || reads[0].key != key || reads[0].err != nil || reads[0].entry == nil {
+		t.Fatalf("reads = %+v, want the one mokuzai key with its entry", reads)
+	}
+	if ckv.gets[key] != 1 || len(ckv.gets) != 1 {
+		t.Errorf("gets = %v, want exactly one get of %s", ckv.gets, key)
+	}
+}
+
+// When the list verb is missing and the hub does not answer the named read, the
+// reader probes once, not once to choose the path and again to word the error.
+func TestUnreadGlobalProbesADownHubOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServerMapping(t, false, `"$JS.global.API.STREAM.INFO.KV_`+globalPresenceBucket+`": "dead.probe.presence"`)
+	t.Setenv("DIRECTOR_CLUSTER", "mokuzai")
+	nc, err := nats.Connect(adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	var probes atomic.Int32
+	sub, err := nc.Subscribe("dead.probe.>", func(*nats.Msg) { probes.Add(1) }) // listens, never answers: a hub that does not reply
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sub.Unsubscribe() }()
+	_ = nc.Flush()
+
+	_, err = readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
+	if err == nil || !strings.Contains(err.Error(), "not reachable") {
+		t.Fatalf("err = %v, want the not-reachable wording", err)
+	}
+	if n := probes.Load(); n != 1 {
+		t.Errorf("the hub was probed %d times, want 1", n)
 	}
 }
