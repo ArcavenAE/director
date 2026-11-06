@@ -129,9 +129,13 @@ the session row builder, and `internal/api` for the values):
   - ` (stalled)`;
   - then at most one of ` (logged-out)`, ` (unwatched)` or ` (parked: <reason>)`.
     marvel sets them from one harness reading or one coverage reading, so two
-    of them never appear together, and the writer refuses a cell that holds
-    two. ` (unwatched)` marks a seat that no watcher covers, or whose control
-    check failed. The reason after `parked` is free text and runs to the last
+    of them never appear together. The writer refuses `(stalled)` or
+    `(unwatched)` after a parked reason, and `(unwatched)` or `(logged-out)`
+    followed by another member. A `(logged-out)` after a parked reason is not
+    refused: the reason runs to the last `)` of the cell, so it is read as
+    part of the reason and written as ` (parked)`, as before.
+    ` (unwatched)` marks a seat that no watcher covers, or whose control check
+    failed. The reason after `parked` is free text and runs to the last
     `)` of the cell; the writer drops it and writes ` (parked)`.
   So `healthy (stalled) (parked: <reason>)` is written as
   `healthy (stalled) (parked)`, and `unhealthy (stalled) (unwatched)` is
