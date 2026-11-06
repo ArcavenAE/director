@@ -53,3 +53,63 @@ func TestSendArgsNoInReplyToLeavesCorrelationEmpty(t *testing.T) {
 		t.Fatalf("a non-reply set correlation fields: in_reply_to=%q correlation_id=%q", e.InReplyTo, e.CorrelationID)
 	}
 }
+
+// A misspelled send_message argument used to be dropped, so the caller saw
+// "content.data is empty for type text" and looked at an envelope field it
+// never set. An unknown argument now fails at the parse and is named.
+func TestSendArgsRefuseUnknownArgumentByName(t *testing.T) {
+	self := Sender{AgentID: "builder", Team: "fleet", Workspace: "ops2"}
+	raw := json.RawMessage(`{"to":"agent://fleet/director","performative":"INFORM","content":"hello"}`)
+
+	e, _, err := buildSendEnvelope(self, raw)
+	if err == nil {
+		t.Fatalf("args carrying content and no text were accepted: envelope %+v", e)
+	}
+	if e != nil {
+		t.Fatalf("an unknown argument is refused before any envelope exists, got %+v", e)
+	}
+	want := `send_message: unknown argument "content" (want text)`
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestSendArgsRefuseUnknownArgumentListsValidNames(t *testing.T) {
+	self := Sender{AgentID: "builder", Team: "fleet", Workspace: "ops2"}
+	raw := json.RawMessage(`{"to":"agent://fleet/director","performative":"INFORM","text":"hi","priority":"high"}`)
+
+	_, _, err := buildSendEnvelope(self, raw)
+	if err == nil {
+		t.Fatal("an unknown argument alongside valid ones was accepted")
+	}
+	want := `send_message: unknown argument "priority" (valid: to, performative, text, refs, in_reply_to, reply_by, workspace)`
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+// Every argument the schema names still binds, so the refusal narrows nothing
+// a valid caller sends.
+func TestSendArgsAllSchemaArgumentsStillPass(t *testing.T) {
+	self := Sender{AgentID: "builder", Team: "fleet", Workspace: "ops2"}
+	raw := json.RawMessage(`{"to":"agent://fleet/director","performative":"INFORM","text":"hi","refs":["pr:1"],"in_reply_to":"n1","reply_by":"2026-09-14T00:00:00Z","workspace":"ops2"}`)
+
+	e, ws, err := buildSendEnvelope(self, raw)
+	if err != nil {
+		t.Fatalf("a valid send was refused: %v", err)
+	}
+	if e.Content.Data != "hi" || ws != "ops2" || e.InReplyTo != "n1" {
+		t.Fatalf("a valid send did not bind: %+v ws=%q", e, ws)
+	}
+}
+
+// fail_fast is added to the schema by the presence watch and read by toolSend,
+// so the strict decode must accept it.
+func TestSendArgsAcceptFailFast(t *testing.T) {
+	self := Sender{AgentID: "builder", Team: "fleet", Workspace: "ops2"}
+	raw := json.RawMessage(`{"to":"global://c1/supervisor","performative":"INFORM","text":"hi","fail_fast":true}`)
+
+	if _, _, err := buildSendEnvelope(self, raw); err != nil {
+		t.Fatalf("a send carrying fail_fast was refused: %v", err)
+	}
+}
