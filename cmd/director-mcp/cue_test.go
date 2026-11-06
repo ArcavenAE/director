@@ -332,11 +332,19 @@ func TestAnUnansweredCueBacksOffForADayThenInformsDirector(t *testing.T) {
 	if len(r.mailCues()) != 5 {
 		t.Fatalf("then hourly: a re-cue an hour after 8W, got %d cues", len(r.mailCues()))
 	}
-	for h := 2; h <= 22; h++ {
+	for h := 2; h <= 23; h++ {
 		at(8*W + time.Duration(h)*time.Hour + time.Second)
+		if want := 4 + h; len(r.mailCues()) != want {
+			t.Fatalf("one re-cue an hour, %d h after 8W: want %d cues, got %d", h, want, len(r.mailCues()))
+		}
 	}
+	at(24*time.Hour - time.Second)
 	if len(r.gaveUp) != 0 {
 		t.Fatalf("no give-up inside 24 h: %v", r.gaveUp)
+	}
+	at(24 * time.Hour)
+	if len(r.gaveUp) != 1 {
+		t.Fatalf("the INFORM is due at exactly 24 h, got %v", r.gaveUp)
 	}
 	at(24*time.Hour + time.Second)
 	if len(r.gaveUp) != 1 || !strings.HasPrefix(r.gaveUp[0], "m1 ") {
@@ -350,6 +358,42 @@ func TestAnUnansweredCueBacksOffForADayThenInformsDirector(t *testing.T) {
 	}
 	if len(r.warns) != 2 {
 		t.Fatalf("the back-off adds no further warning, got %v", r.warns)
+	}
+	for _, w := range r.warns {
+		if !strings.HasPrefix(w, "m1 ") {
+			t.Fatalf("each warning names the message id, got %q", w)
+		}
+	}
+}
+
+// A gap in the ticks (failed inbox reads skip them) must not release every
+// overdue re-cue on the ticks that follow: one catch-up re-cue, then the
+// schedule goes on from the last offset that has passed.
+func TestAGapInTheTicksSendsOneCatchUpReCueNotABurst(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.cues = nil
+	r.src.n = 1
+	r.step(2 * time.Second)
+	t0 := r.now
+	W := r.c.cfg.Window
+	at := func(d time.Duration) {
+		r.now = t0.Add(d)
+		r.c.tick(context.Background())
+	}
+	at(10*time.Hour + time.Second)
+	if got := len(r.mailCues()); got != 2 {
+		t.Fatalf("after a 10 h gap one catch-up re-cue, got %d cues", got)
+	}
+	for i := 1; i <= 5; i++ {
+		at(10*time.Hour + time.Duration(i)*2*time.Second)
+	}
+	if got := len(r.mailCues()); got != 2 {
+		t.Fatalf("the ticks after the gap add no re-cue, got %d cues", got)
+	}
+	at(8*W + 11*time.Hour)
+	if got := len(r.mailCues()); got != 3 {
+		t.Fatalf("the next re-cue is the next hourly offset, got %d cues", got)
 	}
 }
 

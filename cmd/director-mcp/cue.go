@@ -464,6 +464,7 @@ func (c *cue) tick(ctx context.Context) {
 	}
 	sendNew := c.fold > 0 && (c.lastCueAt.IsZero() || now.Sub(c.lastCueAt) >= c.cfg.Floor)
 	var recue, warnOut, gaveUp *pendingCue
+	recueTo := 0
 	if c.out != nil {
 		age := now.Sub(c.out.first)
 		switch {
@@ -475,8 +476,14 @@ func (c *cue) tick(ctx context.Context) {
 				warnOut = c.out
 				c.out.warns++
 			}
-			if age >= recueOffset(c.cfg.Window, c.out.recues) {
-				recue = c.out
+			// After a gap in the ticks every overdue offset has passed:
+			// catch up to the last one and send once, not one per tick.
+			k := c.out.recues
+			for age >= recueOffset(c.cfg.Window, k) {
+				k++
+			}
+			if k > c.out.recues {
+				recue, recueTo = c.out, k
 			}
 		}
 	}
@@ -510,7 +517,7 @@ func (c *cue) tick(ctx context.Context) {
 	if recue != nil && !sendNew {
 		c.mu.Lock()
 		p := c.params(recue.meta, recue.count, now)
-		recue.recues++
+		recue.recues = recueTo
 		c.lastCueAt = now
 		c.mu.Unlock()
 		emits = append(emits, p)
