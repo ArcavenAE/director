@@ -90,7 +90,7 @@ func versionLine() string {
 // cliArgs is what the command line asked for. Anything not listed here is
 // refused, rather than ignored and a live shim started (director#75).
 type cliArgs struct {
-	mode        string // serve, preflight, version, unread, ask-reader, asks
+	mode        string // serve, preflight, version, unread, ask-reader, asks, marry
 	json        bool
 	all         bool          // unread: one row per durable, dead ones included (M1)
 	global      bool          // unread: the hub streams instead of AGENT_INBOX (M3)
@@ -99,7 +99,7 @@ type cliArgs struct {
 	durables    []string      // unread --global: durable names to read by name when the hub cannot be listed
 	once        bool          // ask-reader: run one pass and exit
 	interval    time.Duration // ask-reader: the pass interval; 0 means the 30s default
-	file        string        // ask-reader: the JSON file it rewrites after each pass
+	file        string        // ask-reader: the JSON file it rewrites after each pass; marry: the input file
 	help        bool          // asks: print the help text
 	askID       string        // asks: report one message id and exit
 	role        string        // dossier: TEAM/ROLE
@@ -187,6 +187,11 @@ func parseArgs(args []string) (cliArgs, error) {
 		return out, nil
 	case args[0] == "dossier":
 		return parseDossierArgs(args[1:])
+	case args[0] == "marry":
+		if len(args) != 3 || args[1] != "--input" {
+			return cliArgs{}, fmt.Errorf("marry: usage: %s", marryUsage)
+		}
+		return cliArgs{mode: "marry", file: args[2]}, nil
 	case args[0] == "unread":
 		out := cliArgs{mode: "unread"}
 		rest := args[1:]
@@ -227,7 +232,7 @@ func parseArgs(args []string) (cliArgs, error) {
 		}
 		return out, nil
 	}
-	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage, dossierUsage)
+	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage, dossierUsage, marryUsage)
 }
 
 type unreadPresence struct {
