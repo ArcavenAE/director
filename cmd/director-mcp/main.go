@@ -220,6 +220,7 @@ func main() {
 		c := newCue(cueCfg, busCueSource{bus}, srv.notifyCue, func(ids []string, state string) {
 			warnUnanswered(ctx, bus, logf, ids, state)
 		}, time.Now, randomNonce)
+		c.giveUp = func(ids []string, state string) { informGaveUp(ctx, bus, logf, ids, state) }
 		c.logf = logf
 		srv.cue = c
 		bus.attachCue(c)

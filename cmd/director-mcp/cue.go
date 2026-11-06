@@ -91,21 +91,45 @@ type cueSource interface {
 }
 
 type pendingCue struct {
-	at      time.Time
+	first   time.Time // when the cue first went out; the back-off runs from it
 	meta    *cueMeta
 	count   uint64
 	pending uint64 // messages waiting when the cue went out
-	recued  bool
+	warns   int    // cue.unanswered warnings sent for this cue
+	recues  int    // re-cues sent for this cue
+}
+
+// cueBackOffLimit is how long after the first cue an unanswered cue is re-sent
+// before one INFORM goes to director and the cue stops (I-69 D-9, the
+// operator's answer on card i69-4: "Back off for 24 hours, then notify
+// director"). Both numbers are proposals.
+const cueBackOffLimit = 24 * time.Hour
+
+// recueOffset is when, after the first cue, the i-th re-cue is due: at W, 4W
+// and 8W, then every hour. The warnings stay at W and 2W.
+func recueOffset(window time.Duration, i int) time.Duration {
+	switch i {
+	case 0:
+		return window
+	case 1:
+		return 4 * window
+	case 2:
+		return 8 * window
+	}
+	return 8*window + time.Duration(i-2)*time.Hour
 }
 
 type cue struct {
-	mu    sync.Mutex
-	cfg   cueConfig
-	src   cueSource
-	emit  func(params map[string]any)
-	warn  func(ids []string, state string)
-	now   func() time.Time
-	nonce func() string
+	mu   sync.Mutex
+	cfg  cueConfig
+	src  cueSource
+	emit func(params map[string]any)
+	warn func(ids []string, state string)
+	// giveUp is the one INFORM to director when the back-off ends (24 h after
+	// the first cue); nil sends none.
+	giveUp func(ids []string, state string)
+	now    func() time.Time
+	nonce  func() string
 
 	active        bool
 	state, reason string
@@ -439,13 +463,28 @@ func (c *cue) tick(ctx context.Context) {
 		c.fold = max(c.fold, n)
 	}
 	sendNew := c.fold > 0 && (c.lastCueAt.IsZero() || now.Sub(c.lastCueAt) >= c.cfg.Floor)
-	var recue, warnOut *pendingCue
-	if c.out != nil && now.Sub(c.out.at) >= c.cfg.Window {
-		warnOut = c.out
-		if !c.out.recued {
-			recue = c.out
-		} else {
-			c.out = nil // twice unanswered: back to the manual wake for these
+	var recue, warnOut, gaveUp *pendingCue
+	recueTo := 0
+	if c.out != nil {
+		age := now.Sub(c.out.first)
+		switch {
+		case age >= cueBackOffLimit:
+			gaveUp = c.out
+			c.out = nil // back to the manual wake for these
+		default:
+			if c.out.warns < 2 && age >= time.Duration(c.out.warns+1)*c.cfg.Window {
+				warnOut = c.out
+				c.out.warns++
+			}
+			// After a gap in the ticks every overdue offset has passed:
+			// catch up to the last one and send once, not one per tick.
+			k := c.out.recues
+			for age >= recueOffset(c.cfg.Window, k) {
+				k++
+			}
+			if k > c.out.recues {
+				recue, recueTo = c.out, k
+			}
 		}
 	}
 	state := c.state
@@ -456,7 +495,7 @@ func (c *cue) tick(ctx context.Context) {
 		m, _ := c.src.oldestMeta(ctx)
 		c.mu.Lock()
 		p := c.params(m, c.fold, now)
-		c.out = &pendingCue{at: now, meta: m, count: c.fold, pending: n}
+		c.out = &pendingCue{first: now, meta: m, count: c.fold, pending: n}
 		c.lastCueAt, c.fold = now, 0
 		c.mu.Unlock()
 		emits = append(emits, p)
@@ -468,10 +507,17 @@ func (c *cue) tick(ctx context.Context) {
 		}
 		c.warn(ids, state)
 	}
+	if gaveUp != nil && c.giveUp != nil {
+		var ids []string
+		if gaveUp.meta != nil {
+			ids = append(ids, gaveUp.meta.MessageID)
+		}
+		c.giveUp(ids, state)
+	}
 	if recue != nil && !sendNew {
 		c.mu.Lock()
 		p := c.params(recue.meta, recue.count, now)
-		recue.at, recue.recued = now, true
+		recue.recues = recueTo
 		c.lastCueAt = now
 		c.mu.Unlock()
 		emits = append(emits, p)
@@ -564,7 +610,16 @@ func metaOf(e *Envelope) *cueMeta {
 // warning, never a death or loss report. It always logs, and with the global
 // tier on it also tells director.
 func warnUnanswered(ctx context.Context, bus *Bus, logf func(string, ...any), ids []string, state string) {
-	text := fmt.Sprintf("cue.unanswered: seat %s, messages %v still waiting after the receipt window, cue %s", bus.self.AgentID, ids, state)
+	tellDirector(ctx, bus, logf, "cue.unanswered", fmt.Sprintf("cue.unanswered: seat %s, messages %v still waiting after the receipt window, cue %s", bus.self.AgentID, ids, state))
+}
+
+// informGaveUp is the one INFORM that ends the cue's back-off: 24 hours after
+// the first cue the messages are still waiting, and the shim stops cueing them.
+func informGaveUp(ctx context.Context, bus *Bus, logf func(string, ...any), ids []string, state string) {
+	tellDirector(ctx, bus, logf, "cue.gave_up", fmt.Sprintf("cue.gave_up: seat %s, messages %v still waiting %s after the first cue, cue %s; no further cue for these", bus.self.AgentID, ids, cueBackOffLimit, state))
+}
+
+func tellDirector(ctx context.Context, bus *Bus, logf func(string, ...any), kind, text string) {
 	logf("WARNING %s", text)
 	if bus.globalCfg == nil {
 		return
@@ -575,6 +630,6 @@ func warnUnanswered(ctx context.Context, bus *Bus, logf func(string, ...any), id
 		_, err = bus.publish(ctx, env, ws)
 	}
 	if err != nil {
-		logf("cue.unanswered not delivered to director: %v", err)
+		logf("%s not delivered to director: %v", kind, err)
 	}
 }
