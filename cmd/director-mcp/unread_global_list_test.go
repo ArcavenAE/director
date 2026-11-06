@@ -137,3 +137,30 @@ func TestUnreadGlobalOtherListFailuresKeepTheUnreachableWording(t *testing.T) {
 		t.Fatalf("err = %v, want the unreachable wording for a failure that is not no-responders", err)
 	}
 }
+
+// A live hub answers a named read about a stream that does not exist with an API
+// error (404 stream not found). That is an answer, so the hub is reachable and
+// the gap is the list verb. Only a nil error used to count as reachable, so a
+// hub whose presence bucket was not provisioned read as "not reachable".
+func TestUnreadGlobalAPIErrorOnTheNamedReadStillMeansReachable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	url := startScratchServerNoStreamList(t)
+	nc, err := nats.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+
+	_, err = readUnreadGlobal(ctx, nc, "global", time.Now())
+	if err == nil {
+		t.Fatal("the stream-list request has no responder here, yet the read succeeded")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "not reachable") {
+		t.Fatalf("the hub answered the named read with an API error, but the error says it is unreachable: %q", msg)
+	}
+	if !strings.Contains(msg, "may not list streams") {
+		t.Errorf("error %q does not say the credential may not list streams", msg)
+	}
+}
