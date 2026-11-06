@@ -5,7 +5,9 @@
 #   - probe/: 23 shell scripts, 8 of them verify-*.sh, most of which need a live broker or
 #     hub and the nats CLI, and a second Go module (probe/leaf-fabric/fabtool)
 #     that the go vet and go test below never reach, since the Go job works in
-#     cmd/director-mcp.
+#     cmd/director-mcp. The two hub provisioning verifiers are the exception:
+#     the hub-verifiers job runs probe/nats-global-tier/hub/verify-provision-raise.sh
+#     and verify-start-provision.sh, each against a loopback nats-server of its own.
 #   - anything that needs a live marvel or a macOS host, and a real terminal
 #     pane.
 # The runner's egress policy is audit: it records outbound calls and blocks
@@ -94,6 +96,63 @@ jobs:
           set -uo pipefail
           failed=()
           for f in skills/director/scripts/verify-*.sh; do
+            echo "::group::${f}"
+            if bash "$f"; then echo "ok ${f}"; else echo "::error file=${f}::${f} failed"; failed+=("$f"); fi
+            echo "::endgroup::"
+          done
+          if (( ${#failed[@]} )); then
+            printf 'failed: %s\n' "${failed[@]}"
+            exit 1
+          fi
+
+  hub-verifiers:
+    name: Hub provisioning verifiers
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install nats-server and the nats CLI
+        # Both verifiers exit 2 when nats-server, nats, jq or python3 is not on
+        # PATH; jq and python3 ship on the runner image. The nats-server pin is
+        # the Go job's. The CLI is pinned the same way: bump the version and
+        # the checksum together, taking the checksum from the release's
+        # SHA256SUMS. Each download is checked before it is unpacked.
+        env:
+          NATS_SERVER_VERSION: v2.15.0
+          NATS_SERVER_SHA256: 5d2c51caca950333aba84911df7d377f826f3a59ec36061c6539105084f65c92
+          NATS_CLI_VERSION: 0.4.0
+          NATS_CLI_SHA256: 8dbd437c826b953dbd7432cf890ef22ba3c33dccc3dce5e71b3e8d055427849c
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/nats-bin"
+          server="nats-server-${NATS_SERVER_VERSION}-linux-amd64"
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/${server}.tar.gz" \
+            "https://github.com/nats-io/nats-server/releases/download/${NATS_SERVER_VERSION}/${server}.tar.gz"
+          echo "${NATS_SERVER_SHA256}  ${RUNNER_TEMP}/${server}.tar.gz" | sha256sum --check --strict -
+          tar -xzf "${RUNNER_TEMP}/${server}.tar.gz" -C "${RUNNER_TEMP}/nats-bin" --strip-components=1 "${server}/nats-server"
+          cli="nats-${NATS_CLI_VERSION}-linux-amd64"
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/${cli}.zip" \
+            "https://github.com/nats-io/natscli/releases/download/v${NATS_CLI_VERSION}/${cli}.zip"
+          echo "${NATS_CLI_SHA256}  ${RUNNER_TEMP}/${cli}.zip" | sha256sum --check --strict -
+          unzip -j -o "${RUNNER_TEMP}/${cli}.zip" "${cli}/nats" -d "${RUNNER_TEMP}/nats-bin"
+          echo "${RUNNER_TEMP}/nats-bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/nats-bin/nats-server" --version
+          "${RUNNER_TEMP}/nats-bin/nats" --version
+
+      - name: Run each hub verifier with bash
+        # Both, one at a time, even after a failure, so one run shows every miss.
+        run: |
+          set -uo pipefail
+          failed=()
+          for f in probe/nats-global-tier/hub/verify-provision-raise.sh probe/nats-global-tier/hub/verify-start-provision.sh; do
             echo "::group::${f}"
             if bash "$f"; then echo "ok ${f}"; else echo "::error file=${f}::${f} failed"; failed+=("$f"); fi
             echo "::endgroup::"
