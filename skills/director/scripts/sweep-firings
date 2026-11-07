@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""sweep-firings: board lines for a scheduled firing with no acked result (aae-orc-ijrm5, H-6).
+
+For each schedule in `marvel describe team <team>` it takes the last due firing of its cron
+and, once due plus two hours has passed, prints one board line unless the firing is settled
+and acknowledged. Settled and acknowledged means all of:
+
+  - a run for that firing finished with outcome succeeded;
+  - its results file <results dir>/<YYYYMMDDTHHMMZ>.md holds a `sha256: <hex>` line;
+  - the supervisor's route ledger holds a row (scheduled_role, firing_id, results_sha256,
+    acked_at) for that role and firing whose results_sha256 equals that line.
+
+The sweep writes only the results file, never an ack; the ack is the ledger row (operator
+ruling: use the route ledger). This script only reads.
+
+Read-only and a reminder, never a gate (diagnostic-not-gate.md): it never runs, respawns or
+blocks anything and exits 0 whether it finds nothing or a lot. Anything it could not read is
+printed as a GAP line and counted: a describe that is missing or not JSON, a cron or timezone
+it does not handle, a ledger that is missing or holds a line that is not JSON. An empty board
+therefore reads differently from a sweep that did not look. A ledger it cannot read leaves
+the acknowledgement check out: a succeeded run is then neither listed nor called acked.
+
+  SWEEP_FIRINGS_DESCRIBE  a describe file to read; unset runs `marvel describe team $SWEEP_FIRINGS_TEAM`
+  SWEEP_FIRINGS_TEAM      the team to describe, as <workspace>/<team>; unset with no describe
+                          file is a GAP
+  SWEEP_FIRINGS_RESULTS   default ~/.local/state/daily-sweep/results
+  SWEEP_FIRINGS_LEDGER    a JSON-lines file, one row per ack; unset or unreadable is a GAP.
+                          The ledger has no home yet (aae-orc-rlel4), so this is the one seam
+                          that task fills.
+  SWEEP_FIRINGS_NOW       epoch seconds, fixes the clock for tests
+
+Usage: skills/director/scripts/sweep-firings
+"""
+import datetime as dt
+import json
+import os
+import re
+import subprocess
+import sys
+
+GRACE = dt.timedelta(hours=2)
+UTC_NAMES = ("", "UTC", "Etc/UTC", "GMT", "Etc/GMT")
+
+gaps = []
+lines = []
+
+
+def gap(msg):
+    gaps.append("- GAP sweep-firings: " + msg)
+
+
+def parse_field(text, lo, hi, dow=False):
+    """The set of values a cron field names: numbers, ranges, lists, steps and *."""
+    if not re.fullmatch(r"[0-9*/,\-]+", text):
+        raise ValueError("unsupported field %r" % text)
+    out = set()
+    for part in text.split(","):
+        rng, _, step = part.partition("/")
+        step = int(step) if step else 1
+        if step < 1:
+            raise ValueError("bad step in %r" % text)
+        if rng == "*":
+            a, b = lo, hi
+        elif "-" in rng:
+            x, y = rng.split("-")
+            a, b = int(x), int(y)
+        else:
+            a = int(rng)
+            b = hi if step != 1 else a
+        if a < lo or b > (7 if dow else hi) or a > b:
+            raise ValueError("out of range in %r" % text)
+        out.update(range(a, b + 1, step))
+    if dow:
+        out = {v % 7 for v in out}
+    return out
+
+
+def parse_cron(expr):
+    f = expr.split()
+    if len(f) != 5:
+        raise ValueError("want 5 fields, got %d" % len(f))
+    minute = parse_field(f[0], 0, 59)
+    hour = parse_field(f[1], 0, 23)
+    dom = parse_field(f[2], 1, 31)
+    month = parse_field(f[3], 1, 12)
+    dow = parse_field(f[4], 0, 6, dow=True)
+    return minute, hour, dom, month, dow, f[2] != "*", f[4] != "*"
+
+
+def last_due(expr, now):
+    """The latest time at or before now that the cron names, in UTC."""
+    minute, hour, dom, month, dow, dom_set, dow_set = parse_cron(expr)
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    for _ in range(400):
+        wd = (day.weekday() + 1) % 7  # cron: Sunday is 0
+        if dom_set and dow_set:
+            day_ok = day.day in dom or wd in dow
+        else:
+            day_ok = day.day in dom and wd in dow
+        if day.month in month and day_ok:
+            for h in sorted(hour, reverse=True):
+                for m in sorted(minute, reverse=True):
+                    t = day.replace(hour=h, minute=m)
+                    if t <= now:
+                        return t
+        day -= dt.timedelta(days=1)
+    raise ValueError("no firing in the last 400 days")
+
+
+def parse_time(text):
+    return dt.datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(dt.timezone.utc)
+
+
+def read_describe():
+    path = os.environ.get("SWEEP_FIRINGS_DESCRIBE")
+    if path:
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+        except OSError as e:
+            return None, "describe file %s unreadable: %s" % (path, e.strerror)
+    else:
+        team = os.environ.get("SWEEP_FIRINGS_TEAM")
+        if not team:
+            return None, "no describe file and no SWEEP_FIRINGS_TEAM"
+        try:
+            p = subprocess.run(["marvel", "describe", "team", team], capture_output=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as e:
+            return None, "marvel describe team %s failed: %s" % (team, e)
+        if p.returncode != 0:
+            return None, "marvel describe team %s exited %d" % (team, p.returncode)
+        raw = p.stdout
+    try:
+        doc = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return None, "describe output is not JSON"
+    if not isinstance(doc, dict) or not isinstance(doc.get("Schedules"), list):
+        return None, "describe has no Schedules array"
+    return doc["Schedules"], None
+
+
+def read_ledger():
+    """A list of ledger rows, or None when the ledger cannot be read (a gap is recorded)."""
+    path = os.environ.get("SWEEP_FIRINGS_LEDGER")
+    if not path:
+        gap("no route ledger configured (SWEEP_FIRINGS_LEDGER); acknowledgements were not checked")
+        return None
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read().decode("utf-8", "replace")
+    except OSError as e:
+        gap("route ledger %s unreadable: %s; acknowledgements were not checked" % (path, e.strerror))
+        return None
+    rows = []
+    for n, line in enumerate(raw.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError
+        except ValueError:
+            gap("route ledger %s line %d is not a JSON object; acknowledgements were not checked" % (path, n))
+            return None
+        rows.append(row)
+    return rows
+
+
+def results_sha(results_dir, short):
+    """The hex on the `sha256:` line of the firing's results file, or a reason it is missing."""
+    path = os.path.join(results_dir, short + ".md")
+    try:
+        with open(path, "rb") as fh:
+            text = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return None, "no results file %s.md" % short
+    for line in text.splitlines():
+        m = re.fullmatch(r"sha256: ([0-9a-f]{64})", line.strip())
+        if m:
+            return m.group(1), None
+    return None, "results file %s.md has no sha256 line" % short
+
+
+def main():
+    now_env = os.environ.get("SWEEP_FIRINGS_NOW")
+    now = (dt.datetime.fromtimestamp(int(now_env), dt.timezone.utc) if now_env
+           else dt.datetime.now(dt.timezone.utc))
+    results_dir = os.environ.get("SWEEP_FIRINGS_RESULTS") or os.path.expanduser(
+        "~/.local/state/daily-sweep/results")
+
+    schedules, why = read_describe()
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if schedules is None:
+        gap("%s; nothing was swept" % why)
+        print("- sweep-firings %s: not run, %d gap(s)" % (stamp, len(gaps)))
+        print("\n".join(gaps))
+        return
+
+    ledger = read_ledger()
+    for s in schedules:
+        role = s.get("role", "?")
+        if s.get("suspended") or s.get("frozen"):
+            continue
+        tz = s.get("timezone") or ""
+        if tz not in UTC_NAMES:
+            gap("%s: timezone %s is not handled; its firings were not checked" % (role, tz))
+            continue
+        try:
+            due = last_due(s.get("cron", ""), now)
+        except ValueError as e:
+            gap("%s: cron %r not handled (%s); its firings were not checked" % (role, s.get("cron"), e))
+            continue
+        if now < due + GRACE:
+            continue
+        long_id = due.strftime("%Y%m%dT%H%M%SZ")
+        short_id = due.strftime("%Y%m%dT%H%MZ")
+        run = None
+        for r in s.get("runs") or []:
+            try:
+                same = parse_time(r["due_at"]) == due
+            except (KeyError, ValueError):
+                same = False
+            if same or r.get("firing") in (long_id, short_id):
+                run = r
+                break
+        head = "- sweep-firings: %s firing %s due %s" % (role, long_id, due.strftime("%Y-%m-%dT%H:%MZ"))
+        if run is None:
+            lines.append("%s: no finished run" % head)
+            continue
+        outcome = run.get("outcome")
+        if outcome != "succeeded":
+            lines.append("%s: run %s" % (head, outcome or "has no outcome"))
+            continue
+        sha, why = results_sha(results_dir, short_id)
+        if sha is None:
+            lines.append("%s: succeeded, but %s" % (head, why))
+            continue
+        if ledger is None:
+            continue
+        ids = {long_id, short_id, run.get("firing")}
+        if not any(r.get("scheduled_role") == role and r.get("firing_id") in ids
+                   and r.get("results_sha256") == sha for r in ledger):
+            lines.append("%s: succeeded, results %s.md, no route-ledger row with results_sha256 %s"
+                         % (head, short_id, sha[:12]))
+
+    print("- sweep-firings %s: %d waiting, %d gap(s)" % (stamp, len(lines), len(gaps)))
+    out = gaps + lines
+    if out:
+        print("\n".join(out))
+
+
+if __name__ == "__main__":
+    main()
+    sys.exit(0)
