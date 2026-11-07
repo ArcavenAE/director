@@ -5,6 +5,10 @@
       "description": "Send a director envelope to another session or role. Returns accepted-for-delivery with a message_id; this is a send acknowledgement, not a delivery or read receipt. With the presence watch on, a send to a global address that presence refuses is held, not delivered, and released when the recipient returns; the result says so. Pass fail_fast to refuse instead.",
       "inputSchema": {
         "properties": {
+          "cold": {
+            "description": "optional. With workspace set, publish even when no durable consumer filters the subject yet, for mail to a seat that has not started; the result says no consumer filters it, or that the check could not run. Without cold, a hinted send to an unfiltered subject is refused.",
+            "type": "boolean"
+          },
           "fail_fast": {
             "description": "refuse at once when the recipient has no live presence, as without the presence watch, instead of holding the send for release when it returns",
             "type": "boolean"
@@ -37,7 +41,7 @@
             "type": "string"
           },
           "workspace": {
-            "description": "optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known cold mailbox (no live presence) verbatim. Ignored for a global:// address, whose subject carries no workspace.",
+            "description": "optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known mailbox (no live presence) verbatim; the send is then refused unless a durable consumer filters that subject with that exact filter, or cold is true. Ignored for a global:// address, whose subject carries no workspace.",
             "type": "string"
           }
         },

@@ -55,7 +55,8 @@ func newDeliveryRig(t *testing.T) *deliveryRig {
 func (r *deliveryRig) send(t *testing.T, id, perf string) uint64 {
 	t.Helper()
 	e := envFor(id, perf, "agent://ops/sender", "agent://ops/seat", "hello")
-	res, err := r.bus.publish(r.ctx, &e, "aae-orc")
+	// one test sends before any durable exists, which a hinted send refuses unless cold
+	res, err := r.bus.publish(context.WithValue(r.ctx, coldSendKey{}, true), &e, "aae-orc")
 	if err != nil {
 		t.Fatal(err)
 	}
