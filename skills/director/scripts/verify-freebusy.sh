@@ -73,6 +73,7 @@ fi
 if [[ "$1" == capture ]]; then
   f="$FB_FIX/cap/${2#*/}"
   if [[ -e "$f.fail" ]]; then echo "Error: cannot capture" >&2; exit 1; fi
+  if [[ -e "$f.sleep" ]]; then sleep "$(cat "$f.sleep")"; fi
   if [[ -e "$f" ]]; then cat "$f"; else echo "some output"; fi
   exit 0
 fi
@@ -612,9 +613,16 @@ case_health() {
   [[ "$(grep -c '^capture wsa/.* --cluster alpha' "$FIX/marvel.log" || true)" == 3 && "$(grep -c '^capture wsb/.* --cluster beta' "$FIX/marvel.log" || true)" == 1 ]] && ok "H4b the share beta leaves unused passes to alpha" || bad "H4b pass-on" "$(grep capture "$FIX/marvel.log" | tr "\n" ";")"
   grep -q 'alpha 3)' <<<"$out" && ! grep -q 'beta [0-9]' <<<"$out" && ok "H4b only the short cluster is named" || bad "H4b named" "$out"
   fixtures; new_state; conf3
-  quiet_seats a-1 a-2 a-3
+  quiet_seats $(seq -f 'a-%g' 1 45)
   out="$(run "${base[@]}")"
-  ! grep -q 'capture cap' <<<"$out" && ok "H4b the default cap is above 40" || bad "H4b default" "$out"
+  grep -q '^capture wsa/a-45 ' "$FIX/marvel.log" && ! grep -q 'capture cap' <<<"$out" && ok "H4b the default cap captures all 45 quiet seats of one cluster, above the old 40" || bad "H4b default" "$out"
+
+  # the timeout is the bound: a capture that outlasts it is a GAP naming the cluster
+  fixtures; new_state; conf3
+  quiet_seats t-1 t-2 t-3
+  echo 5 >"$FIX/cap/t-1.sleep"
+  out="$(run "${base[@]}" FREEBUSY_CAPTURE_TIMEOUT=1)"
+  grep -q 'GAP health: 3 seat(s) not captured within 1s (cut short: alpha 3)' <<<"$out" && ok "H4c a capture cut short by the timeout prints a GAP naming the cluster" || bad "H4c timeout gap" "$out"
 
   # a failed capture is a GAP, never a clean seat
   fixtures; new_state; conf3
