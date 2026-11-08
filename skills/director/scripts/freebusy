@@ -81,7 +81,7 @@
 # (seconds for the cluster list, for each cluster read and for the asks read, default 20),
 # FREEBUSY_ASKS_MAX_AGE (seconds an asks ledger may be old, default 900),
 # FREEBUSY_LOCK_STALE_MIN (a positive integer: minutes before a lock with no usable pid is taken over, default 2),
-# FREEBUSY_CAPTURE_MAX (most seats captured per run, default 40; the rest print GAP health: capture cap),
+# FREEBUSY_CAPTURE_MAX (most seats captured per run, default 100, split evenly across the clusters read with an unused share passed on; the rest print GAP health: capture cap naming the cluster),
 # FREEBUSY_CAPTURE_TIMEOUT (seconds for the capture and version reads together, default 60),
 # FREEBUSY_TAP_FORMULA (the local file named above),
 # FREEBUSY_DIRECTOR_MCP (default director-mcp on PATH, else
@@ -98,7 +98,7 @@ legacy_conf="$state/freebusy-clusters.conf"
 exclude_file="$state/freebusy-clusters.exclude"
 call_timeout="${FREEBUSY_CALL_TIMEOUT:-20}"
 max_age="${FREEBUSY_ASKS_MAX_AGE:-900}"
-capture_max="${FREEBUSY_CAPTURE_MAX:-40}"
+capture_max="${FREEBUSY_CAPTURE_MAX:-100}"
 capture_timeout="${FREEBUSY_CAPTURE_TIMEOUT:-60}"
 tap_formula="${FREEBUSY_TAP_FORMULA:-}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -117,8 +117,8 @@ if [[ -n "${FREEBUSY_LOCK_STALE_MIN+x}" ]]; then
 fi
 
 if [[ ! "$capture_max" =~ ^[0-9]+$ ]]; then
-  echo "- GAP health: FREEBUSY_CAPTURE_MAX '${capture_max:0:20}' is not a number; using 40"
-  capture_max=40
+  echo "- GAP health: FREEBUSY_CAPTURE_MAX '${capture_max:0:20}' is not a number; using 100"
+  capture_max=100
 fi
 if [[ ! "$capture_timeout" =~ ^[1-9][0-9]*$ ]]; then
   echo "- GAP health: FREEBUSY_CAPTURE_TIMEOUT '${capture_timeout:0:20}' is not a positive integer; using 60"
@@ -543,7 +543,8 @@ if [[ -s "$dir/health.jsonl" ]]; then jq -s -c . "$dir/health.jsonl" >"$tmp/prev
 : >"$tmp/seat.tsv"
 : >"$tmp/health.new"
 capture_skipped=0
-capture_taken=0
+: >"$tmp/cap-skipped.tsv"
+: >"$tmp/cap-counts.tsv"
 while IFS= read -r n; do
   [[ -n "$n" ]] || continue
   sed '/^@@teams$/,$d' "$tmp/$n.out" | awk 'NR == 1 { turn = ($2 == "turn"); next }
@@ -568,16 +569,28 @@ while IFS= read -r n; do
       printf "%s\t%s\t%s\t%s\t%s\t%d\n", ws, name, st, cls, why, quiet
     }' >"$tmp/$n.blk"
   awk -F'\t' -v c="$n" '$3 == "running" && $4 != "" { printf "%s\t%s\t%s\t%s\t%s\tmarvel\n", c, $1, $2, $4, $5 }' "$tmp/$n.blk" >>"$tmp/seat.tsv"
-  : >"$tmp/$n.elig"
-  while IFS=$'\t' read -r ws nm; do
-    if [[ "$capture_taken" -lt "$capture_max" ]]; then
-      printf '%s\t%s\n' "$ws" "$nm" >>"$tmp/$n.elig"
-      capture_taken=$((capture_taken + 1))
-    else
-      capture_skipped=$((capture_skipped + 1))
-    fi
-  done < <(awk -F'\t' '$3 == "running" && $4 == "" && $6 == 1 { printf "%s\t%s\n", $1, $2 }' "$tmp/$n.blk")
+  awk -F'\t' '$3 == "running" && $4 == "" && $6 == 1 { printf "%s\t%s\n", $1, $2 }' "$tmp/$n.blk" >"$tmp/$n.eligall"
+  printf '%s\t%s\n' "$(wc -l <"$tmp/$n.eligall" | tr -d ' ')" "$n" >>"$tmp/cap-counts.tsv"
 done <"$tmp/reached"
+# Each cluster read gets an even share of the cap, the smallest wanting clusters first so that
+# what one leaves unused passes to the rest. No cluster loses its captures to its place in the list.
+cap_left="$capture_max"
+cap_clusters="$(wc -l <"$tmp/cap-counts.tsv" | tr -d ' ')"
+: >"$tmp/cap-order"
+LC_ALL=C sort -t$'\t' -k1,1n -k2,2 "$tmp/cap-counts.tsv" >"$tmp/cap-order"
+while IFS=$'\t' read -r want n; do
+  [[ -n "$n" ]] || continue
+  share=$((cap_left / cap_clusters))
+  take="$want"
+  if [[ "$take" -gt "$share" ]]; then take="$share"; fi
+  awk -v k="$take" 'NR <= k' "$tmp/$n.eligall" >"$tmp/$n.elig"
+  cap_left=$((cap_left - take))
+  cap_clusters=$((cap_clusters - 1))
+  if [[ "$want" -gt "$take" ]]; then
+    printf '%s\t%s\n' "$n" $((want - take)) >>"$tmp/cap-skipped.tsv"
+    capture_skipped=$((capture_skipped + want - take))
+  fi
+done <"$tmp/cap-order"
 
 # The capture classifier: the pane is read from stdin and only a class word is printed. It looks at
 # the last lines only, so the expired-login text quoted higher in a transcript reads nothing.
@@ -663,20 +676,28 @@ unset wait_limit
 
 capture_failed=0
 capture_unfinished=0
+: >"$tmp/cap-unfinished.tsv"
 while IFS= read -r n; do
   [[ -n "$n" ]] || continue
   want="$(wc -l <"$tmp/$n.elig" | tr -d ' ')"
   got=0
   if [[ -f "$tmp/$n.caps" ]]; then got="$(wc -l <"$tmp/$n.caps" | tr -d ' ')"; fi
-  if [[ "$got" -lt "$want" ]]; then capture_unfinished=$((capture_unfinished + want - got)); fi
+  if [[ "$got" -lt "$want" ]]; then
+    capture_unfinished=$((capture_unfinished + want - got))
+    printf '%s\t%s\n' "$n" $((want - got)) >>"$tmp/cap-unfinished.tsv"
+  fi
   if [[ -f "$tmp/$n.caps" ]]; then
     capture_failed=$((capture_failed + $(awk -F'\t' '$3 == "ERR"' "$tmp/$n.caps" | wc -l | tr -d ' ')))
     awk -F'\t' -v c="$n" '$3 != "ERR" && $3 != "none" { printf "%s\t%s\t%s\t%s\t\tcapture\n", c, $1, $2, $3 }' "$tmp/$n.caps" >>"$tmp/seat.tsv"
   fi
 done <"$tmp/reached"
-if [[ "$capture_skipped" -gt 0 ]]; then gap "health: capture cap, $capture_skipped seat(s) not captured (the cap is $capture_max)"; fi
+if [[ "$capture_skipped" -gt 0 ]]; then
+  gap "health: capture cap, $capture_skipped seat(s) not captured (the cap is $capture_max, shared across the clusters read; short: $(awk -F'\t' '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $1, $2 }' "$tmp/cap-skipped.tsv"))"
+fi
 if [[ "$capture_failed" -gt 0 ]]; then gap "health: $capture_failed capture(s) could not be taken"; fi
-if [[ "$capture_unfinished" -gt 0 ]]; then gap "health: $capture_unfinished seat(s) not captured within ${capture_timeout}s"; fi
+if [[ "$capture_unfinished" -gt 0 ]]; then
+  gap "health: $capture_unfinished seat(s) not captured within ${capture_timeout}s (cut short: $(awk -F'\t' '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $1, $2 }' "$tmp/cap-unfinished.tsv"))"
+fi
 
 jq -R -c --arg at "$at" --slurpfile prev "$tmp/prev.json" '
   split("\t") as $f
@@ -686,7 +707,9 @@ jq -R -c --arg at "$at" --slurpfile prev "$tmp/prev.json" '
   | .since = ((($prev[0] // []) | map(select(.kind == "seat" and .cluster == $r.cluster and .workspace == $r.workspace and .seat == $r.seat and .class == $r.class)) | first | .since) // $at)' \
   "$tmp/seat.tsv" >>"$tmp/health.new"
 if [[ "$capture_skipped" -gt 0 ]]; then
-  jq -n -c --arg at "$at" --argjson n "$capture_skipped" '{kind: "gap", at: $at, reason: "capture cap", count: $n}' >>"$tmp/health.new"
+  while IFS=$'\t' read -r c k; do
+    jq -n -c --arg at "$at" --arg c "$c" --argjson n "$k" '{kind: "gap", at: $at, reason: "capture cap", cluster: $c, count: $n}' >>"$tmp/health.new"
+  done <"$tmp/cap-skipped.tsv"
 fi
 
 # reach, with the time the current outage began
