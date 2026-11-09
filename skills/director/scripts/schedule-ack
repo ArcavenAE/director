@@ -12,6 +12,9 @@ result by due plus 2 hours:
 A line reads `scheduled: ROLE firing ID due TIME: REASON`. A firing is acked when a succeeded run of it exists, its
 results file and sha256 line exist, and a ledger row for that role and firing carries the same sha256 as the line.
 The due time is read from the firing id, which marvel makes from the nominal due time; cron is never evaluated.
+The firing checked is the newest one past its grace period that the document names (the current firing and the firings
+of its run records), so a schedule that fires more often than every 2 hours is still checked; a firing the document
+does not name is not guessed.
 
 Reminds only: it writes nothing, runs nothing and gates nothing. An input it cannot read prints
 `scheduled: UNKNOWN (<what>)`, never a pass. Exit 0 whatever it finds; 2 for a usage error.
@@ -101,6 +104,22 @@ def acked(rows, role, firing, sha):
     return "mismatch" if seen else "none"
 
 
+def last_due_firing(current, runs, now):
+    """The newest firing past its grace period that the describe document names: the current firing and the
+    firings of its run records. A firing id that is not a due time is ignored here. None when none is past grace.
+    A schedule that fires more often than every 2 hours has its current firing inside grace, so the current one
+    alone would never print a line."""
+    best, best_due = None, None
+    ids = [current] + [r.get("firing") for r in runs if isinstance(r, dict)]
+    for f in ids:
+        due = parse_firing(f)
+        if due is None or now < due + GRACE:
+            continue
+        if best_due is None or due > best_due:
+            best, best_due = f, due
+    return best
+
+
 def check(args):
     opts, i = {}, 0
     known = ("--describe", "--results-dir", "--ledger", "--now", "--role")
@@ -132,18 +151,19 @@ def check(args):
             continue
         if "--role" in opts and role != opts["--role"]:
             continue
+        runs = s.get("runs") if isinstance(s.get("runs"), list) else []
         firing = s.get("firing")
         if not firing:
             continue
-        due = parse_firing(firing)
-        if due is None:
+        if parse_firing(firing) is None:
             print(f"scheduled: UNKNOWN ({role}: firing id unreadable)")
             continue
-        if now < due + GRACE:
+        firing = last_due_firing(firing, runs, now)
+        if firing is None:
             continue
+        due = parse_firing(firing)
         head = f"scheduled: {role} firing {firing} due {due.strftime('%Y-%m-%dT%H:%M:%SZ')}: "
         tail = " (schedule is stale)" if s.get("stale") is True else ""
-        runs = s.get("runs") if isinstance(s.get("runs"), list) else []
         if not any(isinstance(r, dict) and r.get("firing") == firing and r.get("outcome") == "succeeded" for r in runs):
             print(head + "no succeeded run" + tail)
             continue

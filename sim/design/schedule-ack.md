@@ -31,8 +31,12 @@ time from the id, so it never evaluates cron. A schedule that has not fired has 
 
 ## The rule
 
-For each scheduled role, with `now` supplied by the caller: when `now` is at or after due plus 2 hours and any of
-these holds, print one line.
+For each scheduled role, with `now` supplied by the caller, take the **last due firing**: the newest firing past its
+grace period (due plus 2 hours at or before `now`) among the current `firing` and the firings of the `runs`. A
+schedule that fires more often than every 2 hours has its current firing inside grace, so checking only the current
+one would never print a line. A firing the document does not name is not guessed, since cron is never evaluated: a
+firing that left no run record and is no longer current cannot be seen. When any of these holds for that firing,
+print one line.
 
 | reason | when |
 |---|---|
