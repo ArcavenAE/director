@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""schedule-ack - the sweep line for a scheduled firing with no acked result (sim/design/schedule-ack.md).
+
+  schedule-ack check --describe FILE --results-dir DIR --ledger FILE --now TIME [--role NAME]
+
+Reads three things and prints one line per scheduled role whose last due firing has no succeeded run with an acked
+result by due plus 2 hours:
+  --describe    the JSON `marvel describe team WORKSPACE/TEAM` prints; only its Schedules block is read
+  --results-dir the directory the sweep writes: <firing>.md and <firing>.md.sha256 (a `sha256sum` line)
+  --ledger      a route ledger (JSON lines); a row {scheduled_role, firing_id, results_sha256, acked_at} acks a firing
+  --now         the clock, as YYYY-MM-DDTHH:MM:SSZ (the caller's, so a run is repeatable)
+A line reads `scheduled: ROLE firing ID due TIME: REASON`. A firing is acked when a succeeded run of it exists, its
+results file and sha256 line exist, and a ledger row for that role and firing carries the same sha256 as the line.
+The due time is read from the firing id, which marvel makes from the nominal due time; cron is never evaluated.
+
+Reminds only: it writes nothing, runs nothing and gates nothing. An input it cannot read prints
+`scheduled: UNKNOWN (<what>)`, never a pass. Exit 0 whatever it finds; 2 for a usage error.
+"""
+import datetime
+import json
+import os
+import re
+import sys
+
+GRACE = datetime.timedelta(hours=2)
+TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
+FIRING_RE = re.compile(r"[0-9]{8}T[0-9]{6}Z\Z")
+HEX_RE = re.compile(r"[0-9a-fA-F]{64}\Z")
+
+
+def parse_iso(s):
+    if not isinstance(s, str) or not TIME_RE.match(s):
+        return None
+    try:
+        return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+
+
+def parse_firing(s):
+    if not isinstance(s, str) or not FIRING_RE.match(s):
+        return None
+    try:
+        return datetime.datetime.strptime(s, "%Y%m%dT%H%M%SZ").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+
+
+def read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def recorded_sha(results_dir, firing):
+    """(state, sha): state is ok, no-results-file or no-sha-line."""
+    md = os.path.join(results_dir, f"{firing}.md")
+    if not os.path.isfile(md):
+        return "no-results-file", None
+    try:
+        with open(md + ".sha256", encoding="utf-8") as f:
+            first = f.readline().split()
+    except (OSError, UnicodeDecodeError):
+        return "no-sha-line", None
+    if not first or not HEX_RE.match(first[0]):
+        return "no-sha-line", None
+    return "ok", first[0].lower()
+
+
+def ledger_rows(path):
+    """The rows of the ledger, or None when it cannot be read. A line that is not JSON is skipped."""
+    rows = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict):
+                    rows.append(r)
+    except (OSError, UnicodeDecodeError):
+        return None
+    return rows
+
+
+def acked(rows, role, firing, sha):
+    """(state): acked, none or mismatch, over the rows for this role and firing that carry acked_at."""
+    seen = False
+    for r in rows:
+        if r.get("scheduled_role") != role or r.get("firing_id") != firing:
+            continue
+        if not isinstance(r.get("acked_at"), str) or not r["acked_at"]:
+            continue
+        seen = True
+        h = r.get("results_sha256")
+        if isinstance(h, str) and h.lower() == sha:
+            return "acked"
+    return "mismatch" if seen else "none"
+
+
+def check(args):
+    opts, i = {}, 0
+    known = ("--describe", "--results-dir", "--ledger", "--now", "--role")
+    while i < len(args):
+        if args[i] in known and i + 1 < len(args):
+            opts[args[i]] = args[i + 1]
+            i += 2
+        else:
+            return usage("unknown or incomplete option")
+    for need in ("--describe", "--results-dir", "--ledger", "--now"):
+        if need not in opts:
+            return usage(f"check needs {need}")
+    now = parse_iso(opts["--now"])
+    if now is None:
+        return usage("--now is YYYY-MM-DDTHH:MM:SSZ")
+    doc = read_json(opts["--describe"])
+    if not isinstance(doc, dict):
+        print("scheduled: UNKNOWN (describe unreadable)")
+        return 0
+    schedules = doc.get("Schedules")
+    if not isinstance(schedules, list):
+        return 0
+    rows, rows_read = None, False
+    for s in schedules:
+        if not isinstance(s, dict):
+            continue
+        role = s.get("role")
+        if not isinstance(role, str) or not role:
+            continue
+        if "--role" in opts and role != opts["--role"]:
+            continue
+        firing = s.get("firing")
+        if not firing:
+            continue
+        due = parse_firing(firing)
+        if due is None:
+            print(f"scheduled: UNKNOWN ({role}: firing id unreadable)")
+            continue
+        if now < due + GRACE:
+            continue
+        head = f"scheduled: {role} firing {firing} due {due.strftime('%Y-%m-%dT%H:%M:%SZ')}: "
+        tail = " (schedule is stale)" if s.get("stale") is True else ""
+        runs = s.get("runs") if isinstance(s.get("runs"), list) else []
+        if not any(isinstance(r, dict) and r.get("firing") == firing and r.get("outcome") == "succeeded" for r in runs):
+            print(head + "no succeeded run" + tail)
+            continue
+        state, sha = recorded_sha(opts["--results-dir"], firing)
+        if state == "no-results-file":
+            print(head + "no results file" + tail)
+            continue
+        if state == "no-sha-line":
+            print(head + "results file has no sha256 line" + tail)
+            continue
+        if not rows_read:
+            rows, rows_read = ledger_rows(opts["--ledger"]), True
+        if rows is None:
+            print("scheduled: UNKNOWN (route ledger unreadable)")
+            continue
+        verdict = acked(rows, role, firing, sha)
+        if verdict == "none":
+            print(head + "no ack in the route ledger" + tail)
+        elif verdict == "mismatch":
+            print(head + "the ack in the route ledger does not match the results" + tail)
+    return 0
+
+
+def usage(msg=""):
+    if msg:
+        print(f"schedule-ack: {msg}", file=sys.stderr)
+    print("usage: schedule-ack check --describe FILE --results-dir DIR --ledger FILE --now TIME [--role NAME]", file=sys.stderr)
+    return 2
+
+
+def main(argv):
+    if not argv:
+        return usage()
+    if argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    if argv[0] != "check":
+        return usage("unknown command")
+    return check(argv[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

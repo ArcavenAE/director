@@ -1,0 +1,29 @@
+{
+  "Name": "placeholder-team",
+  "Schedules": [
+    {
+      "role": "placeholder-sweep",
+      "cron": "0 11 * * 1-5",
+      "timezone": "Etc/UTC",
+      "stale_after": "30h0m0s",
+      "next_due": "2030-01-04T11:00:00Z",
+      "firing": "20300103T110000Z",
+      "since": "2030-01-01T00:00:00Z",
+      "last_succeeded_at": "2030-01-02T11:09:00Z",
+      "stale": false,
+      "runs": [
+        {
+          "session": "placeholder-session-2",
+          "firing": "20300102T110000Z",
+          "due_at": "2030-01-02T11:00:00Z",
+          "started_at": "2030-01-02T11:00:05Z",
+          "ended_at": "2030-01-02T11:09:00Z",
+          "outcome": "succeeded",
+          "tokens": {"prompt": 0, "out": 0, "metered": false},
+          "result_truncated": false,
+          "duration": "8m55s"
+        }
+      ]
+    }
+  ]
+}

@@ -184,6 +184,11 @@ done < <(
 grep -qF "$BINHOME/route-ledger" "$skill" && ok "skill calls route-ledger from the bin home" || bad "skill calls route-ledger from the bin home"
 [[ -x "$here/skills/director/scripts/route-ledger" ]] && ok "the fallback scripts/route-ledger exists in the checkout" || bad "the fallback scripts/route-ledger exists in the checkout"
 [[ -f "$cp_home/director/bin/route-ledger" && ! -L "$cp_home/director/bin/route-ledger" && -x "$cp_home/director/bin/route-ledger" ]] && ok "copy install puts a real executable route-ledger in the bin home" || bad "copy install puts a real executable route-ledger in the bin home"
+# schedule-ack (H-6): installed, executable, called by the skill from the bin home, with its fallback in the checkout.
+[[ -x "$clean/director/bin/schedule-ack" ]] && ok "install puts schedule-ack in the bin home, executable" || bad "install puts schedule-ack in the bin home, executable"
+grep -qF "$BINHOME/schedule-ack" "$skill" && ok "skill calls schedule-ack from the bin home" || bad "skill calls schedule-ack from the bin home"
+[[ -x "$here/skills/director/scripts/schedule-ack" ]] && ok "the fallback scripts/schedule-ack exists in the checkout" || bad "the fallback scripts/schedule-ack exists in the checkout"
+[[ -f "$cp_home/director/bin/schedule-ack" && ! -L "$cp_home/director/bin/schedule-ack" && -x "$cp_home/director/bin/schedule-ack" ]] && ok "copy install puts a real executable schedule-ack in the bin home" || bad "copy install puts a real executable schedule-ack in the bin home"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

@@ -491,6 +491,16 @@ route and the acked and closed times. To read a ledger the same way whatever its
 reads the file and writes nothing; legacy rows are counted, and a refused row names its line and one field and
 reason, never the value. Depth that was not recorded reads as unknown, not zero.
 
+## Scheduled firings with no acked result
+
+A scheduled role that succeeded but whose result nobody acknowledged is a reminder under waiting on you, not an
+alarm. `${DIRECTOR_HOME:-$HOME/.director}/bin/schedule-ack check --describe FILE --results-dir DIR --ledger FILE --now TIME`
+reads `marvel describe team WORKSPACE/TEAM` (saved to FILE), the sweep's results directory and the supervisor's
+route ledger, and prints one `scheduled: ROLE firing ID due TIME: REASON` line per role whose last due firing has no
+succeeded run with an acked result by due plus 2 hours. Show those lines under waiting on you. It writes nothing,
+never runs or gates, and an input it cannot read prints `scheduled: UNKNOWN (...)`. The contract is
+`sim/design/schedule-ack.md`; the results file and ack row it reads wait on other work, so a live run finds none.
+
 ## Relaying
 
 Interpreting is the job. You exist because the human has one attention budget
