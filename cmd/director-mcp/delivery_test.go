@@ -59,8 +59,8 @@ func TestDeliveryOfReadsTheStreamAndTheCoveringDurables(t *testing.T) {
 func TestSendRecordsPruneAtTheInboxMaxAgePlusADay(t *testing.T) {
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 	l := newAskLedger()
-	l.Sends["keep"] = sendRec{Seq: 1, At: now.Add(-inboxMaxAge - 23*time.Hour)}
-	l.Sends["drop"] = sendRec{Seq: 2, At: now.Add(-inboxMaxAge - 25*time.Hour)}
+	l.Sends["keep"] = sendRec{Seq: 1, At: now.Add(-inboxMaxAge() - 23*time.Hour)}
+	l.Sends["drop"] = sendRec{Seq: 2, At: now.Add(-inboxMaxAge() - 25*time.Hour)}
 	l.Sweep(now)
 	if _, ok := l.Sends["keep"]; !ok {
 		t.Error("a send inside inboxMaxAge plus a day was pruned")

@@ -114,13 +114,14 @@ type Bus struct {
 	testAfterAck   func(ctx context.Context)
 }
 
-// localConsumerInactive is the local durable's inactive threshold. The inbox
-// declares a 168h max age (docs/getting-started.md), so a durable cleaned up
+// localConsumerInactive is the local durable's inactive threshold. The setup
+// example gives the inbox a 168h max age (docs/getting-started.md; the live
+// stream's own value is read at startup, inboxage.go), so a durable cleaned up
 // after a longer idle window can only ever have replayed messages that already
 // expired, and a live seat's durable outlasts its mail (aae-orc-t77rr). It is
 // what keeps superseded instances' durables from accumulating, the same
 // reasoning as globalConsumerInactive. TestLocalInactiveOutlastsInboxMaxAge
-// reads the declared max age and fails if the two drift.
+// reads the example's max age and fails if the two drift.
 const localConsumerInactive = 8 * 24 * time.Hour
 
 // dial opens the NATS connection and JetStream context, presenting the R-77

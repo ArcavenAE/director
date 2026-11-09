@@ -210,6 +210,8 @@ func main() {
 		os.Exit(1)
 	}
 	defer bus.close()
+	// The inbox lifetime is read from the stream itself, not assumed (aae-orc-t77rr).
+	adoptInboxMaxAge(ctx, bus.js, logf)
 	// Remove rows a dead predecessor left, before the first write, so the
 	// roster never lists this seat twice (aae-orc-4unyk).
 	bus.reapDeadPredecessors(ctx, logf)

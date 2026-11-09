@@ -71,6 +71,12 @@ nats stream add AGENT_AUDIT --subjects 'agent.audit' --storage file --retention 
 nats kv add AGENT_STATE --ttl 90s --storage file
 ```
 
+The `--max-age` on `AGENT_INBOX` is yours to set; 168h is only the example.
+`director-mcp` reads the stream's own `max_age` when it starts, uses that for
+how long it keeps its send records, and logs the value it read. If it cannot
+read the stream, or the stream has no max age, it falls back to 168h and logs a
+warning. It never changes the stream.
+
 Verify:
 
 ```sh
