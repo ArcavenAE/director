@@ -100,6 +100,8 @@ install_one "$SRC/skills/director/scripts/standing-hook" "$DIRECTOR_HOME/bin/sta
 # director-session starts one director session by hand with the channel cue bound when asked; a
 # plain `claude` never binds it.
 install_one "$SRC/skills/director/scripts/director-session" "$DIRECTOR_HOME/bin/director-session"
+# route-ledger reads a supervisor route ledger by the shared shape (rlel4); the skill names it by its bin-home path.
+install_one "$SRC/skills/director/scripts/route-ledger" "$DIRECTOR_HOME/bin/route-ledger"
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"

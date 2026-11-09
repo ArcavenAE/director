@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""route-ledger - read a supervisor's route ledger by the shared shape (sim/design/route-ledger.md).
+
+  route-ledger check FILE [--json]   check every row of FILE (JSON lines) against route-record@1 or route-event@1,
+                                     accept the legacy shapes ledgers hold today and count them, and print the counts:
+                                       route-ledger: rows N, asks N, routed N, acked N, closed N, cancelled N, open N,
+                                       depth known K of R, event@1 N, legacy N, refused N
+                                     (--json prints the same counts as one object)
+  route-ledger --help
+
+Read-only: it reads the one file it is given and writes nothing. A row it refuses is reported on stderr as
+`route-ledger: refused: row <line>: <field>:<reason>` with fixed words and never the value; the other rows are still
+read. Exit 0 when no row was refused, 1 when one was, 2 for a usage error or an unreadable file.
+
+A row with `routed_to` is a route-record@1; a row with `kind` is a route-event@1; a row with `event`, `result`,
+`note` or `closed_at` and neither of those is a legacy row (counted, not refused). Anything else is unrecognized.
+"""
+import json
+import os
+import re
+import sys
+
+LINE_MAX = 65536
+FILE_MAX = 32 * 1024 * 1024
+TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
+KINDS = ("ack", "relay", "note", "close", "cancel")
+RECORD_REQUIRED = ("ask_id", "routed_to", "basis", "principal", "supervisor_epoch", "routed_at")
+RECORD_TIMES = ("routed_at", "acked_at", "cancelled_at")
+LEGACY_KEYS = ("event", "result", "note", "closed_at")
+
+
+class Refused(Exception):
+    def __init__(self, field, reason):
+        super().__init__(f"{field}:{reason}")
+
+
+def text(v):
+    return isinstance(v, str) and v.strip() != ""
+
+
+def need(row, field):
+    if not text(row.get(field)):
+        raise Refused(field, "missing")
+
+
+def time_ok(row, field):
+    v = row.get(field)
+    if v is None:
+        return
+    if not isinstance(v, str) or not TIME_RE.match(v):
+        raise Refused(field, "time")
+    mo, d, h = int(v[5:7]), int(v[8:10]), int(v[11:13])
+    mi, s = int(v[14:16]), int(v[17:19])
+    if not (1 <= mo <= 12 and 1 <= d <= 31 and h <= 23 and mi <= 59 and s <= 60):
+        raise Refused(field, "time")
+
+
+def depth_ok(row, field):
+    if field in row and row[field] is not None:
+        v = row[field]
+        if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+            raise Refused(field, "number")
+
+
+def check_record(row):
+    for f in RECORD_REQUIRED:
+        need(row, f)
+    for f in RECORD_TIMES:
+        time_ok(row, f)
+    depth_ok(row, "depth_at_route")
+    depth_ok(row, "depth_observed")
+    alt = row.get("alternatives")
+    if alt is not None and not (isinstance(alt, list) and all(isinstance(x, str) for x in alt)):
+        raise Refused("alternatives", "shape")
+    nr = row.get("no_route")
+    if nr is not None and not isinstance(nr, (dict, str)):
+        raise Refused("no_route", "shape")
+
+
+def check_event(row):
+    need(row, "ask_id")
+    need(row, "supervisor_epoch")
+    if row.get("kind") not in KINDS:
+        raise Refused("kind", "unknown")
+    need(row, "at")
+    time_ok(row, "at")
+    kind = row["kind"]
+    if kind != "close":
+        need(row, "text")
+    if kind == "ack":
+        need(row, "acked_at")
+        time_ok(row, "acked_at")
+    if kind == "close":
+        need(row, "closed_at")
+        time_ok(row, "closed_at")
+        need(row, "result")
+
+
+def check_legacy(row):
+    if "ask_id" in row:
+        need(row, "ask_id")
+    for f in ("at", "acked_at", "closed_at"):
+        time_ok(row, f)
+    for f in LEGACY_KEYS:
+        if f in row and not isinstance(row[f], str):
+            raise Refused(f, "shape")
+
+
+def check_file(path):
+    c = {"rows": 0, "asks": set(), "routed": set(), "acked": set(), "closed": set(), "cancelled": set(),
+         "depth_known": 0, "depth_total": 0, "event_v1": 0, "legacy": 0, "refused": 0}
+    msgs = []
+
+    def note(ask, key):
+        if text(ask):
+            c[key].add(ask)
+
+    with open(path, "rb") as f:
+        n = 0
+        for raw in f:
+            n += 1
+            if not raw.strip():
+                continue
+            c["rows"] += 1
+            try:
+                if len(raw) > LINE_MAX:
+                    raise Refused("row", "length")
+                try:
+                    row = json.loads(raw.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    raise Refused("row", "json")
+                if not isinstance(row, dict):
+                    raise Refused("row", "shape")
+                if "routed_to" in row:
+                    check_record(row)
+                    c["asks"].add(row["ask_id"]); c["routed"].add(row["ask_id"])
+                    c["depth_total"] += 1
+                    if isinstance(row.get("depth_at_route"), int) and not isinstance(row.get("depth_at_route"), bool):
+                        c["depth_known"] += 1
+                    if row.get("acked_at"):
+                        note(row["ask_id"], "acked")
+                    if row.get("cancelled_at"):
+                        note(row["ask_id"], "cancelled")
+                elif "kind" in row:
+                    check_event(row)
+                    c["event_v1"] += 1
+                    note(row["ask_id"], "asks")
+                    k = row["kind"]
+                    if k == "ack":
+                        note(row["ask_id"], "acked")
+                    elif k == "close":
+                        note(row["ask_id"], "closed")
+                    elif k == "cancel":
+                        note(row["ask_id"], "cancelled")
+                elif any(k in row for k in LEGACY_KEYS):
+                    check_legacy(row)
+                    c["legacy"] += 1
+                    note(row.get("ask_id"), "asks")
+                    if row.get("acked_at"):
+                        note(row.get("ask_id"), "acked")
+                    if "result" in row or "closed_at" in row:
+                        note(row.get("ask_id"), "closed")
+                else:
+                    raise Refused("row", "unrecognized")
+            except Refused as e:
+                c["refused"] += 1
+                msgs.append(f"route-ledger: refused: row {n}: {e}")
+    return c, msgs
+
+
+def summarize(c):
+    openn = len(c["routed"] - c["closed"] - c["cancelled"])
+    return {"rows": c["rows"], "asks": len(c["asks"]), "routed": len(c["routed"]), "acked": len(c["acked"]),
+            "closed": len(c["closed"]), "cancelled": len(c["cancelled"]), "open": openn,
+            "depth_known": c["depth_known"], "depth_total": c["depth_total"], "event_v1": c["event_v1"],
+            "legacy": c["legacy"], "refused": c["refused"]}
+
+
+def usage(msg=""):
+    if msg:
+        print(f"route-ledger: {msg}", file=sys.stderr)
+    print("usage: route-ledger check FILE [--json]", file=sys.stderr)
+    return 2
+
+
+def main(argv):
+    if not argv:
+        return usage()
+    if argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    if argv[0] != "check":
+        return usage("unknown command")
+    args = argv[1:]
+    as_json = "--json" in args
+    args = [a for a in args if a != "--json"]
+    if len(args) != 1 or args[0].startswith("--"):
+        return usage("check takes one FILE")
+    try:
+        if not os.path.isfile(args[0]) or os.path.getsize(args[0]) > FILE_MAX:
+            return usage("FILE is not a readable ledger")
+        c, msgs = check_file(args[0])
+    except OSError:
+        return usage("FILE is not a readable ledger")
+    for m in msgs:
+        print(m, file=sys.stderr)
+    s = summarize(c)
+    if as_json:
+        print(json.dumps(s))
+    else:
+        print(f"route-ledger: rows {s['rows']}, asks {s['asks']}, routed {s['routed']}, acked {s['acked']}, "
+              f"closed {s['closed']}, cancelled {s['cancelled']}, open {s['open']}, depth known {s['depth_known']} of "
+              f"{s['depth_total']}, event@1 {s['event_v1']}, legacy {s['legacy']}, refused {s['refused']}")
+    return 1 if s["refused"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

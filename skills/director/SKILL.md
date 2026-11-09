@@ -464,6 +464,15 @@ nothing. This is guidance, not a template. A weak episode is corrected in the
 seat's notes and handoff. A change to a role or identity file goes only as a
 proposal through ratification, and a seat is never retired over one episode.
 
+## Route ledger: one shape for every supervisor
+
+A supervisor's route ledger is JSON lines in the shape `sim/design/route-ledger.md` defines: a route-record@1 per
+routing decision and a route-event@1 per later event (ack, relay, note, close, cancel), with the queue depth at
+route and the acked and closed times. To read a ledger the same way whatever its age, run
+`${DIRECTOR_HOME:-$HOME/.director}/bin/route-ledger check FILE` (`--json` for the counts as one object). It
+reads the file and writes nothing; legacy rows are counted, and a refused row names its line and one field and
+reason, never the value. Depth that was not recorded reads as unknown, not zero.
+
 ## Relaying
 
 Interpreting is the job. You exist because the human has one attention budget

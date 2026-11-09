@@ -179,5 +179,11 @@ done < <(
     done
   } | sort -u)
 
+# route-ledger (rlel4): installed, executable, called by the skill from the bin home, with its fallback in the checkout.
+[[ -x "$clean/director/bin/route-ledger" ]] && ok "install puts route-ledger in the bin home, executable" || bad "install puts route-ledger in the bin home, executable"
+grep -qF "$BINHOME/route-ledger" "$skill" && ok "skill calls route-ledger from the bin home" || bad "skill calls route-ledger from the bin home"
+[[ -x "$here/skills/director/scripts/route-ledger" ]] && ok "the fallback scripts/route-ledger exists in the checkout" || bad "the fallback scripts/route-ledger exists in the checkout"
+[[ -f "$cp_home/director/bin/route-ledger" && ! -L "$cp_home/director/bin/route-ledger" && -x "$cp_home/director/bin/route-ledger" ]] && ok "copy install puts a real executable route-ledger in the bin home" || bad "copy install puts a real executable route-ledger in the bin home"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
