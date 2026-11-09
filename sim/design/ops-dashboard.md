@@ -127,15 +127,15 @@ the session row builder, and `internal/api` for the values):
 - HEALTH is one base word, `alive`, `healthy`, `unhealthy` or `unknown` (`alive` is what a process-alive role reads once marvel#968 merges), then in
   this order, each at most once:
   - ` (stalled)`;
-  - then at most one of ` (logged-out)`, ` (unwatched)` or ` (parked: <reason>)`.
+  - then at most one of ` (logged-out)`, ` (unwatched)`, ` (unprompted)` or ` (parked: <reason>)`.
     marvel sets them from one harness reading or one coverage reading, so two
     of them never appear together. The writer refuses `(stalled)` or
-    `(unwatched)` after a parked reason, and `(unwatched)` or `(logged-out)`
-    followed by another member. A `(logged-out)` after a parked reason is not
+    `(unwatched)` or `(unprompted)` after a parked reason, and `(unwatched)`,
+    `(unprompted)` or `(logged-out)` followed by another member. A `(logged-out)` after a parked reason is not
     refused: the reason runs to the last `)` of the cell, so it is read as
     part of the reason and written as ` (parked)`, as before.
     ` (unwatched)` marks a seat that no watcher covers, or whose control check
-    failed. The reason after `parked` is free text and runs to the last
+    failed. ` (unprompted)` marks a seat with no stored harness state. The reason after `parked` is free text and runs to the last
     `)` of the cell; the writer drops it and writes ` (parked)`.
   So `healthy (stalled) (parked: <reason>)` is written as
   `healthy (stalled) (parked)`, and `unhealthy (stalled) (unwatched)` is
@@ -309,7 +309,9 @@ not part of this build.
      the row.
    - A HEALTH of `healthy (parked: x) (stalled)` (wrong order), of
      `healthy (unwatched) (parked: x)` or `healthy (parked: x) (unwatched)`
-     (two members of the one slot), or of `healthy (unwatched) (stalled)`
+     (two members of the one slot), of `healthy (unprompted) (unwatched)` or
+     `healthy (parked: x) (unprompted)` (the same), or of
+     `healthy (unwatched) (stalled)` or `healthy (unprompted) (stalled)`
      (wrong order) writes `unreadable`; a `last_active` over 40 characters writes `unreadable`; an
      unknown area writes `unlabelled`. Each is counted in `refusal`, and the
      page never shows the failed text.

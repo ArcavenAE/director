@@ -90,6 +90,13 @@ type cueSource interface {
 	oldestMeta(ctx context.Context) (*cueMeta, error)
 }
 
+// laneSource is the optional second half of a cue source: how many replies to
+// open asks are waiting, and the oldest of them. A source that does not
+// implement it has no lane, and the cue keeps its ordinary schedule.
+type laneSource interface {
+	laneOpen(ctx context.Context) (int, *laneItem)
+}
+
 type pendingCue struct {
 	first   time.Time // when the cue first went out; the back-off runs from it
 	meta    *cueMeta
@@ -100,13 +107,19 @@ type pendingCue struct {
 }
 
 // cueBackOffLimit is how long after the first cue an unanswered cue is re-sent
-// before one INFORM goes to director and the cue stops (I-69 D-9, the
-// operator's answer on card i69-4: "Back off for 24 hours, then notify
+// before one INFORM goes to director and the cue stops (aae-orc-u90tt, the
+// operator's answer: "Back off for 24 hours, then notify
 // director"). Both numbers are proposals.
 const cueBackOffLimit = 24 * time.Hour
 
 // recueOffset is when, after the first cue, the i-th re-cue is due: at W, 4W
 // and 8W, then every hour. The warnings stay at W and 2W.
+// laneRecueOffset is the schedule while a lane item is open: the cue does not
+// back off, so the i-th re-cue is due at (i+1)W: W, 2W, 3W and on.
+func laneRecueOffset(window time.Duration, i int) time.Duration {
+	return time.Duration(i+1) * window
+}
+
 func recueOffset(window time.Duration, i int) time.Duration {
 	switch i {
 	case 0:
@@ -423,6 +436,17 @@ func (c *cue) tick(ctx context.Context) {
 	}
 
 	n, err := c.src.count(ctx)
+	// The lane is read only once a cue has been out for a window, since only the
+	// re-cue schedule uses it.
+	laneN, laneOldest := 0, (*laneItem)(nil)
+	if ls, ok := c.src.(laneSource); ok {
+		c.mu.Lock()
+		due := c.out != nil && c.now().Sub(c.out.first) >= c.cfg.Window
+		c.mu.Unlock()
+		if due {
+			laneN, laneOldest = ls.laneOpen(ctx)
+		}
+	}
 	c.mu.Lock()
 	if err != nil {
 		// Skip the tick, so a transient error cannot read as a drop. Show it
@@ -478,8 +502,12 @@ func (c *cue) tick(ctx context.Context) {
 			}
 			// After a gap in the ticks every overdue offset has passed:
 			// catch up to the last one and send once, not one per tick.
+			offset := func(i int) time.Duration { return recueOffset(c.cfg.Window, i) }
+			if laneN > 0 {
+				offset = func(i int) time.Duration { return laneRecueOffset(c.cfg.Window, i) }
+			}
 			k := c.out.recues
-			for age >= recueOffset(c.cfg.Window, k) {
+			for age >= offset(k) {
 				k++
 			}
 			if k > c.out.recues {
@@ -517,6 +545,11 @@ func (c *cue) tick(ctx context.Context) {
 	if recue != nil && !sendNew {
 		c.mu.Lock()
 		p := c.params(recue.meta, recue.count, now)
+		if laneN > 0 && laneOldest != nil {
+			if m, ok := p["meta"].(map[string]any); ok {
+				m["lane_oldest"], m["lane_ask"], m["lane_open"] = laneOldest.MessageID, laneOldest.AskID, fmt.Sprint(laneN)
+			}
+		}
 		recue.recues = recueTo
 		c.lastCueAt = now
 		c.mu.Unlock()
@@ -585,6 +618,27 @@ func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
 		}
 	}
 	return nil, err
+}
+
+// laneOpen builds the lane from what is waiting, as inbox_summary does, and
+// returns its size and its oldest item. It reads and acks nothing.
+func (s busCueSource) laneOpen(ctx context.Context) (int, *laneItem) {
+	items, _, _, err := peekWaiting(ctx, s.b.js, s.b.cons(), "local", summaryDefault)
+	if err != nil {
+		return 0, nil
+	}
+	if s.b.globalCfg != nil {
+		if g, gerr := s.b.globalReady(ctx); gerr == nil {
+			if gitems, _, _, gerr := peekWaiting(ctx, g.js, g.cons(), "global", summaryDefault); gerr == nil {
+				items = append(items, gitems...)
+			}
+		}
+	}
+	l := loadLane(items, time.Now())
+	if len(l.Items) == 0 {
+		return 0, nil
+	}
+	return len(l.Items), &l.Items[0]
 }
 
 // oldestMetaOn reads the oldest waiting message on one tier, the one the

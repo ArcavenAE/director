@@ -18,7 +18,7 @@ type sendRec struct {
 
 // sendKeep is how long a send record is kept: the inbox's max age plus a day,
 // so a send is still answerable for a day after the stream dropped it.
-const sendKeep = inboxMaxAge + 24*time.Hour
+func sendKeep() time.Duration { return inboxMaxAge() + 24*time.Hour }
 
 // sendsMax caps the records kept, oldest dropped first, so the stored value
 // stays well inside a KV value's size limit.

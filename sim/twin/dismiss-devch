@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""dismiss-devch - answer Claude Code's development-channels prompt for one cue seat.
+
+cast-launch.sh starts this in the background, just before it execs claude, for a
+seat whose channel cue is on. Such a seat is started with
+--dangerously-load-development-channels, which stops at a prompt:
+
+  WARNING: Loading development channels ... Channels: server:director
+  1. I am using this for local development / 2. Exit
+
+and waits for a key. The operator ruled on 2026-11-09 that the launcher may press
+option 1 itself (aae-orc-d3rel, route R4). This is a separate file so the launchers
+keep naming no keystroke tool (verify-director-session.sh checks that).
+
+  dismiss-devch --pane <tmux-target> [--tmux-arg ARG ...]
+
+It captures the pane every DIRECTOR_DEVCH_POLL seconds (default 0.5) for at most
+DIRECTOR_DEVCH_DEADLINE seconds (default 90) and classes each capture:
+
+  DIALOG    the lines below, whole, in order, with option 1 carrying the cursor mark,
+            and nothing after option 2 but blank lines and key hints: press once.
+  MISMATCH  the title line is there but the rest is not exactly as written (the text
+            drifted, the channel list is not ours, option 1 is not highlighted): report
+            and exit 2 at once. It presses nothing.
+  OTHER     anything else (a trust prompt, a login screen, a composer, the dialog text
+            quoted above a composer): press nothing, keep polling, and give up at the
+            deadline (exit 1). A capture that is already an empty composer ends it at
+            once (exit 0).
+
+After the one press it waits up to DIRECTOR_DEVCH_AFTER seconds (default 15) for the
+dialog to go and composer-check to read an empty composer. It never sends a second key.
+If the key did nothing it says so (exit 3), so a wrong key is reported, not retried.
+
+Every capture and composer-check call is bounded by CALL_TIMEOUT (10 s) and by the
+time the current wait has left, so a hung tmux cannot outlive the deadline. A capture
+or composer-check that times out reads as "not this screen". The one send-keys runs
+under CALL_TIMEOUT alone, so a dialog seen near the deadline still gets its key; one
+that times out is exit 4, reported with the limit it ran under, and the key is never
+sent a second time.
+
+Exit codes: 0 done, 1 gave up, 2 text did not match, 3 pressed but not confirmed,
+4 the key could not be sent.
+
+The key is NOT yet measured against a real prompt: the digit below is what
+composer-check's menu takes, and the first real cue-seat cast will show whether this
+dialog takes it. PRESS_KEY is the one place to change if it does not.
+"""
+import argparse
+import os
+import signal
+import subprocess
+import sys
+import time
+
+# The one key pressed on option 1. A digit, never Enter: a digit does nothing on a
+# screen that is not the dialog, while Enter would submit whatever is in a composer.
+PRESS_KEY = "1"
+
+# The longest any one tmux or composer-check call may run, in seconds. A call is
+# also cut short by the time its wait has left, except the one key press, which runs
+# under this limit alone.
+CALL_TIMEOUT = 10.0
+
+TITLE = "WARNING: Loading development channels"
+CHANNELS = "Channels: server:director"
+OPTION1 = "1. I am using this for local development"
+OPTION2 = "2. Exit"
+CURSOR_MARKS = "❯>›►▶"  # the highlighted option starts with one of these
+HINT_WORDS = ("Enter to confirm", "Esc")
+
+
+def say(msg):
+    print(msg, flush=True)
+
+
+def norm(line):
+    return line.strip().lstrip(CURSOR_MARKS).strip()
+
+
+def classify(text):
+    """Return ("dialog" | "mismatch" | "other", detail)."""
+    lines = text.splitlines()
+    titles = [i for i, ln in enumerate(lines) if norm(ln) == TITLE]
+    if not titles:
+        return "other", ""
+    i = titles[0]
+    at = {}
+    for name, want in (("channels", CHANNELS), ("option1", OPTION1), ("option2", OPTION2)):
+        j = next((k for k in range(i + 1, len(lines)) if norm(lines[k]) == want), None)
+        if j is None:
+            shown = [ln.strip() for ln in lines[i:i + 14] if ln.strip()]
+            return "mismatch", "no line " + repr(want) + " after the title; saw: " + " | ".join(shown)
+        at[name] = j
+        i = j
+    if not (at["channels"] < at["option1"] < at["option2"]):
+        return "mismatch", "the lines are out of order"
+    tail = [ln for ln in lines[at["option2"] + 1:] if ln.strip()]
+    if any(not any(w in ln for w in HINT_WORDS) for ln in tail):
+        return "other", "text after option 2"
+    if lines[at["option1"]].strip()[:1] not in CURSOR_MARKS:
+        return "mismatch", "option 1 is not highlighted"
+    return "dialog", ""
+
+
+def run_bounded(cmd, limit):
+    """Run cmd, give it at most limit seconds, and return (returncode, stdout, stderr).
+
+    A command that is still running at the limit is killed with its whole process
+    group (tmux, or a composer-check that has started its own tmux) and reported as
+    returncode None, so a hung tmux cannot hold the helper past its deadline.
+    """
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, errors="replace", start_new_session=True)
+    except OSError as e:
+        return 127, "", str(e)
+    try:
+        out, err = p.communicate(timeout=limit)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            p.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        return None, "", ""
+    return p.returncode, out, err
+
+
+class Pane:
+    def __init__(self, pane, tmux_args, call_timeout):
+        self.pane = pane
+        self.tmux_args = tmux_args
+        self.call_timeout = call_timeout
+        self.until = None  # monotonic time the current wait ends; calls are clamped to it
+
+    def limit(self):
+        if self.until is None:
+            return self.call_timeout
+        return max(0.1, min(self.call_timeout, self.until - time.monotonic()))
+
+    def capture(self):
+        rc, out, _ = run_bounded(["tmux", *self.tmux_args, "capture-pane", "-p", "-t", self.pane],
+                                 self.limit())
+        return out if rc == 0 else ""
+
+    def press(self, key):
+        # The one press runs under its own bound, not what the wait before it has
+        # left: a dialog first seen near that wait's deadline must still get its key.
+        limit = self.call_timeout
+        rc, _, err = run_bounded(["tmux", *self.tmux_args, "send-keys", "-t", self.pane, key],
+                                 limit)
+        if rc is None:
+            return False, "timed out after %g s; the key may or may not have reached the pane" % limit
+        return rc == 0, err.strip()
+
+    def composer_empty(self, checker):
+        cmd = [checker, "--pane", self.pane] + ["--tmux-arg=" + a for a in self.tmux_args]
+        rc, _, _ = run_bounded(cmd, self.limit())
+        return rc == 0
+
+
+def first_line(text):
+    for ln in text.splitlines():
+        if ln.strip():
+            return ln.strip()
+    return "(blank)"
+
+
+def find_checker():
+    env = os.environ.get("DIRECTOR_DEVCH_COMPOSER_CHECK")
+    if env:
+        return env
+    here = os.path.dirname(os.path.realpath(__file__))
+    home = os.environ.get("DIRECTOR_HOME") or os.path.join(os.path.expanduser("~"), ".director")
+    for cand in (os.path.join(here, "composer-check"),
+                 os.path.join(here, "..", "..", "skills", "director", "scripts", "composer-check"),
+                 os.path.join(home, "bin", "composer-check")):
+        if os.access(cand, os.X_OK):
+            return cand
+    return "composer-check"
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="dismiss-devch")
+    ap.add_argument("--pane", required=True)
+    ap.add_argument("--tmux-arg", action="append", default=[])
+    a = ap.parse_args()
+    deadline = float(os.environ.get("DIRECTOR_DEVCH_DEADLINE", "90"))
+    poll = float(os.environ.get("DIRECTOR_DEVCH_POLL", "0.5"))
+    after = float(os.environ.get("DIRECTOR_DEVCH_AFTER", "15"))
+    checker = find_checker()
+    pane = Pane(a.pane, a.tmux_arg, CALL_TIMEOUT)
+
+    start = time.monotonic()
+    pane.until = start + deadline
+    last = ""
+    while True:
+        text = pane.capture()
+        last = text or last
+        kind, detail = classify(text)
+        if kind == "mismatch":
+            say("devch: dialog text did not match, pressing nothing: " + detail)
+            return 2
+        if kind == "dialog":
+            break
+        if pane.composer_empty(checker):
+            say("devch: composer reached, no dialog seen")
+            return 0
+        if time.monotonic() - start >= deadline:
+            say("devch: gave up after %g s, last screen was %s" % (deadline, first_line(last)))
+            return 1
+        time.sleep(poll)
+
+    ok, err = pane.press(PRESS_KEY)
+    if not ok:
+        say("devch: sending the key failed: " + err)
+        return 4
+    say("devch: pressed " + PRESS_KEY + " on option 1")
+
+    start = time.monotonic()
+    pane.until = start + after
+    still_shown = True
+    while True:
+        text = pane.capture()
+        still_shown = classify(text)[0] != "other" or TITLE in text
+        if not still_shown and pane.composer_empty(checker):
+            say("devch: dismissed, composer reached")
+            return 0
+        if time.monotonic() - start >= after:
+            break
+        time.sleep(poll)
+    if still_shown:
+        say("devch: dialog still shown after the press")
+    else:
+        say("devch: dialog gone but the composer was not reached")
+    return 3
+
+
+if __name__ == "__main__":
+    sys.exit(main())

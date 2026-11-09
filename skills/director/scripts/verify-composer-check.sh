@@ -437,5 +437,36 @@ check "an ESC[37m box rule inside a framed draft is refused, not read EMPTY" UNC
 ${R37}
 more draft")"
 
+# --- a Codex pane: the idle placeholder is EMPTY, anything else on the line stays UNCLEAR ----
+# Codex draws no rule lines, so the frame is missing. Its mark is U+203A (bold), and its idle
+# placeholder "Ask Codex to do anything" is dim. Fixture: fixtures/composer-check.codex-idle.pin.
+CX=$'›'; PH="Ask Codex to do anything"
+codex() { printf '%s\n  %s' "$1" "${E}[1m?${E}[0m for shortcuts"; }
+pinned_codex() { # file, sha256
+  local f="$here/fixtures/$1"
+  [[ -f "$f" && "$(shasum -a 256 "$f" | cut -d' ' -f1)" == "$2" ]] \
+    && /usr/bin/grep -q "$2" "$here/fixtures/composer-check.codex-idle.pin" \
+    && ok "fixture $1 matches its pin" || bad "fixture $1 matches its pin"
+}
+pinned_codex composer-check.codex-idle.ansi.txt 756df20424d260a3e3e8340aea82fbf2d0631c9c75912d222e3d51fa17f3115f
+real "the real Codex idle capture is EMPTY"            EMPTY    0 composer-check.codex-idle.ansi.txt
+check "the placeholder alone on the composer line is EMPTY" EMPTY 0 "$(codex "${E}[1m${CX}${E}[0m ${E}[2m${PH}${E}[0m")"
+check "the placeholder after transcript lines with their own mark is EMPTY" EMPTY 0 "${E}[1m${CX}${E}[0m an earlier message
+reply text
+
+$(codex "${E}[1m${CX}${E}[0m ${E}[2m${PH}${E}[0m")"
+check "the placeholder plus dim trailing text is UNCLEAR"    UNCLEAR 3 "$(codex "${E}[1m${CX}${E}[0m ${E}[2m${PH} now${E}[0m")"
+check "the placeholder plus typed trailing text is UNCLEAR"  UNCLEAR 3 "$(codex "${E}[1m${CX}${E}[0m ${E}[2m${PH}${E}[0m${E}[39m now")"
+check "the placeholder typed in the default colour is UNCLEAR" UNCLEAR 3 "$(codex "${E}[1m${CX}${E}[0m ${PH}")"
+check "a partial placeholder is UNCLEAR"                     UNCLEAR 3 "$(codex "${E}[1m${CX}${E}[0m ${E}[2mAsk Codex${E}[0m")"
+check "other dim text on the Codex line is UNCLEAR"          UNCLEAR 3 "$(codex "${E}[1m${CX}${E}[0m ${E}[2mgo ahead${E}[0m")"
+check "typed text on the Codex line is UNCLEAR"              UNCLEAR 3 "$(codex "${E}[1m${CX}${E}[0m half a message")"
+check "an empty Codex mark line is UNCLEAR"                  UNCLEAR 3 "$(codex "${E}[1m${CX}${E}[0m ")"
+check "a draft below an older placeholder line is UNCLEAR"   UNCLEAR 3 "${E}[1m${CX}${E}[0m ${E}[2m${PH}${E}[0m
+${E}[1m${CX}${E}[0m half a message"
+# a Claude frame is read as before: the Codex phrase there is just text
+check "the placeholder as a dim suggestion in a Claude frame is SUGGESTION" SUGGESTION 0 "$(framed "${P} ${E}[2m${PH}${E}[0m")"
+check "the placeholder as typed text in a Claude frame is HAS-TEXT"         HAS-TEXT 1 "$(framed "${P} ${PH}")"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

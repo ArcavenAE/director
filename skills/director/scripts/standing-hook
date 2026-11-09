@@ -33,6 +33,17 @@ $DIRECTOR_STATE/last-stalled-scan the same way. The hook never runs the scan its
 each repo's remote, which takes seconds, and a prompt hook must not. It only shows how old the
 last one is, so a sweep that skipped the block shows that in the next answer.
 
+The line after it counts operator asks that never got a relay entry or a ledger row, only when there are some:
+
+  asks in the last 24 h with no relay or row: <n> (oldest <id>)
+
+It is the join `dws asks --json` already computes (asks.jsonl, the relay log, the ledger), read through that
+command as a read-only subprocess with a short timeout (STANDING_HOOK_ASKS_TIMEOUT seconds, default 3, also used for any value that is not finite and above 0; no
+network). An ask counts when its received_at is within 24 hours and its relay and row both read none; the
+oldest is the earliest received. At 0 it prints nothing. When the join cannot be read, or the relay log it
+needs could not be, it prints `asks in the last 24 h with no relay or row: UNKNOWN (<reason>)`, so a missing
+log never reads as every ask unlinked. It is a diagnostic: it prompts and gates nothing.
+
 One more line follows, last, only when something waits:
 
   waiting: <n> Desk answers not relayed (oldest <age>, ids <ids>); <m> approved PRs not merged (oldest <age>); Desk read <age> ago
@@ -45,11 +56,23 @@ answers come from the newest row of $DIRECTOR_STATE/desk-reads.jsonl (desk-snaps
 PRs come from $DIRECTOR_STATE/waiting-prs.json, which `dws waiting write` writes in the sweep and which
 is the only step that may call gh. A missing file is UNKNOWN, including when neither exists.
 
-The hook never types into a pane and never reads the hub or the network; it reads files: the heartbeat,
+After the asks line, one more only when this seat's own backlog is old:
+
+  director inbox: oldest unread seq <n> is <age> old (bound <age>)
+
+It reads `director-mcp unread --json` (STANDING_HOOK_MCP names the binary; STANDING_HOOK_UNREAD_TIMEOUT seconds,
+default 3), takes the row whose agent_id is this seat's (DIRECTOR_AGENT_ID, else MARVEL_SESSION), and prints when
+that row's oldest unread age is at or over the pending-age bound: DIRECTOR_PENDING_AGE_BOUND as a Go duration,
+default 10m, twice the cue's window. It runs whatever the cue state. Under the bound it prints nothing; when the
+read fails, times out or is not a report it prints `director inbox: UNKNOWN (<reason>)`; with no director-mcp at
+all it prints nothing. It is a diagnostic: it prompts and gates nothing.
+
+The hook never types into a pane and never writes to the hub. It reads the hub in one place only, the unread
+report above, which is a read-only call; everything else it reads is a file: the heartbeat,
 the dash and scan stamps, and the two inputs above. The waiting line widens the contract the earlier
 "reads one file" stated, on purpose.
 """
-import datetime, json, os, sys, tempfile
+import datetime, json, math, os, re, shutil, subprocess, sys, tempfile
 
 CHECKLIST = """Before you answer:
 1. Drained, and answered Desk cards and page picks read, since my last answer? If not, do them first.
@@ -225,6 +248,139 @@ def waiting_line():
     return "waiting: " + "; ".join(clauses)
 
 
+ASKS_WINDOW_HOURS = 24
+ASKS_PREFIX = "asks in the last 24 h with no relay or row: "
+
+
+def asks_timeout():
+    """Seconds to wait for the join. A value that is not finite and above 0 (inf, nan, 0, a negative, text) is
+    the 3 s default, so the call stays bounded and the hook never raises past the asks line."""
+    try:
+        v = float(os.environ.get("STANDING_HOOK_ASKS_TIMEOUT", "3"))
+    except ValueError:
+        return 3.0
+    return v if math.isfinite(v) and v > 0 else 3.0
+
+
+def asks_line():
+    """The unlinked-asks line, or None when nothing is unlinked. The join is dws's own, read through it."""
+    dws = os.environ.get("STANDING_HOOK_DWS") or os.path.join(os.path.dirname(os.path.realpath(__file__)), "dws")
+    try:
+        p = subprocess.run([dws, "asks", "--json"], capture_output=True, text=True, timeout=asks_timeout(), stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return f"{ASKS_PREFIX}UNKNOWN (dws asks did not answer in {asks_timeout():g}s)"
+    except OSError as err:
+        return f"{ASKS_PREFIX}UNKNOWN (dws asks could not run: {err.strerror or err})"
+    if p.returncode != 0:
+        return f"{ASKS_PREFIX}UNKNOWN (dws asks exited {p.returncode})"
+    try:
+        rows = json.loads(p.stdout)
+        if not isinstance(rows, list):
+            raise ValueError("not a list")
+    except ValueError:
+        return f"{ASKS_PREFIX}UNKNOWN (dws asks did not print JSON)"
+    t_now = now()
+    unlinked = []
+    for r in rows:
+        try:
+            at = parse_stamp(r["received_at"])
+            ask_id, relay, row = r["ask_id"], r["relay"], r["row"]
+        except (KeyError, TypeError, ValueError):
+            continue
+        age = (t_now - at).total_seconds()
+        if 0 <= age <= ASKS_WINDOW_HOURS * 3600 and relay == "none" and row == "none" and r.get("closed", "none") == "none":
+            unlinked.append((at, ask_id))
+    if not unlinked:
+        return None
+    # dws prints a warning on stderr when the relay log was not read; then every ask would read unlinked.
+    warn = p.stderr.strip().splitlines()
+    if warn:
+        return f"{ASKS_PREFIX}UNKNOWN ({warn[0][:120]})"
+    return f"{ASKS_PREFIX}{len(unlinked)} (oldest {min(unlinked)[1]})"
+
+
+INBOX_PREFIX = "director inbox: "
+DEFAULT_PENDING_BOUND = 600.0  # twice the cue's 300 s window (cue.go defaultPendingAgeBound)
+_GO_UNITS = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
+
+
+def pending_bound():
+    """Seconds an unread message may wait before the alarm: DIRECTOR_PENDING_AGE_BOUND as a Go duration
+    (15m, 1h30m, 90s), else the default. A value that does not parse or is not above 0 is the default,
+    as director-mcp's own reader treats it."""
+    raw = os.environ.get("DIRECTOR_PENDING_AGE_BOUND", "")
+    if not raw:
+        return DEFAULT_PENDING_BOUND
+    if not re.fullmatch(r"(?:[0-9]+(?:\.[0-9]+)?(?:ms|h|m|s))+", raw):
+        return DEFAULT_PENDING_BOUND
+    total = sum(float(n) * _GO_UNITS[u] for n, u in re.findall(r"([0-9]+(?:\.[0-9]+)?)(ms|h|m|s)", raw))
+    return total if math.isfinite(total) and total > 0 else DEFAULT_PENDING_BOUND
+
+
+def unread_timeout():
+    """Seconds to wait for the unread read, with the same fallback as asks_timeout."""
+    try:
+        v = float(os.environ.get("STANDING_HOOK_UNREAD_TIMEOUT", "3"))
+    except ValueError:
+        return 3.0
+    return v if math.isfinite(v) and v > 0 else 3.0
+
+
+def mcp_binary():
+    """The director-mcp to ask, or None when there is none: STANDING_HOOK_MCP, else the one on PATH, else
+    ${DIRECTOR_HOME:-~/.director}/bin/director-mcp. None means the hook was installed without it: no line."""
+    env = os.environ.get("STANDING_HOOK_MCP")
+    if env:
+        return env if os.access(env, os.X_OK) else None
+    found = shutil.which("director-mcp")
+    if found:
+        return found
+    home = os.environ.get("DIRECTOR_HOME") or os.path.join(os.path.expanduser("~"), ".director")
+    cand = os.path.join(home, "bin", "director-mcp")
+    return cand if os.access(cand, os.X_OK) else None
+
+
+def inbox_line():
+    """The alarm on this seat's own backlog, or None. It runs whatever the cue state, because the cue can be
+    off or silent and the backlog is still there. This line reads the hub through `director-mcp unread --json`,
+    a read-only call with a short timeout, so it widens the "files only" contract above on purpose; it prompts
+    and gates nothing."""
+    mcp = mcp_binary()
+    if not mcp:
+        return None
+    me = os.environ.get("DIRECTOR_AGENT_ID") or os.environ.get("MARVEL_SESSION")
+    if not me:
+        return None
+    try:
+        p = subprocess.run([mcp, "unread", "--json"], capture_output=True, text=True, timeout=unread_timeout(), stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return f"{INBOX_PREFIX}UNKNOWN (unread did not answer in {unread_timeout():g}s)"
+    except OSError as err:
+        return f"{INBOX_PREFIX}UNKNOWN (unread could not run: {err.strerror or err})"
+    if p.returncode != 0:
+        return f"{INBOX_PREFIX}UNKNOWN (unread exited {p.returncode})"
+    try:
+        rows = json.loads(p.stdout)["durables"]
+        if not isinstance(rows, list):
+            raise ValueError("not a list")
+    except (ValueError, KeyError, TypeError):
+        return f"{INBOX_PREFIX}UNKNOWN (unread did not print a report)"
+    bound = pending_bound()
+    worst = None
+    for r in rows:
+        if not isinstance(r, dict) or r.get("agent_id") != me:
+            continue
+        age = r.get("oldest_unread_age_seconds")
+        if isinstance(age, bool) or not isinstance(age, (int, float)) or not math.isfinite(age):
+            continue
+        if age >= bound and (worst is None or age > worst[0]):
+            worst = (age, r.get("oldest_unread_seq"))
+    if worst is None:
+        return None
+    seq = f"seq {worst[1]}" if isinstance(worst[1], int) and not isinstance(worst[1], bool) else "message"
+    return f"{INBOX_PREFIX}oldest unread {seq} is {age_text(worst[0])} old (bound {age_text(bound)})"
+
+
 def main():
     if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] not in ("beat", "scan-beat")):
         sys.exit("usage: standing-hook [beat|scan-beat]")
@@ -235,6 +391,12 @@ def main():
     print(CHECKLIST)
     print(dash_line())
     print(scan_line())
+    line = asks_line()
+    if line:
+        print(line)
+    line = inbox_line()
+    if line:
+        print(line)
     line = waiting_line()
     if line:
         print(line)

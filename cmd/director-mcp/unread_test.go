@@ -115,12 +115,28 @@ func expectedRev(t *testing.T, bin string) string {
 	return r
 }
 
+// shimEnv is the environment a test gives a child shim: the test process's own,
+// without the keys that make the shim feed a marvel daemon (busbeat.go), so a
+// test run inside a marvel seat can never send bus.beat to that seat's daemon
+// with its real session and token. extra is appended after.
+func shimEnv(extra ...string) []string {
+	drop := map[string]bool{marvelSocketEnv: true, marvelSessionEnv: true, heartbeatTokenEnv: true, heartbeatTokenFile: true}
+	var env []string
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); drop[k] {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, extra...)
+}
+
 // startShim runs the binary as a live seat with stdin held open and returns
 // once its presence row exists.
 func startShim(t *testing.T, ctx context.Context, bin, url string, self Sender, kv jetstream.KeyValue) map[string]any {
 	t.Helper()
 	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(), "NATS_URL="+url, "DIRECTOR_AGENT_ID="+self.AgentID, "DIRECTOR_TEAM="+self.Team, "DIRECTOR_WORKSPACE="+self.Workspace, "DIRECTOR_GLOBAL_DOMAIN=")
+	cmd.Env = shimEnv("NATS_URL="+url, "DIRECTOR_AGENT_ID="+self.AgentID, "DIRECTOR_TEAM="+self.Team, "DIRECTOR_WORKSPACE="+self.Workspace, "DIRECTOR_GLOBAL_DOMAIN=")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +167,7 @@ func startShim(t *testing.T, ctx context.Context, bin, url string, self Sender, 
 func runUnread(t *testing.T, bin, url string) unreadReport {
 	t.Helper()
 	cmd := exec.Command(bin, "unread", "--json")
-	cmd.Env = append(os.Environ(), "NATS_URL="+url, "DIRECTOR_AGENT_ID=", "DIRECTOR_GLOBAL_DOMAIN=")
+	cmd.Env = shimEnv("NATS_URL="+url, "DIRECTOR_AGENT_ID=", "DIRECTOR_GLOBAL_DOMAIN=")
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("unread exited %v: %s", err, out)

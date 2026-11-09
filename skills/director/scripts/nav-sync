@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""nav-sync - report whether each exported Director page carries the current menu.
+
+The menu on every Director page is the instance file page-nav.html in the state directory, copied into
+each page when the page is rendered. A page published before the file changed keeps the old menu until
+someone republishes it, and nothing said so. This reports it; publishing stays the director session's.
+
+  nav-sync check [--nav FILE] PAGE...
+
+PAGE is an HTML file the session exported from a published page (an Artifact read written to a file). FILE
+defaults to $DIRECTOR_STATE/page-nav.html (default ~/.director/state). One line per page, in the order given:
+
+  <page>: ok
+  <page>: stale (missing "Label"; extra "Label")   links differ from FILE's, by label and address
+  <page>: differs                                  same links, other markup
+  <page>: no-nav                                   the page carries no <nav class="dnav"> element
+  <page>: unreadable (<reason>)
+
+Each page marks its own link with aria-current="page", so that attribute is ignored, and so is whitespace
+between tags. Exit 0 when every page reads ok, 1 when any does not, 2 on usage, or when FILE is missing,
+unreadable or holds no nav element: a reference that cannot be read is never read as a match. It reads the
+files named and writes nothing, to disk or anywhere else.
+"""
+import argparse
+import os
+import re
+import sys
+
+NAV = re.compile(r'<nav\b[^>]*\bclass="dnav"[^>]*>.*?</nav>', re.S)
+LINK = re.compile(r'<a\b([^>]*)>(.*?)</a>', re.S)
+HREF = re.compile(r'\bhref="([^"]*)"')
+CURRENT = re.compile(r'\s+aria-current="page"')
+
+
+def normalise(nav):
+    nav = CURRENT.sub("", nav)
+    nav = re.sub(r">\s+<", "><", nav)
+    return re.sub(r"\s+", " ", nav).strip()
+
+
+def links(nav):
+    out = []
+    for attrs, text in LINK.findall(nav):
+        m = HREF.search(attrs)
+        out.append((re.sub(r"<[^>]*>", "", text).strip(), m.group(1) if m else ""))
+    return out
+
+
+def read_nav(path):
+    with open(path, encoding="utf-8") as f:
+        m = NAV.search(f.read())
+    return normalise(m.group(0)) if m else None
+
+
+def compare(ref, got):
+    if ref == got:
+        return "ok"
+    rl, gl = links(ref), links(got)
+    missing = [l for l, _ in rl if (l, dict(rl)[l]) not in gl]
+    extra = [l for l, _ in gl if (l, dict(gl)[l]) not in rl]
+    if not missing and not extra:
+        return "differs"
+    parts = [f'missing "{l}"' for l in missing] + [f'extra "{l}"' for l in extra]
+    return "stale (" + "; ".join(parts) + ")"
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="nav-sync", description="report whether exported Director pages carry the current menu")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("check")
+    c.add_argument("--nav")
+    c.add_argument("pages", nargs="+", metavar="PAGE")
+    args = ap.parse_args()
+
+    state = os.environ.get("DIRECTOR_STATE") or os.path.join(os.path.expanduser("~"), ".director", "state")
+    nav_path = args.nav or os.path.join(state, "page-nav.html")
+    try:
+        ref = read_nav(nav_path)
+    except (OSError, UnicodeDecodeError) as err:
+        print(f"nav-sync: cannot read {nav_path} ({type(err).__name__})", file=sys.stderr)
+        sys.exit(2)
+    if ref is None:
+        print(f"nav-sync: {nav_path} holds no <nav class=\"dnav\"> element", file=sys.stderr)
+        sys.exit(2)
+
+    bad = False
+    for page in args.pages:
+        try:
+            got = read_nav(page)
+        except (OSError, UnicodeDecodeError) as err:
+            print(f"{page}: unreadable ({type(err).__name__})")
+            bad = True
+            continue
+        verdict = "no-nav" if got is None else compare(ref, got)
+        print(f"{page}: {verdict}")
+        bad = bad or verdict != "ok"
+    sys.exit(1 if bad else 0)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""shelf-row - build Reply Shelf rows (sim/design/reply-shelf.md) as the write a director session applies.
+
+  shelf-row new --ask I-n --asked-by NAME --asked-of NAME --summary-file F --source S [--sha256 H] [--n N]
+                       validate one row and print its write: {"op":"set","collection":"replies","doc_id":...,"data":{...}}
+  shelf-row seed FILE [--start N]
+                       FILE is {"rows":[{ask, asked_by, asked_of, summary, source[, sha256]}, ...]}, at most 50 rows;
+                       print {"ops":[...]}, one set op per row, numbered from N (default 1); all rows or none
+  shelf-row --help
+
+A script cannot write artifact data (finding-director-glst), so this one prints and a session applies the output with
+ArtifactData. It reads one file the caller names and the private-names list, and writes nothing.
+
+The row holds exactly: summary, source, [sha256], ask, asked_by, asked_of, state (new), created_at, read_at,
+cleared_at, more, more_at. The id is r-<yyyymmdd>-<n>, the day of created_at in UTC.
+
+`source` is one of: an https URL (no credentials, no spaces); a repo path (relative, no `..`); or <host>:<absolute path>
+with the file's `sha256`, for the host-local report files most answers come from. A host name is fine on this private
+page. A bare local path is not a source. `sha256` is required with the host form and refused with the others.
+
+The summary is one paragraph of at most 1200 characters with no token, key, credential URL or name from the
+private-names list. That list is $DIRECTOR_STATE/dash-withhold.txt (0600, one name per line, whole words, any case), the
+file dash-writer reads; absent, unreadable or wider than 0600 refuses every row, since no list is never read as no filter.
+
+A refusal prints one line on stderr, `shelf-row: refused: <field>:<reason>` (a row number first for a seed), and nothing on
+stdout; it never repeats the value. Exit 0 built, 1 refused, 2 usage. SHELF_NOW overrides the clock only with
+DIRECTOR_TEST_CLOCK=1.
+"""
+import datetime
+import json
+import os
+import re
+import stat
+import sys
+
+HOME = os.path.expanduser("~")
+STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
+SUMMARY_MAX = 1200
+SEED_MAX = 50
+NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,79}\Z")
+ASK_RE = re.compile(r"I-[0-9]{1,6}\Z")
+SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
+HOST_RE = re.compile(r"[a-z0-9][a-z0-9.-]{0,62}\Z")
+PATHCH_RE = re.compile(r"[A-Za-z0-9._/+=@-]+\Z")
+REPO_RE = re.compile(r"[A-Za-z0-9._/-]+\Z")
+TOKEN_PREFIX_RE = re.compile(r"(ghp_|gho_|ghs_|github_pat_|xox|sk-|AKIA)")
+HEX_RE = re.compile(r"[0-9a-fA-F]{40,}")
+B64_RE = re.compile(r"[A-Za-z0-9+/]{32,}={0,2}")
+SECRET_RES = (
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY"),
+    re.compile(r"\b(password|passwd|secret|api[_-]?key|token)\s*[:=]\s*\S", re.I),
+    re.compile(r"\bBearer\s+\S{8,}", re.I),
+    re.compile(r"://[^/\s]*:[^/\s]*@"),
+)
+FIELDS = ("summary", "source", "sha256", "ask", "asked_by", "asked_of")
+SEED_REQUIRED = ("ask", "asked_by", "asked_of", "summary", "source")
+
+
+class Refused(Exception):
+    def __init__(self, field, reason):
+        super().__init__(f"{field}:{reason}")
+
+
+def now_text():
+    if os.environ.get("DIRECTOR_TEST_CLOCK") == "1" and os.environ.get("SHELF_NOW"):
+        return os.environ["SHELF_NOW"]
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def load_withhold():
+    """The private names, or raises Refused. Absent, unreadable, not a plain file, not UTF-8 or wider than 0600 refuses."""
+    path = os.path.join(STATE, "dash-withhold.txt")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)  # a FIFO must not hang the open
+    except FileNotFoundError:
+        raise Refused("withhold", "absent")
+    except OSError:
+        raise Refused("withhold", "unreadable")
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise Refused("withhold", "unreadable")
+        if st.st_mode & 0o077:
+            raise Refused("withhold", "mode")
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            text = f.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise Refused("withhold", "unreadable")
+    finally:
+        os.close(fd)
+    return [l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+
+
+def has_name(text, names):
+    return any(re.search(r"(?<![A-Za-z0-9])" + re.escape(n) + r"(?![A-Za-z0-9])", text, re.I) for n in names)
+
+
+def has_token(text):
+    if TOKEN_PREFIX_RE.search(text) or HEX_RE.search(text):
+        return True
+    for m in B64_RE.finditer(text):
+        s = m.group(0)
+        if any(c.isdigit() for c in s) and any(c.isupper() for c in s) and any(c.islower() for c in s):
+            return True
+    return False
+
+
+def check_name(field, v):
+    if not isinstance(v, str) or not NAME_RE.match(v):
+        raise Refused(field, "shape")
+
+
+def check_summary(v, names):
+    if not isinstance(v, str):
+        raise Refused("summary", "shape")
+    s = v.strip()
+    if not s:
+        raise Refused("summary", "empty")
+    if len(s) > SUMMARY_MAX:
+        raise Refused("summary", "length")
+    if any(not (c.isprintable() or c in "\n\t") for c in s):
+        raise Refused("summary", "control")
+    if re.search(r"\n\s*\n", s):
+        raise Refused("summary", "paragraphs")
+    if has_token(s):
+        raise Refused("summary", "token")
+    if any(r.search(s) for r in SECRET_RES):
+        raise Refused("summary", "secret")
+    if has_name(s, names):
+        raise Refused("summary", "withheld-name")
+    return s
+
+
+def check_source(src, sha, names):
+    if not isinstance(src, str) or not src:
+        raise Refused("source", "empty")
+    if len(src) > 300 or any(not c.isprintable() for c in src):
+        raise Refused("source", "shape")
+    if has_name(src, names):
+        raise Refused("source", "withheld-name")
+    if TOKEN_PREFIX_RE.search(src):
+        raise Refused("source", "token")
+    host_form = False
+    if src.startswith("https://"):
+        rest = src[len("https://"):]
+        if not rest or re.search(r"[\s@]", rest) or "/../" in "/" + rest:
+            raise Refused("source", "shape")
+    elif "://" in src:
+        raise Refused("source", "shape")
+    elif src.startswith(("/", "~")):
+        raise Refused("source", "local-path")
+    else:
+        m = re.match(r"([^:/\s]+):(/.*)\Z", src)
+        if m:
+            host, path = m.groups()
+            if not HOST_RE.match(host) or not PATHCH_RE.match(path) or "//" in path or ".." in path.split("/"):
+                raise Refused("source", "shape")
+            host_form = True
+        else:
+            if not REPO_RE.match(src) or ".." in src.split("/") or src.endswith("/"):
+                raise Refused("source", "shape")
+    if host_form:
+        if sha is None:
+            raise Refused("source", "sha256-required")
+        if not isinstance(sha, str) or not SHA_RE.match(sha):
+            raise Refused("sha256", "shape")
+    elif sha is not None:
+        raise Refused("sha256", "host-path-only")
+
+
+def build(row, n, names, created):
+    ask = row.get("ask")
+    if not isinstance(ask, str) or not ASK_RE.match(ask):
+        raise Refused("ask", "shape")
+    check_name("asked_by", row.get("asked_by"))
+    check_name("asked_of", row.get("asked_of"))
+    summary = check_summary(row.get("summary"), names)
+    sha = row.get("sha256")
+    check_source(row.get("source"), sha, names)
+    data = {
+        "summary": summary,
+        "source": row["source"],
+        "ask": ask,
+        "asked_by": row["asked_by"],
+        "asked_of": row["asked_of"],
+        "state": "new",
+        "created_at": created,
+        "read_at": "",
+        "cleared_at": "",
+        "more": "",
+        "more_at": "",
+    }
+    if sha is not None:
+        data["sha256"] = sha
+    day = created[:10].replace("-", "")
+    return {"op": "set", "collection": "replies", "doc_id": f"r-{day}-{n}", "data": data}
+
+
+def refuse(e, row=None):
+    pre = f"row {row}: " if row else ""
+    print(f"shelf-row: refused: {pre}{e}", file=sys.stderr)
+    return 1
+
+
+def usage(msg=""):
+    if msg:
+        print(f"shelf-row: {msg}", file=sys.stderr)
+    print("usage: shelf-row new --ask I-n --asked-by NAME --asked-of NAME --summary-file F --source S [--sha256 H] [--n N]\n"
+          "       shelf-row seed FILE [--start N]", file=sys.stderr)
+    return 2
+
+
+def opts(args, known, flags=()):
+    out, i = {}, 0
+    while i < len(args):
+        a = args[i]
+        if a in known and i + 1 < len(args):
+            out[a] = args[i + 1]
+            i += 2
+        else:
+            return None
+    return out
+
+
+def intarg(v, default):
+    if v is None:
+        return default
+    if not re.fullmatch(r"[0-9]{1,6}", v) or int(v) < 1:
+        return None
+    return int(v)
+
+
+def cmd_new(args):
+    known = ("--ask", "--asked-by", "--asked-of", "--summary-file", "--source", "--sha256", "--n")
+    o = opts(args, known)
+    if o is None or any(k not in o for k in ("--ask", "--asked-by", "--asked-of", "--summary-file", "--source")):
+        return usage("new needs --ask, --asked-by, --asked-of, --summary-file and --source")
+    n = intarg(o.get("--n"), 1)
+    if n is None:
+        return usage("--n is a positive integer")
+    try:
+        names = load_withhold()
+        try:
+            with open(o["--summary-file"], encoding="utf-8") as f:
+                summary = f.read()
+        except (OSError, UnicodeDecodeError):
+            raise Refused("summary", "unreadable")
+        row = {"ask": o["--ask"], "asked_by": o["--asked-by"], "asked_of": o["--asked-of"], "summary": summary, "source": o["--source"]}
+        if "--sha256" in o:
+            row["sha256"] = o["--sha256"]
+        w = build(row, n, names, now_text())
+    except Refused as e:
+        return refuse(e)
+    print(json.dumps(w, ensure_ascii=False))
+    return 0
+
+
+def cmd_seed(args):
+    if not args or args[0].startswith("--"):
+        return usage("seed needs a file")
+    o = opts(args[1:], ("--start",))
+    start = intarg((o or {}).get("--start"), 1) if o is not None else None
+    if o is None or start is None:
+        return usage("seed takes FILE and optionally --start N")
+    try:
+        names = load_withhold()
+        try:
+            with open(args[0], encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, ValueError):
+            raise Refused("seed", "unreadable")
+        rows = doc.get("rows") if isinstance(doc, dict) else None
+        if not isinstance(rows, list) or not rows or set(doc) != {"rows"}:
+            raise Refused("seed", "shape")
+        if len(rows) > SEED_MAX:
+            raise Refused("seed", "too-many")
+        created, ops = now_text(), []
+        for i, r in enumerate(rows, 1):
+            if not isinstance(r, dict):
+                raise Refused("seed", "shape")
+            if not set(r) <= set(FIELDS) or any(k not in r for k in SEED_REQUIRED):
+                raise Refused("seed", "fields")
+            try:
+                ops.append(build(r, start + i - 1, names, created))
+            except Refused as e:
+                return refuse(e, i)
+    except Refused as e:
+        return refuse(e)
+    print(json.dumps({"ops": ops}, ensure_ascii=False))
+    return 0
+
+
+def main(argv):
+    if not argv:
+        return usage()
+    if argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    if argv[0] == "new":
+        return cmd_new(argv[1:])
+    if argv[0] == "seed":
+        return cmd_seed(argv[1:])
+    return usage(f"unknown command {argv[0]!r}"[:60])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

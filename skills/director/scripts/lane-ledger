@@ -12,7 +12,7 @@ Reads, all optional; a missing or unreadable source prints a GAP line and a GAP 
   $DIRECTOR_STATE/freebusy/seats.jsonl   one row per seat, from freebusy (all clusters)
   $DIRECTOR_STATE/freebusy/lanes.jsonl   one row per lane, with its open asks, from freebusy
   $DIRECTOR_STATE/desk-snapshot.json     the operator's open Desk cards, from desk-snapshot
-  --marry FILE                           a `marvel marry` output (MarryOutput JSON), for the
+  --marry FILE                           a `director-mcp marry` output (marry.Output JSON), for the
                                          "ready for the lane" column; default
                                          $DIRECTOR_STATE/idle-shadow/marry.json, which
                                          idle-shadow writes on each run where marry answers
@@ -55,7 +55,7 @@ FIX = {
     "unread": "marvel exposes consumer pending per seat (S11)",
     "last_turn": "freebusy reads marvel's LAST-TURN column once it is deployed on the cluster",
     "runtime": "an idle signal for codex, opencode and crush seats; until then their free and busy read ACTIVE% only",
-    "ready": "idle-shadow writes a marvel marry output (idle-shadow/marry.json) when marry answers",
+    "ready": "idle-shadow writes a director-mcp marry output (idle-shadow/marry.json) when marry answers",
     "desk": "desk-snapshot writes desk-snapshot.json from a Desk read",
     "client": "a client-item count in the Desk snapshot",
     "host": "the team-to-host map in git, which places bd event writers",
@@ -191,7 +191,7 @@ def compute(marry_path):
     for r in lanes_in or []:
         asks[s(r.get("lane"))] = r
 
-    # Would-pair rows from marvel marry, counted per seat address agent://<team>/<name>.
+    # Would-pair rows from director-mcp marry, counted per seat address agent://<team>/<name>.
     ready = None
     unmatched = None
     if marry is not None:
@@ -440,7 +440,7 @@ def page(m):
         P.append('<p class="under">Ready work: GAP%s.</p>' % fn("ready"))
     else:
         g = lambda k: cell(mr[k], "ready")
-        P.append('<p class="under">Ready work, from marvel marry (shadow, nothing sent): ready %s, eligible %s, would-pair %s; '
+        P.append('<p class="under">Ready work, from director-mcp marry (shadow, nothing sent): ready %s, eligible %s, would-pair %s; '
                  'unmatched %s (no class %s, no component %s, no eligible seat %s, operator-only %s); client %s, counted only.</p>'
                  % (g("ready"), g("eligible"), g("would_pair"), g("unmatched"), g("no_class"), g("no_component"),
                     g("no_eligible_seat"), g("operator_only"), g("client")))
@@ -453,7 +453,7 @@ def page(m):
         P.append('<p class="under">Not read: %s.</p>' % e("; ".join(m["gaps"])))
     P.append("<footer><ol>%s</ol>" % "".join("<li>fix: %s</li>" % e(n) for n in notes))
     P.append("<p>Sources: freebusy/seats.jsonl and freebusy/lanes.jsonl (one row per seat and per lane, replaced each "
-             "sweep), desk-snapshot.json, and a marvel marry output when one is given. Presence and health set no state "
+             "sweep), desk-snapshot.json, and a director-mcp marry output when one is given. Presence and health set no state "
              "here; freebusy's own reason shows on hover. Nothing here ranks seats or acts.</p></footer>")
     data = json.dumps(m, sort_keys=True, separators=(",", ":"), ensure_ascii=True).replace("</", "<\\/")
     P.append('<script type="application/json" id="data">%s</script>' % data)

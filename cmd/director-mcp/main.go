@@ -92,7 +92,7 @@ func main() {
 		fmt.Println(versionLine())
 		return
 	}
-	// The pending-age bound is read once, where the reader runs (I-190:1).
+	// The pending-age bound is read once, where the reader runs.
 	pendingAgeBound = loadPendingAgeBound(os.Getenv, os.Stderr)
 	preflightMode := cli.mode == "preflight"
 	// unread is a read-only report over every seat's durable: it needs no
@@ -103,11 +103,28 @@ func main() {
 		cancel()
 		os.Exit(code)
 	}
+	// look reads one seat's unread mail and writes files; it consumes nothing
+	// and registers no identity.
+	if cli.mode == "look" {
+		os.Exit(runLookMain(cli))
+	}
+	// marry is a pure computation over a file: no bus, no identity.
+	if cli.mode == "marry" {
+		os.Exit(runMarryCmd(cli, os.Stdout, os.Stderr))
+	}
 	// asks is a read of the ask ledger's store; ask-reader keeps it. Neither
 	// needs an identity of its own.
 	if cli.mode == "asks" {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		code := runAsksCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, os.Stdout, os.Stderr)
+		cancel()
+		os.Exit(code)
+	}
+	// roster lists the presence rows for a script; like unread it needs no
+	// identity of its own.
+	if cli.mode == "roster" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		code := runRosterCmd(ctx, env("NATS_URL", "nats://127.0.0.1:4222"), cli, os.Stdout, os.Stderr)
 		cancel()
 		os.Exit(code)
 	}
@@ -193,11 +210,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer bus.close()
+	// The inbox lifetime is read from the stream itself, not assumed (aae-orc-t77rr).
+	adoptInboxMaxAge(ctx, bus.js, logf)
 	// Remove rows a dead predecessor left, before the first write, so the
 	// roster never lists this seat twice (aae-orc-4unyk).
 	bus.reapDeadPredecessors(ctx, logf)
 	// Announce presence on start so a roster lists us immediately.
-	globalWarn, _ := bus.setPresence(ctx, "idle")
+	bus.beat = newBusBeat(os.Getenv, logf)
+	globalWarn, _ := bus.announce(ctx)
 	bus.reportGlobalWarn(globalWarn, logf)
 	if warn := bus.checkCollision(ctx); warn != "" {
 		logf("WARNING: %s", warn)

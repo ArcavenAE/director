@@ -11,7 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// The pending-age bound (I-190:1): list_roster flags a live row over it, the
+// The pending-age bound: list_roster flags a live row over it, the
 // unread reader marks a live recipient over it, and neither changes anything
 // but the report.
 

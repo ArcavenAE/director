@@ -18,7 +18,7 @@ func TestFindByIDAnswersByMessageIDAndNamesAnExpiredAsk(t *testing.T) {
 			LastMsgAt: now.Add(-age), AskedAt: now.Add(-age), ThreadIDs: thread}
 	}
 	add("m-fresh", askSent, 10*time.Minute)
-	add("m-old", askSent, inboxMaxAge+time.Hour)
+	add("m-old", askSent, inboxMaxAge()+time.Hour)
 	add("m-done", askAnswered, 2*time.Hour, "m-done-reply")
 	add("m-cancel", askCancelled, 3*time.Hour)
 	l.reindex()

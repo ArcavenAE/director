@@ -74,7 +74,7 @@ type askMeta struct {
 }
 
 // askSends is the send records, under their own key so the meta value stays
-// small (the records hold one entry per local send for inboxMaxAge plus a day).
+// small (the records hold one entry per local send for inboxMaxAge() plus a day).
 type askSends struct {
 	Sends map[string]sendRec `json:"sends"`
 }
