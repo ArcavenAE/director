@@ -208,6 +208,22 @@ and then `dws set <slug> --blocked operator --ask <card id>`. Without a
 snapshot read in the last 24 hours, `dws` refuses and says UNREAD; do not work
 around it, read the Desk again.
 
+## Reply shelf: parked answers for the operator
+
+An answer the operator asked for and did not see in the stream goes on the Reply Shelf, a separate Artifact
+(`skills/director/shelf/shelf.html`; design in `sim/design/reply-shelf.md`). Publish it like the Desk page, from
+`${DIRECTOR_HOME:-$HOME/.director}/bin/page-namespace apply <shelf.html>`, with capabilities
+`{"db":{"rules":[{"path":"replies","write":"owner"}]},"user":{}}`.
+
+1. When you relay an answer, ask the answering seat for one paragraph and a source (an https URL, a repo path,
+   or `<host>:<absolute path>` with the file's sha256). Build the row with
+   `${DIRECTOR_HOME:-$HOME/.director}/bin/shelf-row new --ask I-n --asked-by NAME --asked-of NAME --summary-file F --source S [--sha256 H] [--n N]`,
+   or a batch from a seed file with `shelf-row seed FILE [--start N]`. It prints the write and writes nothing; a
+   refusal prints one line naming the field and reason. Apply the printed write or batch with ArtifactData
+   (`set`, collection `replies`). List the collection first so `--n` or `--start` does not reuse an id.
+2. On the sweep, list `replies` and relay each row whose `more` is non-empty on its source ask, then note it was
+   relayed in the ask's own thread. The page never reaches the bus.
+
 ## Card standard: one parse from a card file to the Desk
 
 A seat writes the card for an operator decision as a file, and the card goes

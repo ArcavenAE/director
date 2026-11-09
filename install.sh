@@ -91,6 +91,8 @@ install_one "$SRC/skills/director/scripts/idle-shadow" "$DIRECTOR_HOME/bin/idle-
 # dash-writer, the operations dashboard's writer step (ghxv2): the sweep's tick runs it from the bin home.
 install_one "$SRC/skills/director/scripts/dash-writer" "$DIRECTOR_HOME/bin/dash-writer"
 # dws is installed above; dash-writer reads it from beside itself.
+# shelf-row builds Reply Shelf rows (reply-shelf design): the session runs it by name when it relays an answer.
+install_one "$SRC/skills/director/scripts/shelf-row" "$DIRECTOR_HOME/bin/shelf-row"
 # introspect, the director introspector (a script director runs, never a seat): the sweep and harvest step 6 call it.
 install_one "$SRC/skills/director/scripts/introspect" "$DIRECTOR_HOME/bin/introspect"
 # composer-check looks at a pane before an inject that ends in Enter; standing-hook prints the drain age before each answer.
