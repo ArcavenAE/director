@@ -24,7 +24,7 @@ import (
 var askIDPattern = regexp.MustCompile(`^I-[0-9]+$`)
 
 // relayKinds are the kinds relay-log accepts, in its own order.
-var relayKinds = []string{"relay", "ruling", "build", "research", "question"}
+var relayKinds = []string{"relay", "ruling", "build", "research", "question", "answer"}
 
 // relayLogTimeout bounds the relay-log call. The send has already left by then.
 const relayLogTimeout = 5 * time.Second

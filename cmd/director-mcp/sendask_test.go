@@ -94,7 +94,7 @@ func TestSendAskRefusals(t *testing.T) {
 func TestSendAskKnownIdIsAccepted(t *testing.T) {
 	self := Sender{AgentID: "director", Team: "fleet", Workspace: "ops2"}
 	askFixture(t, "I-6", "I-7")
-	for _, k := range []string{"", "relay", "ruling", "build", "research", "question"} {
+	for _, k := range []string{"", "relay", "ruling", "build", "research", "question", "answer"} {
 		args := map[string]any{"ask": "I-7"}
 		if k != "" {
 			args["kind"] = k

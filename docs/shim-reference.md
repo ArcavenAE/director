@@ -260,7 +260,7 @@ that stands in for a push the transport cannot make.
 | `reply_by` | no | RFC 3339 deadline |
 | `workspace` | no | the recipient's workspace. Omit and it is resolved from the recipient's live presence; with no live presence the send is refused rather than misdelivered (R-92). Set it to address a known cold mailbox verbatim. Ignored for `global://` and `broadcast://`, whose address carries its own scope. |
 | `ask` | no | the intake id (`I-<n>`) of the operator ask this send answers. When the send is accepted, the shim runs `relay-log append` for it, so the relay entry exists without a second step. A malformed id, an id not in `$DIRECTOR_STATE/asks.jsonl`, or a `broadcast://` address refuses the send before publish. |
-| `kind` | no | with `ask`: `relay`, `ruling`, `build`, `research` or `question`, passed to the entry. Defaults to `relay` when `ask` is set; refused without `ask`. |
+| `kind` | no | with `ask`: `relay`, `ruling`, `build`, `research`, `question` or `answer`, passed to the entry. Defaults to `relay` when `ask` is set; refused without `ask`. |
 
 A `broadcast://` address takes the same path as the `broadcast` tool (see
 below): one durable send per live seat in scope, the broadcast result shape,
