@@ -216,7 +216,8 @@ func main() {
 	// roster never lists this seat twice (aae-orc-4unyk).
 	bus.reapDeadPredecessors(ctx, logf)
 	// Announce presence on start so a roster lists us immediately.
-	globalWarn, _ := bus.setPresence(ctx, "idle")
+	bus.beat = newBusBeat(os.Getenv, logf)
+	globalWarn, _ := bus.announce(ctx)
 	bus.reportGlobalWarn(globalWarn, logf)
 	if warn := bus.checkCollision(ctx); warn != "" {
 		logf("WARNING: %s", warn)

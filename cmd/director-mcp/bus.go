@@ -31,6 +31,10 @@ type Bus struct {
 	waitMu    sync.Mutex
 	waitSince time.Time
 
+	// beat is the feed to marvel, nil when off (busbeat.go). Set before the
+	// heartbeat timer starts.
+	beat *busBeat
+
 	// returned is mail whose reply nobody read (a late cancel), returned first
 	// by the next wait (ackafter.go).
 	retMu    sync.Mutex
@@ -1450,6 +1454,16 @@ func (b *Bus) setPresence(ctx context.Context, state string) (globalWarn string,
 	return b.writeGlobalPresenceView(ctx, state, view), nil
 }
 
+// announce writes the first presence row at connect and, when it landed, sends
+// the first bus beat so the grace before the first beat ends at once.
+func (b *Bus) announce(ctx context.Context) (globalWarn string, err error) {
+	globalWarn, err = b.setPresence(ctx, "idle")
+	if err == nil {
+		b.beat.send(ctx)
+	}
+	return globalWarn, err
+}
+
 // writeGlobalPresence puts this session's row in GLOBAL_PRESENCE, returning a
 // warning string rather than an error because every caller wants to carry on
 // without it. Off (no domain configured) returns an empty warning: nothing is
@@ -1616,7 +1630,11 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 				b.samplePending(ctx)
 			}
 			view := b.presenceView(ctx)
-			_ = b.writePresenceView(ctx, s, view)
+			// The bus beat to marvel rides this tick, and only a tick whose
+			// local presence Put succeeded sends it (aae-orc-z63a4).
+			if err := b.writePresenceView(ctx, s, view); err == nil {
+				b.beat.send(ctx)
+			}
 			b.reportGlobalWarn(b.writeGlobalPresenceView(ctx, s, view), logf)
 			b.watchTick(ctx)
 		}
