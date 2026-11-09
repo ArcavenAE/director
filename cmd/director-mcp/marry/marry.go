@@ -49,6 +49,7 @@ const (
 type Lease struct {
 	ID         string     `json:"id"`
 	Item       string     `json:"item"`
+	Cluster    string     `json:"cluster"`
 	Seat       string     `json:"seat"`
 	ValidUntil time.Time  `json:"valid_until"`
 	State      LeaseState `json:"state"`
@@ -153,16 +154,18 @@ const (
 // Pair is a would-pair row: the item, the seat and the lease that a delivery
 // step would write ahead of its send.
 type Pair struct {
-	Item  string `json:"item"`
-	Seat  string `json:"seat"`
-	Lease string `json:"lease"`
+	Item    string `json:"item"`
+	Cluster string `json:"cluster"`
+	Seat    string `json:"seat"`
+	Lease   string `json:"lease"`
 }
 
 // Unplaced is a pair whose seat no ruled sender reaches.
 type Unplaced struct {
-	Item   string `json:"item"`
-	Seat   string `json:"seat"`
-	Reason string `json:"reason"`
+	Item    string `json:"item"`
+	Cluster string `json:"cluster"`
+	Seat    string `json:"seat"`
+	Reason  string `json:"reason"`
 }
 
 // Unmatched is an item with no seat, by kind.
@@ -426,12 +429,12 @@ func Run(in Input) (Output, error) {
 		case placedAt >= 0:
 			s := free[placedAt].seat
 			used[keyOf(s)] = true
-			l := Lease{ID: in.RunID + "/" + it.ID, Item: it.ID, Seat: s.Address, ValidUntil: validUntil, State: LeaseOpen}
+			l := Lease{ID: in.RunID + "/" + it.ID, Item: it.ID, Cluster: s.Cluster, Seat: s.Address, ValidUntil: validUntil, State: LeaseOpen}
 			out.Leases = append(out.Leases, l)
-			out.Pairs = append(out.Pairs, Pair{Item: it.ID, Seat: s.Address, Lease: l.ID})
+			out.Pairs = append(out.Pairs, Pair{Item: it.ID, Cluster: s.Cluster, Seat: s.Address, Lease: l.ID})
 			out.Count.WouldPair++
 		case len(free) > 0:
-			out.Unplaced = append(out.Unplaced, Unplaced{Item: it.ID, Seat: free[0].seat.Address, Reason: UnplacedNoSender})
+			out.Unplaced = append(out.Unplaced, Unplaced{Item: it.ID, Cluster: free[0].seat.Cluster, Seat: free[0].seat.Address, Reason: UnplacedNoSender})
 		}
 	}
 	out.Count.Duplicate = len(out.Duplicates)
