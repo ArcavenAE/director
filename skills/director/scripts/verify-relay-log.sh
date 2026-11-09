@@ -127,5 +127,23 @@ mkdir -p "$root/noledger"
 ( export DIRECTOR_STATE="$root/noledger/none"; PATH="/usr/bin:/bin"; RELAY_LOG="$wsl" "$RL" append --to x --ws nosuch --text unknown >/dev/null 2>&1 ) \
   && grep -q '^\*\*Workstream:\*\* nosuch$' "$wsl" && ok "an unknown slug is written; relay-log needs no ledger" || bad "an unknown slug is written"
 
+# --- --kind answer: the cue for a Reply Shelf row (a relayed answer owes one) -----------------
+# The entry is the same as any other. The writer also prints one line after the heading
+# naming the shelf-row call to make; it writes nothing else, and the heading stays line one.
+al="$root/answer-log.md"
+RELAY_LOG="$al" "$RL" append --to agent://t/a --ask I-12 --kind answer --text "the answer" >"$root/aout" 2>&1 \
+  && ok "--kind answer is accepted with an ask" || bad "--kind answer is accepted with an ask" "$(cat "$root/aout")"
+head -n1 "$root/aout" | grep -q '^## R-1 (' && ok "the heading is still the first output line" || bad "the heading is still the first output line" "$(cat "$root/aout")"
+[[ "$(sed -n 2p "$root/aout")" == "shelf: relayed answer for I-12; build its row with shelf-row new --ask I-12 --asked-by NAME --asked-of NAME --summary-file F --source S, then apply the write to replies" ]] \
+  && ok "the second line names the shelf-row call, with the ask filled in" || bad "the second line names the shelf-row call" "$(cat "$root/aout")"
+[[ "$(grep -c . "$root/aout")" == 2 ]] && ok "and there are only those two lines" || bad "only two output lines" "$(cat "$root/aout")"
+grep -q '^\*\*Kind:\*\* answer$' "$al" && ok "the entry records Kind: answer" || bad "the entry records Kind: answer"
+n0="$(wc -c <"$al" | tr -d ' ')"
+if RELAY_LOG="$al" "$RL" append --to agent://t/a --kind answer --text "no ask" >"$root/aout2" 2>&1; then bad "--kind answer without --ask is refused"; else
+  grep -q 'ask' "$root/aout2" && ok "--kind answer without --ask is refused and names --ask" || bad "refusal names --ask" "$(cat "$root/aout2")"; fi
+[[ "$(wc -c <"$al" | tr -d ' ')" == "$n0" ]] && ok "and writes nothing" || bad "and writes nothing"
+RELAY_LOG="$al" "$RL" append --to agent://t/a --ask I-13 --kind relay --text "plain relay" >"$root/aout3" 2>&1
+[[ "$(grep -c . "$root/aout3")" == 1 ]] && ok "other kinds print the heading alone, as before" || bad "other kinds print the heading alone" "$(cat "$root/aout3")"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
