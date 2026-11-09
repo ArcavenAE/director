@@ -9,9 +9,9 @@ supervisor onto the shape; that is a separate step per supervisor.
 ## Where the shapes come from
 
 - **route-record@1** is the supervisor team-supervision process's route record
-  (`supervisor/route-record@1`, in the private wardrobe role library). Its fields are restated here, since this
+  (`supervisor/route-record@1`, in the role library, which is private). Its fields are restated here, since this
   repository cannot link a private one.
-- **route-event@1 has no written definition that this work could find** in wardrobe, director or marvel. The
+- **route-event@1 has no written definition that this work could find** in the role library, director or marvel. The
   brief names it only by name. The definition below is **derived from rows**: it is read off the event, close and
   note rows in the aae-orc supervisor lineage's ledger, the best-kept ledger readable at the time of writing. The
   brief's own well-kept ledger (604 routed, 485 acked) was not located and is **unverified**; it was probably a
