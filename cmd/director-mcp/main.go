@@ -103,6 +103,11 @@ func main() {
 		cancel()
 		os.Exit(code)
 	}
+	// look reads one seat's unread mail and writes files; it consumes nothing
+	// and registers no identity.
+	if cli.mode == "look" {
+		os.Exit(runLookMain(cli))
+	}
 	// marry is a pure computation over a file: no bus, no identity.
 	if cli.mode == "marry" {
 		os.Exit(runMarryCmd(cli, os.Stdout, os.Stderr))

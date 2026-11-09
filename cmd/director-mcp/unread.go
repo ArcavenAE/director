@@ -108,11 +108,15 @@ type cliArgs struct {
 	pointers    []string      // dossier: files the role keeps
 	handoffPath string        // dossier: the handoff file the manifest declares
 	handoffMark string        // dossier: the terminal marker the manifest declares
+	lookState   string        // look: the state directory
+	lookSeat    string        // look: the seat id whose inbox is read
 }
 
 const askReaderUsage = "director-mcp ask-reader [--once] [--file <path>] [--interval <duration up to 30s>]"
 
 const dossierUsage = "director-mcp dossier --role TEAM/ROLE [--predecessor AGENT-INSTANCE] [--predecessor-state DIR] [--handoff-path PATH] [--handoff-marker TEXT] [--pointer PATH]... [--json]"
+
+const lookUsage = "director-mcp look [--state DIR] [--seat AGENT-ID]"
 
 const unreadUsage = "director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <duration>] [--durable NAME]..."
 
@@ -197,6 +201,25 @@ func parseArgs(args []string) (cliArgs, error) {
 			return cliArgs{}, fmt.Errorf("marry: usage: %s", marryUsage)
 		}
 		return cliArgs{mode: "marry", file: args[2]}, nil
+	case args[0] == "look":
+		out := cliArgs{mode: "look"}
+		rest := args[1:]
+		for i := 0; i < len(rest); i++ {
+			a := rest[i]
+			if a != "--state" && a != "--seat" {
+				return cliArgs{}, fmt.Errorf("look: unknown argument %q (usage: %s)", a, lookUsage)
+			}
+			if i+1 >= len(rest) {
+				return cliArgs{}, fmt.Errorf("look: %s needs a value (usage: %s)", a, lookUsage)
+			}
+			i++
+			if a == "--state" {
+				out.lookState = rest[i]
+			} else {
+				out.lookSeat = rest[i]
+			}
+		}
+		return out, nil
 	case args[0] == "unread":
 		out := cliArgs{mode: "unread"}
 		rest := args[1:]
