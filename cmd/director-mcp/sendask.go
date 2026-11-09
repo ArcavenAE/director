@@ -24,7 +24,7 @@ import (
 var askIDPattern = regexp.MustCompile(`^I-[0-9]+$`)
 
 // relayKinds are the kinds relay-log accepts, in its own order.
-var relayKinds = []string{"relay", "ruling", "build", "research", "question"}
+var relayKinds = []string{"relay", "ruling", "build", "research", "question", "answer"}
 
 // relayLogTimeout bounds the relay-log call. The send has already left by then.
 const relayLogTimeout = 5 * time.Second
@@ -122,12 +122,13 @@ func directorHome() string {
 var relayHeading = regexp.MustCompile(`^## (R-[0-9]+) `)
 
 // writeRelayEntry has relay-log append the entry for an accepted send and returns
-// its number (R-<n>). The text goes in on stdin, verbatim; the message id rides on
-// the Outcome line.
-func writeRelayEntry(ctx context.Context, ask, kind, to, text, messageID string) (string, error) {
+// its number (R-<n>) and, for an answer entry, the `shelf:` cue line relay-log prints
+// after the heading (empty for every other kind). The text goes in on stdin,
+// verbatim; the message id rides on the Outcome line.
+func writeRelayEntry(ctx context.Context, ask, kind, to, text, messageID string) (string, string, error) {
 	home := directorHome()
 	if home == "" {
-		return "", errors.New("no DIRECTOR_HOME and no home directory")
+		return "", "", errors.New("no DIRECTOR_HOME and no home directory")
 	}
 	bin := filepath.Join(home, "bin", "relay-log")
 	ctx, cancel := context.WithTimeout(ctx, relayLogTimeout)
@@ -145,11 +146,19 @@ func writeRelayEntry(ctx context.Context, ask, kind, to, text, messageID string)
 		if i := strings.IndexByte(msg, '\n'); i >= 0 {
 			msg = msg[:i]
 		}
-		return "", errors.New(msg)
+		return "", "", errors.New(msg)
 	}
-	m := relayHeading.FindStringSubmatch(strings.TrimSpace(stdout.String()))
+	out := strings.TrimSpace(stdout.String())
+	m := relayHeading.FindStringSubmatch(out)
 	if m == nil {
-		return "", fmt.Errorf("relay-log printed no entry heading: %q", strings.TrimSpace(stdout.String()))
+		return "", "", fmt.Errorf("relay-log printed no entry heading: %q", out)
 	}
-	return m[1], nil
+	shelf := ""
+	for _, line := range strings.Split(out, "\n")[1:] {
+		if strings.HasPrefix(line, "shelf: ") {
+			shelf = line
+			break
+		}
+	}
+	return m[1], shelf, nil
 }

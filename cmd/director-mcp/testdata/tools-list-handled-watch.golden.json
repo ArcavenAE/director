@@ -18,7 +18,7 @@
             "type": "string"
           },
           "kind": {
-            "description": "optional, with ask: relay, ruling, build, research or question. Defaults to relay when ask is set.",
+            "description": "optional, with ask: relay, ruling, build, research, question or answer. Defaults to relay when ask is set.",
             "type": "string"
           },
           "performative": {

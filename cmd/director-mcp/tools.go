@@ -62,7 +62,7 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 					"in_reply_to":  str("optional message_id being answered"),
 					"reply_by":     str("optional RFC3339 deadline"),
 					"ask":          str("optional: the intake id (I-<n>) of the operator ask this send answers. When the send is accepted, the shim writes the relay-log entry for it (ask, recipient, text, message id). An id that is not in asks.jsonl refuses the send. One recipient only; not for broadcast addresses."),
-					"kind":         str("optional, with ask: relay, ruling, build, research or question. Defaults to relay when ask is set."),
+					"kind":         str("optional, with ask: relay, ruling, build, research, question or answer. Defaults to relay when ask is set."),
 					"workspace":    str("optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known cold mailbox (no live presence) verbatim. Ignored for a global:// address, whose subject carries no workspace."),
 				},
 				"required": []string{"to", "performative", "text"},
@@ -354,10 +354,14 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if ask != "" {
 		// The send has left. A relay-log that cannot write is a warning on the accepted
 		// result, never a failed send: refusing now would invite a duplicate.
-		if entry, err := writeRelayEntry(ctx, ask, kind, e.Recipient.Address, e.Content.Data, e.MessageID); err != nil {
+		if entry, shelf, err := writeRelayEntry(ctx, ask, kind, e.Recipient.Address, e.Content.Data, e.MessageID); err != nil {
 			out["warning"] = "accepted, but no relay-log entry was written: " + err.Error()
 		} else {
 			out["relay_entry"] = entry
+			if shelf != "" {
+				// An answer entry owes the Reply Shelf a row; the cue reaches the seat here.
+				out["shelf"] = shelf
+			}
 		}
 	}
 	return out, nil
