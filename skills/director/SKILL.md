@@ -299,7 +299,7 @@ questions crowds them out. Three scripts in `scripts/` give them one.
 
 - `standing-hook` is a prompt hook. Wired as a Claude Code `UserPromptSubmit`
   hook, it prints the drain age and the three-line checklist before each
-  answer. After every drain, run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat` to record it. With no
+  answer. The director-mcp shim records a drain itself: a `wait_for_message` with `max` above 1 that returns with `remaining` 0 writes `last-drain`. Run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat` by hand only after a drain that ended another way (the silence note, or a single-message wait). With no
   heartbeat it says the age is unknown; it never invents one. Its last line gives
   the age of the last stalled-ideas scan (`dbi`, run by the sweep, then
   `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat`), read from a file: the hook never runs the scan.
@@ -330,7 +330,7 @@ hook's three-line checklist asks about:
 1. Drain the bus inbox: `inbox_summary`, then `wait_for_message` with `max`
    above 1 until `remaining` is 0 or the reply is the silence note. This gives
    the messages to answer.
-2. Record the drain: `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat`. This gives `last-drain`.
+2. Record the drain. The shim writes `last-drain` when the batch wait in step 1 returns with `remaining` 0. If step 1 ended on the silence note or a single-message wait, run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat` yourself.
 3. Read answered Desk cards and refresh the snapshot: `desk-snapshot write`.
    This gives `desk-snapshot.json`. Read page picks beside it: export the work ledger
    page's `picks` collection to a file and run `dws picks --file <export>`. It prints
