@@ -62,7 +62,7 @@ echo "MARVEL_SOCKET=${MARVEL_SOCKET-unset} MARVEL_HOME=${MARVEL_HOME-unset}" >>"
 if [[ "${1:-}" != marry || "${2:-}" != --input || -z "${3:-}" || $# -ne 3 ]]; then echo "director-mcp $*" >>"$IS_FIX/forbidden.log"; exit 1; fi
 if [[ -n "${IS_REAL_DMCP:-}" ]]; then cp "$3" "$IS_FIX/marry.in"; exec "$IS_REAL_DMCP" "$@"; fi
 cp "$3" "$IS_FIX/marry.in"
-dup="$(jq -r '[.seats[].address] | group_by(.) | map(select(length > 1) | .[0]) | .[0] // empty' "$3" 2>/dev/null || true)"
+dup="$(jq -r '[.seats[] | [.cluster, .address]] | group_by(.) | map(select(length > 1) | .[0][1]) | .[0] // empty' "$3" 2>/dev/null || true)"
 if [[ -n "$dup" ]]; then echo "Error: marry: seat $dup is listed twice" >&2; exit 1; fi
 if [[ -e "$IS_FIX/dmcp.fail" ]]; then echo "marry input: boom" >&2; echo "second stderr line" >&2; exit 1; fi
 if [[ -e "$IS_FIX/dmcp.slow" ]]; then echo "$$" >>"$IS_FIX/slow.pids"; sleep "$(cat "$IS_FIX/dmcp.slow")"; fi
@@ -181,7 +181,7 @@ marry_cases() {
   # the one-would-pair vector: a class, a component, one free in-scope same-cluster seat
   reset; one_item
   ELIG_PATH="$ELIG_FIXTURE"
-  canned '{"pairs":[{"item":"e-1","seat":"agent://crew/b1","lease":"'"$RUN_ID"'/e-1"}],"leases":[{"id":"'"$RUN_ID"'/e-1","item":"e-1","seat":"agent://crew/b1","valid_until":"2026-10-21T08:35:00Z","state":"open"}],"count":{"ready":1,"eligible":1,"free":1,"would_pair":1}}'
+  canned '{"pairs":[{"item":"e-1","cluster":"alpha","seat":"agent://crew/b1","lease":"'"$RUN_ID"'/e-1"}],"leases":[{"id":"'"$RUN_ID"'/e-1","item":"e-1","seat":"agent://crew/b1","valid_until":"2026-10-21T08:35:00Z","state":"open"}],"count":{"ready":1,"eligible":1,"free":1,"would_pair":1}}'
   runm "$B"
   ELIG_PATH=""
   cl="$(count_line)"
@@ -191,8 +191,8 @@ marry_cases() {
   [[ "$(cat "$FIX/dmcp.env")" == "MARVEL_SOCKET=unset MARVEL_HOME=unset" ]] && ok "$tag 1 director-mcp is run with no MARVEL_SOCKET and no MARVEL_HOME of the script's making" || bad "$tag 1 env" "$(cat "$FIX/dmcp.env")"
   [[ "$cl" == *"would-pair 1"* && "$cl" == *"leases sent 0"* ]] && ok "$tag 1 would-pair 1, leases sent 0" || bad "$tag 1 count" "$cl"
   [[ "$(wc -l <"$st/would-pair.jsonl" | tr -d ' ')" == 1 ]] && ok "$tag 1 exactly one would-pair row" || bad "$tag 1 rows" "$(cat "$st/would-pair.jsonl")"
-  [[ "$(jq -r '[.item, .seat, .lease] | join(" ")' "$st/would-pair.jsonl")" == "e-1 agent://crew/b1 $RUN_ID/e-1" ]] && ok "$tag 1 the row names the item, the seat and the lease" || bad "$tag 1 row" "$(cat "$st/would-pair.jsonl")"
-  has "- would-pair e-1 agent://crew/b1 (lease $RUN_ID/e-1; shadow, nothing is sent)" && ok "$tag 1 the pair is printed" || bad "$tag 1 print" "$(out)"
+  [[ "$(jq -r '[.item, .cluster, .seat, .lease] | join(" ")' "$st/would-pair.jsonl")" == "e-1 alpha agent://crew/b1 $RUN_ID/e-1" ]] && ok "$tag 1 the row names the item, the cluster, the seat and the lease" || bad "$tag 1 row" "$(cat "$st/would-pair.jsonl")"
+  has "- would-pair e-1 agent://crew/b1 (cluster alpha; lease $RUN_ID/e-1; shadow, nothing is sent)" && ok "$tag 1 the pair is printed" || bad "$tag 1 print" "$(out)"
   ! has "- GAP marry" && ok "$tag 1 no marry GAP" || bad "$tag 1 gap" "$(out)"
   [[ ! -e "$FIX/forbidden.log" ]] && ok "$tag 1 no send, inject, bd write or gh call" || bad "$tag 1 forbidden" "$(cat "$FIX/forbidden.log")"
   [[ "$(jq -r '.would_pair' "$st/flow.jsonl")" == 1 ]] && ok "$tag 1 the flow line says 1" || bad "$tag 1 flow"
@@ -236,17 +236,28 @@ marry_cases() {
   runm "$B" IDLE_SHADOW_NOW="$NOW_OLD2"
   jq -e '[.seats[].availability] | all(. == "unknown")' "$FIX/marry.in" >/dev/null && ok "$tag 3 an old seats file reaches director-mcp as all unknown" || bad "$tag 3 old seats" "$(jq -c '[.seats[].availability]' "$FIX/marry.in" 2>&1)"
 
-  # one address under two clusters: marry refuses the whole input, so the address is dropped,
-  # named once, and the rest of the seats still reach marry
+  # one address listed twice on ONE cluster: marry refuses the whole input, so the address is
+  # dropped, named once with its cluster, and the rest of the seats still reach marry
   reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"
-  { seat alpha crew builder b1 free; seat beta crew builder b1 free; seat alpha crew builder b2 free; } >"$root/state/freebusy/seats.jsonl"
+  { seat alpha crew builder b1 free; seat alpha crew builder b1 free; seat alpha crew builder b2 free; } >"$root/state/freebusy/seats.jsonl"
   canned '{"count":{"ready":1,"eligible":1,"free":1}}'
   runm "$B"
-  [[ "$rc" == 0 && "$(/usr/bin/grep -c -F -- '- GAP duplicate-seat agent://crew/b1 (clusters alpha, beta)' "$root/out" || true)" == 1 ]] \
-    && ok "$tag DUP1 a duplicated address is named once, with both clusters, and the run ends 0" || bad "$tag DUP1 duplicate gap" "$(out)"
+  [[ "$rc" == 0 && "$(/usr/bin/grep -c -F -- '- GAP duplicate-seat agent://crew/b1 (cluster alpha)' "$root/out" || true)" == 1 ]] \
+    && ok "$tag DUP1 an address listed twice on one cluster is named once, with that cluster, and the run ends 0" || bad "$tag DUP1 duplicate gap" "$(out)"
   ! has "marry: director-mcp marry failed" && ok "$tag DUP1 marry is not refused" || bad "$tag DUP1 marry refused" "$(out)"
   jq -e '[.seats[].address] == ["agent://crew/b2"]' "$FIX/marry.in" >/dev/null \
     && ok "$tag DUP1 the duplicate is dropped and the other seat still reaches marry" || bad "$tag DUP1 marry input" "$(jq -c '[.seats[].address]' "$FIX/marry.in" 2>&1)"
+  # one name on two clusters is two seats: no duplicate GAP, both reach marry, and the pair row names its cluster
+  reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"
+  { seat alpha crew builder b1 free; seat beta crew builder b1 free; } >"$root/state/freebusy/seats.jsonl"
+  canned '{"pairs":[{"item":"e-1","cluster":"alpha","seat":"agent://crew/b1","lease":"'"$RUN_ID"'/e-1"}],"count":{"ready":1,"eligible":1,"free":2,"would_pair":1}}'
+  runm "$B"
+  ! has "duplicate-seat" && ok "$tag DUP3 one name on two clusters prints no duplicate-seat gap" || bad "$tag DUP3 gap" "$(out)"
+  jq -e '[.seats[] | [.address, .cluster] | join(" ")] == ["agent://crew/b1 alpha", "agent://crew/b1 beta"]' "$FIX/marry.in" >/dev/null \
+    && ok "$tag DUP3 both cluster seats reach marry" || bad "$tag DUP3 marry input" "$(jq -c '[.seats[] | [.address, .cluster]]' "$FIX/marry.in" 2>&1)"
+  [[ "$(wc -l <"$st/would-pair.jsonl" | tr -d ' ')" == 1 && "$(jq -r '.cluster' "$st/would-pair.jsonl")" == alpha ]] \
+    && has "- would-pair e-1 agent://crew/b1 (cluster alpha; lease $RUN_ID/e-1; shadow, nothing is sent)" \
+    && ok "$tag DUP3 the one pair row names cluster alpha, in the file and in the print" || bad "$tag DUP3 pair row" "$(cat "$st/would-pair.jsonl"; out)"
   # no duplicate: no duplicate GAP
   reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"
   canned '{"count":{"ready":1,"eligible":1,"free":1}}'
@@ -283,7 +294,7 @@ marry_cases() {
   done
   # the default path lives in the state directory
   reset; one_item; mkdir -p "$st"; chmod 700 "$st"; printf '%s\n' "$ELIG_OK" >"$st/seat-eligibility.json"
-  canned '{"pairs":[{"item":"e-1","seat":"agent://crew/b1","lease":"'"$RUN_ID"'/e-1"}],"count":{"would_pair":1}}'
+  canned '{"pairs":[{"item":"e-1","cluster":"alpha","seat":"agent://crew/b1","lease":"'"$RUN_ID"'/e-1"}],"count":{"would_pair":1}}'
   runis "$B" IDLE_SHADOW_SENDER_CLUSTER=alpha ${REAL:+IS_REAL_DMCP="$REAL"}
   ! has "- GAP seat-eligibility" && jq -e '.seats[0].classes == ["story-implementation"] or ([.seats[] | select(.address == "agent://crew/b1")][0].classes == ["story-implementation"])' "$FIX/marry.in" >/dev/null \
     && ok "$tag 5 with no variable set the file in the state directory is read" || bad "$tag 5 default path" "$(out)"
@@ -369,10 +380,10 @@ marry_cases() {
     # The marvel stub stays first on PATH and logs any call as forbidden, so a marvel installed
     # on the host cannot answer in its place: a marry step that calls marvel fails this case.
     reset; one_item; printf '%s\n' "$ELIG_OK" >"$FIX/elig.json"
-    canned '{"pairs":[{"item":"e-1","seat":"agent://crew/b1","lease":"'"$RUN_ID"'/e-1"}],"count":{"ready":1,"eligible":1,"free":1,"would_pair":1}}'
+    canned '{"pairs":[{"item":"e-1","cluster":"alpha","seat":"agent://crew/b1","lease":"'"$RUN_ID"'/e-1"}],"count":{"ready":1,"eligible":1,"free":1,"would_pair":1}}'
     runm "$B"
     cl="$(count_line)"
-    [[ "$rc" == 0 && "$cl" == *"would-pair 1"* ]] && has "- would-pair e-1 agent://crew/b1 (lease $RUN_ID/e-1; shadow, nothing is sent)" \
+    [[ "$rc" == 0 && "$cl" == *"would-pair 1"* ]] && has "- would-pair e-1 agent://crew/b1 (cluster alpha; lease $RUN_ID/e-1; shadow, nothing is sent)" \
       && ! has "marry: marvel marry failed" && ! has "- GAP marry" && [[ ! -e "$FIX/forbidden.log" ]] \
       && ok "$tag 12 with marvel unusable the run pairs through director-mcp, with no marry GAP" || bad "$tag 12 no marvel" "$cl $(out) $(cat "$FIX/forbidden.log" 2>&1)"
   fi

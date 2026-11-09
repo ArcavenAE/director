@@ -336,13 +336,14 @@ marry_step() {
   if [[ "$elig_ok" != 1 ]]; then
     gap "seat-eligibility: $elig_why; seats go to marry with no classes, scopes or duty cells"
   fi
-  # marry refuses the whole input when one address is listed twice (an address held under two
-  # clusters, marvel#1231). Each such address is dropped and named once; the rest still goes.
-  dups_json="$(jq -s -c '[ .[] | {a: "agent://\(.team)/\(.name)", c: (.cluster | tostring)} ] | group_by(.a)
-    | map(select(length > 1) | {a: .[0].a, c: (map(.c) | unique | join(", "))})' "$seats_file" 2>/dev/null || true)"
+  # marry refuses the whole input when one seat (a cluster and an address) is listed twice. Each
+  # such seat is dropped and named once with its cluster; the rest still goes. One address on two
+  # clusters is two seats, and both reach marry.
+  dups_json="$(jq -s -c '[ .[] | {a: "agent://\(.team)/\(.name)", c: (.cluster | tostring)} ] | group_by([.a, .c])
+    | map(select(length > 1) | {a: .[0].a, c: .[0].c})' "$seats_file" 2>/dev/null || true)"
   if [[ -z "$dups_json" ]]; then dups_json='[]'; fi
   while IFS=$'\t' read -r dup_addr dup_clusters; do
-    if [[ -n "$dup_addr" ]]; then gap "duplicate-seat $(printf '%s' "$dup_addr" | tr -d '[:cntrl:]') (clusters $(printf '%s' "$dup_clusters" | tr -d '[:cntrl:]'))"; fi
+    if [[ -n "$dup_addr" ]]; then gap "duplicate-seat $(printf '%s' "$dup_addr" | tr -d '[:cntrl:]') (cluster $(printf '%s' "$dup_clusters" | tr -d '[:cntrl:]'))"; fi
   done < <(jq -r '.[] | "\(.a)\t\(.c)"' <<<"$dups_json" 2>/dev/null)
   jq -n -c --arg run "idle-shadow-$now" --arg at "$at" --arg sender "$sender_cluster" --argjson stale "$stale" --argjson dups "$dups_json" \
     --slurpfile items "$tmp/marry.items" --slurpfile st "$seats_file" --slurpfile el "$tmp/elig.json" '
@@ -351,7 +352,8 @@ marry_step() {
         seats: [ $st[]
           | (if $stale == 1 then .state = "unknown" else . end)
           | ("agent://\(.team)/\(.name)") as $addr
-          | select(([ $dups[].a ] | index($addr)) == null)
+          | (.cluster | tostring) as $clu
+          | select([ $dups[] | select(.a == $addr and .c == $clu) ] | length == 0)
           | ([ $es[] | select(.address == $addr) ][0] // {}) as $e
           | {address: $addr, team: .team, cluster: .cluster,
              availability: (if .state == "free" then "free" elif .state == "busy" then "working" elif .state == "waiting" then "parked" else "unknown" end)}
@@ -384,8 +386,8 @@ marry_step() {
     gap "marry: director-mcp returned a pair whose seat is not an agent:// address; no pair was written"
     return 0
   fi
-  jq -c --arg at "$at" '(.pairs // [])[] | {at: $at, item: .item, seat: .seat, lease: .lease}' "$tmp/marry.out" >"$tmp/would-pair.jsonl" 2>/dev/null || true
-  jq -r '(.pairs // [])[] | "- would-pair \(.item) \(.seat) (lease \(.lease); shadow, nothing is sent)"' "$tmp/marry.out" >"$tmp/pair-lines" 2>/dev/null || true
+  jq -c --arg at "$at" '(.pairs // [])[] | {at: $at, item: .item, cluster: (.cluster // ""), seat: .seat, lease: .lease}' "$tmp/marry.out" >"$tmp/would-pair.jsonl" 2>/dev/null || true
+  jq -r '(.pairs // [])[] | "- would-pair \(.item) \(.seat) (\(if (.cluster // "") != "" then "cluster \(.cluster); " else "" end)lease \(.lease); shadow, nothing is sent)"' "$tmp/marry.out" >"$tmp/pair-lines" 2>/dev/null || true
   jq -r --argjson max "$list_max" '(.unplaced // []) as $u | $u[:$max][] | "- unplaced: \(.reason): \(.item) \(.seat)"
     , (if ($u | length) > $max then "- unplaced: and \(($u | length) - $max) more" else empty end)' "$tmp/marry.out" >"$tmp/unplaced-lines" 2>/dev/null || true
   jq -c --arg at "$at" '(.unmatched // [])[] | select(.kind == "no-eligible-seat") | {at: $at, id: .item, missing: ["seat"], operator: false}' "$tmp/marry.out" >>"$tmp/unmatched.jsonl" 2>/dev/null || true
