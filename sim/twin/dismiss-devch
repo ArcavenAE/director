@@ -31,6 +31,11 @@ After the one press it waits up to DIRECTOR_DEVCH_AFTER seconds (default 15) for
 dialog to go and composer-check to read an empty composer. It never sends a second key.
 If the key did nothing it says so (exit 3), so a wrong key is reported, not retried.
 
+Every tmux and composer-check call is bounded by CALL_TIMEOUT (10 s) and by the time
+the current wait has left, so a hung tmux cannot outlive the
+deadline. A capture or composer-check that times out reads as "not this screen". A
+send-keys that times out is exit 4, and the key is never sent a second time.
+
 Exit codes: 0 done, 1 gave up, 2 text did not match, 3 pressed but not confirmed,
 4 the key could not be sent.
 
@@ -40,6 +45,7 @@ dialog takes it. PRESS_KEY is the one place to change if it does not.
 """
 import argparse
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -47,6 +53,10 @@ import time
 # The one key pressed on option 1. A digit, never Enter: a digit does nothing on a
 # screen that is not the dialog, while Enter would submit whatever is in a composer.
 PRESS_KEY = "1"
+
+# The longest any one tmux or composer-check call may run, in seconds. A call is
+# also cut short by the time its wait has left, so this only matters in a long wait.
+CALL_TIMEOUT = 10.0
 
 TITLE = "WARNING: Loading development channels"
 CHANNELS = "Channels: server:director"
@@ -89,27 +99,61 @@ def classify(text):
     return "dialog", ""
 
 
+def run_bounded(cmd, limit):
+    """Run cmd, give it at most limit seconds, and return (returncode, stdout, stderr).
+
+    A command that is still running at the limit is killed with its whole process
+    group (tmux, or a composer-check that has started its own tmux) and reported as
+    returncode None, so a hung tmux cannot hold the helper past its deadline.
+    """
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, errors="replace", start_new_session=True)
+    except OSError as e:
+        return 127, "", str(e)
+    try:
+        out, err = p.communicate(timeout=limit)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            p.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        return None, "", ""
+    return p.returncode, out, err
+
+
 class Pane:
-    def __init__(self, pane, tmux_args):
+    def __init__(self, pane, tmux_args, call_timeout):
         self.pane = pane
         self.tmux_args = tmux_args
+        self.call_timeout = call_timeout
+        self.until = None  # monotonic time the current wait ends; calls are clamped to it
+
+    def limit(self):
+        if self.until is None:
+            return self.call_timeout
+        return max(0.1, min(self.call_timeout, self.until - time.monotonic()))
 
     def capture(self):
-        r = subprocess.run(["tmux", *self.tmux_args, "capture-pane", "-p", "-t", self.pane],
-                           capture_output=True, text=True, errors="replace")
-        return r.stdout if r.returncode == 0 else ""
+        rc, out, _ = run_bounded(["tmux", *self.tmux_args, "capture-pane", "-p", "-t", self.pane],
+                                 self.limit())
+        return out if rc == 0 else ""
 
     def press(self, key):
-        r = subprocess.run(["tmux", *self.tmux_args, "send-keys", "-t", self.pane, key],
-                           capture_output=True, text=True, errors="replace")
-        return r.returncode == 0, r.stderr.strip()
+        rc, _, err = run_bounded(["tmux", *self.tmux_args, "send-keys", "-t", self.pane, key],
+                                 self.limit())
+        if rc is None:
+            return False, "timed out after %g s; the key may or may not have reached the pane" % self.limit()
+        return rc == 0, err.strip()
 
     def composer_empty(self, checker):
         cmd = [checker, "--pane", self.pane] + ["--tmux-arg=" + a for a in self.tmux_args]
-        try:
-            return subprocess.run(cmd, capture_output=True, text=True).returncode == 0
-        except OSError:
-            return False
+        rc, _, _ = run_bounded(cmd, self.limit())
+        return rc == 0
 
 
 def first_line(text):
@@ -142,9 +186,10 @@ def main():
     poll = float(os.environ.get("DIRECTOR_DEVCH_POLL", "0.5"))
     after = float(os.environ.get("DIRECTOR_DEVCH_AFTER", "15"))
     checker = find_checker()
-    pane = Pane(a.pane, a.tmux_arg)
+    pane = Pane(a.pane, a.tmux_arg, CALL_TIMEOUT)
 
     start = time.monotonic()
+    pane.until = start + deadline
     last = ""
     while True:
         text = pane.capture()
@@ -170,6 +215,7 @@ def main():
     say("devch: pressed " + PRESS_KEY + " on option 1")
 
     start = time.monotonic()
+    pane.until = start + after
     still_shown = True
     while True:
         text = pane.capture()

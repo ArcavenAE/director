@@ -437,7 +437,7 @@ done
 helper_dir="$(dirname "$LAUNCH")"
 HELPER="$helper_dir/dismiss-devch"
 [[ -x "$HELPER" ]] || HELPER="$here/dismiss-devch"
-fake="$root/fake"; mkdir -p "$fake"
+fake="$(mktemp -d "$root/fake.XXXXXX")"
 cat > "$root/bin/tmux" <<'STUB'
 #!/usr/bin/env bash
 # Fake tmux: records every call; serves $FAKE/before until a send-keys, then
@@ -445,14 +445,17 @@ cat > "$root/bin/tmux" <<'STUB'
 echo "$*" >> "$FAKE/calls"
 while [[ "${1:-}" == -S || "${1:-}" == -L ]]; do shift 2; done
 case "${1:-}" in
-  capture-pane) if [[ -f "$FAKE/pressed" ]]; then cat "$FAKE/after"; else cat "$FAKE/before"; fi ;;
-  send-keys) echo "$*" >> "$FAKE/keys"; [[ -f "$FAKE/never_gone" ]] || touch "$FAKE/pressed" ;;
+  capture-pane) [[ -f "$FAKE/hang_capture" ]] && sleep 8
+                if [[ -f "$FAKE/pressed" ]]; then cat "$FAKE/after"; else cat "$FAKE/before"; fi ;;
+  send-keys) echo "$*" >> "$FAKE/keys"; [[ -f "$FAKE/hang_press" ]] && sleep 8
+             [[ -f "$FAKE/never_gone" ]] || touch "$FAKE/pressed" ;;
 esac
 STUB
 # Stand-in for composer-check: EMPTY (exit 0) when $FAKE/composer_now exists, or
 # once the key was sent and $FAKE/composer_after exists; UNCLEAR (exit 3) otherwise.
 cat > "$root/bin/composer-check-stub" <<'STUB'
 #!/usr/bin/env bash
+[[ -f "$FAKE/hang_composer" ]] && sleep 8
 if [[ -f "$FAKE/composer_now" || ( -f "$FAKE/pressed" && -f "$FAKE/composer_after" ) ]]; then echo EMPTY; exit 0; fi
 echo UNCLEAR; exit 3
 STUB
@@ -475,7 +478,10 @@ hrun() { # runs the helper with the fake tmux; leaves rc in $hrc and output in $
     DIRECTOR_DEVCH_COMPOSER_CHECK="$root/bin/composer-check-stub" \
     "$HELPER" --pane %7 2>&1)" || hrc=$?
 }
-hreset() { rm -rf "$fake"; mkdir -p "$fake"; }
+# Each case gets its own fake dir, so a helper a launcher case left running (it
+# keeps polling until its own deadline) writes into that case's dir and never into
+# the next case's calls file.
+hreset() { fake="$(mktemp -d "$root/fake.XXXXXX")"; }
 nkeys() { if [[ -f "$fake/keys" ]]; then wc -l < "$fake/keys" | tr -d ' '; else echo 0; fi; }
 
 # the exact dialog: one key, the digit 1, never Enter, then the composer is confirmed
@@ -539,6 +545,24 @@ hreset; printf '%s\n' ' loading' > "$fake/before"
 t0=$SECONDS; hrun 1
 [[ "$hrc" == 1 && $((SECONDS - t0)) -lt 6 ]] && ok "devch: the wait is bounded by the deadline" \
   || bad "devch: the wait is bounded" "rc=$hrc secs=$((SECONDS - t0))"
+
+# a hung tmux or composer-check must not outlive the deadline: every call is bounded
+# by the helper's CALL_TIMEOUT and by the time the current wait has left
+hung() { # name, switch file, rc wanted, keys wanted, deadline
+  local name="$1" sw="$2" wantrc="$3" wantkeys="$4" dl="$5" t0
+  hreset; if [[ "$sw" == hang_press ]]; then good_dialog > "$fake/before"; else printf '%s\n' ' loading' > "$fake/before"; fi
+  : > "$fake/$sw"; t0=$SECONDS
+  hrun "$dl"
+  [[ "$hrc" == "$wantrc" && "$(nkeys)" == "$wantkeys" && $((SECONDS - t0)) -lt $((dl + 4)) ]] \
+    && ok "devch: $name: ends in time with rc $wantrc and $wantkeys key(s)" \
+    || bad "devch: $name" "rc=$hrc keys=$(nkeys) secs=$((SECONDS - t0)) out=$hout"
+}
+hung "a hung capture (clamped to the deadline)" hang_capture 1 0 2
+hung "a hung composer-check" hang_composer 1 0 2
+hung "a hung send-keys" hang_press 4 1 3
+[[ "$hout" == *"timed out"* ]] \
+  && ok "devch: a send-keys that hangs is reported as timed out, never retried" \
+  || bad "devch: hung send-keys message" "$hout"
 
 # a failed send-keys is reported, not hidden
 hreset; good_dialog > "$fake/before"
