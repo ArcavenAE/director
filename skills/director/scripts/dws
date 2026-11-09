@@ -1376,6 +1376,9 @@ def cmd_asks(a):
     for card, ask in intake_map.items():
         cards_of.setdefault(ask, []).append(card)
     relay = read_relay()
+    if not relay["ok"]:
+        # stdout stays the join; the reader of it (standing-hook) must not take "none" for a fact
+        print(f"dws asks: relay log not read ({relay['why']}); every relay column reads none", file=sys.stderr)
     relays_of = {}
     for n, es in relay["entries"].items():
         for e in es:

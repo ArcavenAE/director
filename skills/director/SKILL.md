@@ -303,6 +303,9 @@ questions crowds them out. Three scripts in `scripts/` give them one.
   heartbeat it says the age is unknown; it never invents one. Its last line gives
   the age of the last stalled-ideas scan (`dbi`, run by the sweep, then
   `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat`), read from a file: the hook never runs the scan.
+  When an ask from the last 24 hours has neither a relay entry nor a ledger row, it adds
+  `asks in the last 24 h with no relay or row: <n> (oldest <id>)` before the waiting line, read through
+  `dws asks --json` (nothing printed at 0; `UNKNOWN (<reason>)` when the join or the relay log cannot be read).
   When something waits it adds one last line, `waiting: <n> Desk answers not relayed (...); <m> approved PRs not
   merged (...); Desk read <age> ago`, or `waiting: UNKNOWN (<reason>)` when an input is missing or too old. The
   answers come from `desk-snapshot write --answers`; the PR half comes from `dws waiting write`, which the
