@@ -440,7 +440,7 @@ more draft")"
 # --- a Codex pane: the idle placeholder is EMPTY, anything else on the line stays UNCLEAR ----
 # Codex draws no rule lines, so the frame is missing. Its mark is U+203A (bold), and its idle
 # placeholder "Ask Codex to do anything" is dim. Fixture: fixtures/composer-check.codex-idle.pin.
-CX=$'\u203a'; PH="Ask Codex to do anything"
+CX=$'›'; PH="Ask Codex to do anything"
 codex() { printf '%s\n  %s' "$1" "${E}[1m?${E}[0m for shortcuts"; }
 pinned_codex() { # file, sha256
   local f="$here/fixtures/$1"

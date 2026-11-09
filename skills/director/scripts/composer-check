@@ -39,6 +39,13 @@ is QUEUED, decided before the scan for typed text. The queued message itself sit
 in the transcript above the frame with its own prompt mark, and the phrase
 anywhere outside the mark line, above or below the frame, is not the banner.
 
+A Codex pane draws no rule lines, so it has no frame and would be refused. Its idle composer
+line is the mark U+203A and then the placeholder "Ask Codex to do anything" in the dim code. When
+no frame is found and the last U+203A line holds exactly that placeholder, dim, and nothing else,
+the verdict is EMPTY. Any other text on that line (more text after the placeholder, the phrase typed
+in the default colour, a partial phrase, no text) stays UNCLEAR. A capture that has a frame is read
+as before, whatever its text says.
+
 The menu is recognised only as its own block BELOW the bottom rule: the title
 line followed within a few lines by an option line "1. Yes" and a later
 "2. Not now" (a leading cursor mark on an option line is allowed). The phrase in
@@ -71,6 +78,8 @@ TMUX_BIN overrides the tmux binary (the tests use a fake).
 import argparse, os, re, subprocess, sys
 
 PROMPT = "\u276f"  # the prompt mark
+CODEX_MARK = "\u203a"  # the mark on a Codex pane's composer line
+CODEX_PLACEHOLDER = "Ask Codex to do anything"  # its idle placeholder, drawn dim
 ANSI = re.compile(r"\x1b\[([0-9;:]*)m")
 # A drawn rule, measured from three live Claude Code panes on 2026-10-14: after an optional
 # ESC[39m, the colour ESC[38;5;244m, then a run of U+2500 (never ASCII "-"); the top rule
@@ -154,13 +163,37 @@ def menu_at(lines, start):
     return None
 
 
+def codex_idle(lines):
+    """True when the last Codex mark line holds only the idle placeholder, dim.
+    Codex draws no rule lines, so the frame is missing and the check would refuse.
+    Its composer line is the mark U+203A and then the dim placeholder; anything else
+    on that line (more text, the phrase typed in the default colour, a partial
+    phrase, nothing at all) is not matched and stays UNCLEAR."""
+    marks = [l for l in lines if plain(l).lstrip().startswith(CODEX_MARK)]
+    if not marks:
+        return False
+    segs, seen = [], False
+    for dim, seg in runs(marks[-1]):
+        if not seen:
+            if CODEX_MARK not in seg:
+                continue
+            seg, seen = seg.split(CODEX_MARK, 1)[1], True
+        if blank(seg):
+            continue
+        if not dim:
+            return False
+        segs.append(seg)
+    return " ".join("".join(segs).replace("\u00a0", " ").split()) == CODEX_PLACEHOLDER
+
+
 def verdict(text):
     """The composer is framed: the rule line above it and the one below, the last two
     rules on screen. Anything that does not look like that is refused, not guessed at."""
     lines = text.splitlines()
     rules = [i for i, l in enumerate(lines) if is_rule(l)]
     if len(rules) < 2:
-        return "UNCLEAR"
+        # No Claude frame. A Codex pane draws none; its idle placeholder alone is EMPTY.
+        return "EMPTY" if codex_idle(lines) else "UNCLEAR"
     top, bot = rules[-2], rules[-1]
     # A rule-shaped line typed into a draft can pose as the frame's top. A drawn top rule
     # sits above it, so a mark line between the rule before and this "top" means the
