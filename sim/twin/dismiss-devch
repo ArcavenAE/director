@@ -31,10 +31,12 @@ After the one press it waits up to DIRECTOR_DEVCH_AFTER seconds (default 15) for
 dialog to go and composer-check to read an empty composer. It never sends a second key.
 If the key did nothing it says so (exit 3), so a wrong key is reported, not retried.
 
-Every tmux and composer-check call is bounded by CALL_TIMEOUT (10 s) and by the time
-the current wait has left, so a hung tmux cannot outlive the
-deadline. A capture or composer-check that times out reads as "not this screen". A
-send-keys that times out is exit 4, and the key is never sent a second time.
+Every capture and composer-check call is bounded by CALL_TIMEOUT (10 s) and by the
+time the current wait has left, so a hung tmux cannot outlive the deadline. A capture
+or composer-check that times out reads as "not this screen". The one send-keys runs
+under CALL_TIMEOUT alone, so a dialog seen near the deadline still gets its key; one
+that times out is exit 4, reported with the limit it ran under, and the key is never
+sent a second time.
 
 Exit codes: 0 done, 1 gave up, 2 text did not match, 3 pressed but not confirmed,
 4 the key could not be sent.
@@ -55,7 +57,8 @@ import time
 PRESS_KEY = "1"
 
 # The longest any one tmux or composer-check call may run, in seconds. A call is
-# also cut short by the time its wait has left, so this only matters in a long wait.
+# also cut short by the time its wait has left, except the one key press, which runs
+# under this limit alone.
 CALL_TIMEOUT = 10.0
 
 TITLE = "WARNING: Loading development channels"
@@ -144,10 +147,13 @@ class Pane:
         return out if rc == 0 else ""
 
     def press(self, key):
+        # The one press runs under its own bound, not what the wait before it has
+        # left: a dialog first seen near that wait's deadline must still get its key.
+        limit = self.call_timeout
         rc, _, err = run_bounded(["tmux", *self.tmux_args, "send-keys", "-t", self.pane, key],
-                                 self.limit())
+                                 limit)
         if rc is None:
-            return False, "timed out after %g s; the key may or may not have reached the pane" % self.limit()
+            return False, "timed out after %g s; the key may or may not have reached the pane" % limit
         return rc == 0, err.strip()
 
     def composer_empty(self, checker):
