@@ -3,11 +3,12 @@
 #
 # "not until marvel admits": the director seat and research-supervisor stay on
 # cast-launch until marvel resolves the director global role and admits a
-# research-supervisor as a holder by default. Every other bus role is switchable.
+# research-supervisor as a holder by default. The supervisor is unlisted: it stays on
+# cast-launch until the supervisor cue default is decided (aae-orc-no9i4.4), then it
+# returns here as its own change. Every other listed bus role is switchable.
 [roles]
 director = "not until marvel admits"
 research-supervisor = "not until marvel admits"
-supervisor = "switchable"
 builder = "switchable"
 marvel-builder = "switchable"
 sideshow-builder = "switchable"

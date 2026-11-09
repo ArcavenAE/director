@@ -26,7 +26,7 @@ under the library root. Leave both names alone.
 |---|---|
 | `company.toml` | the library's index: name, kind `recipes`, schema, the marvel floor, the definition schema its recipes expect. It carries no `version` and no `source`; see Stamping |
 | `recipes/bus-seat.toml` | the bus-seat recipe |
-| `switch-list.toml` | which bus roles may move to the recipe; the director seat and research-supervisor stay on `cast-launch.sh` until marvel admits them |
+| `switch-list.toml` | which bus roles may move to the recipe; the director seat and research-supervisor stay on `cast-launch.sh` until marvel admits them, and the supervisor stays there until the supervisor cue default is decided (aae-orc-no9i4.4) |
 | `parity-table.toml` | cases 4 and 6 of `sim/twin/verify-cast-launch.sh` as data, with the one relaxation (`DIRECTOR_CLUSTER`) recorded in the file |
 
 marvel strict-decodes every file in `recipes/recipes/` as a recipe, so only recipes go
@@ -68,7 +68,8 @@ scripts/stamp-recipes.sh recipes <out-dir>
 
 It writes `version = "<commit date>-<short sha>"` and `source = { url, commit }` into
 the copy and leaves the committed file alone. It refuses a library with uncommitted
-changes.
+changes, and an out-dir that is the library, inside it, a parent of it or of the
+repository, or not empty. It removes nothing.
 
 Cutting a release is a separate act and is not part of a pull request: tag
 `director-recipes-<version>` and publish the git tree id with the tag. An installer that

@@ -10,8 +10,10 @@
 #                                              suffix) and the full sha of HEAD
 #
 # Usage: scripts/stamp-recipes.sh <library-dir> <out-dir>
-# Refuses a library with uncommitted changes and writes nothing in that case. The
-# committed files are never edited. Needs git and python3 (3.11 or newer).
+# Refuses a library with uncommitted changes, and an out-dir that is the library,
+# inside it, a parent of it or of the repository, or not empty; it writes nothing and
+# removes nothing in those cases. The committed files are never edited. Needs git
+# and python3 (3.11 or newer).
 set -euo pipefail
 
 lib="${1:?usage: stamp-recipes.sh <library-dir> <out-dir>}"
@@ -24,6 +26,23 @@ if [[ -n "$dirty" ]]; then
   echo "refusing: $lib has uncommitted changes (commit them first):" >&2
   printf '%s\n' "$dirty" | sed 's/^/  /' >&2
   exit 1
+fi
+# The out-dir must be new or empty, and must not be the library, inside it, or a
+# parent of it or of the repository: nothing is ever removed to make room.
+out="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$out")"
+libp="$(cd "$lib" && pwd -P)"
+repop="$(cd "$repo" && pwd -P)"
+case "$out/" in
+  "$libp"/*) echo "refusing: out-dir $out is the library or inside it" >&2; exit 1 ;;
+esac
+case "$libp/" in
+  "$out"/*) echo "refusing: out-dir $out contains the library" >&2; exit 1 ;;
+esac
+case "$repop/" in
+  "$out"/*) echo "refusing: out-dir $out contains the repository" >&2; exit 1 ;;
+esac
+if [[ -e "$out" && ( ! -d "$out" || -n "$(ls -A "$out")" ) ]]; then
+  echo "refusing: out-dir $out exists and is not an empty directory" >&2; exit 1
 fi
 commit="$(git -C "$repo" rev-parse HEAD)"
 short="$(git -C "$repo" rev-parse --short=7 HEAD)"
@@ -62,7 +81,6 @@ out.append(f'source = {{ url = "{url}", commit = "{commit}" }}')
 open(path, "w").write("\n".join(out) + "\n")
 tomllib.loads(open(path).read())
 PY
-rm -rf "$out"
 mkdir -p "$out"
 cp -R "$tmp/lib/." "$out/"
 echo "stamped $out: version ${date}-${short}, commit $commit"
