@@ -167,27 +167,6 @@ Slice M (`sim/design/unread-slice-m.md`):
   count in each state. The role comes from a `role.<role>.inbox` filter, or
   else from the agent id with its replica suffix and team prefix removed.
 
-### `look`
-
-`director-mcp look [--state DIR] [--seat AGENT-ID]` is a timed look at one seat's
-unread mail. It reads and never acts: it consumes, acks, publishes and creates
-nothing, and no message body leaves it. `--state` defaults to `~/.director/look`
-and `--seat` to `DIRECTOR_AGENT_ID`, else `MARVEL_SESSION`; `NATS_URL` names the
-broker. The only broker requests it sends are `STREAM.INFO`, `CONSUMER.NAMES`,
-`CONSUMER.INFO` and a message get carrying the seat's own filter subject, so
-another seat's mail is not read.
-
-It reads the local tier's current durable for the seat (the newest by `Created`;
-older sessions get one line each) and writes, mode 0600, under the state
-directory: `digest.txt` (the text an operator reads), `notify.json` (the urgent
-gates and requests, and the gates listed in `cleared.json`, apart) and
-`heartbeat.json` (written every run, failed or not). A gate is a body with a line
-that starts with `GATE`; a request is urgent only once its `reply_by` has
-passed. A reader that fails writes a `reader:` failure line and exits 1, never a
-zero count. This version does not read the global tier and says so in the digest.
-The poster with its reminders, `look-clear` and `look-check` are separate steps,
-and the job is not scheduled by this command.
-
 ## Startup behaviour
 
 1. Validate identity and global levers; refuse on failure.
