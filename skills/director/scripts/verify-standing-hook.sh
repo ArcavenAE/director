@@ -227,6 +227,7 @@ t0s="$(date +%s)"; slow="$(STANDING_HOOK_MCP="$stub" STANDING_HOOK_UNREAD_TIMEOU
 ! STANDING_HOOK_MCP="$root/no-such-binary" "$H" | grep -q "$ALARM" && ok "no director-mcp at all prints nothing" || bad "missing binary printed"
 ! "$H" | grep -q "$ALARM" && ok "and the default lookup finds none under a scratch HOME" || bad "default lookup"
 unset DIRECTOR_AGENT_ID
+mkask I-1 1     # the timeout cases below count this ask
 
 # --- STANDING_HOOK_ASKS_TIMEOUT: any value that is not finite and above 0 falls back to 3 -----------------
 for v in inf -inf nan 0 -1 1e999 abc ""; do

@@ -56,11 +56,23 @@ answers come from the newest row of $DIRECTOR_STATE/desk-reads.jsonl (desk-snaps
 PRs come from $DIRECTOR_STATE/waiting-prs.json, which `dws waiting write` writes in the sweep and which
 is the only step that may call gh. A missing file is UNKNOWN, including when neither exists.
 
-The hook never types into a pane and never reads the hub or the network; it reads files: the heartbeat,
+After the asks line, one more only when this seat's own backlog is old:
+
+  director inbox: oldest unread seq <n> is <age> old (bound <age>)
+
+It reads `director-mcp unread --json` (STANDING_HOOK_MCP names the binary; STANDING_HOOK_UNREAD_TIMEOUT seconds,
+default 3), takes the row whose agent_id is this seat's (DIRECTOR_AGENT_ID, else MARVEL_SESSION), and prints when
+that row's oldest unread age is at or over the pending-age bound: DIRECTOR_PENDING_AGE_BOUND as a Go duration,
+default 10m, twice the cue's window. It runs whatever the cue state. Under the bound it prints nothing; when the
+read fails, times out or is not a report it prints `director inbox: UNKNOWN (<reason>)`; with no director-mcp at
+all it prints nothing. It is a diagnostic: it prompts and gates nothing.
+
+The hook never types into a pane and never writes to the hub. It reads the hub in one place only, the unread
+report above, which is a read-only call; everything else it reads is a file: the heartbeat,
 the dash and scan stamps, and the two inputs above. The waiting line widens the contract the earlier
 "reads one file" stated, on purpose.
 """
-import datetime, json, math, os, subprocess, sys, tempfile
+import datetime, json, math, os, re, shutil, subprocess, sys, tempfile
 
 CHECKLIST = """Before you answer:
 1. Drained, and answered Desk cards and page picks read, since my last answer? If not, do them first.
@@ -287,6 +299,88 @@ def asks_line():
     return f"{ASKS_PREFIX}{len(unlinked)} (oldest {min(unlinked)[1]})"
 
 
+INBOX_PREFIX = "director inbox: "
+DEFAULT_PENDING_BOUND = 600.0  # twice the cue's 300 s window (cue.go defaultPendingAgeBound)
+_GO_UNITS = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
+
+
+def pending_bound():
+    """Seconds an unread message may wait before the alarm: DIRECTOR_PENDING_AGE_BOUND as a Go duration
+    (15m, 1h30m, 90s), else the default. A value that does not parse or is not above 0 is the default,
+    as director-mcp's own reader treats it."""
+    raw = os.environ.get("DIRECTOR_PENDING_AGE_BOUND", "")
+    if not raw:
+        return DEFAULT_PENDING_BOUND
+    if not re.fullmatch(r"(?:[0-9]+(?:\.[0-9]+)?(?:ms|h|m|s))+", raw):
+        return DEFAULT_PENDING_BOUND
+    total = sum(float(n) * _GO_UNITS[u] for n, u in re.findall(r"([0-9]+(?:\.[0-9]+)?)(ms|h|m|s)", raw))
+    return total if math.isfinite(total) and total > 0 else DEFAULT_PENDING_BOUND
+
+
+def unread_timeout():
+    """Seconds to wait for the unread read, with the same fallback as asks_timeout."""
+    try:
+        v = float(os.environ.get("STANDING_HOOK_UNREAD_TIMEOUT", "3"))
+    except ValueError:
+        return 3.0
+    return v if math.isfinite(v) and v > 0 else 3.0
+
+
+def mcp_binary():
+    """The director-mcp to ask, or None when there is none: STANDING_HOOK_MCP, else the one on PATH, else
+    ${DIRECTOR_HOME:-~/.director}/bin/director-mcp. None means the hook was installed without it: no line."""
+    env = os.environ.get("STANDING_HOOK_MCP")
+    if env:
+        return env if os.access(env, os.X_OK) else None
+    found = shutil.which("director-mcp")
+    if found:
+        return found
+    home = os.environ.get("DIRECTOR_HOME") or os.path.join(os.path.expanduser("~"), ".director")
+    cand = os.path.join(home, "bin", "director-mcp")
+    return cand if os.access(cand, os.X_OK) else None
+
+
+def inbox_line():
+    """The alarm on this seat's own backlog, or None. It runs whatever the cue state, because the cue can be
+    off or silent and the backlog is still there. This line reads the hub through `director-mcp unread --json`,
+    a read-only call with a short timeout, so it widens the "files only" contract above on purpose; it prompts
+    and gates nothing."""
+    mcp = mcp_binary()
+    if not mcp:
+        return None
+    me = os.environ.get("DIRECTOR_AGENT_ID") or os.environ.get("MARVEL_SESSION")
+    if not me:
+        return None
+    try:
+        p = subprocess.run([mcp, "unread", "--json"], capture_output=True, text=True, timeout=unread_timeout(), stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return f"{INBOX_PREFIX}UNKNOWN (unread did not answer in {unread_timeout():g}s)"
+    except OSError as err:
+        return f"{INBOX_PREFIX}UNKNOWN (unread could not run: {err.strerror or err})"
+    if p.returncode != 0:
+        return f"{INBOX_PREFIX}UNKNOWN (unread exited {p.returncode})"
+    try:
+        rows = json.loads(p.stdout)["durables"]
+        if not isinstance(rows, list):
+            raise ValueError("not a list")
+    except (ValueError, KeyError, TypeError):
+        return f"{INBOX_PREFIX}UNKNOWN (unread did not print a report)"
+    bound = pending_bound()
+    worst = None
+    for r in rows:
+        if not isinstance(r, dict) or r.get("agent_id") != me:
+            continue
+        age = r.get("oldest_unread_age_seconds")
+        if isinstance(age, bool) or not isinstance(age, (int, float)) or not math.isfinite(age):
+            continue
+        if age >= bound and (worst is None or age > worst[0]):
+            worst = (age, r.get("oldest_unread_seq"))
+    if worst is None:
+        return None
+    seq = f"seq {worst[1]}" if isinstance(worst[1], int) and not isinstance(worst[1], bool) else "message"
+    return f"{INBOX_PREFIX}oldest unread {seq} is {age_text(worst[0])} old (bound {age_text(bound)})"
+
+
 def main():
     if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] not in ("beat", "scan-beat")):
         sys.exit("usage: standing-hook [beat|scan-beat]")
@@ -298,6 +392,9 @@ def main():
     print(dash_line())
     print(scan_line())
     line = asks_line()
+    if line:
+        print(line)
+    line = inbox_line()
     if line:
         print(line)
     line = waiting_line()
