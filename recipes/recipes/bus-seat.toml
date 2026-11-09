@@ -1,0 +1,6 @@
+# STUB for the red commit: the non-holder block is empty.
+schema = 1
+adapter = "claude"
+
+[when.global.non_holder]
+unset = []
