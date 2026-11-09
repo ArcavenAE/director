@@ -5,6 +5,21 @@ recipe schema defines. It holds one recipe, `bus-seat`, which carries as data wh
 `sim/twin/cast-launch.sh` decides today for a seat that talks on the director bus.
 Nothing here changes a running seat: marvel does not read it until a team pins it.
 
+## Tree
+
+```
+recipes/                  the library root: the directory an installer takes
+  company.toml            the library's index
+  switch-list.toml        data beside the index, not read as a recipe
+  parity-table.toml       data beside the index, not read as a recipe
+  recipes/                the schema's own directory for recipe files
+    bus-seat.toml         the one recipe
+```
+
+`recipes/recipes/` is not a mistake. The library root is named `recipes/` in this
+repository, and marvel's schema keeps its recipe files in a `recipes/` directory
+under the library root. Leave both names alone.
+
 ## Layout
 
 | file | what it is |
