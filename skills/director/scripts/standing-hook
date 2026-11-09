@@ -276,7 +276,7 @@ def asks_line():
         except (KeyError, TypeError, ValueError):
             continue
         age = (t_now - at).total_seconds()
-        if 0 <= age <= ASKS_WINDOW_HOURS * 3600 and relay == "none" and row == "none":
+        if 0 <= age <= ASKS_WINDOW_HOURS * 3600 and relay == "none" and row == "none" and r.get("closed", "none") == "none":
             unlinked.append((at, ask_id))
     if not unlinked:
         return None
