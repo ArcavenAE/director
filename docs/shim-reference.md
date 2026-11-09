@@ -285,7 +285,10 @@ With `ask`, an accepted result adds `"relay_entry": "R-<n>"`, the entry
 message id on the Outcome line). The send has already left by then, so a
 `relay-log` that cannot run (not at `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-log`,
 no log path, a timeout) adds `"warning": "accepted, but no relay-log entry was
-written: <reason>"` instead; the result stays accepted. A send that the presence
+written: <reason>"` instead; the result stays accepted. With `kind: answer` the
+result also carries `"shelf": "shelf: ..."`, the cue line `relay-log` prints for an
+answer entry (the `shelf-row new` call to make for the Reply Shelf row); a held
+answer send gives the same line in the presence notice when it is released. A send that the presence
 watch holds is not accepted, so it writes no entry then: the held result says
 `"relay_entry": "pending: ..."`, the hold keeps `ask` and `kind`, and the entry is
 written when the send is released (a presence notice says so, or says the write

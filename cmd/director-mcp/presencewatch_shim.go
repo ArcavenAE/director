@@ -163,10 +163,13 @@ func (p *presenceWatcher) release(ctx context.Context, now time.Time) {
 				// The entry records a send that went out, so it is written here and only here, after
 				// the released record is kept: a release that was not recorded is published again and
 				// reaches this line once.
-				if entry, werr := writeRelayEntry(ctx, r.Ask, r.Kind, r.To, r.Envelope.Content.Data, r.ID); werr != nil {
+				if entry, shelf, werr := writeRelayEntry(ctx, r.Ask, r.Kind, r.To, r.Envelope.Content.Data, r.ID); werr != nil {
 					p.pending = append(p.pending, fmt.Sprintf("presence: held send %s was released, but no relay-log entry was written: %v", r.ID, werr))
 				} else {
 					p.pending = append(p.pending, fmt.Sprintf("presence: held send %s relay entry %s written", r.ID, entry))
+					if shelf != "" {
+						p.pending = append(p.pending, "presence: "+shelf)
+					}
 				}
 			}
 		case errors.As(err, &refused) || errors.As(err, &unread):

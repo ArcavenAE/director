@@ -264,3 +264,36 @@ func TestSendRefusedForAnUnknownAskPublishesAndWritesNothing(t *testing.T) {
 		t.Error("a refused send wrote the relay log")
 	}
 }
+
+func TestSendAnswerResultCarriesTheShelfCue(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	auditStream(t, ctx, js)
+	sender := liveSeat(t, ctx, url, Sender{AgentID: "director", Workspace: "w", Team: "t"})
+	liveSeat(t, ctx, url, Sender{AgentID: "builder", Workspace: "w", Team: "t"})
+	askFixture(t, "I-7")
+	relayFixture(t)
+
+	out, err := toolSend(ctx, sender, sendRaw(map[string]any{"to": "agent://t/builder", "ask": "I-7", "kind": "answer"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := out.(map[string]any)
+	if m["relay_entry"] != "R-1" {
+		t.Errorf("result relay_entry = %v, want R-1", m["relay_entry"])
+	}
+	shelf, _ := m["shelf"].(string)
+	if !strings.HasPrefix(shelf, "shelf: relayed answer for I-7;") || !strings.Contains(shelf, "shelf-row new --ask I-7") {
+		t.Errorf("result shelf = %q, want the shelf-row cue for I-7", shelf)
+	}
+
+	out, err = toolSend(ctx, sender, sendRaw(map[string]any{"to": "agent://t/builder", "ask": "I-7", "kind": "ruling"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, has := out.(map[string]any)["shelf"]; has {
+		t.Error("a non-answer send carries a shelf key")
+	}
+}

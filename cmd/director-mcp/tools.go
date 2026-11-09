@@ -354,10 +354,14 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if ask != "" {
 		// The send has left. A relay-log that cannot write is a warning on the accepted
 		// result, never a failed send: refusing now would invite a duplicate.
-		if entry, err := writeRelayEntry(ctx, ask, kind, e.Recipient.Address, e.Content.Data, e.MessageID); err != nil {
+		if entry, shelf, err := writeRelayEntry(ctx, ask, kind, e.Recipient.Address, e.Content.Data, e.MessageID); err != nil {
 			out["warning"] = "accepted, but no relay-log entry was written: " + err.Error()
 		} else {
 			out["relay_entry"] = entry
+			if shelf != "" {
+				// An answer entry owes the Reply Shelf a row; the cue reaches the seat here.
+				out["shelf"] = shelf
+			}
 		}
 	}
 	return out, nil
