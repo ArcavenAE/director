@@ -446,8 +446,10 @@ echo "$*" >> "$FAKE/calls"
 while [[ "${1:-}" == -S || "${1:-}" == -L ]]; do shift 2; done
 case "${1:-}" in
   capture-pane) [[ -f "$FAKE/hang_capture" ]] && sleep 8
+                if [[ -f "$FAKE/late_dialog" && ! -f "$FAKE/slept" ]]; then touch "$FAKE/slept"; sleep 1.7; fi
                 if [[ -f "$FAKE/pressed" ]]; then cat "$FAKE/after"; else cat "$FAKE/before"; fi ;;
-  send-keys) echo "$*" >> "$FAKE/keys"; [[ -f "$FAKE/hang_press" ]] && sleep 8
+  send-keys) echo "$*" >> "$FAKE/keys"; [[ -f "$FAKE/hang_press" ]] && sleep 30
+             [[ -f "$FAKE/slow_press" ]] && sleep 0.6
              [[ -f "$FAKE/never_gone" ]] || touch "$FAKE/pressed" ;;
 esac
 STUB
@@ -559,10 +561,20 @@ hung() { # name, switch file, rc wanted, keys wanted, deadline
 }
 hung "a hung capture (clamped to the deadline)" hang_capture 1 0 2
 hung "a hung composer-check" hang_composer 1 0 2
-hung "a hung send-keys" hang_press 4 1 3
-[[ "$hout" == *"timed out"* ]] \
-  && ok "devch: a send-keys that hangs is reported as timed out, never retried" \
+# the one press has its own bound (CALL_TIMEOUT, 10 s), not what the first wait has left
+hung "a hung send-keys" hang_press 4 1 8
+[[ "$hout" == *"timed out after 10 s"* ]] \
+  && ok "devch: a send-keys that hangs is reported as timed out after the limit it ran under, never retried" \
   || bad "devch: hung send-keys message" "$hout"
+
+# a dialog first seen with almost none of the first wait left still gets its key: the
+# press is not clamped by that wait
+hreset; good_dialog > "$fake/before"; composer_screen > "$fake/after"; : > "$fake/composer_after"
+: > "$fake/late_dialog"; : > "$fake/slow_press"
+hrun 2
+[[ "$hrc" == 0 && "$(nkeys)" == 1 && "$hout" == *"devch: dismissed, composer reached"* ]] \
+  && ok "devch: a dialog seen near the deadline still gets its one key, with its own bound" \
+  || bad "devch: press near the deadline" "rc=$hrc keys=$(nkeys) out=$hout"
 
 # a failed send-keys is reported, not hidden
 hreset; good_dialog > "$fake/before"
