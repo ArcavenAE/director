@@ -160,6 +160,7 @@ func TestLaneOrdersTiersThenSequence(t *testing.T) {
 func TestLoadLaneWithoutRelayLogWarnsAndHasNoLane(t *testing.T) {
 	t.Setenv("DIRECTOR_STATE", t.TempDir())
 	t.Setenv("RELAY_LOG", "")
+	t.Setenv("DIRECTOR_HOME", t.TempDir()) // no installed relay-log to find
 	l := loadLane([]summaryItem{laneMsg("local", 1, "r", "INFORM", "01MSENT1")}, laneNow)
 	if len(l.Items) != 0 || !strings.Contains(l.Warning, "RELAY_LOG") {
 		t.Fatalf("lane = %+v, want no items and a warning that names RELAY_LOG, never a silent empty lane", l)

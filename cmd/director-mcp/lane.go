@@ -6,7 +6,8 @@ package main
 //
 // A reply joins an ask by one key only: its in_reply_to is the id of a message
 // director sent, and the relay log ties that id to the ask ("Intake: I-<n>"
-// beside "Outcome: sent; message <id>", written by send_message --ask). A reply
+// beside "Outcome: sent; message <id>", written by send_message --ask), found
+// where relay-log writes it (relayLogPath). A reply
 // that names nothing it replies to cannot join, and the join never guesses by
 // sender. An ask is open until `dws ask-close` writes a close row for it. This
 // reader writes nothing, and no clock closes anything: an item leaves the lane
@@ -171,7 +172,35 @@ func buildLane(items []summaryItem, sent map[string]string, asks askRecords, now
 	return l
 }
 
-// loadLane reads RELAY_LOG and $DIRECTOR_STATE/asks.jsonl and builds the lane.
+// relayLogPath finds the relay log as relay-log does: $RELAY_LOG, else the
+// checkout's sim/notes/relay-log.md when $DIRECTOR_HOME/bin/relay-log is a
+// symlink into a checkout (the script sits three levels under the checkout
+// root, which must hold .git and a sim/notes directory). It never guesses past
+// that: false means neither resolved.
+func relayLogPath() (string, bool) {
+	if env := os.Getenv("RELAY_LOG"); env != "" {
+		return env, true
+	}
+	home := directorHome()
+	if home == "" {
+		return "", false
+	}
+	script, err := filepath.EvalSymlinks(filepath.Join(home, "bin", "relay-log"))
+	if err != nil {
+		return "", false
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(script), "..", "..", ".."))
+	notes := filepath.Join(root, "sim", "notes")
+	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
+		return "", false
+	}
+	if fi, err := os.Stat(notes); err != nil || !fi.IsDir() {
+		return "", false
+	}
+	return filepath.Join(notes, "relay-log.md"), true
+}
+
+// loadLane reads the relay log and $DIRECTOR_STATE/asks.jsonl and builds the lane.
 // With no RELAY_LOG, or a relay log it cannot read, there is no lane and the
 // Warning says so; the backlog line still comes from asks.jsonl.
 func loadLane(items []summaryItem, now time.Time) inboxLane {
@@ -187,10 +216,10 @@ func loadLane(items []summaryItem, now time.Time) inboxLane {
 		asks = rec
 	}
 	sent := map[string]string{}
-	if path := os.Getenv("RELAY_LOG"); path == "" {
-		warns = append(warns, "RELAY_LOG is not set; replies cannot be joined to asks, so the lane is not built")
+	if path, ok := relayLogPath(); !ok {
+		warns = append(warns, "RELAY_LOG is not set and no relay log was found beside the installed relay-log; replies cannot be joined to asks, so the lane is not built")
 	} else if data, err := os.ReadFile(path); err != nil {
-		warns = append(warns, fmt.Sprintf("RELAY_LOG %s not read: %v; the lane is not built", path, err))
+		warns = append(warns, fmt.Sprintf("relay log %s not read: %v; the lane is not built", path, err))
 	} else {
 		sent = parseRelaySent(string(data))
 	}

@@ -392,12 +392,13 @@ count would miss the newest mail.
 The answer carries a `lane` field ahead of `summary`: the waiting replies to open
 operator asks, tier then sequence, each with its `ask_id`. A message joins an ask
 by `in_reply_to` only, when that id is a message director sent under the ask (the
-relay log's `Outcome: sent; message <id>` beside its `Intake: I-<n>`, found at
-`RELAY_LOG`). A reply that sets no `in_reply_to` cannot join, and nothing joins by
+relay log's `Outcome: sent; message <id>` beside its `Intake: I-<n>`; the log is
+`RELAY_LOG`, else the checkout's `sim/notes/relay-log.md` when
+`$DIRECTOR_HOME/bin/relay-log` is a symlink into a checkout, as `relay-log` finds it). A reply that sets no `in_reply_to` cannot join, and nothing joins by
 sender. An ask leaves the lane when `dws ask-close` records it; the reply leaves
 when it is acked or drained. `lane.backlog` counts the open asks received before
 the relay link existed (2026-11-09T03:40:49Z) and gives the age of the oldest in
-seconds. With no `RELAY_LOG`, or one that cannot be read, `lane.warning` says so
+seconds. When neither resolves, or the log cannot be read, `lane.warning` says so
 and the lane is empty by that reason, not by finding nothing.
 
 ```json
