@@ -164,5 +164,13 @@ after="$(cd "$root" && find . -type f ! -name out ! -name err | LC_ALL=C sort | 
 ! grep -q 'placeholder results' "$root/out" && ok "the line never carries the results text" || bad "the line carries results text"
 ! grep -qE "$SHA|$OTHER" "$root/out" && ok "the line never carries a hash value" || bad "the line carries a hash"
 
+# --- the design note reads the ack row from the route-ledger shape and does not define it -------------------
+doc="$here/../../../sim/design/schedule-ack.md"
+if [[ -f "$doc" ]]; then
+  grep -qF 'sim/design/route-ledger.md' "$doc" && ok "the design note points to the route-ledger design for the ack row's shape" || bad "the note points to route-ledger.md"
+  ! grep -qiE 'its own row type|separate row|which this document defines|defined here' "$doc" && ok "the design note does not define the ack row as a type of its own" || bad "the note defines the ack row itself"
+  ! grep -qF 'is not a route-ledger event' "$doc" && ok "the design note does not say the ack is outside the route ledger's rows" || bad "the note says the ack is outside the ledger's rows"
+else bad "the design note exists" "no file at $doc"; fi
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

@@ -8,7 +8,7 @@ plus 2 hours. It reminds only. It never runs, respawns or gates anything, and it
 
 **Status: the reader and its input contract, built against fixtures.** marvel already returns the describe block this
 reads. Two inputs do not exist yet: the results file with its sha256 line (the sweep prompt step, ticket H-3) and the
-supervisor's ack row, which this document defines. Nothing here is wired into a live sweep, and the contract below
+supervisor's ack row, whose shape `sim/design/route-ledger.md` defines and this reader only reads. Nothing here is wired into a live sweep, and the contract below
 changes only by a ruling.
 
 ## The inputs
@@ -22,8 +22,9 @@ changes only by a ruling.
 2. **The results directory**, per firing: `<firing>.md`, the results the sweep wrote, and `<firing>.md.sha256`, one
    `sha256sum` line (the hash, then the file name). The first word of that line is the results hash. The reader does
    not recompute the hash of the file; it compares the ack's hash with the recorded line.
-3. **A route ledger** (`sim/design/route-ledger.md`): JSON lines, where an ack is a row
-   `{scheduled_role, firing_id, results_sha256, acked_at}`. The supervisor writes it; the sweep never does.
+3. **A route ledger**: JSON lines, where an ack is the scheduled-firing ack row
+   `{scheduled_role, firing_id, results_sha256, acked_at}`. `sim/design/route-ledger.md` defines that row; this reader
+   only reads it. The supervisor writes it; the sweep never does.
 
 The firing id is marvel's `FiringID`: the nominal due time in UTC as `YYYYMMDDTHHMMSSZ`. The reader reads the due
 time from the id, so it never evaluates cron. A schedule that has not fired has no `firing` and no line.
@@ -48,12 +49,6 @@ rows for one firing are fine: any matching row acks it.
 An input the reader cannot read prints `scheduled: UNKNOWN (describe unreadable)`,
 `scheduled: UNKNOWN (route ledger unreadable)` or `scheduled: UNKNOWN (ROLE: firing id unreadable)`, and never a
 silent pass. It exits 0 whatever it finds; a usage error is exit 2.
-
-## Why the ack is a separate row
-
-The ack is not a route-ledger event on an ask: it names a scheduled role and a firing, not an ask id, so it does
-not fit route-record@1 or route-event@1 and the route-ledger checker does not read it. It lives in the same file as
-those rows, because the supervisor keeps one ledger, and `schedule-ack` reads only its own rows.
 
 ## What waits on others
 
