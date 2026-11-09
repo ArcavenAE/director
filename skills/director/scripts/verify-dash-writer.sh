@@ -113,6 +113,14 @@ rows = [
     ["arcaven", "worker", "arcaven-worker-g5-16", "running", "healthy (parked: x) (unwatched)", "2m"],
     ["arcaven", "worker", "arcaven-worker-g5-17", "running", "healthy (unwatched) (logged-out)", "2m"],
     ["arcaven", "worker", "arcaven-worker-g5-18", "running", "healthy (unwatched) (stalled)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-19", "running", "healthy (unprompted)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-20", "running", "healthy (stalled) (unprompted)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-21", "running", "healthy (unprompted) (unwatched)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-22", "running", "healthy (unwatched) (unprompted)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-23", "running", "healthy (unprompted) (logged-out)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-24", "running", "healthy (parked: x) (unprompted)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-25", "running", "healthy (unprompted) (stalled)", "2m"],
+    ["arcaven", "worker", "arcaven-worker-g5-26", "running", "healthy (unprompted) (parked: x)", "2m"],
     ["arcaven", "worker", "arcaven-bartholomew-g5-9", "running", "healthy", "1m"],
 ]
 open(os.path.join(d, "alpha"), "w").write(table(H, rows))
@@ -301,9 +309,14 @@ assert rows["arcaven-worker-g5-14"]["health"] == "unhealthy (stalled) (unwatched
 for n in (15, 16, 17):
     assert rows["arcaven-worker-g5-%d" % n]["health"] == "unreadable", "(unwatched) never appears with (parked) or (logged-out), in either order: %d" % n
 assert rows["arcaven-worker-g5-18"]["health"] == "unreadable", "(unwatched) before (stalled) is the wrong order"
+assert rows["arcaven-worker-g5-19"]["health"] == "healthy (unprompted)", rows.get("arcaven-worker-g5-19")
+assert rows["arcaven-worker-g5-20"]["health"] == "healthy (stalled) (unprompted)", "(unprompted) follows (stalled)"
+for n in (21, 22, 23, 24, 26):
+    assert rows["arcaven-worker-g5-%d" % n]["health"] == "unreadable", "(unprompted) never appears with (unwatched), (logged-out) or (parked), in either order: %d" % n
+assert rows["arcaven-worker-g5-25"]["health"] == "unreadable", "(unprompted) before (stalled) is the wrong order"
 assert "arcaven-bartholomew-g5-9" not in rows, "a withheld name in a session name drops the row"
 ref = [x["data"]["refusal"] for x in d["writes"] if x["doc_id"] == "sessions" and x["collection"] == "dash_panels"][0]
-assert ref.get("health:grammar") == 5 and ref.get("last_active:unreadable") == 3 and ref.get("stage:grammar") == 1 and ref.get("id:charset") == 1, ref
+assert ref.get("health:grammar") == 11 and ref.get("last_active:unreadable") == 3 and ref.get("stage:grammar") == 1 and ref.get("id:charset") == 1, ref
 ' && ok "state and health are matched to marvel's grammar: parked reasons dropped, exit codes as printed, failed tagged terminal, wrong order and long cells unreadable, a bad state drops the row" || bad "session grammar"
 grep -q 'secret\|budget exceeded' "$root/out.json" && bad "free text after a session cell never lands" || ok "free text inside a session cell never lands"
 
