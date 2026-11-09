@@ -204,6 +204,30 @@ if [[ "$rc" == 0 && -f "$stamped" ]]; then
   [[ -f "$tmp/stamped/recipes/bus-seat.toml" ]] && cmp -s "$tmp/stamped/recipes/bus-seat.toml" "$S/recipes/recipes/bus-seat.toml" && ok "stamp: the recipe is copied byte for byte" || bad "stamp: the recipe is copied byte for byte"
   ! grep -q '^version' "$S/recipes/company.toml" && ok "stamp: the committed company.toml is left unchanged" || bad "stamp: the committed company.toml is left unchanged"
 else bad "stamp: writes a company.toml with version and source (rc $rc)" "$(head -3 "$tmp/stamp.out" | tr '\n' '|')"; fi
+# 8b. the stamp refuses an out-dir that would delete or overwrite committed files
+before="$(git -C "$S" status --porcelain; git -C "$S" rev-parse HEAD)"
+rc=0; "$STAMP" "$S/recipes" "$S/recipes" >/dev/null 2>&1 || rc=$?
+[[ "$rc" != 0 && -f "$S/recipes/recipes/bus-seat.toml" && -z "$(git -C "$S" status --porcelain)" ]] && ok "stamp: refuses the library itself as the out-dir and leaves it intact" || bad "stamp: refuses the library itself as the out-dir and leaves it intact (rc $rc)"
+rc=0; "$STAMP" "$S/recipes" "$S/recipes/stamped" >/dev/null 2>&1 || rc=$?
+[[ "$rc" != 0 && ! -e "$S/recipes/stamped" ]] && ok "stamp: refuses an out-dir inside the library and writes nothing" || bad "stamp: refuses an out-dir inside the library and writes nothing (rc $rc)"
+rc=0; "$STAMP" "$S/recipes" "$S" >/dev/null 2>&1 || rc=$?
+[[ "$rc" != 0 && -f "$S/recipes/recipes/bus-seat.toml" && -d "$S/.git" ]] && ok "stamp: refuses a parent of the library as the out-dir and leaves it intact" || bad "stamp: refuses a parent of the library as the out-dir and leaves it intact (rc $rc)"
+mkdir -p "$tmp/occupied"; echo keep > "$tmp/occupied/keep.txt"
+rc=0; "$STAMP" "$S/recipes" "$tmp/occupied" >/dev/null 2>&1 || rc=$?
+[[ "$rc" != 0 && "$(cat "$tmp/occupied/keep.txt" 2>/dev/null)" == keep && ! -e "$tmp/occupied/company.toml" ]] && ok "stamp: refuses an existing non-empty out-dir and leaves it intact" || bad "stamp: refuses an existing non-empty out-dir and leaves it intact (rc $rc)"
+mkdir -p "$tmp/emptyout"
+rc=0; "$STAMP" "$S/recipes" "$tmp/emptyout" >/dev/null 2>&1 || rc=$?
+[[ "$rc" == 0 && -f "$tmp/emptyout/company.toml" ]] && ok "stamp: control: an existing empty out-dir is accepted" || bad "stamp: control: an existing empty out-dir is accepted (rc $rc)"
+[[ "$before" == "$(git -C "$S" status --porcelain; git -C "$S" rev-parse HEAD)" ]] && ok "stamp: the source repository is unchanged by every refusal" || bad "stamp: the source repository is unchanged by every refusal"
+
+# 9. the supervisor stays off the switch list until its cue default is decided
+sup="$("$PY" -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb")).get("roles",{}).get("supervisor","absent"))' "$LIB/switch-list.toml")"
+[[ "$sup" != "switchable" ]] && ok "the shipped switch list does not mark supervisor switchable (it is '$sup')" || bad "the shipped switch list does not mark supervisor switchable"
+[[ "$sup" == "not until marvel admits" || "$sup" == "absent" ]] && ok "supervisor is held or unlisted, not given a new status word" || bad "supervisor is held or unlisted, not given a new status word (got '$sup')"
+for r in builder marvel-builder sideshow-builder maintainer envoy reviewer claude-reviewer; do
+  v="$("$PY" -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb")).get("roles",{}).get(sys.argv[2],"absent"))' "$LIB/switch-list.toml" "$r")"
+  [[ "$v" == "switchable" ]] && ok "control: $r is still switchable" || bad "control: $r is still switchable (got '$v')"
+done
 echo "dirty" > "$S/recipes/extra.txt"
 rc=0; "$STAMP" "$S/recipes" "$tmp/stamped2" >/dev/null 2>&1 || rc=$?
 [[ "$rc" != 0 && ! -e "$tmp/stamped2/company.toml" ]] && ok "stamp: refuses a library with uncommitted changes and writes nothing" || bad "stamp: refuses a library with uncommitted changes and writes nothing (rc $rc)"
