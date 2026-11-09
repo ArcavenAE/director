@@ -27,6 +27,8 @@ type fakeSource struct {
 	// one more on the seat's subject, kept after it is read (limits retention),
 	// so T is every message seen so far.
 	seq, lastN uint64
+	// lane is the open lane items the source reports (cue_lane_test.go).
+	lane []laneItem
 }
 
 func (f *fakeSource) count(context.Context) (uint64, error) {
