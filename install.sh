@@ -91,6 +91,8 @@ install_one "$SRC/skills/director/scripts/idle-shadow" "$DIRECTOR_HOME/bin/idle-
 # dash-writer, the operations dashboard's writer step (ghxv2): the sweep's tick runs it from the bin home.
 install_one "$SRC/skills/director/scripts/dash-writer" "$DIRECTOR_HOME/bin/dash-writer"
 # dws is installed above; dash-writer reads it from beside itself.
+# shelf-row builds Reply Shelf rows (reply-shelf design): the session runs it by name when it relays an answer.
+install_one "$SRC/skills/director/scripts/shelf-row" "$DIRECTOR_HOME/bin/shelf-row"
 # introspect, the director introspector (a script director runs, never a seat): the sweep and harvest step 6 call it.
 install_one "$SRC/skills/director/scripts/introspect" "$DIRECTOR_HOME/bin/introspect"
 # composer-check looks at a pane before an inject that ends in Enter; standing-hook prints the drain age before each answer.
@@ -100,6 +102,8 @@ install_one "$SRC/skills/director/scripts/standing-hook" "$DIRECTOR_HOME/bin/sta
 # director-session starts one director session by hand with the channel cue bound when asked; a
 # plain `claude` never binds it.
 install_one "$SRC/skills/director/scripts/director-session" "$DIRECTOR_HOME/bin/director-session"
+# route-ledger reads a supervisor route ledger by the shared shape (rlel4); the skill names it by its bin-home path.
+install_one "$SRC/skills/director/scripts/route-ledger" "$DIRECTOR_HOME/bin/route-ledger"
 # schedule-ack: the sweep line for a scheduled firing with no acked result (H-6); the skill names it by its bin-home path.
 install_one "$SRC/skills/director/scripts/schedule-ack" "$DIRECTOR_HOME/bin/schedule-ack"
 # The component installer. After this, a host upgrades the launcher from a

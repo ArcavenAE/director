@@ -44,6 +44,9 @@ be read it writes nothing and exits 1.
 
 Intake: `dws intake --text-file <path|-> [--source S]` records an operator ask in
 $DIRECTOR_STATE/asks.jsonl, stamped from the clock under one flock, and prints its id, I-<n>.
+`dws ask-close I-<n> --as answered|carded|not-an-ask [--ref R] [--reason T]` records how it ended (a not-an-ask
+needs a reason; there is no relayed kind, so a relayed ask is closed by hand with --as answered --ref); the close
+is a row with an event key in the same file and mints nothing, and `dws asks` shows it in a closed column.
 The id then travels: relay-log append --ask I-<n> [--kind K], card-ingest parse --intake I-<n>
 (desk-snapshot keeps it per card), and an intake:I-<n> link on a row (a typed link, set with
 `link` or `open --link`; the name differs from ask:, which is a Desk card id). `dws asks
@@ -1331,8 +1334,31 @@ def read_asks(path=None):
                 e = json.loads(line.decode("utf-8"))
             except ValueError:
                 continue
-            if isinstance(e, dict) and isinstance(e.get("ask_id"), str) and INTAKE_ID.match(e["ask_id"]):
+            if isinstance(e, dict) and "event" not in e and isinstance(e.get("ask_id"), str) and INTAKE_ID.match(e["ask_id"]):
                 out.append(e)
+    return out
+
+
+CLOSE_KINDS = ("answered", "carded", "not-an-ask")
+
+
+def read_closes(path=None):
+    """The close records by ask id, the first close of an id winning, torn or malformed lines skipped.
+    A close is a row with event "close"; it is not an ask and mints nothing."""
+    out = {}
+    try:
+        f = open(path or ASKS, "rb")
+    except FileNotFoundError:
+        return out
+    with f:
+        for line in f:
+            try:
+                e = json.loads(line.decode("utf-8"))
+            except ValueError:
+                continue
+            if (isinstance(e, dict) and e.get("event") == "close" and isinstance(e.get("ask_id"), str)
+                    and INTAKE_ID.match(e["ask_id"]) and e.get("as") in CLOSE_KINDS):
+                out.setdefault(e["ask_id"], e)
     return out
 
 
@@ -1361,6 +1387,35 @@ def cmd_intake(a):
     print(ask_id)
 
 
+def cmd_ask_close(a):
+    """Record how an operator ask ended. One close per ask; there is no relayed kind, since a relayed ask
+    is closed by hand with --as answered --ref. Everything is checked under the intake flock, so two closers
+    cannot both win, and a refusal appends nothing."""
+    if not INTAKE_ID.match(a.ask_id):
+        raise Refused(f"{a.ask_id!r} is not an ask id (I-<n>); nothing written")
+    reason = (a.reason or "").strip()
+    if a.kind == "not-an-ask" and not reason:
+        raise Refused("--as not-an-ask needs --reason; nothing written")
+    os.makedirs(STATE, exist_ok=True)
+    fd = os.open(ASKS_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        if a.ask_id not in {e["ask_id"] for e in read_asks()}:
+            raise Refused(f"{a.ask_id} was never minted; nothing written")
+        prior = read_closes().get(a.ask_id)
+        if prior:
+            raise Refused(f"{a.ask_id} is already closed ({prior['as']} at {prior.get('closed_at', 'unknown time')}); nothing written")
+        row = {"event": "close", "ask_id": a.ask_id, "closed_at": now(), "as": a.kind}
+        if a.ref:
+            row["ref"] = a.ref
+        if reason:
+            row["reason"] = reason
+        append(row, ASKS)
+    finally:
+        os.close(fd)
+    print(f"{a.ask_id} closed {a.kind}")
+
+
 def cmd_asks(a):
     """One row per ask: id, received_at, card, answer time, relay, row. A blank is 'none'; several
     values join with a comma in sorted order, so the same inputs give the same bytes."""
@@ -1384,6 +1439,7 @@ def cmd_asks(a):
         for e in es:
             if e.get("intake"):
                 relays_of.setdefault(e["intake"], []).append(n)
+    closes = read_closes()
     rows, _ = fold()
     rows_of = {}
     for r in rows.values():
@@ -1401,13 +1457,14 @@ def cmd_asks(a):
         out.append({"ask_id": i, "received_at": e.get("received_at") or NONE, "card": join(cards),
                     "answered_at": ",".join(times) if times else NONE,
                     "relay": join([f"R-{n}" for n in sorted(set(relays_of.get(i, [])))]),
-                    "row": join(sorted(rows_of.get(i, [])))})
+                    "row": join(sorted(rows_of.get(i, []))),
+                    "closed": closes[i]["as"] if i in closes else NONE})
     if a.json:
         json.dump(out, sys.stdout, indent=2, ensure_ascii=False, sort_keys=True)
         print()
         return
-    cols = ("ask", "received_at", "card", "answered_at", "relay", "row")
-    keys = ("ask_id", "received_at", "card", "answered_at", "relay", "row")
+    cols = ("ask", "received_at", "card", "answered_at", "relay", "row", "closed")
+    keys = ("ask_id", "received_at", "card", "answered_at", "relay", "row", "closed")
     table = [cols] + [tuple(r[k] for k in keys) for r in out]
     widths = [max(len(c[i]) for c in table) for i in range(len(cols))]
     for row in table:
@@ -3501,6 +3558,13 @@ def main(argv):
     ik.add_argument("--text-file", required=True, help="the ask text, verbatim: a path, or - for stdin")
     ik.add_argument("--source", default="operator", help="where the ask came from (a slug word)")
     ik.set_defaults(fn=cmd_intake)
+
+    ac = sub.add_parser("ask-close", help="record how an operator ask ended: answered, carded or not-an-ask (needs --reason); one close per ask")
+    ac.add_argument("ask_id", help="the ask id (I-<n>) from intake")
+    ac.add_argument("--as", dest="kind", required=True, choices=CLOSE_KINDS)
+    ac.add_argument("--ref", help="where the close can be checked: a PR, a card, a message id")
+    ac.add_argument("--reason", help="why; required for not-an-ask")
+    ac.set_defaults(fn=cmd_ask_close)
 
     sk = sub.add_parser("asks", help="join each ask to its card, answer time, relay entry and row; writes nothing")
     sk.add_argument("--json", action="store_true")

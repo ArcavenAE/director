@@ -149,6 +149,9 @@ n_scan="$(printf '%s\n' "$out" | grep -n '^stalled ideas: ' | cut -d: -f1 || tru
 # the oldest is by received_at, not by id order
 rm -f "$RELAY_LOG" "$RELAY_LOG.lock"; : >"$RELAY_LOG"
 "$H" | grep -q "no relay or row: 3 (oldest I-3)" && ok "the oldest is the earliest received, not the lowest id" || bad "oldest by received_at"
+# a closed ask is no longer unlinked: closing I-2 takes the count from 3 to 2
+"$here/dws" ask-close I-2 --as answered --ref pr:x/y#1 >/dev/null 2>&1 || true
+"$H" | grep -q "no relay or row: 2 (oldest I-3)" && ok "a closed ask drops out of the unlinked count" || bad "a closed ask still counted" "$("$H" | grep "$ASKLINE")"
 # the hook reads: it writes none of the files it looks at
 sum_before="$(cksum "$DIRECTOR_STATE/asks.jsonl" "$DIRECTOR_STATE/workstreams.jsonl" "$RELAY_LOG" | tr '\n' ' ')"; "$H" >/dev/null
 [[ "$sum_before" == "$(cksum "$DIRECTOR_STATE/asks.jsonl" "$DIRECTOR_STATE/workstreams.jsonl" "$RELAY_LOG" | tr '\n' ' ')" ]] && ok "the hook writes none of the stores it reads" || bad "the hook wrote a store"

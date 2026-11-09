@@ -1,0 +1,260 @@
+<!doctype html>
+<!-- Director Reply Shelf page source. director publishes it as its own Artifact (not a tab on the Desk)
+     with capabilities {"db":{"rules":[{"path":"replies","write":"owner"}]},"user":{}}.
+     Director writes the rows (skills/director/scripts/shelf-row builds them, a session applies them with
+     ArtifactData); the operator opens, clears, recovers and asks for more, each a write of the operator's own
+     fields only. Row text is drawn as escaped text: no Markdown, no link, no network call.
+     Proved by skills/director/scripts/verify-shelf-page.sh. -->
+<html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Director Reply Shelf</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#f3f5f4; --panel:#ffffff; --ink:#1b2422; --muted:#5b6b67; --line:#d8e0dd;
+  --accent:#b8641a; --accent-ink:#ffffff; --accent-soft:#fbeedd;
+  --rec:#2f7d5b; --rec-soft:#e2f2ea; --warn:#a8670a; --warn-soft:#fdf1d8;
+  --crit:#b03a2e; --crit-soft:#f9e1de; --chip:#e8eeec; --focus:#2f6f8f;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#111514; --panel:#181e1c; --ink:#d5d8d6; --muted:#93a29d; --line:#2a3331;
+    --accent:#e9a46a; --accent-ink:#1a1209; --accent-soft:#3a2a1b;
+    --rec:#8fd3b0; --rec-soft:#1d3329; --warn:#efc678; --warn-soft:#3a2f17;
+    --crit:#f0a39a; --crit-soft:#3d1f1c; --chip:#232b29; --focus:#8cc4de;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#111514; --panel:#181e1c; --ink:#d5d8d6; --muted:#93a29d; --line:#2a3331;
+  --accent:#e9a46a; --accent-ink:#1a1209; --accent-soft:#3a2a1b;
+  --rec:#8fd3b0; --rec-soft:#1d3329; --warn:#efc678; --warn-soft:#3a2f17;
+  --crit:#f0a39a; --crit-soft:#3d1f1c; --chip:#232b29; --focus:#8cc4de;
+}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5}
+.wrap{max-width:860px;margin:0 auto;padding-inline:16px;padding-block:20px 64px}
+header.top{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px;margin-bottom:16px}
+h1{font-size:1.45rem;margin:0;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--muted);font-size:.9rem;margin:2px 0 0}
+.tally{display:flex;gap:8px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
+.tally span{background:var(--chip);border-radius:999px;padding:3px 10px;font-size:.82rem}
+.tally b{font-weight:600}
+.filters{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 18px}
+.filters button{font:inherit;font-size:.82rem;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:999px;padding:4px 12px;cursor:pointer}
+.filters button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.notice{border:1px dashed var(--line);border-radius:10px;padding:14px;color:var(--muted);margin-bottom:16px}
+.list{display:flex;flex-direction:column;gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 16px 14px}
+.card.ready{border-color:var(--rec)}
+.meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px}
+.chip{font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;background:var(--chip);color:var(--muted);border-radius:4px;padding:2px 7px}
+.pill{font-size:.75rem;border-radius:999px;padding:2px 9px;font-variant-numeric:tabular-nums}
+.pill.ok{background:var(--chip);color:var(--muted)}
+.pill.soon{background:var(--warn-soft);color:var(--warn)}
+.pill.past{background:var(--crit-soft);color:var(--crit)}
+.pill.state{background:var(--rec-soft);color:var(--rec)}
+.id{font-family:var(--mono);font-size:.72rem;color:var(--muted);margin-left:auto}
+h2{font-size:1.05rem;margin:2px 0 4px;text-wrap:balance}
+.q{margin:0 0 6px;font-weight:500}
+.ctx{margin:0 0 10px;color:var(--muted);font-size:.9rem;max-width:68ch}
+.md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
+.md p{margin:0 0 .6em}.md ul,.md ol{margin:0 0 .6em;padding-left:1.3em}.md li{margin:0 0 .2em}
+.md strong{font-weight:600;color:var(--ink)}
+.md code{font-family:var(--mono);font-size:.86em;background:var(--chip);border-radius:4px;padding:1px 4px;overflow-wrap:anywhere}
+.ot{min-width:0}.ot .oh{margin-bottom:2px}.ot .md{overflow-wrap:anywhere}
+.recbox{margin:10px 0 0;border-left:3px solid var(--rec);background:var(--rec-soft);border-radius:0 8px 8px 0;padding:8px 10px;font-size:.9rem}
+.recbox .r{display:inline-block;font-size:.7rem;letter-spacing:.04em;text-transform:uppercase;color:var(--rec);margin-bottom:2px}
+.ruling .md{display:inline-block;vertical-align:top}
+fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+legend{position:absolute;left:-9999px}
+.opt{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:9px 11px;cursor:pointer}
+.opt:hover{border-color:var(--muted)}
+.opt.chosen{border-color:var(--accent);background:var(--accent-soft)}
+.opt input{margin-top:4px;accent-color:var(--accent)}
+.opt .k{font-family:var(--mono);font-size:.8rem;color:var(--muted);margin-right:6px}
+.opt .r{display:inline-block;font-size:.7rem;letter-spacing:.04em;text-transform:uppercase;color:var(--rec);background:var(--rec-soft);border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:1px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-top:10px}
+textarea{width:100%;box-sizing:border-box;font:inherit;font-size:.92rem;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-height:2.6em;resize:vertical;margin-top:10px}
+label.ready{display:flex;gap:8px;align-items:center;font-size:.9rem;cursor:pointer}
+label.ready input{accent-color:var(--rec);width:16px;height:16px}
+.saved{font-size:.78rem;color:var(--muted);min-height:1em}
+.src{font-size:.78rem;color:var(--muted);font-family:var(--mono);overflow-wrap:anywhere}
+.ruling{margin-top:8px;font-size:.88rem;background:var(--rec-soft);color:var(--ink);border-radius:8px;padding:8px 10px}
+details.done{margin-top:28px}
+details.done summary{cursor:pointer;color:var(--muted);font-weight:600}
+details.done .list{margin-top:12px}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+/* Narrow screens: long words and URLs wrap, grid and flex children may shrink, nothing scrolls the page sideways. */
+.card,.list,.ot,.row>*,.meta>*{min-width:0}
+.opt{grid-template-columns:auto minmax(0,1fr)}
+h1,h2,.q,.md,.chip,.id,.ruling,.recbox{overflow-wrap:anywhere}
+
+.row-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:0}
+.row-card[data-state="new"]{border-color:var(--accent)}
+.row-card summary{list-style:none;cursor:pointer;padding:12px 14px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.row-card summary::-webkit-details-marker{display:none}
+.row-card .body{padding:0 14px 14px}
+.row-card .sum{white-space:pre-wrap;margin:0 0 10px;max-width:68ch}
+.hint{font-size:.78rem;color:var(--muted)}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.btns button{font:inherit;font-size:.85rem;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:6px 12px;cursor:pointer}
+.btns button:disabled{opacity:.5;cursor:default}
+.more{margin-top:10px;font-size:.88rem;background:var(--accent-soft);border-radius:8px;padding:8px 10px;white-space:pre-wrap}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Director Reply Shelf</h1>
+      <p class="sub">The answers director relayed, one paragraph each, with the source. Opening a row marks it read. Clear what you are done with; a cleared row stays recoverable for 14 days.</p>
+    </div>
+    <div class="tally" id="tally" aria-live="polite"></div>
+  </header>
+  <div id="notice" class="notice" hidden></div>
+  <div class="list" id="open"></div>
+  <details class="done" id="doneWrap" hidden>
+    <summary id="doneSum">Cleared, recoverable</summary>
+    <div class="list" id="done"></div>
+  </details>
+</div>
+
+<script>
+(function(){
+  var state={rows:[],db:null,canWrite:true};
+  var $=function(id){return document.getElementById(id)};
+  function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
+
+  /*shelf:start*/
+  // What each row shows, and the only writes the page makes. Every write is a patch built here, and a patch
+  // holds the operator's own fields (state, read_at, cleared_at, more, more_at) and nothing else.
+  var SHELF_RECOVER_DAYS=14, SHELF_MORE_MAX=2000;
+  function shelfMs(t){var m=Date.parse(t); return isNaN(m)?null:m}
+  function shelfView(r,nowMs){
+    var s=r&&r.state;
+    if(s==="new"||s==="read") return s;
+    if(s==="cleared"){
+      var t=shelfMs(r.cleared_at);
+      if(t===null) return "gone";
+      return nowMs-t<SHELF_RECOVER_DAYS*86400000?"cleared":"gone";
+    }
+    return "gone";
+  }
+  function shelfDaysLeft(r,nowMs){
+    var t=shelfMs(r&&r.cleared_at); if(t===null) return 0;
+    var left=SHELF_RECOVER_DAYS-(nowMs-t)/86400000;
+    return left<=0?0:Math.ceil(left);
+  }
+  function shelfOpenPatch(r,nowIso){return r&&r.state==="new"?{state:"read",read_at:nowIso}:null}
+  function shelfClearPatch(nowIso){return {state:"cleared",cleared_at:nowIso}}
+  function shelfRecoverPatch(){return {state:"read",cleared_at:""}}
+  function shelfMorePatch(text,nowIso){
+    var t=String(text==null?"":text).trim();
+    if(!t) return null;
+    return {more:t.slice(0,SHELF_MORE_MAX),more_at:nowIso};
+  }
+  function shelfSort(rows){
+    return rows.slice().sort(function(a,b){
+      var x=shelfMs(a.created_at), y=shelfMs(b.created_at);
+      if(x===null&&y===null) return 0;
+      if(x===null) return 1;
+      if(y===null) return -1;
+      return y-x;
+    });
+  }
+  /*shelf:end*/
+
+  function nowIso(){return new Date().toISOString().replace(/\.\d+Z$/,"Z")}
+  function age(t){
+    var m=shelfMs(t); if(m===null) return "";
+    var h=(Date.now()-m)/3600000;
+    return h<1?"just now":h<48?Math.round(h)+" h ago":Math.round(h/24)+" days ago";
+  }
+
+  function card(r){
+    var v=shelfView(r,Date.now());
+    var cleared=v==="cleared";
+    return '<details class="row-card" data-id="'+esc(r.id)+'" data-state="'+esc(v)+'">'+
+      '<summary><span class="chip">'+esc(r.ask)+'</span>'+
+        '<span class="pill '+(v==="new"?'soon':'ok')+'">'+esc(cleared?"cleared, "+shelfDaysLeft(r,Date.now())+" days to recover":v)+'</span>'+
+        '<span class="hint">'+esc(r.asked_of)+' answered '+esc(r.asked_by)+(r.created_at?', '+esc(age(r.created_at)):'')+'</span>'+
+        '<span class="id">'+esc(r.id)+'</span></summary>'+
+      '<div class="body"><p class="sum">'+esc(r.summary)+'</p>'+
+        '<div class="src">source: '+esc(r.source)+(r.sha256?' (sha256 '+esc(r.sha256)+')':'')+'</div>'+
+        (r.more?'<div class="more"><b>You asked for more:</b> '+esc(r.more)+'</div>':'')+
+        (cleared?'':'<textarea id="m-'+esc(r.id)+'" data-id="'+esc(r.id)+'" placeholder="Ask for more (director reads this on its sweep and relays it)"'+(state.canWrite?'':' disabled')+'></textarea>')+
+        '<div class="btns">'+
+          (cleared
+            ?'<button type="button" data-act="recover" data-id="'+esc(r.id)+'"'+(state.canWrite?'':' disabled')+'>Recover</button>'
+            :'<button type="button" data-act="more" data-id="'+esc(r.id)+'"'+(state.canWrite?'':' disabled')+'>Ask for more</button>'+
+             '<button type="button" data-act="clear" data-id="'+esc(r.id)+'"'+(state.canWrite?'':' disabled')+'>Clear</button>')+
+        '</div><div class="saved" id="s-'+esc(r.id)+'"></div></div></details>';
+  }
+
+  function render(){
+    var rows=shelfSort(state.rows), now=Date.now();
+    var live=rows.filter(function(r){var v=shelfView(r,now);return v==="new"||v==="read"});
+    var cleared=rows.filter(function(r){return shelfView(r,now)==="cleared"});
+    var openIds={}; Array.prototype.forEach.call(document.querySelectorAll("details.row-card[open]"),function(d){openIds[d.getAttribute("data-id")]=1});
+    $("open").innerHTML=live.length?live.map(card).join(""):'<div class="notice">Nothing on the shelf.</div>';
+    $("done").innerHTML=cleared.map(card).join("");
+    Array.prototype.forEach.call(document.querySelectorAll("details.row-card"),function(d){if(openIds[d.getAttribute("data-id")]) d.open=true});
+    $("doneWrap").hidden=!cleared.length;
+    $("doneSum").textContent="Cleared, recoverable ("+cleared.length+")";
+    var unread=live.filter(function(r){return r.state==="new"}).length;
+    $("tally").innerHTML='<span><b>'+unread+'</b> new</span><span><b>'+live.length+'</b> on the shelf</span>';
+  }
+
+  function write(id,patch,msg){
+    if(!state.db||!patch) return;
+    var s=$("s-"+id); if(s) s.textContent="Saving";
+    state.db.doc("replies/"+id).update(patch).then(function(){
+      var s2=$("s-"+id); if(s2) s2.textContent=msg||"Saved";
+    }).catch(function(e){
+      var s3=$("s-"+id); if(s3) s3.textContent=(e&&e.code==="invalid_argument")?"You can't save here":"Not saved, try again";
+      if(e&&e.code==="invalid_argument"){state.canWrite=false;render();}
+    });
+  }
+  function byId(id){return state.rows.filter(function(r){return r.id===id})[0]}
+
+  // Opening a row is the read mark.
+  document.addEventListener("toggle",function(ev){
+    var d=ev.target; if(!d||!d.classList||!d.classList.contains("row-card")||!d.open) return;
+    var id=d.getAttribute("data-id"), r=byId(id); if(!r) return;
+    write(id,shelfOpenPatch(r,nowIso()),"Marked read");
+  },true);
+  document.addEventListener("click",function(ev){
+    var b=ev.target.closest&&ev.target.closest("button[data-act]"); if(!b) return;
+    var id=b.getAttribute("data-id"), act=b.getAttribute("data-act");
+    if(act==="clear") write(id,shelfClearPatch(nowIso()),"Cleared");
+    else if(act==="recover") write(id,shelfRecoverPatch(),"Recovered");
+    else if(act==="more"){
+      var t=$("m-"+id), p=shelfMorePatch(t?t.value:"",nowIso());
+      if(!p){var s=$("s-"+id); if(s) s.textContent="Type what you want to know first"; return;}
+      write(id,p,"Sent to director's next sweep");
+    }
+  });
+
+  function showNotice(t){var n=$("notice"); n.textContent=t; n.hidden=!t;}
+  showNotice("Loading the shelf.");
+  render();
+
+  claude.use("db").then(function(db){
+    if(!db){showNotice("Your shelf isn't available in this view. Open the page signed in to claude.ai.");return;}
+    state.db=db;
+    claude.use("user").then(function(u){
+      if(u && u.can){ u.can("data.write").then(function(v){ if(v===false){state.canWrite=false;render();} }).catch(function(){}); }
+    });
+    db.collection("replies").onSnapshot(function(snap){
+      state.rows=snap.docs.map(function(d){var b=Object.assign({},d.data()); b.id=d.id; return b});
+      showNotice(state.rows.length?"":"No replies yet. Director puts each answer it relays here.");
+      var a=document.activeElement;
+      if(a&&a.tagName==="TEXTAREA"){ return; }
+      render();
+    },function(){showNotice("The shelf stopped updating. Reload the page.");});
+  });
+})();
+</script>
