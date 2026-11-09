@@ -172,3 +172,37 @@ func TestHeldSendWithoutAskIsUnchanged(t *testing.T) {
 		t.Error("a release without ask wrote the relay log")
 	}
 }
+
+// A release of a hold that carries no ask writes no relay entry and says nothing
+// about one: the guard on the hold's ask in release() is what keeps a plain held
+// send from reaching the relay-log writer. Dropping that guard sends an empty ask
+// to the writer, which then reports a failed entry on a send that never asked for
+// one, so the notices are read for any mention of a relay entry.
+func TestReleaseWithoutAskSaysNothingAboutARelayEntry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	fx, log := heldAskFixture(t, ctx)
+	if _, err := fx.send(map[string]any{"to": "global://c1/supervisor"}); err != nil {
+		t.Fatal(err)
+	}
+	fx.beatTicks(3)
+	if fx.msgs("c1") != 1 || fx.held()[0].State != holdReleased {
+		t.Fatalf("the send was not released: msgs %d, %+v", fx.msgs("c1"), fx.held())
+	}
+	notices := fx.bus.watch.takeNotices()
+	var released bool
+	for _, n := range notices {
+		if strings.Contains(n, "released to") {
+			released = true
+		}
+		if strings.Contains(n, "relay") {
+			t.Errorf("a release without ask noticed a relay entry: %q", n)
+		}
+	}
+	if !released {
+		t.Errorf("no release notice among %q", notices)
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Error("a release without ask wrote the relay log")
+	}
+}
