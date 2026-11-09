@@ -167,5 +167,25 @@ mv "$DIRECTOR_STATE/asks.jsonl" "$root/asks.keep"; mkask I-9 40
 ! RELAY_LOG="$root/no-such-dir/relay-log.md" "$H" | grep -q "$ASKLINE" && ok "no ask in the window prints nothing, whatever the relay log" || bad "no ask in the window"
 mv "$root/asks.keep" "$DIRECTOR_STATE/asks.jsonl"
 
+# --- the asks line with a waiting line: the waiting line stays last --------------------------------------
+# One unlinked ask in the window and one approved PR waiting. The waiting line is last and the asks line
+# is the line just before it, so swapping the two blocks in the hook turns this red.
+rm -f "$DIRECTOR_STATE/asks.jsonl" "$DIRECTOR_STATE/workstreams.jsonl" "$RELAY_LOG" "$RELAY_LOG.lock"; : >"$RELAY_LOG"
+mkask I-1 1
+nowz="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"read_at": "%s", "answered_not_relayed": []}\n' "$nowz" >"$DIRECTOR_STATE/desk-reads.jsonl"
+printf '{"written_at": "%s", "checked": 1, "approved_not_merged": [{"pr": "o/r#1", "approved_at": "%s"}]}\n' "$nowz" "$nowz" >"$DIRECTOR_STATE/waiting-prs.json"
+out="$("$H")"
+[[ "$(printf '%s\n' "$out" | tail -n 1)" == "waiting: "* ]] && ok "with both lines present the waiting line is last" || bad "the waiting line is not last" "$(printf '%s\n' "$out" | tail -n 1)"
+[[ "$(printf '%s\n' "$out" | tail -n 2 | head -n 1)" == "asks in the last 24 h with no relay or row: 1 (oldest I-1)" ]] && ok "and the asks line is the line just before it" || bad "the asks line is not just before the waiting line"
+rm -f "$DIRECTOR_STATE/desk-reads.jsonl" "$DIRECTOR_STATE/waiting-prs.json"
+
+# --- STANDING_HOOK_ASKS_TIMEOUT: any value that is not finite and above 0 falls back to 3 -----------------
+for v in inf -inf nan 0 -1 1e999 abc ""; do
+  out="$(STANDING_HOOK_ASKS_TIMEOUT="$v" "$H" 2>&1)" && rc=0 || rc=$?
+  [[ $rc -eq 0 && "$(printf '%s\n' "$out" | sed -n 1p)" == "drain age: "* && "$out" != *Traceback* ]] && ok "timeout '$v' does not crash the hook" || bad "timeout '$v' crashes the hook" "rc=$rc $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"
+  printf '%s\n' "$out" | grep -q '^asks in the last 24 h with no relay or row: 1 (oldest I-1)$' && ok "timeout '$v' still counts the unlinked ask" || bad "timeout '$v' loses the asks line"
+done
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
