@@ -19,7 +19,7 @@ import (
 // purpose, in a PR that says so (testdata/README.md).
 const (
 	routingVectorsSHA256 = "4cb6a7295845ace0a9456d8723013675907b0def798b016ad7e265ad540a6be4"
-	marryVectorsSHA256   = "3783fe0af988f1505b708ff0ab92837dd3aabbde853b26ef4870fcbce8086f92"
+	marryVectorsSHA256   = "5fe464863800eb75911fb2f4b5e5c8190678057480e2b4801f08bebead92376f"
 
 	// marryVectorsGrepSkips is how many grep steps the pinned marry vectors
 	// carry. Those steps read marvel's Go source, so director skips them; the
