@@ -549,6 +549,9 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 		return nil
 	}
 	floor, why := g.seatFloor(ctx, agentID, instance)
+	if pf := g.predecessorFloor(ctx, agentID, instance); pf > floor {
+		floor = pf
+	}
 	g.floorWhy = why
 	start := uint64(0)
 	if floor > 0 {
@@ -608,6 +611,48 @@ func (g *globalTier) seatFloor(ctx context.Context, agentID, self string) (uint6
 		return 0, fmt.Sprintf("listing hub consumers failed (%v), and reading them by name failed (%v)", err, nerr)
 	}
 	return floor, ""
+}
+
+// predecessorID is the agent id of the session this one replaced, read from
+// MARVEL_PREDECESSOR, which marvel sets to "<workspace>/<name>" for a seat a
+// shift or a wake started. The name is the predecessor's agent id. It is empty
+// when there is no link, when the value has no name, or when the name is this
+// seat's own id (a restart, which the ordinary lookup already covers).
+func predecessorID(self string) string {
+	link := os.Getenv("MARVEL_PREDECESSOR")
+	name := link[strings.LastIndex(link, "/")+1:]
+	if name == "" || name == self {
+		return ""
+	}
+	return name
+}
+
+// predecessorFloor is the highest ack floor among the durables the explicit
+// predecessor left on the hub stream, 0 when there is no link or none acked
+// anything. A new generation has a new agent id, so seatFloor's prefix never
+// names the predecessor's durables. The link names the seat, so the live check
+// is not applied: the predecessor is usually still running when its successor
+// starts, and a floor that is a little stale delivers a message twice, where
+// skipping the floor would replay the whole stream. A lookup that fails
+// returns 0, the replay seatFloor would have done.
+func (g *globalTier) predecessorFloor(ctx context.Context, agentID, self string) uint64 {
+	pred := predecessorID(agentID)
+	if pred == "" {
+		return 0
+	}
+	prefix := "mcp_global_" + pred + "_"
+	filters := []string{g.cfg.inboxSubject()}
+	notLive := func(string) bool { return false }
+	lctx, lcancel := context.WithTimeout(ctx, floorListTimeout)
+	floor, err := seatAckFloor(lctx, g.js, g.cfg.streamName(), prefix, filters, nil)
+	lcancel()
+	if err == nil {
+		return floor
+	}
+	nctx, ncancel := context.WithTimeout(ctx, floorListTimeout)
+	defer ncancel()
+	byName, _ := g.floorByName(nctx, pred, self, prefix, filters, notLive)
+	return byName
 }
 
 // floorByName finds this seat's departed instances without listing the hub:
