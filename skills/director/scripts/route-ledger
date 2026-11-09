@@ -25,7 +25,7 @@ FILE_MAX = 32 * 1024 * 1024
 TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 KINDS = ("ack", "relay", "note", "close", "cancel")
 RECORD_REQUIRED = ("ask_id", "routed_to", "basis", "principal", "supervisor_epoch", "routed_at")
-RECORD_TIMES = ("routed_at", "acked_at", "cancelled_at")
+RECORD_TIMES = ("routed_at", "acked_at", "cancelled_at", "closed_at")
 LEGACY_KEYS = ("event", "result", "note", "closed_at")
 
 
@@ -141,6 +141,8 @@ def check_file(path):
                         note(row["ask_id"], "acked")
                     if row.get("cancelled_at"):
                         note(row["ask_id"], "cancelled")
+                    if row.get("closed_at"):
+                        note(row["ask_id"], "closed")
                 elif "kind" in row:
                     check_event(row)
                     c["event_v1"] += 1

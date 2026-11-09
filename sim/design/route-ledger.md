@@ -32,6 +32,7 @@ supervisor onto the shape; that is a separate step per supervisor.
 | `depth_observed` | integer, 0 or more, or null | optional; the depth read at ack, if read |
 | `acked_at` | time | optional; when the destination took it |
 | `cancelled_at` | time | optional; when the routing was withdrawn |
+| `closed_at` | time | optional; when the ask was done, if the supervisor closes it on the record itself |
 | `no_route` | object or text | optional; the reason when `routed_to` is `none` |
 
 A record with no `depth_at_route` is **depth unknown**, never zero. Fields a local ledger adds beyond these are
@@ -50,7 +51,9 @@ allowed and ignored.
 | `closed_at` | time | required for `close` |
 | `result` | text | required for `close`; what finished the ask (a merged PR, a ruling) |
 
-Closure is a `close` event, so "done" is a time and a result and not an absence. An ask is **open** when it was
+Closure is a `close` event, so "done" is a time and a result and not an absence. A `closed_at` on the record
+counts as a close too (the record then carries no result); a ledger that closes asks should prefer the event, which
+carries the result. An ask is **open** when it was
 routed and has neither a `close` nor a `cancel`.
 
 ## Legacy rows

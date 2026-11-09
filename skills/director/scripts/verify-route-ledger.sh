@@ -72,6 +72,8 @@ row "{$REC,\"depth_at_route\":true}"; refused "a boolean depth is refused" "row 
 row "{$REC,\"depth_at_route\":null}"; grep -qF 'depth known 0 of 1' "$root/out" && ok "a null depth_at_route counts as depth unknown" || bad "null depth_at_route" "$(cat "$root/out")"
 row "{$REC,\"depth_observed\":null}"; [[ $rc -eq 0 ]] && ok "a null depth_observed passes (not observed)" || bad "null depth_observed" "$(cat "$root/err")"
 row "{$REC,\"acked_at\":\"soon\"}"; refused "an unreadable acked_at is refused" "row 1: acked_at:time"
+row "{$REC,\"closed_at\":\"2030-01-01T12:00:00Z\"}"; [[ $rc -eq 0 ]] && grep -qF 'closed 1' "$root/out" && grep -qF 'open 0' "$root/out" && ok "a record with closed_at counts the ask as closed, not open" || bad "record closed_at" "rc=$rc $(cat "$root/out")"
+row "{$REC,\"closed_at\":\"later\"}"; refused "an unreadable closed_at on a record is refused" "row 1: closed_at:time"
 row "{$REC,\"cancelled_at\":\"2030-01-01T10:01:00Z\"}"; grep -qF 'cancelled 1' "$root/out" && ok "cancelled_at counts the ask as cancelled" || bad "cancelled count" "$(cat "$root/out")"
 row "{$REC,\"alternatives\":\"one\"}"; refused "alternatives must be a list" "row 1: alternatives:shape"
 row "{$REC,\"no_route\":5}"; refused "no_route must be an object or text" "row 1: no_route:shape"
