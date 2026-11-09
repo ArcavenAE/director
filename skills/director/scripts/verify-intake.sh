@@ -185,14 +185,62 @@ python3 - "$root/j1" "$slug" <<'P' && ok "I-1 joins its card, answer time, relay
 import json, sys
 j = json.load(open(sys.argv[1]))
 assert j == [
- {"answered_at": "2026-10-19T11:30:00Z", "ask_id": "I-1", "card": sys.argv[2], "received_at": "2026-10-19T08:00:00Z", "relay": "R-1", "row": "slug-a"},
- {"answered_at": "none", "ask_id": "I-2", "card": "none", "received_at": "2026-10-19T09:00:00Z", "relay": "none", "row": "none"}], j
+ {"answered_at": "2026-10-19T11:30:00Z", "ask_id": "I-1", "closed": "none", "card": sys.argv[2], "received_at": "2026-10-19T08:00:00Z", "relay": "R-1", "row": "slug-a"},
+ {"answered_at": "none", "ask_id": "I-2", "closed": "none", "card": "none", "received_at": "2026-10-19T09:00:00Z", "relay": "none", "row": "none"}], j
 P
 tab="$("$DWS" asks)"
-[[ "$(printf '%s\n' "$tab" | sed -n 1p | awk '{print NF}')" == 6 && "$(printf '%s\n' "$tab" | sed -n 3p | tr -s ' ')" == "I-2 2026-10-19T09:00:00Z none none none none" ]] && ok "the table prints six columns and none for a blank" || bad "the table" "$tab"
+[[ "$(printf '%s\n' "$tab" | sed -n 1p | awk '{print NF}')" == 7 && "$(printf '%s\n' "$tab" | sed -n 3p | tr -s ' ')" == "I-2 2026-10-19T09:00:00Z none none none none none" ]] && ok "the table prints seven columns and none for a blank" || bad "the table" "$tab"
 "$DWS" asks >"$root/t2"; [[ "$tab" == "$(cat "$root/t2")" ]] && ok "the table gives the same bytes twice" || bad "table bytes"
 mkdir -p "$root/empty-state"
 [[ "$(DIRECTOR_STATE="$root/empty-state" "$DWS" asks --json)" == "[]" ]] && ok "with no asks the join is an empty list" || bad "empty join"
+
+# --- ask-close: every ask gets a recorded close -------------------------------------------------------
+# A close is a row with an event key, appended to asks.jsonl under the intake flock. It is not an ask: it
+# mints nothing and the next id does not move. Closing twice, an unminted id, not-an-ask without a reason
+# and the kind "relayed" all fail and append nothing.
+saved_state="$DIRECTOR_STATE"
+{
+  export DIRECTOR_STATE="$root/close-state"; mkdir -p "$DIRECTOR_STATE"
+  CA="$DIRECTOR_STATE/asks.jsonl"
+  printf 'first\n' >"$root/c-a.txt"; printf 'second\n' >"$root/c-b.txt"
+  "$DWS" intake --text-file "$root/c-a.txt" >/dev/null; "$DWS" intake --text-file "$root/c-b.txt" >/dev/null
+  if "$DWS" ask-close I-2 --as answered --ref pr:ArcavenAE/director#1 >/dev/null 2>&1; then ok "ask-close I-2 --as answered --ref succeeds"; else bad "ask-close I-2 succeeds"; fi
+  [[ "$(nlines "$CA")" == 3 ]] && ok "the close appends exactly one line" || bad "the close appends one line" "$(nlines "$CA")"
+  python3 - "$CA" <<'P' && ok "the close row has event close, the id, the kind, the ref and a clock time" || bad "close row shape" "$(tail -n1 "$CA")"
+import json, sys
+r = json.loads(open(sys.argv[1]).read().splitlines()[-1])
+assert r["event"] == "close" and r["ask_id"] == "I-2" and r["as"] == "answered" and r["ref"] == "pr:ArcavenAE/director#1", r
+assert isinstance(r.get("closed_at"), str) and r["closed_at"].endswith("Z"), r
+P
+  "$DWS" asks --json >"$root/cj"
+  python3 - "$root/cj" <<'P' && ok "dws asks lists two asks, I-2 closed answered and I-1 closed none" || bad "asks after close" "$(cat "$root/cj")"
+import json, sys
+j = json.load(open(sys.argv[1]))
+assert [(e["ask_id"], e["closed"]) for e in j] == [("I-1", "none"), ("I-2", "answered")], j
+P
+  [[ "$("$DWS" intake --text-file "$root/c-a.txt")" == "I-3" ]] && ok "the next intake mints I-3: a close does not bump the id" || bad "next id after a close"
+  n0="$(nlines "$CA")"
+  refuse() { # refuse NAME ARGS...: nonzero and nothing appended
+    local name="$1"; shift
+    if "$DWS" ask-close "$@" >/dev/null 2>&1; then bad "$name is refused"; else ok "$name is refused"; fi
+    [[ "$(nlines "$CA")" == "$n0" ]] && ok "$name appends nothing" || bad "$name appends nothing"
+  }
+  refuse "a second close of one id" I-2 --as answered
+  refuse "not-an-ask with no --reason" I-1 --as not-an-ask
+  refuse "an unminted id" I-99 --as answered
+  refuse "a malformed id" nope --as answered
+  refuse "the kind relayed" I-1 --as relayed
+  refuse "no --as" I-1
+  if "$DWS" ask-close I-1 --as not-an-ask --reason "chatter, not a request" >/dev/null 2>&1; then ok "not-an-ask with a --reason succeeds"; else bad "not-an-ask with a reason"; fi
+  python3 - "$CA" <<'P' && ok "the reason is kept on the close row" || bad "reason kept" "$(tail -n1 "$CA")"
+import json, sys
+r = json.loads(open(sys.argv[1]).read().splitlines()[-1])
+assert r["event"] == "close" and r["as"] == "not-an-ask" and r["reason"] == "chatter, not a request", r
+P
+  "$DWS" asks >"$root/ct"
+  [[ "$(sed -n 1p "$root/ct" | awk '{print NF}')" == 7 && "$(grep -c 'not-an-ask' "$root/ct")" == 1 ]] && ok "the table shows the closed column and the kind" || bad "table closed column" "$(cat "$root/ct")"
+}
+export DIRECTOR_STATE="$saved_state"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
