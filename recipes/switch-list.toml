@@ -1,1 +1,17 @@
+# Which bus roles may move from cast-launch to the bus-seat recipe. Data for the switch;
+# nothing here changes a running seat.
+#
+# "not until marvel admits": the director seat and research-supervisor stay on
+# cast-launch until marvel resolves the director global role and admits a
+# research-supervisor as a holder by default. Every other bus role is switchable.
 [roles]
+director = "not until marvel admits"
+research-supervisor = "not until marvel admits"
+supervisor = "switchable"
+builder = "switchable"
+marvel-builder = "switchable"
+sideshow-builder = "switchable"
+maintainer = "switchable"
+envoy = "switchable"
+reviewer = "switchable"
+claude-reviewer = "switchable"

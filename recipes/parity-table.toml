@@ -1,1 +1,60 @@
+# Cases 4 and 6 of sim/twin/verify-cast-launch.sh, as data. Each row casts one role
+# with the global tier on at the daemon (DIRECTOR_GLOBAL_DOMAIN and DIRECTOR_CLUSTER
+# set) and names what must be absent from, or present on, three surfaces:
+#   mcp        the mcp-config the harness is handed
+#   claude     the environment the harness runs with
+#   preflight  the environment the pre-flight runs with
+# A surface entry is "<surface>:<NAME>" for absent, "<surface>:<NAME>=<value>" for present.
+#
+# Relaxation, recorded here: case 4 of verify-cast-launch.sh also requires
+# DIRECTOR_CLUSTER absent on all three surfaces. This table does not. marvel
+# constructs DIRECTOR_CLUSTER and the shim ignores it without a domain, so a
+# launcher that leaves it set is at parity. Those entries are listed under
+# `relaxed` on each row and are not asserted.
+#
+# The same table runs against cast-launch (sim/twin/parity-table.sh) and, later,
+# against marvel's launch of the recipe.
 schema = 1
+
+[[rows]]
+id = "case4-maintainer"
+role = "maintainer"
+env = { DIRECTOR_GLOBAL_DOMAIN = "global", DIRECTOR_CLUSTER = "mokuzai" }
+absent = ["mcp:DIRECTOR_GLOBAL_DOMAIN", "mcp:DIRECTOR_GLOBAL_ROLE", "claude:DIRECTOR_GLOBAL_DOMAIN", "claude:DIRECTOR_GLOBAL_ROLE", "preflight:DIRECTOR_GLOBAL_DOMAIN", "preflight:DIRECTOR_GLOBAL_ROLE"]
+relaxed = ["mcp:DIRECTOR_CLUSTER", "claude:DIRECTOR_CLUSTER", "preflight:DIRECTOR_CLUSTER"]
+
+[[rows]]
+id = "case4-builder"
+role = "builder"
+env = { DIRECTOR_GLOBAL_DOMAIN = "global", DIRECTOR_CLUSTER = "mokuzai" }
+absent = ["mcp:DIRECTOR_GLOBAL_DOMAIN", "mcp:DIRECTOR_GLOBAL_ROLE", "claude:DIRECTOR_GLOBAL_DOMAIN", "claude:DIRECTOR_GLOBAL_ROLE", "preflight:DIRECTOR_GLOBAL_DOMAIN", "preflight:DIRECTOR_GLOBAL_ROLE"]
+relaxed = ["mcp:DIRECTOR_CLUSTER", "claude:DIRECTOR_CLUSTER", "preflight:DIRECTOR_CLUSTER"]
+
+[[rows]]
+id = "case4-marvel-builder"
+role = "marvel-builder"
+env = { DIRECTOR_GLOBAL_DOMAIN = "global", DIRECTOR_CLUSTER = "mokuzai" }
+absent = ["mcp:DIRECTOR_GLOBAL_DOMAIN", "mcp:DIRECTOR_GLOBAL_ROLE", "claude:DIRECTOR_GLOBAL_DOMAIN", "claude:DIRECTOR_GLOBAL_ROLE", "preflight:DIRECTOR_GLOBAL_DOMAIN", "preflight:DIRECTOR_GLOBAL_ROLE"]
+relaxed = ["mcp:DIRECTOR_CLUSTER", "claude:DIRECTOR_CLUSTER", "preflight:DIRECTOR_CLUSTER"]
+
+[[rows]]
+id = "case4-sideshow-builder"
+role = "sideshow-builder"
+env = { DIRECTOR_GLOBAL_DOMAIN = "global", DIRECTOR_CLUSTER = "mokuzai" }
+absent = ["mcp:DIRECTOR_GLOBAL_DOMAIN", "mcp:DIRECTOR_GLOBAL_ROLE", "claude:DIRECTOR_GLOBAL_DOMAIN", "claude:DIRECTOR_GLOBAL_ROLE", "preflight:DIRECTOR_GLOBAL_DOMAIN", "preflight:DIRECTOR_GLOBAL_ROLE"]
+relaxed = ["mcp:DIRECTOR_CLUSTER", "claude:DIRECTOR_CLUSTER", "preflight:DIRECTOR_CLUSTER"]
+
+[[rows]]
+id = "case4-envoy"
+role = "envoy"
+env = { DIRECTOR_GLOBAL_DOMAIN = "global", DIRECTOR_CLUSTER = "mokuzai" }
+absent = ["mcp:DIRECTOR_GLOBAL_DOMAIN", "mcp:DIRECTOR_GLOBAL_ROLE", "claude:DIRECTOR_GLOBAL_DOMAIN", "claude:DIRECTOR_GLOBAL_ROLE", "preflight:DIRECTOR_GLOBAL_DOMAIN", "preflight:DIRECTOR_GLOBAL_ROLE"]
+relaxed = ["mcp:DIRECTOR_CLUSTER", "claude:DIRECTOR_CLUSTER", "preflight:DIRECTOR_CLUSTER"]
+
+# Case 6: the director seat is the second global role word. The seat address that
+# cast-launch also prints is its own log line and is not part of the parity.
+[[rows]]
+id = "case6-director"
+role = "director"
+env = { DIRECTOR_GLOBAL_DOMAIN = "global", DIRECTOR_CLUSTER = "mokuzai" }
+present = ["mcp:DIRECTOR_GLOBAL_ROLE=director"]

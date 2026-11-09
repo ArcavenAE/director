@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The cast-launch test harness, sourced by sim/twin/verify-cast-launch.sh and
 # sim/twin/parity-table.sh so both drive the launcher the same way: the stubs
-# (a wardrobe root, the shim, claude, curl), cast(), and the lookups over what
+# (a role-library root, the shim, claude, curl), cast(), and the lookups over what
 # claude was handed and ran with. The caller sets LAUNCH first. Not run on its own.
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
