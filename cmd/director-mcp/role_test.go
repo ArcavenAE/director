@@ -84,7 +84,8 @@ func TestBrokerEveryRoleHolderGetsACopy(t *testing.T) {
 
 // A send to a role nobody live holds is refused before publish, like a send
 // to an agent with no live presence. An explicit workspace still addresses
-// the role's mailbox verbatim, as it does a cold agent mailbox.
+// the role's mailbox verbatim, as it does a cold agent mailbox, when the send
+// says cold: true; without it a subject no consumer filters is refused.
 func TestBrokerRoleSendWithNoHolderIsRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -97,8 +98,12 @@ func TestBrokerRoleSendWithNoHolderIsRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "holds role") {
 		t.Fatalf("send to a role nobody holds = %v; want a refusal naming the role", err)
 	}
-	if err := sendRole(ctx, sender, "role://ops/reviewer", "r2", "aae-orc"); err != nil {
-		t.Errorf("explicit workspace to a cold role mailbox refused: %v", err)
+	if err := sendRole(ctx, sender, "role://ops/reviewer", "r2", "aae-orc"); err == nil || !strings.Contains(err.Error(), "no consumer filters agent.aae-orc.ops.role.reviewer.inbox") {
+		t.Errorf("explicit workspace to a role mailbox no consumer filters = %v, want a refusal naming the subject", err)
+	}
+	cold := context.WithValue(ctx, coldSendKey{}, true)
+	if err := sendRole(cold, sender, "role://ops/reviewer", "r3", "aae-orc"); err != nil {
+		t.Errorf("explicit workspace to a cold role mailbox refused with cold: %v", err)
 	}
 }
 
@@ -178,7 +183,8 @@ func TestBrokerTakingARoleDoesNotInheritTheAgentOnlyFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sendRole(ctx, sender, "role://ops/reviewer", "r1", "aae-orc"); err != nil {
+	cold := context.WithValue(ctx, coldSendKey{}, true)
+	if err := sendRole(cold, sender, "role://ops/reviewer", "r1", "aae-orc"); err != nil {
 		t.Fatal(err)
 	}
 	if err := sendRole(ctx, sender, "agent://ops/rev-1", "a1", "aae-orc"); err != nil {

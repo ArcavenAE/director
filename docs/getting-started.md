@@ -468,8 +468,9 @@ prerequisites", in its repository) gives the ways to keep a host awake.
 | `claude mcp list` shows the server but the tools are absent | tools load at session start | start a new session |
 | the roster is empty while a session runs | a shim build older than 2026-09-12 set presence once and never renewed | rebuild the shim; presence is on a 30s timer now |
 | a message never arrives | the receiver has not polled | it arrives on the receiver's next `wait_for_message`; there is no push |
-| did my message arrive | `send_message` says only "accepted" | `director-mcp asks --id <message_id>` reports `delivery`: `read`, `not_yet_read`, `expired_unread`, `no_reader` or `unknown`. It is a read by the receiver's durable, not a reply |
-| `send_message` refused: no live presence for the recipient | R-92: the workspace is resolved from live presence | pass `workspace` explicitly to address a cold mailbox verbatim |
+| did my message arrive | `send_message` says only "accepted" | `director-mcp asks --id <message_id>` reports `delivery`: `read`, `not_yet_read`, `expired_unread`, `no_reader` or `unknown`. `delivery` is the receiver's ack, not a reply; in handled mode (`DIRECTOR_HANDLED=1`) a seat acks only at `mark_handled`, so mail it received and has not marked handled is not yet acked |
+| `send_message` refused: no live presence for the recipient | R-92: the workspace is resolved from live presence | pass `workspace` explicitly to address a known mailbox verbatim |
+| `send_message` refused: no consumer filters the subject | a send with `workspace` set names a subject no durable consumer filters with that exact filter, often a typo in the workspace, team or id | fix the address; to leave mail for a seat that has not started, send with `cold: true` |
 | shim refuses to start naming the id | the id has a byte outside `[A-Za-z0-9_-]` | fix the launcher; the shim rejects and never rewrites |
 | a second shim logs `WARNING: ... instance ... pid ...` | two sessions share one id | give each session its own id |
 | authorization violation in the shim log | the broker requires a credential | set `DIRECTOR_NATS_USER` and `DIRECTOR_NATS_PASS` for the team |

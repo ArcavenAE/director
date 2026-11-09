@@ -9,6 +9,10 @@
             "description": "optional: the intake id (I-\u003cn\u003e) of the operator ask this send answers. When the send is accepted, the shim writes the relay-log entry for it (ask, recipient, text, message id). An id that is not in asks.jsonl refuses the send. One recipient only; not for broadcast addresses.",
             "type": "string"
           },
+          "cold": {
+            "description": "optional. With workspace set, publish even when no durable consumer filters the subject yet, for mail to a seat that has not started; the result says no consumer filters it, or that the check could not run. Without cold, a hinted send to an unfiltered subject is refused.",
+            "type": "boolean"
+          },
           "fail_fast": {
             "description": "refuse at once when the recipient has no live presence, as without the presence watch, instead of holding the send for release when it returns",
             "type": "boolean"
@@ -45,7 +49,7 @@
             "type": "string"
           },
           "workspace": {
-            "description": "optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known cold mailbox (no live presence) verbatim. Ignored for a global:// address, whose subject carries no workspace.",
+            "description": "optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known mailbox (no live presence) verbatim; the send is then refused unless a durable consumer filters that subject with that exact filter, or cold is true. Ignored for a global:// address, whose subject carries no workspace.",
             "type": "string"
           }
         },
