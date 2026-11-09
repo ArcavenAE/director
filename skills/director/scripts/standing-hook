@@ -33,6 +33,17 @@ $DIRECTOR_STATE/last-stalled-scan the same way. The hook never runs the scan its
 each repo's remote, which takes seconds, and a prompt hook must not. It only shows how old the
 last one is, so a sweep that skipped the block shows that in the next answer.
 
+The line after it counts operator asks that never got a relay entry or a ledger row, only when there are some:
+
+  asks in the last 24 h with no relay or row: <n> (oldest <id>)
+
+It is the join `dws asks --json` already computes (asks.jsonl, the relay log, the ledger), read through that
+command as a read-only subprocess with a short timeout (STANDING_HOOK_ASKS_TIMEOUT seconds, default 3; no
+network). An ask counts when its received_at is within 24 hours and its relay and row both read none; the
+oldest is the earliest received. At 0 it prints nothing. When the join cannot be read, or the relay log it
+needs could not be, it prints `asks in the last 24 h with no relay or row: UNKNOWN (<reason>)`, so a missing
+log never reads as every ask unlinked. It is a diagnostic: it prompts and gates nothing.
+
 One more line follows, last, only when something waits:
 
   waiting: <n> Desk answers not relayed (oldest <age>, ids <ids>); <m> approved PRs not merged (oldest <age>); Desk read <age> ago
@@ -49,7 +60,7 @@ The hook never types into a pane and never reads the hub or the network; it read
 the dash and scan stamps, and the two inputs above. The waiting line widens the contract the earlier
 "reads one file" stated, on purpose.
 """
-import datetime, json, os, sys, tempfile
+import datetime, json, os, subprocess, sys, tempfile
 
 CHECKLIST = """Before you answer:
 1. Drained, and answered Desk cards and page picks read, since my last answer? If not, do them first.
@@ -225,6 +236,54 @@ def waiting_line():
     return "waiting: " + "; ".join(clauses)
 
 
+ASKS_WINDOW_HOURS = 24
+ASKS_PREFIX = "asks in the last 24 h with no relay or row: "
+
+
+def asks_timeout():
+    try:
+        return float(os.environ.get("STANDING_HOOK_ASKS_TIMEOUT", "3"))
+    except ValueError:
+        return 3.0
+
+
+def asks_line():
+    """The unlinked-asks line, or None when nothing is unlinked. The join is dws's own, read through it."""
+    dws = os.environ.get("STANDING_HOOK_DWS") or os.path.join(os.path.dirname(os.path.realpath(__file__)), "dws")
+    try:
+        p = subprocess.run([dws, "asks", "--json"], capture_output=True, text=True, timeout=asks_timeout(), stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return f"{ASKS_PREFIX}UNKNOWN (dws asks did not answer in {asks_timeout():g}s)"
+    except OSError as err:
+        return f"{ASKS_PREFIX}UNKNOWN (dws asks could not run: {err.strerror or err})"
+    if p.returncode != 0:
+        return f"{ASKS_PREFIX}UNKNOWN (dws asks exited {p.returncode})"
+    try:
+        rows = json.loads(p.stdout)
+        if not isinstance(rows, list):
+            raise ValueError("not a list")
+    except ValueError:
+        return f"{ASKS_PREFIX}UNKNOWN (dws asks did not print JSON)"
+    t_now = now()
+    unlinked = []
+    for r in rows:
+        try:
+            at = parse_stamp(r["received_at"])
+            ask_id, relay, row = r["ask_id"], r["relay"], r["row"]
+        except (KeyError, TypeError, ValueError):
+            continue
+        age = (t_now - at).total_seconds()
+        if 0 <= age <= ASKS_WINDOW_HOURS * 3600 and relay == "none" and row == "none":
+            unlinked.append((at, ask_id))
+    if not unlinked:
+        return None
+    # dws prints a warning on stderr when the relay log was not read; then every ask would read unlinked.
+    warn = p.stderr.strip().splitlines()
+    if warn:
+        return f"{ASKS_PREFIX}UNKNOWN ({warn[0][:120]})"
+    return f"{ASKS_PREFIX}{len(unlinked)} (oldest {min(unlinked)[1]})"
+
+
 def main():
     if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] not in ("beat", "scan-beat")):
         sys.exit("usage: standing-hook [beat|scan-beat]")
@@ -235,6 +294,9 @@ def main():
     print(CHECKLIST)
     print(dash_line())
     print(scan_line())
+    line = asks_line()
+    if line:
+        print(line)
     line = waiting_line()
     if line:
         print(line)
