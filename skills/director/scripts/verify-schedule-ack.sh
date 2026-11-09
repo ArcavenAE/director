@@ -115,6 +115,37 @@ check; noline "a schedule that has not fired yet has no line"
 reset; describe "$root/d.json" "bad-id" none
 check; oneline "a firing id that is not a due time reads as unknown, not as a pass" "UNKNOWN"
 
+# --- a schedule that fires more often than every 2 hours ---------------------------------------------------
+# hourly <file> <current firing> <firing:outcome>...: the current firing sits inside the grace period, so the last
+# due firing past it is the newest older one the describe document names (in its runs).
+hourly() {
+  python3 - "$@" <<'PY'
+import json, sys
+path, current = sys.argv[1], sys.argv[2]
+runs = []
+for spec in sys.argv[3:]:
+    f, outcome = spec.split(":")
+    runs.append({"session": "s", "firing": f, "outcome": outcome})
+json.dump({"Schedules": [{"role": "placeholder-sweep", "cron": "0 * * * *", "timezone": "Etc/UTC", "stale_after": "3h0m0s",
+                          "firing": current, "stale": False, "runs": runs}]}, open(path, "w"))
+PY
+}
+F13="20300103T130000Z"; F12="20300103T120000Z"; F11="20300103T110000Z"; F10="20300103T100000Z"
+reset; hourly "$root/d.json" "$F13" "$F12:succeeded" "$F11:failed"
+check; oneline "hourly: the current firing is inside grace, so the 11:00 firing (past it, failed) is the one reported" "firing $F11"
+reset; hourly "$root/d.json" "$F13" "$F12:succeeded" "$F11:succeeded"; results "$F11" "$SHA"; ledger placeholder-sweep "$F11" "$SHA"
+check; noline "hourly: the 11:00 firing is acked, the newer ones are inside grace: no line"
+reset; hourly "$root/d.json" "$F13" "$F12:succeeded" "$F11:succeeded"; results "$F11" "$SHA"
+check; oneline "hourly: the 11:00 firing succeeded but is unacked: one line, for 11:00" "firing $F11"
+reset; hourly "$root/d.json" "$F13" "$F11:succeeded" "$F10:succeeded"; results "$F11" "$SHA"; ledger placeholder-sweep "$F11" "$SHA"
+check; noline "hourly: only the last due firing is checked, an older unacked 10:00 firing is not a second line"
+reset; hourly "$root/d.json" "$F13" "$F12:succeeded"
+check; noline "hourly: nothing older than grace is known: no line, and no guess at a firing the document does not name"
+reset; hourly "$root/d.json" "$F13" "$F11:succeeded" "bad-id:succeeded"; results "$F11" "$SHA"; ledger placeholder-sweep "$F11" "$SHA"
+check; noline "hourly: a run whose firing id is not a due time is ignored when choosing the last due firing"
+reset; hourly "$root/d.json" "$F11" "$F11:succeeded"; results "$F11" "$SHA"
+check; oneline "the current firing past grace is still the last due firing (the single-firing case)" "firing $F11"
+
 # --- several roles, filtering, the example file ----------------------------------------------------------
 python3 - "$root/two.json" "$FIRING" <<'PY'
 import json, sys
