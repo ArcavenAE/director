@@ -183,6 +183,51 @@ out="$("$H")"
 [[ "$(printf '%s\n' "$out" | tail -n 2 | head -n 1)" == "asks in the last 24 h with no relay or row: 1 (oldest I-1)" ]] && ok "and the asks line is the line just before it" || bad "the asks line is not just before the waiting line"
 rm -f "$DIRECTOR_STATE/desk-reads.jsonl" "$DIRECTOR_STATE/waiting-prs.json"
 
+# --- the inbox alarm: director's own oldest unread age against the pending-age bound ---------------------
+# Diagnostic only, whatever the cue state. Read through `director-mcp unread --json` (STANDING_HOOK_MCP names
+# the binary), the row whose agent_id is this seat's. At or over the bound (DIRECTOR_PENDING_AGE_BOUND, a Go
+# duration, default 10m = twice the cue window) it prints one line naming the oldest unread seq and its age;
+# under it, nothing. A reader that fails reads as UNKNOWN; no binary at all prints nothing.
+ALARM='^director inbox: '
+export DIRECTOR_AGENT_ID=director
+mcp_stub() { # mcp_stub NAME AGE [SEQ] [AGENT]: a director-mcp whose unread row has that age
+  local f="$root/mcp-$1"
+  printf '#!/bin/sh\nprintf '"'"'{"stream":"AGENT_INBOX","durables":[{"agent_id":"%s","instance":"i1","live":true,"pending":3,"oldest_unread_seq":%s,"oldest_unread_age_seconds":%s},{"agent_id":"other","instance":"i2","live":true,"pending":1,"oldest_unread_seq":7,"oldest_unread_age_seconds":99999}]}'"'"'\n' "${4:-director}" "${3:-43501}" "$2" >"$f"
+  chmod +x "$f"; echo "$f"
+}
+rm -f "$DIRECTOR_STATE/asks.jsonl" "$DIRECTOR_STATE/workstreams.jsonl" "$RELAY_LOG" "$RELAY_LOG.lock"; : >"$RELAY_LOG"
+m="$(mcp_stub at-bound 600)"
+out="$(STANDING_HOOK_MCP="$m" "$H")"
+[[ "$(printf '%s\n' "$out" | grep "$ALARM")" == "director inbox: oldest unread seq 43501 is 10m old (bound 10m)" ]] && ok "at the bound (2 windows) one line names the oldest seq and its age" || bad "alarm at the bound" "$(printf '%s\n' "$out" | grep "$ALARM")"
+[[ "$(printf '%s\n' "$out" | grep -c "$ALARM")" == 1 ]] && ok "the alarm is printed once" || bad "alarm printed once"
+m="$(mcp_stub under 299)"
+! STANDING_HOOK_MCP="$m" "$H" | grep -q "$ALARM" && ok "one second under a window prints nothing" || bad "alarm under the bound"
+m="$(mcp_stub just-under 599)"
+! STANDING_HOOK_MCP="$m" "$H" | grep -q "$ALARM" && ok "and so does one second under the bound" || bad "alarm just under the bound"
+m="$(mcp_stub other-agent 5 43501 someone-else)"
+! STANDING_HOOK_MCP="$m" "$H" | grep -q "$ALARM" && ok "another seat's old backlog is not this seat's alarm" || bad "other seat alarmed"
+m="$(mcp_stub env-bound 150)"
+STANDING_HOOK_MCP="$m" DIRECTOR_PENDING_AGE_BOUND=2m "$H" | grep -q "^director inbox: oldest unread seq 43501 is 2m old (bound 2m)$" && ok "DIRECTOR_PENDING_AGE_BOUND moves the bound" || bad "env bound"
+! STANDING_HOOK_MCP="$m" DIRECTOR_PENDING_AGE_BOUND=nonsense "$H" | grep -q "$ALARM" && ok "a bound that is not a Go duration falls back to 10m" || bad "bad bound"
+m="$(mcp_stub order 900)"; mkask I-1 1
+out="$(STANDING_HOOK_MCP="$m" "$H")"
+n_a="$(printf '%s\n' "$out" | grep -n '^asks in the last 24 h' | cut -d: -f1)"; n_i="$(printf '%s\n' "$out" | grep -n "$ALARM" | cut -d: -f1)"
+[[ -n "$n_a" && "$n_i" == $((n_a + 1)) ]] && ok "the alarm sits right after the asks line" || bad "alarm order" "$n_a $n_i"
+printf '{"read_at": "%s", "answered_not_relayed": []}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$DIRECTOR_STATE/desk-reads.jsonl"
+printf '{"written_at": "%s", "checked": 1, "approved_not_merged": [{"pr": "o/r#1", "approved_at": "%s"}]}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$DIRECTOR_STATE/waiting-prs.json"
+[[ "$(STANDING_HOOK_MCP="$m" "$H" | tail -n 1)" == "waiting: "* ]] && ok "the waiting line stays last" || bad "waiting line not last"
+rm -f "$DIRECTOR_STATE/desk-reads.jsonl" "$DIRECTOR_STATE/waiting-prs.json" "$DIRECTOR_STATE/asks.jsonl"
+stub="$root/mcp-fail"; printf '#!/bin/sh\necho boom >&2\nexit 3\n' >"$stub"; chmod +x "$stub"
+STANDING_HOOK_MCP="$stub" "$H" | grep -q "${ALARM}UNKNOWN (" && ok "a failing reader reads as UNKNOWN" || bad "failing reader"
+stub="$root/mcp-junk"; printf '#!/bin/sh\necho not-json\n' >"$stub"; chmod +x "$stub"
+STANDING_HOOK_MCP="$stub" "$H" | grep -q "${ALARM}UNKNOWN (" && ok "output that is not JSON reads as UNKNOWN" || bad "junk reader"
+stub="$root/mcp-slow"; printf '#!/bin/sh\nsleep 30\n' >"$stub"; chmod +x "$stub"
+t0s="$(date +%s)"; slow="$(STANDING_HOOK_MCP="$stub" STANDING_HOOK_UNREAD_TIMEOUT=1 "$H" | grep "$ALARM")"; t1s="$(date +%s)"
+[[ "$slow" == *"UNKNOWN ("* && $((t1s - t0s)) -lt 10 ]] && ok "a slow reader times out and reads as UNKNOWN" || bad "slow reader" "$slow after $((t1s - t0s))s"
+! STANDING_HOOK_MCP="$root/no-such-binary" "$H" | grep -q "$ALARM" && ok "no director-mcp at all prints nothing" || bad "missing binary printed"
+! "$H" | grep -q "$ALARM" && ok "and the default lookup finds none under a scratch HOME" || bad "default lookup"
+unset DIRECTOR_AGENT_ID
+
 # --- STANDING_HOOK_ASKS_TIMEOUT: any value that is not finite and above 0 falls back to 3 -----------------
 for v in inf -inf nan 0 -1 1e999 abc ""; do
   out="$(STANDING_HOOK_ASKS_TIMEOUT="$v" "$H" 2>&1)" && rc=0 || rc=$?
