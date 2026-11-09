@@ -467,8 +467,8 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 func returnedResult(ctx context.Context, bus *Bus, a waitArgs, items []drained) map[string]any {
 	note := "returned: the reply that first carried this mail was cancelled after it was written; it is not new mail"
 	if a.Max > 1 {
-		rem := bus.remaining(ctx)
-		beatLastDrain(rem, time.Now())
+		rem, failed := bus.remainingRead(ctx)
+		beatLastDrain(rem, failed, time.Now())
 		return map[string]any{
 			"messages": items, "count": len(items), "order": batchOrderNote,
 			"returned": len(items), "returned_note": note, "remaining": rem,
@@ -502,9 +502,9 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 			out["expired_unread"] = e
 		}
 	} else {
-		rem := bus.remaining(ctx)
+		rem, failed := bus.remainingRead(ctx)
 		out["remaining"] = rem
-		beatLastDrain(rem, time.Now())
+		beatLastDrain(rem, failed, time.Now())
 	}
 	if res.Discarded > 0 {
 		out["discarded"] = res.Discarded
@@ -547,6 +547,7 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 		return nil, err
 	}
 	out := map[string]any{
+		"lane":    res.Lane,
 		"summary": res.Summary,
 		"waiting": res.Expected,
 		"read":    res.Read,
