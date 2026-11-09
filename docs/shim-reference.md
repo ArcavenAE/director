@@ -250,8 +250,11 @@ With `ask`, an accepted result adds `"relay_entry": "R-<n>"`, the entry
 message id on the Outcome line). The send has already left by then, so a
 `relay-log` that cannot run (not at `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-log`,
 no log path, a timeout) adds `"warning": "accepted, but no relay-log entry was
-written: <reason>"` instead; the result stays accepted. A held send is not
-accepted and writes no entry. A send without `ask` is unchanged.
+written: <reason>"` instead; the result stays accepted. A send that the presence
+watch holds is not accepted, so it writes no entry then: the held result says
+`"relay_entry": "pending: ..."`, the hold keeps `ask` and `kind`, and the entry is
+written when the send is released (a presence notice says so, or says the write
+failed). A cancelled hold writes none. A send without `ask` is unchanged.
 
 `stream` and `sequence` are the broker's own word that the bytes are
 stored. A global send is refused before publish when nobody is live at the

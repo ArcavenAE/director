@@ -315,10 +315,13 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		ctx = context.WithValue(ctx, holdFailFastKey{}, true)
 	}
 	ask, kind := sendRelayFields(raw)
+	if ask != "" {
+		ctx = context.WithValue(ctx, holdRelayKey{}, relayFields{ask, kind})
+	}
 	res, err := bus.publish(ctx, e, wsHint)
 	var held *heldErr
 	if errors.As(err, &held) {
-		return map[string]any{
+		out := map[string]any{
 			"status":     "held, not delivered",
 			"message_id": e.MessageID,
 			"hold_id":    held.rec.ID,
@@ -326,7 +329,11 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 			"reason":     held.rec.Reason,
 			"sell_by":    held.rec.SellBy.Format(time.RFC3339),
 			"note":       "the presence watch is holding this send: it is not delivered. It goes out when the recipient returns and its presence row is beating, within its sell-by, and is proposed for your review after that. cancel_held withdraws it; fail_fast refuses instead",
-		}, nil
+		}
+		if ask != "" {
+			out["relay_entry"] = "pending: written when the send is released; a cancelled hold writes none"
+		}
+		return out, nil
 	}
 	if err != nil {
 		return nil, bus.refuseEnvelope(ctx, e, "publish", err)
