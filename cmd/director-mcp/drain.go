@@ -25,6 +25,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -356,6 +359,71 @@ func (b *Bus) remaining(ctx context.Context) map[string]uint64 {
 		}
 	}
 	return out
+}
+
+// lastDrainFile is the beat the director skill reads to see when the inbox was
+// last drained: one RFC 3339 UTC line under the state directory, the same file
+// and format as `standing-hook beat`.
+const lastDrainFile = "last-drain"
+
+// drainedClean reports whether a remaining map says nothing is waiting. A map
+// with no tier in it is a failed read, not an empty inbox, so it is not clean.
+// Every tier the shim could read must be 0.
+func drainedClean(rem map[string]uint64) bool {
+	if len(rem) == 0 {
+		return false
+	}
+	for _, n := range rem {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// beatLastDrain writes last-drain when a batch wait returns with nothing left
+// waiting. It writes a temp file in the same directory and renames it over the
+// target, as standing-hook does, so a reader never sees a half-written line.
+// Any other return leaves the file alone. A write failure is logged and never
+// fails the wait: the mail was already taken, and the manual beat still works.
+func beatLastDrain(rem map[string]uint64, now time.Time) {
+	if !drainedClean(rem) {
+		return
+	}
+	if err := writeLastDrain(now); err != nil {
+		log.Printf("director-mcp: last-drain not written: %v", err)
+	}
+}
+
+func writeLastDrain(now time.Time) error {
+	dir, err := stateDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".stamp.")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, werr := f.WriteString(now.UTC().Format("2006-01-02T15:04:05Z") + "\n")
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		_ = os.Remove(tmp)
+		return werr
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, lastDrainFile)); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // ---- unread summary ----

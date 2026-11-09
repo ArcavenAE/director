@@ -98,3 +98,22 @@ func TestWaitSilenceLeavesLastDrain(t *testing.T) {
 		t.Errorf("a wait that returned nothing created last-drain (stat err = %v)", err)
 	}
 }
+
+func TestDrainedCleanNeedsEveryTierZero(t *testing.T) {
+	cases := []struct {
+		rem  map[string]uint64
+		want bool
+	}{
+		{map[string]uint64{"local": 0}, true},
+		{map[string]uint64{"local": 0, "global": 0}, true},
+		{map[string]uint64{"local": 0, "global": 1}, false},
+		{map[string]uint64{"local": 2}, false},
+		{map[string]uint64{}, false},
+		{nil, false},
+	}
+	for _, c := range cases {
+		if got := drainedClean(c.rem); got != c.want {
+			t.Errorf("drainedClean(%v) = %v, want %v", c.rem, got, c.want)
+		}
+	}
+}
