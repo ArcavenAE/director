@@ -31,6 +31,10 @@ type Bus struct {
 	waitMu    sync.Mutex
 	waitSince time.Time
 
+	// beat is the feed to marvel, nil when off (busbeat.go). Set before the
+	// heartbeat timer starts.
+	beat *busBeat
+
 	// returned is mail whose reply nobody read (a late cancel), returned first
 	// by the next wait (ackafter.go).
 	retMu    sync.Mutex
@@ -105,6 +109,8 @@ type Bus struct {
 	// (localrecover.go), and the cue watcher reads it on another goroutine.
 	localMu sync.Mutex
 	local   localState
+	// dh counts the local durable's rebuilds (durablehealth.go).
+	dh durableHealth
 	// lookup is a test seam for the broker lookup of the local durable; nil in
 	// production (localrecover.go lookupLocal).
 	lookup func(ctx context.Context, durable string) error
@@ -115,13 +121,14 @@ type Bus struct {
 	testAfterAck   func(ctx context.Context)
 }
 
-// localConsumerInactive is the local durable's inactive threshold. The inbox
-// declares a 168h max age (docs/getting-started.md), so a durable cleaned up
+// localConsumerInactive is the local durable's inactive threshold. The setup
+// example gives the inbox a 168h max age (docs/getting-started.md; the live
+// stream's own value is read at startup, inboxage.go), so a durable cleaned up
 // after a longer idle window can only ever have replayed messages that already
 // expired, and a live seat's durable outlasts its mail (aae-orc-t77rr). It is
 // what keeps superseded instances' durables from accumulating, the same
 // reasoning as globalConsumerInactive. TestLocalInactiveOutlastsInboxMaxAge
-// reads the declared max age and fails if the two drift.
+// reads the example's max age and fails if the two drift.
 const localConsumerInactive = 8 * 24 * time.Hour
 
 // dial opens the NATS connection and JetStream context, presenting the R-77
@@ -1531,6 +1538,16 @@ func (b *Bus) setPresence(ctx context.Context, state string) (globalWarn string,
 	return b.writeGlobalPresenceView(ctx, state, view), nil
 }
 
+// announce writes the first presence row at connect and, when it landed, sends
+// the first bus beat so the grace before the first beat ends at once.
+func (b *Bus) announce(ctx context.Context) (globalWarn string, err error) {
+	globalWarn, err = b.setPresence(ctx, "idle")
+	if err == nil {
+		b.beat.send(ctx)
+	}
+	return globalWarn, err
+}
+
 // writeGlobalPresence puts this session's row in GLOBAL_PRESENCE, returning a
 // warning string rather than an error because every caller wants to carry on
 // without it. Off (no domain configured) returns an empty warning: nothing is
@@ -1575,11 +1592,12 @@ type presenceView struct {
 	cueOn     bool
 	cue       string
 	cueReason string
+	durable   durableSummary
 }
 
 func (b *Bus) presenceView(ctx context.Context) presenceView {
 	age, tier := b.pending.oldest(time.Now())
-	v := presenceView{oldestS: int64(age / time.Second)}
+	v := presenceView{oldestS: int64(age / time.Second), durable: b.durableSummary()}
 	if b.cueState == nil {
 		return v
 	}
@@ -1593,12 +1611,39 @@ func (b *Bus) presenceView(ctx context.Context) presenceView {
 		}
 		v.cueReason = joinReason(stalledReason(id, age, b.pending.oldestUnacked(time.Now())), v.cueReason)
 	}
+	if v.durable.Reason != "" {
+		v.cueReason = joinReason(v.cueReason, v.durable.Reason)
+	}
 	return v
+}
+
+// durableSummary folds the local tier's rebuild health with the global one's,
+// when this seat has the global tier up.
+func (b *Bus) durableSummary() durableSummary {
+	parts := []durableSummary{b.dh.summary("local")}
+	b.globalMu.Lock()
+	g := b.global
+	b.globalMu.Unlock()
+	if g != nil {
+		parts = append(parts, g.dh.summary("global"))
+	}
+	return mergeDurable(parts...)
 }
 
 // fields puts the view into a presence record.
 func (v presenceView) fields(rec map[string]any) {
 	rec["oldest_pending_s"] = v.oldestS
+	// Only once a durable has been lost: a healthy seat's row is unchanged, and a
+	// reader treats the fields' absence as present (or a shim older than P6).
+	if v.durable.State != "" && v.durable.State != durablePresent {
+		rec["durable_state"] = v.durable.State
+		rec["rebuilds_ok"] = v.durable.OK
+		rec["rebuilds_failed"] = v.durable.Failed
+	}
+	if v.durable.Reason != "" {
+		// Carried whether or not the cue is on; with the cue on it is also in cue_reason.
+		rec["durable_reason"] = v.durable.Reason
+	}
 	if v.cueOn {
 		rec["cue"] = v.cue
 		if v.cueReason != "" {
@@ -1669,7 +1714,11 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 				b.samplePending(ctx)
 			}
 			view := b.presenceView(ctx)
-			_ = b.writePresenceView(ctx, s, view)
+			// The bus beat to marvel rides this tick, and only a tick whose
+			// local presence Put succeeded sends it (aae-orc-z63a4).
+			if err := b.writePresenceView(ctx, s, view); err == nil {
+				b.beat.send(ctx)
+			}
 			b.reportGlobalWarn(b.writeGlobalPresenceView(ctx, s, view), logf)
 			b.watchTick(ctx)
 		}

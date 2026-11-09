@@ -453,6 +453,9 @@ type globalTier struct {
 	// back.
 	selfPut atomic.Int64
 
+	// dh counts the global durable's rebuilds (durablehealth.go).
+	dh durableHealth
+
 	cfg      globalConfig
 	js       jetstream.JetStream
 	local    jetstream.JetStream // the local tier on the same connection
@@ -783,8 +786,11 @@ func (g *globalTier) restore(ctx context.Context, agentID, instance string) (boo
 	}
 	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), g.consumerConfig(agentID, instance, start))
 	if err != nil {
-		return false, fmt.Errorf("the hub has lost this session's global durable %s and recreating it failed: %w (%s)", durable, err, hubHint(g.cfg))
+		ferr := fmt.Errorf("the hub has lost this session's global durable %s and recreating it failed: %w (%s)", durable, err, hubHint(g.cfg))
+		g.dh.rebuildFailed(ferr)
+		return false, ferr
 	}
+	g.dh.rebuilt()
 	g.setConsumer(cons)
 	msg := fmt.Sprintf("the hub had lost this session's global durable %s; it was recreated", durable)
 	if resumed {

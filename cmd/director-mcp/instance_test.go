@@ -58,7 +58,7 @@ func runSimultaneousPair(t *testing.T) [2]string {
 		go func(j int) {
 			defer wg.Done()
 			cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
-			cmd.Env = append(os.Environ(), instanceProbeEnv+"=1")
+			cmd.Env = shimEnv(instanceProbeEnv + "=1")
 			cmd.Stdout = &out[j]
 			<-start
 			if err := cmd.Run(); err != nil {

@@ -73,6 +73,7 @@ fi
 if [[ "$1" == capture ]]; then
   f="$FB_FIX/cap/${2#*/}"
   if [[ -e "$f.fail" ]]; then echo "Error: cannot capture" >&2; exit 1; fi
+  if [[ -e "$f.sleep" ]]; then sleep "$(cat "$f.sleep")"; fi
   if [[ -e "$f" ]]; then cat "$f"; else echo "some output"; fi
   exit 0
 fi
@@ -90,6 +91,14 @@ if [[ "$*" == "unread --json --older-than 300s" ]]; then
   if [[ -e "$FB_FIX/unread.fail" ]]; then echo "director-mcp: unknown mode unread" >&2; exit 2; fi
   if [[ -e "$FB_FIX/unread.junk" ]]; then echo "not json at all"; exit 0; fi
   cat "$FB_FIX/unread.json"; exit 0
+fi
+if [[ "$*" == "roster --json" ]]; then
+  if [[ -e "$FB_FIX/roster.fail" ]]; then echo "director-mcp roster: connect nats://127.0.0.1:1: no servers" >&2; exit 1; fi
+  cat "$FB_FIX/roster.json"; exit 0
+fi
+if [[ "$*" == "unread --json" ]]; then
+  if [[ -e "$FB_FIX/unread.plain.fail" ]]; then echo "director-mcp unread: connect failed" >&2; exit 1; fi
+  cat "$FB_FIX/unread.plain.json"; exit 0
 fi
 if [[ "$*" == "unread --json --global" ]]; then
   if [[ -e "$FB_FIX/global.fail" ]]; then echo "director-mcp unread: hub unreachable" >&2; exit 1; fi
@@ -581,9 +590,39 @@ case_health() {
   quiet_seats q-a q-b q-c
   expired_pane >"$FIX/cap/q-a"; expired_pane >"$FIX/cap/q-b"; expired_pane >"$FIX/cap/q-c"
   out="$(run "${base[@]}" FREEBUSY_CAPTURE_MAX=2)"
-  [[ "$(grep -c '^capture ' "$FIX/marvel.log" || true)" == 2 ]] && ok "H4 a cap of 2 takes two captures" || bad "H4 two captures" "$(grep capture "$FIX/marvel.log")"
+  [[ "$(grep -c '^capture ' "$FIX/marvel.log" || true)" == 2 ]] && ok "H4 a cap of 2 takes two captures" || bad "H4 two captures" "$(grep capture "$FIX/marvel.log" | tr "\n" ";")"
   grep -q 'GAP health: capture cap' <<<"$out" && ok "H4 the rest print GAP: capture cap" || bad "H4 gap" "$out"
   [[ "$(hval gap 'true' .count)" == 1 ]] && ok "H4 the gap row counts the one seat not captured" || bad "H4 gap row" "$(hrows gap)"
+
+  # capture cap, two clusters: each gets its own share, and an unused share passes on
+  fixtures; new_state; conf3
+  sess alpha.sessions 'wsa crew qa q-busy 1s 80% running healthy'
+  sess beta.sessions 'wsb desk builder desk-builder-1 3s 60% running healthy'
+  quiet_seats a-1 a-2 a-3 a-4 a-5 a-6
+  printf '%s\n' 'wsb crew qa b-1 9m 0% running healthy' 'wsb crew qa b-2 9m 0% running healthy' 'wsb crew qa b-3 9m 0% running healthy' 'wsb crew qa b-4 9m 0% running healthy' 'wsb crew qa b-5 9m 0% running healthy' 'wsb crew qa b-6 9m 0% running healthy' >>"$FIX/beta.sessions"
+  out="$(run "${base[@]}" FREEBUSY_CAPTURE_MAX=5)"
+  [[ "$(grep -c '^capture wsa/.* --cluster alpha' "$FIX/marvel.log" || true)" == 2 && "$(grep -c '^capture wsb/.* --cluster beta' "$FIX/marvel.log" || true)" == 2 ]] && ok "H4b a cap of 5 over two clusters of 6 and one of 1 takes 2, 2 and 1" || bad "H4b shares" "$(grep capture "$FIX/marvel.log" | tr "\n" ";")"
+  grep -q 'GAP health: capture cap, 8 seat(s).*alpha 4, beta 4' <<<"$out" && ok "H4b the GAP names both clusters and their counts" || bad "H4b gap" "$out"
+  [[ "$(jq -s -r '[.[] | select(.kind=="gap") | .cluster] | sort | join(",")' "$state/freebusy/health.jsonl")" == alpha,beta ]] && ok "H4b the gap rows carry the cluster" || bad "H4b rows" "$(hrows gap)"
+  fixtures; new_state; conf3
+  sess alpha.sessions 'wsa crew qa q-busy 1s 80% running healthy'
+  sess beta.sessions 'wsb desk builder desk-builder-1 3s 60% running healthy'
+  quiet_seats a-1 a-2 a-3 a-4 a-5 a-6
+  printf '%s\n' 'wsb crew qa b-1 9m 0% running healthy' >>"$FIX/beta.sessions"
+  out="$(run "${base[@]}" FREEBUSY_CAPTURE_MAX=5)"
+  [[ "$(grep -c '^capture wsa/.* --cluster alpha' "$FIX/marvel.log" || true)" == 3 && "$(grep -c '^capture wsb/.* --cluster beta' "$FIX/marvel.log" || true)" == 1 ]] && ok "H4b the share beta leaves unused passes to alpha" || bad "H4b pass-on" "$(grep capture "$FIX/marvel.log" | tr "\n" ";")"
+  grep -q 'alpha 3)' <<<"$out" && ! grep -q 'beta [0-9]' <<<"$out" && ok "H4b only the short cluster is named" || bad "H4b named" "$out"
+  fixtures; new_state; conf3
+  quiet_seats $(seq -f 'a-%g' 1 45)
+  out="$(run "${base[@]}")"
+  grep -q '^capture wsa/a-45 ' "$FIX/marvel.log" && ! grep -q 'capture cap' <<<"$out" && ok "H4b the default cap captures all 45 quiet seats of one cluster, above the old 40" || bad "H4b default" "$out"
+
+  # the timeout is the bound: a capture that outlasts it is a GAP naming the cluster
+  fixtures; new_state; conf3
+  quiet_seats t-1 t-2 t-3
+  echo 5 >"$FIX/cap/t-1.sleep"
+  out="$(run "${base[@]}" FREEBUSY_CAPTURE_TIMEOUT=1)"
+  grep -q 'GAP health: 3 seat(s) not captured within 1s (cut short: alpha 3)' <<<"$out" && ok "H4c a capture cut short by the timeout prints a GAP naming the cluster" || bad "H4c timeout gap" "$out"
 
   # a failed capture is a GAP, never a clean seat
   fixtures; new_state; conf3
@@ -675,12 +714,53 @@ case_over_bound() {
   [[ "$(cat "$root/rc")" == 0 ]] && ok "B3 the exit status is unchanged" || bad "B3 rc" "$(cat "$root/rc")"
 }
 
+
+# E1: no marvel on PATH. The seats come from director's roster (presence rows), their
+# states from presence age and pending unread, the lanes from the asks rollup, and the
+# summary says source: roster. A seat with old presence, or any seat when unread cannot
+# be read, is unknown and never free.
+case_no_marvel() {
+  fixtures; new_state; conf3
+  local nb="$root/bin-nomarvel" base
+  rm -rf "$nb"; mkdir -p "$nb"
+  for t in director-mcp bd gh ssh; do ln -s "$root/bin/$t" "$nb/$t"; done
+  base=(FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp")
+  jq -n -c '{read_at: "2026-10-21T00:05:00Z", rows: [
+    {agent_id: "crew-builder-1", team: "crew", role: "builder", instance: "01A", age_seconds: 12, fresh: true},
+    {agent_id: "crew-builder-2", team: "crew", role: "builder", instance: "01B", age_seconds: 20, fresh: true},
+    {agent_id: "ops-envoy-1", team: "ops", role: "envoy", instance: "01C", age_seconds: 600, fresh: false},
+    {agent_id: "crew-builder-3", team: "crew", role: "builder", instance: "01D", age_seconds: 5, fresh: true}],
+    warnings: ["presence.ops.ops-envoy-1.01C: the presence record is not JSON, so it is not fresh"]}' >"$FIX/roster.json"
+  jq -n -c '{durables: [{agent_id: "crew-builder-1", instance: "01A", live: true, pending: 3}, {agent_id: "crew-builder-2", instance: "01B", live: true, pending: 0}]}' >"$FIX/unread.plain.json"
+  out="$(run PATH="$nb:/usr/bin:/bin" "${base[@]}")"
+  [[ "$(cat "$root/rc")" == 0 ]] && ok "E1 exits 0 with no marvel on PATH" || bad "E1 rc" "$(cat "$root/rc")"
+  grep -q 'source: roster' <<<"$out" && ok "E1 the summary says source: roster" || bad "E1 summary" "$out"
+  [[ "$(seat seats crew-builder-1)" == busy ]] && ok "E1 a seat with unread mail waiting reads busy" || bad "E1 busy" "$(seat seats crew-builder-1)"
+  [[ "$(seat seats crew-builder-2)" == free ]] && ok "E1 a fresh seat with nothing waiting reads free" || bad "E1 free" "$(seat seats crew-builder-2)"
+  [[ "$(seat seats crew-builder-3)" == unknown ]] && ok "E1 a fresh seat with no unread row is unknown, never free" || bad "E1 no unread row" "$(seat seats crew-builder-3)"
+  grep -q 'GAP roster: presence.ops.ops-envoy-1.01C' <<<"$out" && ok "E1 a roster warning is printed as a GAP" || bad "E1 roster warning" "$out"
+  [[ "$(seat seats ops-envoy-1)" == unknown ]] && ok "E1 a seat with old presence is unknown, never free" || bad "E1 old" "$(seat seats ops-envoy-1)"
+  [[ "$(jq -r 'select(.name=="crew-builder-2") | .source' "$state/freebusy/seats.jsonl")" == roster ]] && ok "E1 every roster row says source: roster" || bad "E1 row source" "$(cat "$state/freebusy/seats.jsonl")"
+  grep -q 'duty cells absent' <<<"$out" && ok "E1 the count line says the duty cells are absent" || bad "E1 duty note" "$out"
+  ! grep -q 'GAP clusters: marvel' <<<"$out" && ok "E1 no marvel GAP is printed for the cluster read it does not make" || bad "E1 gap noise" "$out"
+  [[ "$(jq -r 'select(.lane=="crew/builder") | .seats.busy' "$state/freebusy/lanes.jsonl")" == 1 ]] && ok "E1 the lanes are built from the roster rows" || bad "E1 lanes" "$(cat "$state/freebusy/lanes.jsonl")"
+  [[ ! -e "$FIX/forbidden.log" && ! -s "$FIX/marvel.log" ]] && ok "E1 nothing but director-mcp was called" || bad "E1 calls" "$(cat "$FIX/forbidden.log" 2>&1)"
+  # unread unreadable: nothing reads free
+  touch "$FIX/unread.plain.fail"
+  out="$(run PATH="$nb:/usr/bin:/bin" "${base[@]}")"; rm -f "$FIX/unread.plain.fail"
+  [[ "$(seat seats crew-builder-2)" == unknown ]] && grep -q 'GAP roster: .*unread' <<<"$out" && ok "E1 with unread unreadable a fresh seat is unknown, with a GAP" || bad "E1 unread gap" "$(seat seats crew-builder-2) $out"
+  # roster unreadable: no seat is invented, and it is a GAP
+  touch "$FIX/roster.fail"
+  out="$(run PATH="$nb:/usr/bin:/bin" "${base[@]}")"; rm -f "$FIX/roster.fail"
+  grep -q 'GAP roster: director-mcp roster' <<<"$out" && [[ "$(wc -l <"$state/freebusy/seats.jsonl" | tr -d ' ')" == 0 ]] && ok "E1 an unreadable roster is a GAP and lists no seat" || bad "E1 roster gap" "$out"
+}
+
 for FB_BASH in $BASHES; do
   export FB_BASH
   echo "== $FB_BASH =="
   if ! "$FB_BASH" -n "$FB"; then bad "0  bash -n ($FB_BASH)"; else ok "0  bash -n passes ($FB_BASH)"; fi
   case_all_read; case_parked; case_cluster_down; case_asks; case_modes
-  case_no_writes; case_health; case_concurrent; case_hung_read; case_flow_and_turn; case_conf; case_formats; case_lock_age; case_empty_list; case_discovery; case_lock_min; case_over_bound
+  case_no_writes; case_health; case_concurrent; case_hung_read; case_flow_and_turn; case_conf; case_formats; case_lock_age; case_empty_list; case_discovery; case_lock_min; case_over_bound; case_no_marvel
 done
 
 echo "$pass passed, $fail failed"

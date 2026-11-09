@@ -25,7 +25,7 @@ const (
 	// interval late, and presence outlives its last beat by the TTL.
 	resolveMargin = askPassInterval + presenceTTL
 	alarmAfter    = 15 * time.Minute // the one threshold table (design section 7)
-	staleAfter    = 72 * time.Hour   // the ledger's staleness and Seen-pruning window, not the inbox age (inboxMaxAge)
+	staleAfter    = 72 * time.Hour   // the ledger's staleness and Seen-pruning window, not the inbox age (inboxMaxAge())
 	closedKeep    = 30 * 24 * time.Hour
 	idKeep        = 30 * 24 * time.Hour
 	lineMax       = 120
@@ -679,7 +679,7 @@ func (l *askLedger) Sweep(now time.Time) {
 		}
 	}
 	for id, s := range l.Sends {
-		if now.Sub(s.At) > sendKeep {
+		if now.Sub(s.At) > sendKeep() {
 			delete(l.Sends, id)
 		}
 	}

@@ -159,6 +159,19 @@ func (p *presenceWatcher) release(ctx context.Context, now time.Time) {
 				continue
 			}
 			p.pending = append(p.pending, fmt.Sprintf("presence: held send %s released to %s after %s (stream %s, sequence %d); delivered to the hub, not read", r.ID, r.To, now.Sub(r.HeldAt).Round(time.Second), res.Stream, res.Sequence))
+			if r.Ask != "" && r.Envelope != nil {
+				// The entry records a send that went out, so it is written here and only here, after
+				// the released record is kept: a release that was not recorded is published again and
+				// reaches this line once.
+				if entry, shelf, werr := writeRelayEntry(ctx, r.Ask, r.Kind, r.To, r.Envelope.Content.Data, r.ID); werr != nil {
+					p.pending = append(p.pending, fmt.Sprintf("presence: held send %s was released, but no relay-log entry was written: %v", r.ID, werr))
+				} else {
+					p.pending = append(p.pending, fmt.Sprintf("presence: held send %s relay entry %s written", r.ID, entry))
+					if shelf != "" {
+						p.pending = append(p.pending, "presence: "+shelf)
+					}
+				}
+			}
 		case errors.As(err, &refused) || errors.As(err, &unread):
 			// the unit flapped out again, or the hub did not answer: still held
 		default:
@@ -334,6 +347,9 @@ func (b *Bus) holdRefused(ctx context.Context, e *Envelope, cause error) error {
 	rec := heldRec{ID: e.MessageID, To: e.Recipient.Address, Envelope: e, HeldAt: now, Reason: cause.Error(), State: holdHeld, StateAt: now, SellBy: now.Add(p.sellBy)}
 	if t, err := time.Parse(time.RFC3339, e.ReplyBy); err == nil {
 		rec.SellBy = t
+	}
+	if rf, ok := ctx.Value(holdRelayKey{}).(relayFields); ok {
+		rec.Ask, rec.Kind = rf.ask, rf.kind
 	}
 	if err := p.hold.Append(rec); err != nil {
 		// A send that cannot be kept is refused as before, with the reason added.

@@ -1,0 +1,7 @@
+name = "director"
+kind = "recipes"
+schema = 1
+# requires_marvel is a placeholder: the marvel owner sets the real floor.
+requires_marvel = "0.9.0"
+recipe_schema = 1
+requires = { definition_schema = 1 }

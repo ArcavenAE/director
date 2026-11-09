@@ -1,6 +1,6 @@
 package main
 
-// The pending-age bound (I-190:1). A seat's presence row carries the age of its
+// The pending-age bound. A seat's presence row carries the age of its
 // oldest waiting message; this is the bound a reader holds that age against.
 // list_roster flags a live row over it and the unread reader marks a live
 // recipient over it. The bound is diagnostic only: it changes no exit status,

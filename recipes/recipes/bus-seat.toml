@@ -1,0 +1,33 @@
+# The bus seat: what cast-launch decides today for a seat that talks on the director bus,
+# as data. It carries the seat's role, its session name, the director MCP server with its
+# pre-flight, and the global-tier levers a seat with no global address must not see.
+#
+# It carries no [when.global.holder] block and no env that names DIRECTOR_GLOBAL_DOMAIN:
+# a holder's domain comes from its role environment, one source. It does not carry
+# DIRECTOR_BUS_REQUIRED, a Bedrock command, or any bus credential name.
+schema = 1
+adapter = "claude"
+args = ["-n", "{session}"]
+
+[params.cue]
+type = "bool"
+
+[env]
+DIRECTOR_ROLE = "{role}"
+
+[mcp.director]
+command = "tool:director-mcp"
+strict = true
+
+# No timeout: the default and the ceiling are marvel's, filled from per-host measurement.
+[preflight]
+command = ["tool:director-mcp", "--preflight"]
+
+[when.cue]
+env = { DIRECTOR_CUE = "1" }
+args = ["--dangerously-load-development-channels", "server:director"]
+
+# DIRECTOR_CLUSTER is not unset here: marvel constructs it, and the shim ignores it
+# when no domain is set.
+[when.global.non_holder]
+unset = ["DIRECTOR_GLOBAL_DOMAIN", "DIRECTOR_GLOBAL_ROLE"]

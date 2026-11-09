@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# vector-pin-drift: say when director's pinned copies of marvel's marry and
+# routing vectors differ from marvel main's. A diagnostic, never a gate: it
+# prints one line per file that differs, a GAP for a file it could not compare,
+# nothing for a match, and exits 0 whatever it finds (diagnostic-not-gate).
+#
+# Why: the marry package in director asserts a sha256 of each pinned file, so a
+# change in marvel's copy is invisible here until someone re-pins by hand. This
+# is the cheap reminder that they have drifted, read from marvel main by gh.
+#
+# Environment: VECTOR_PIN_DIR (the pinned files, default
+# cmd/director-mcp/marry/testdata under the repo root), VECTOR_PIN_REPO (default
+# ArcavenAE/marvel), VECTOR_PIN_REF (default main), VECTOR_PIN_GH (the gh
+# binary, default gh on PATH), VECTOR_PIN_TIMEOUT (seconds per read, default 20).
+#
+# Usage: skills/director/scripts/vector-pin-drift
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../../.." && pwd)"
+dir="${VECTOR_PIN_DIR:-$root/cmd/director-mcp/marry/testdata}"
+repo="${VECTOR_PIN_REPO:-ArcavenAE/marvel}"
+ref="${VECTOR_PIN_REF:-main}"
+gh_bin="${VECTOR_PIN_GH:-gh}"
+limit="${VECTOR_PIN_TIMEOUT:-20}"
+files=(marry-vectors.json routing-vectors.json)
+
+sha_of() { shasum -a 256 | cut -d' ' -f1; }
+one_line() { tr -d '[:cntrl:]' | cut -c1-160; }
+
+# One private scratch directory for the whole run. Without one nothing can be
+# compared, which is a GAP and not a pass, and the exit is still 0.
+scratch_root="${TMPDIR:-/tmp}"
+if ! work="$(mktemp -d "$scratch_root/vpd.XXXXXX" 2>/dev/null)" || [[ -z "$work" ]]; then
+  echo "GAP vector-pin-drift: no scratch directory could be made under $scratch_root, so no pin was compared"
+  exit 0
+fi
+trap 'rm -rf "$work"' EXIT
+
+for f in "${files[@]}"; do
+  if [[ ! -r "$dir/$f" ]]; then
+    echo "GAP vector-pin-drift: $f: the pinned copy is not readable at $dir"
+    continue
+  fi
+  pinned="$(sha_of <"$dir/$f")"
+  # Bounded with perl alarm; a host may have no timeout(1). exec failing is an error, not a pass.
+  rc=0
+  perl -e 'alarm shift; exec @ARGV or die "exec $ARGV[0]: $!\n"' "$limit" \
+    "$gh_bin" api -H 'Accept: application/vnd.github.raw' \
+    "repos/$repo/contents/contracts/readiness/$f?ref=$ref" </dev/null >"$work/out" 2>"$work/err" || rc=$?
+  if [[ "$rc" != 0 ]]; then
+    why="$(head -n 1 "$work/err" 2>/dev/null | one_line || true)"
+    echo "GAP vector-pin-drift: $f: marvel $ref was not read (exit $rc${why:+: $why})"
+  elif [[ ! -s "$work/out" ]]; then
+    echo "GAP vector-pin-drift: $f: marvel $ref answered with nothing"
+  else
+    theirs="$(sha_of <"$work/out")"
+    if [[ "$theirs" != "$pinned" ]]; then
+      echo "vector-pin-drift: $f differs: pinned $pinned, marvel $ref $theirs"
+    fi
+  fi
+done
+exit 0

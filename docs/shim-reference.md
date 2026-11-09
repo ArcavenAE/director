@@ -24,6 +24,7 @@ never rewritten (R-76).
 | `DIRECTOR_WORKSPACE` | `default` | the workspace |
 | `NATS_URL` | `nats://127.0.0.1:4222` | the local broker |
 | `MARVEL_SESSION`, `MARVEL_TEAM`, `MARVEL_WORKSPACE` | unset | read when `DIRECTOR_AGENT_ID`, `DIRECTOR_TEAM` or `DIRECTOR_WORKSPACE` is unset, so a session marvel spawned needs no registration env of its own; outside marvel, team and workspace are then required and the shim exits without them |
+| `MARVEL_SOCKET`, `MARVEL_HEARTBEAT_TOKEN`, `MARVEL_HEARTBEAT_TOKEN_FILE` | unset | the bus beat to marvel (see Startup behaviour, step 4). The feed needs `MARVEL_SOCKET`, `MARVEL_SESSION` and a token; the file named by `MARVEL_HEARTBEAT_TOKEN_FILE` wins over `MARVEL_HEARTBEAT_TOKEN` when set, and an unreadable named file gives no token, never the variable. With any of them absent the feed is off and the shim runs as before |
 | `DIRECTOR_BUS_REQUIRED` | unset | set to `1` by `director-session` for the seats it launches: with no `NATS_URL` the shim exits 2 with one line instead of using the local default |
 
 Broker credentials, all optional. Unset means an anonymous connection.
@@ -167,6 +168,27 @@ Slice M (`sim/design/unread-slice-m.md`):
   count in each state. The role comes from a `role.<role>.inbox` filter, or
   else from the agent id with its replica suffix and team prefix removed.
 
+### `look`
+
+`director-mcp look [--state DIR] [--seat AGENT-ID]` is a timed look at one seat's
+unread mail. It reads and never acts: it consumes, acks, publishes and creates
+nothing, and no message body leaves it. `--state` defaults to `~/.director/look`
+and `--seat` to `DIRECTOR_AGENT_ID`, else `MARVEL_SESSION`; `NATS_URL` names the
+broker. The only broker requests it sends are `STREAM.INFO`, `CONSUMER.NAMES`,
+`CONSUMER.INFO` and a message get carrying the seat's own filter subject, so
+another seat's mail is not read.
+
+It reads the local tier's current durable for the seat (the newest by `Created`;
+older sessions get one line each) and writes, mode 0600, under the state
+directory: `digest.txt` (the text an operator reads), `notify.json` (the urgent
+gates and requests, and the gates listed in `cleared.json`, apart) and
+`heartbeat.json` (written every run, failed or not). A gate is a body with a line
+that starts with `GATE`; a request is urgent only once its `reply_by` has
+passed. A reader that fails writes a `reader:` failure line and exits 1, never a
+zero count. This version does not read the global tier and says so in the digest.
+The poster with its reminders, `look-clear` and `look-check` are separate steps,
+and the job is not scheduled by this command.
+
 ## Startup behaviour
 
 1. Validate identity and global levers; refuse on failure.
@@ -203,7 +225,20 @@ Slice M (`sim/design/unread-slice-m.md`):
    same id is present (R-49).
 4. Start the heartbeat: presence renewed every 30 seconds on the shim's own
    timer, independent of the model (R-56). The same tick carries the global
-   presence row and re-attaches a hub that was down at start.
+   presence row and re-attaches a hub that was down at start. When
+   `MARVEL_SOCKET`, `MARVEL_SESSION` and a heartbeat token are all present, the
+   same tick also sends marvel one `bus.beat` request on that unix socket (2
+   second limit), and only when that tick's local presence write succeeded; one
+   more goes right after the first presence write at start. The beat means
+   "this shim reached the bus and its presence bucket within the last tick",
+   so a seat with a dead bus stops beating while its statusline does not. The
+   request is `{"method":"bus.beat","params":{"session_key":...,"session_token":...,"source":"director-shim"}}`
+   (pinned by `cmd/director-mcp/testdata/bus-beat-request.json`). With a key
+   absent the feed is off and one log line names the absent keys, never a
+   value. A marvel that answers `unknown method` turns it off for the life of
+   the process, with one log line. Any other failure is logged on the
+   transition only and retried on the next tick; a daemon still adopting
+   (`starting`) is retried silently. The token never reaches a log.
 5. Log `connected to <url> as agent://<team>/<id> instance <ulid> in
    workspace <ws>`, then serve.
 
@@ -225,6 +260,8 @@ that stands in for a push the transport cannot make.
 | `reply_by` | no | RFC 3339 deadline |
 | `workspace` | no | the recipient's workspace. Omit and it is resolved from the recipient's live presence; with no live presence the send is refused rather than misdelivered (R-92). Set it to address a known mailbox verbatim; the send is then refused unless a durable consumer on `AGENT_INBOX` filters that subject with that exact filter (an unfiltered or wildcard consumer, and an ephemeral one, do not count), or `cold` is true. Ignored for `global://` and `broadcast://`, whose address carries its own scope. |
 | `cold` | no | with `workspace` set, publish even when no consumer filters the subject yet, for mail to a seat that has not started. The result then carries a `cold` note saying no consumer filters it, and the message stays unread until a seat's durable does. If the consumer list cannot be read, the result says the check could not run, with the error, and does not claim that no consumer filters the subject. Without `cold`, a hinted send to an unfiltered subject, or one whose consumer list cannot be read, is refused before publish (a tool error, audited like any resolve-stage refusal), so a typo in the workspace, team or id is caught. |
+| `ask` | no | the intake id (`I-<n>`) of the operator ask this send answers. When the send is accepted, the shim runs `relay-log append` for it, so the relay entry exists without a second step. A malformed id, an id not in `$DIRECTOR_STATE/asks.jsonl`, or a `broadcast://` address refuses the send before publish. |
+| `kind` | no | with `ask`: `relay`, `ruling`, `build`, `research`, `question` or `answer`, passed to the entry. Defaults to `relay` when `ask` is set; refused without `ask`. |
 
 A `broadcast://` address takes the same path as the `broadcast` tool (see
 below): one durable send per live seat in scope, the broadcast result shape,
@@ -243,6 +280,20 @@ Result:
   "note": "accepted is not delivered or read; the recipient reports those (R-08)"
 }
 ```
+
+With `ask`, an accepted result adds `"relay_entry": "R-<n>"`, the entry
+`relay-log` wrote (text verbatim, the recipient, the ask and kind, and the
+message id on the Outcome line). The send has already left by then, so a
+`relay-log` that cannot run (not at `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-log`,
+no log path, a timeout) adds `"warning": "accepted, but no relay-log entry was
+written: <reason>"` instead; the result stays accepted. With `kind: answer` the
+result also carries `"shelf": "shelf: ..."`, the cue line `relay-log` prints for an
+answer entry (the `shelf-row new` call to make for the Reply Shelf row); a held
+answer send gives the same line in the presence notice when it is released. A send that the presence
+watch holds is not accepted, so it writes no entry then: the held result says
+`"relay_entry": "pending: ..."`, the hold keeps `ask` and `kind`, and the entry is
+written when the send is released (a presence notice says so, or says the write
+failed). A cancelled hold writes none. A send without `ask` is unchanged.
 
 `stream` and `sequence` are the broker's own word that the bytes are
 stored. A global send is refused before publish when nobody is live at the
@@ -385,6 +436,18 @@ and a repeat call returns the same answer. It reads to the end of the stream
 (up to `limit`), not to the durable's count of what is waiting: the waiting
 set is not always a prefix of the stream above the floor, and stopping at the
 count would miss the newest mail.
+
+The answer carries a `lane` field ahead of `summary`: the waiting replies to open
+operator asks, tier then sequence, each with its `ask_id`. A message joins an ask
+by `in_reply_to` only, when that id is a message director sent under the ask (the
+relay log's `Outcome: sent; message <id>` beside its `Intake: I-<n>`; the log is
+`RELAY_LOG`, else the checkout's `sim/notes/relay-log.md` when
+`$DIRECTOR_HOME/bin/relay-log` is a symlink into a checkout, as `relay-log` finds it). A reply that sets no `in_reply_to` cannot join, and nothing joins by
+sender. An ask leaves the lane when `dws ask-close` records it; the reply leaves
+when it is acked or drained. `lane.backlog` counts the open asks received before
+the relay link existed (2026-11-09T03:40:49Z) and gives the age of the oldest in
+seconds. When neither resolves, or the log cannot be read, `lane.warning` says so
+and the lane is empty by that reason, not by finding nothing.
 
 ```json
 {

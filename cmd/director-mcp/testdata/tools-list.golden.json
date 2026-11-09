@@ -5,12 +5,20 @@
       "description": "Send a director envelope to another session or role. Returns accepted-for-delivery with a message_id; this is a send acknowledgement, not a delivery or read receipt.",
       "inputSchema": {
         "properties": {
+          "ask": {
+            "description": "optional: the intake id (I-\u003cn\u003e) of the operator ask this send answers. When the send is accepted, the shim writes the relay-log entry for it (ask, recipient, text, message id). An id that is not in asks.jsonl refuses the send. One recipient only; not for broadcast addresses.",
+            "type": "string"
+          },
           "cold": {
             "description": "optional. With workspace set, publish even when no durable consumer filters the subject yet, for mail to a seat that has not started; the result says no consumer filters it, or that the check could not run. Without cold, a hinted send to an unfiltered subject is refused.",
             "type": "boolean"
           },
           "in_reply_to": {
             "description": "optional message_id being answered",
+            "type": "string"
+          },
+          "kind": {
+            "description": "optional, with ask: relay, ruling, build, research, question or answer. Defaults to relay when ask is set.",
             "type": "string"
           },
           "performative": {
