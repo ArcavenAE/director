@@ -224,6 +224,8 @@ that stands in for a push the transport cannot make.
 | `in_reply_to` | no | the `message_id` being answered; also sets `correlation_id` so receipts correlate (R-88) |
 | `reply_by` | no | RFC 3339 deadline |
 | `workspace` | no | the recipient's workspace. Omit and it is resolved from the recipient's live presence; with no live presence the send is refused rather than misdelivered (R-92). Set it to address a known cold mailbox verbatim. Ignored for `global://` and `broadcast://`, whose address carries its own scope. |
+| `ask` | no | the intake id (`I-<n>`) of the operator ask this send answers. When the send is accepted, the shim runs `relay-log append` for it, so the relay entry exists without a second step. A malformed id, an id not in `$DIRECTOR_STATE/asks.jsonl`, or a `broadcast://` address refuses the send before publish. |
+| `kind` | no | with `ask`: `relay`, `ruling`, `build`, `research` or `question`, passed to the entry. Defaults to `relay` when `ask` is set; refused without `ask`. |
 
 A `broadcast://` address takes the same path as the `broadcast` tool (see
 below): one durable send per live seat in scope, the broadcast result shape,
@@ -242,6 +244,14 @@ Result:
   "note": "accepted is not delivered or read; the recipient reports those (R-08)"
 }
 ```
+
+With `ask`, an accepted result adds `"relay_entry": "R-<n>"`, the entry
+`relay-log` wrote (text verbatim, the recipient, the ask and kind, and the
+message id on the Outcome line). The send has already left by then, so a
+`relay-log` that cannot run (not at `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-log`,
+no log path, a timeout) adds `"warning": "accepted, but no relay-log entry was
+written: <reason>"` instead; the result stays accepted. A held send is not
+accepted and writes no entry. A send without `ask` is unchanged.
 
 `stream` and `sequence` are the broker's own word that the bytes are
 stored. A global send is refused before publish when nobody is live at the
