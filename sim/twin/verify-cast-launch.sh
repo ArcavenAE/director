@@ -426,6 +426,224 @@ for v in 0 true yes; do
   fi
 done
 
+# --- D-1: the cue seat's launcher dismisses the development-channels prompt ----
+# Operator ruling 2026-11-09 ("1 yes", R4 of aae-orc-d3rel): the launcher may press
+# option 1 on the dev-channels prompt itself. The press comes from a separate
+# helper (dismiss-devch) the launcher starts before it execs claude, so the
+# launchers keep naming no keystroke tool. These cases run the helper against a
+# fake tmux that serves scripted screens and records every call, so no real pane
+# and no real claude is involved. Not run by CI (the ci.yml header says so): the
+# gate for this block is running this script.
+helper_dir="$(dirname "$LAUNCH")"
+HELPER="$helper_dir/dismiss-devch"
+[[ -x "$HELPER" ]] || HELPER="$here/dismiss-devch"
+fake="$(mktemp -d "$root/fake.XXXXXX")"
+cat > "$root/bin/tmux" <<'STUB'
+#!/usr/bin/env bash
+# Fake tmux: records every call; serves $FAKE/before until a send-keys, then
+# $FAKE/after (unless $FAKE/never_gone exists).
+echo "$*" >> "$FAKE/calls"
+while [[ "${1:-}" == -S || "${1:-}" == -L ]]; do shift 2; done
+case "${1:-}" in
+  capture-pane) [[ -f "$FAKE/hang_capture" ]] && sleep 8
+                if [[ -f "$FAKE/pressed" ]]; then cat "$FAKE/after"; else cat "$FAKE/before"; fi ;;
+  send-keys) echo "$*" >> "$FAKE/keys"; [[ -f "$FAKE/hang_press" ]] && sleep 8
+             [[ -f "$FAKE/never_gone" ]] || touch "$FAKE/pressed" ;;
+esac
+STUB
+# Stand-in for composer-check: EMPTY (exit 0) when $FAKE/composer_now exists, or
+# once the key was sent and $FAKE/composer_after exists; UNCLEAR (exit 3) otherwise.
+cat > "$root/bin/composer-check-stub" <<'STUB'
+#!/usr/bin/env bash
+[[ -f "$FAKE/hang_composer" ]] && sleep 8
+if [[ -f "$FAKE/composer_now" || ( -f "$FAKE/pressed" && -f "$FAKE/composer_after" ) ]]; then echo EMPTY; exit 0; fi
+echo UNCLEAR; exit 3
+STUB
+chmod +x "$root/bin/tmux" "$root/bin/composer-check-stub"
+
+dialog_screen() { # $1 channels list, $2 option 1 line, $3 option 2 line
+  printf '%s\n' ' WARNING: Loading development channels' '' \
+    ' --dangerously-load-development-channels is for local channel development' \
+    ' only. Do not use this option to run channels you have downloaded off the' \
+    ' internet.' '' ' Please use --channels to run a list of approved channels.' '' \
+    " Channels: $1" '' "$2" "$3"
+}
+good_dialog() { dialog_screen server:director ' ❯ 1. I am using this for local development' '   2. Exit'; }
+composer_screen() { printf '%s\n' '' '────────────────────────────────' '❯ ' '────────────────────────────────'; }
+hrun() { # runs the helper with the fake tmux; leaves rc in $hrc and output in $hout
+  local dl="${1:-2}"
+  hrc=0
+  hout="$(env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" FAKE="$fake" \
+    DIRECTOR_DEVCH_DEADLINE="$dl" DIRECTOR_DEVCH_POLL=0.1 DIRECTOR_DEVCH_AFTER=2 \
+    DIRECTOR_DEVCH_COMPOSER_CHECK="$root/bin/composer-check-stub" \
+    "$HELPER" --pane %7 2>&1)" || hrc=$?
+}
+# Each case gets its own fake dir, so a helper a launcher case left running (it
+# keeps polling until its own deadline) writes into that case's dir and never into
+# the next case's calls file.
+hreset() { fake="$(mktemp -d "$root/fake.XXXXXX")"; }
+nkeys() { if [[ -f "$fake/keys" ]]; then wc -l < "$fake/keys" | tr -d ' '; else echo 0; fi; }
+
+# the exact dialog: one key, the digit 1, never Enter, then the composer is confirmed
+hreset; good_dialog > "$fake/before"; composer_screen > "$fake/after"; : > "$fake/composer_after"
+hrun
+[[ "$hrc" == 0 && "$(nkeys)" == 1 && "$(cat "$fake/keys")" == "send-keys -t %7 1" ]] \
+  && ok "devch: the exact dialog gets one key, the digit 1, and nothing else" \
+  || bad "devch: the exact dialog gets one key, the digit 1" "rc=$hrc keys=$(cat "$fake/keys" 2>/dev/null) out=$hout"
+[[ "$hout" == *"devch: dismissed, composer reached"* ]] \
+  && ok "devch: success is reported only once the dialog is gone and the composer is reached" \
+  || bad "devch: success line" "$hout"
+
+# already at the composer: no key
+hreset; composer_screen > "$fake/before"; : > "$fake/composer_now"
+hrun
+[[ "$hrc" == 0 && "$(nkeys)" == 0 ]] && ok "devch: a screen that is already the composer gets no key" \
+  || bad "devch: composer screen, no key" "rc=$hrc keys=$(nkeys) out=$hout"
+
+# any other screen: no key, polls to the deadline, exits 1 with the last screen named
+hreset; printf '%s\n' ' Do you trust the files in this folder?' ' ❯ 1. Yes, proceed' '   2. No, exit' > "$fake/before"
+hrun 1
+[[ "$hrc" == 1 && "$(nkeys)" == 0 && "$hout" == *"devch: gave up after 1 s, last screen was"*"Do you trust the files"* ]] \
+  && ok "devch: another prompt gets no key and the helper gives up at the deadline naming the screen" \
+  || bad "devch: another prompt" "rc=$hrc keys=$(nkeys) out=$hout"
+
+# near matches: title present, something else differs: no key, stop at once (exit 2)
+near() { # name, then the screen on stdin
+  local name="$1" t0; hreset; cat > "$fake/before"
+  t0=$SECONDS; hrun 30
+  [[ "$hrc" == 2 && "$(nkeys)" == 0 && "$hout" == *"devch: dialog text did not match"* && $((SECONDS - t0)) -lt 5 ]] \
+    && ok "devch: $name: no key, reports and stops at once" \
+    || bad "devch: $name" "rc=$hrc keys=$(nkeys) secs=$((SECONDS - t0)) out=$hout"
+}
+dialog_screen server:director ' ❯ 1. I am using this for development' '   2. Exit' | near "option 1 reworded"
+dialog_screen server:other ' ❯ 1. I am using this for local development' '   2. Exit' | near "another channels list"
+dialog_screen server:director ' ❯ 1. I am using this for local development' '   2. Quit' | near "option 2 reworded"
+dialog_screen server:director '   1. I am using this for local development' ' ❯ 2. Exit' | near "option 1 not highlighted"
+
+# the key is sent and the dialog stays: exactly one key in the whole run, exit 3
+hreset; good_dialog > "$fake/before"; : > "$fake/never_gone"
+hrun 5
+[[ "$hrc" == 3 && "$(nkeys)" == 1 && "$hout" == *"devch: dialog still shown after the press"* ]] \
+  && ok "devch: a dialog that stays after the press is reported and never pressed twice" \
+  || bad "devch: dialog stays" "rc=$hrc keys=$(nkeys) out=$hout"
+
+# the dialog goes but no composer appears: reported, exit 3
+hreset; good_dialog > "$fake/before"; printf '%s\n' ' starting up' > "$fake/after"
+hrun 5
+[[ "$hrc" == 3 && "$(nkeys)" == 1 && "$hout" == *"devch: dialog gone but the composer was not reached"* ]] \
+  && ok "devch: a dialog that goes without a composer is not reported as success" \
+  || bad "devch: gone without composer" "rc=$hrc keys=$(nkeys) out=$hout"
+
+# the dialog quoted in a transcript above a composer is not the dialog: no key
+hreset; { good_dialog; composer_screen; } > "$fake/before"
+hrun 1
+[[ "$hrc" == 1 && "$(nkeys)" == 0 ]] && ok "devch: dialog text quoted above a composer gets no key" \
+  || bad "devch: quoted dialog" "rc=$hrc keys=$(nkeys) out=$hout"
+
+# the bound: a screen that never shows the dialog ends the helper by itself
+hreset; printf '%s\n' ' loading' > "$fake/before"
+t0=$SECONDS; hrun 1
+[[ "$hrc" == 1 && $((SECONDS - t0)) -lt 6 ]] && ok "devch: the wait is bounded by the deadline" \
+  || bad "devch: the wait is bounded" "rc=$hrc secs=$((SECONDS - t0))"
+
+# a hung tmux or composer-check must not outlive the deadline: every call is bounded
+# by the helper's CALL_TIMEOUT and by the time the current wait has left
+hung() { # name, switch file, rc wanted, keys wanted, deadline
+  local name="$1" sw="$2" wantrc="$3" wantkeys="$4" dl="$5" t0
+  hreset; if [[ "$sw" == hang_press ]]; then good_dialog > "$fake/before"; else printf '%s\n' ' loading' > "$fake/before"; fi
+  : > "$fake/$sw"; t0=$SECONDS
+  hrun "$dl"
+  [[ "$hrc" == "$wantrc" && "$(nkeys)" == "$wantkeys" && $((SECONDS - t0)) -lt $((dl + 4)) ]] \
+    && ok "devch: $name: ends in time with rc $wantrc and $wantkeys key(s)" \
+    || bad "devch: $name" "rc=$hrc keys=$(nkeys) secs=$((SECONDS - t0)) out=$hout"
+}
+hung "a hung capture (clamped to the deadline)" hang_capture 1 0 2
+hung "a hung composer-check" hang_composer 1 0 2
+hung "a hung send-keys" hang_press 4 1 3
+[[ "$hout" == *"timed out"* ]] \
+  && ok "devch: a send-keys that hangs is reported as timed out, never retried" \
+  || bad "devch: hung send-keys message" "$hout"
+
+# a failed send-keys is reported, not hidden
+hreset; good_dialog > "$fake/before"
+cp "$root/bin/tmux" "$root/bin/tmux-ok"
+cat > "$root/bin/tmux" <<'STUB'
+#!/usr/bin/env bash
+while [[ "${1:-}" == -S || "${1:-}" == -L ]]; do shift 2; done
+case "${1:-}" in capture-pane) cat "$FAKE/before" ;; send-keys) echo "no server" >&2; exit 1 ;; esac
+STUB
+hrun 3; cp "$root/bin/tmux-ok" "$root/bin/tmux"
+[[ "$hrc" == 4 && "$hout" == *"devch: sending the key failed"* ]] \
+  && ok "devch: a failed key send is reported with its own exit code" \
+  || bad "devch: failed send" "rc=$hrc out=$hout"
+
+# through the launcher: a cue seat in a pane arms the helper, which presses once
+mkdir -p "$root/.local/state/wardrobe"
+devch_cast() { # extra KEY=VALUE pairs; role builder
+  hreset; good_dialog > "$fake/before"; composer_screen > "$fake/after"; : > "$fake/composer_after"
+  cast builder FAKE="$fake" DIRECTOR_DEVCH_DEADLINE=3 DIRECTOR_DEVCH_POLL=0.1 DIRECTOR_DEVCH_AFTER=2 \
+    DIRECTOR_DEVCH_COMPOSER_CHECK="$root/bin/composer-check-stub" "$@"
+}
+if devch_cast DIRECTOR_CUE=1 TMUX_PANE=%7 TMUX="$root/fake.sock,1,0"; then
+  for _ in $(seq 1 50); do [[ -f "$fake/pressed" ]] && break; sleep 0.1; done
+  [[ "$(cat "$fake/keys" 2>/dev/null)" == "send-keys -t %7 1" ]] \
+    && ok "devch: a cue seat in a pane arms the helper and one key reaches the pane" \
+    || bad "devch: armed through the launcher" "keys=$(cat "$fake/keys" 2>/dev/null) calls=$(cat "$fake/calls" 2>/dev/null)"
+  grep -q "channel cue ON (DIRECTOR_CUE=1), devch helper armed" "$root/out/stderr" \
+    && ok "devch: the spawn line says the helper is armed, after the cue note" \
+    || bad "devch: spawn line" "$(cat "$root/out/stderr")"
+  grep -q -- "-S $root/fake.sock" "$fake/calls" \
+    && ok "devch: the helper talks to the pane's own tmux server, taken from TMUX" \
+    || bad "devch: the tmux server comes from TMUX" "$(cat "$fake/calls" 2>/dev/null)"
+else
+  bad "devch: cue seat cast in a pane" "$(cat "$root/out/stderr")"
+fi
+# an installed launcher is a symlink to lib/cast-launch/<sha>/cast-launch.sh: the helper is found beside the real file
+inst="$root/installed"; mkdir -p "$inst/lib" "$inst/bin"
+cp "$LAUNCH" "$inst/lib/cast-launch.sh"; cp "$HELPER" "$inst/lib/dismiss-devch"; chmod +x "$inst/lib/cast-launch.sh"
+ln -sfn "$inst/lib/cast-launch.sh" "$inst/bin/cast-launch"
+LAUNCH_SAVED="$LAUNCH"; LAUNCH="$inst/bin/cast-launch"
+if devch_cast DIRECTOR_CUE=1 TMUX_PANE=%7 TMUX="$root/fake.sock,1,0"; then
+  for _ in $(seq 1 50); do [[ -f "$fake/pressed" ]] && break; sleep 0.1; done
+  [[ "$(cat "$fake/keys" 2>/dev/null)" == "send-keys -t %7 1" ]] \
+    && ok "devch: a launcher installed as a symlink finds the helper beside the real file" \
+    || bad "devch: symlinked launcher" "keys=$(cat "$fake/keys" 2>/dev/null) err=$(cat "$root/out/stderr")"
+else
+  bad "devch: symlinked launcher cast" "$(cat "$root/out/stderr")"
+fi
+LAUNCH="$LAUNCH_SAVED"
+if devch_cast DIRECTOR_CUE=1; then
+  sleep 1
+  [[ ! -e "$fake/calls" ]] && grep -q "devch helper not armed" "$root/out/stderr" \
+    && ok "devch: with no TMUX_PANE the helper is not armed and the launcher says so" \
+    || bad "devch: no pane" "calls=$(cat "$fake/calls" 2>/dev/null) err=$(cat "$root/out/stderr")"
+else
+  bad "devch: cue seat cast outside a pane" "$(cat "$root/out/stderr")"
+fi
+for v in unset 0; do
+  if [[ "$v" == 0 ]]; then
+    devch_cast DIRECTOR_CUE=0 TMUX_PANE=%7 TMUX="$root/fake.sock,1,0" || { bad "devch: non-cue cast, cue $v" "$(cat "$root/out/stderr")"; continue; }
+  else
+    devch_cast TMUX_PANE=%7 TMUX="$root/fake.sock,1,0" || { bad "devch: non-cue cast, cue $v" "$(cat "$root/out/stderr")"; continue; }
+  fi
+  sleep 1
+  [[ ! -e "$fake/calls" ]] && ! grep -qi "devch" "$root/out/stderr" \
+    && ok "devch: a non-cue seat (cue $v) starts no helper and its spawn line says nothing of one" \
+    || bad "devch: non-cue seat, cue $v" "calls=$(cat "$fake/calls" 2>/dev/null) err=$(cat "$root/out/stderr")"
+done
+
+# the source rules: the launcher names no keystroke tool; the helper sends one key, never Enter
+if grep -n -E 'send-keys|expect |xdotool|osascript|yes \|' "$LAUNCH" >/dev/null; then
+  bad "devch: the launcher source names a keystroke tool"
+else
+  ok "devch: the launcher source names no keystroke tool"
+fi
+if grep -n -E '"(Enter|C-m|C-j|KPEnter)"|send-keys.*(Enter|C-m)' "$HELPER" >/dev/null; then
+  bad "devch: the helper names Enter"
+else
+  ok "devch: the helper never names Enter, C-m or KPEnter"
+fi
+
 # --- the cue is the default for supervisor casts (operator ruling 2026-11-05)
 # It replaces the 2026-10-01 opt-in for supervisors only. A set DIRECTOR_CUE
 # always wins, director casts are not included, and a headless launch (-p or
@@ -911,6 +1129,7 @@ if [[ -z "${VERIFY_NESTED:-}" ]]; then
   nested="$root/nested"; mkdir -p "$nested"
   cp "$LAUNCH_ORIG" "$nested/cast-launch"; chmod +x "$nested/cast-launch"
   [[ -f "$wrapper_orig" ]] && cp "$wrapper_orig" "$nested/claude-bedrock-launch"
+  [[ -f "$here/dismiss-devch" ]] && cp "$here/dismiss-devch" "$nested/dismiss-devch"
   if VERIFY_NESTED=1 CAST_LAUNCH="$nested/cast-launch" "${BASH_SOURCE[0]}" >"$root/out/nested.log" 2>&1; then
     ok "CAST_LAUNCH with a renamed launcher: all cases pass on the patched copy, none on the original"
   else
