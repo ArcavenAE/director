@@ -643,7 +643,9 @@ func peekWaiting(ctx context.Context, js jetstream.JetStream, cons jetstream.Con
 
 // summaryResult is inbox_summary's answer before shaping into JSON.
 type summaryResult struct {
-	Summary  inboxSummary
+	Summary inboxSummary
+	// Lane is the replies to open asks, listed ahead of the rest (lane.go).
+	Lane     inboxLane
 	Expected map[string]uint64
 	Read     map[string]int
 	// MaybeConsumed counts, per tier, listed messages beyond the durable's
@@ -722,6 +724,7 @@ func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, err
 		}
 		all = unread
 	}
+	res.Lane = loadLane(all, time.Now())
 	res.Summary = summarize(all)
 	return res, nil
 }

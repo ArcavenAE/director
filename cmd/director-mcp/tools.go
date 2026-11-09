@@ -547,6 +547,7 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 		return nil, err
 	}
 	out := map[string]any{
+		"lane":    res.Lane,
 		"summary": res.Summary,
 		"waiting": res.Expected,
 		"read":    res.Read,
