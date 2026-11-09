@@ -167,6 +167,7 @@ Into `~/.director/bin`, one line each. Each is a script under `skills/director/s
 | `dsx` | external state verification |
 | `merge-guard` | the fail-closed read before a merge; prints PROCEED or a refusal |
 | `relay-log` | writes a relay-log entry, stamped from the clock |
+| `nav-sync` | reports which exported pages carry a menu that differs from `page-nav.html`; publishing stays the session's |
 | `desk-snapshot` | writes the local snapshot of the Desk's open cards that `dws` checks |
 | `lane-ledger` | renders the lane ledger page from director's own files |
 | `card-ingest` | turns a seat's card file into a Desk write, and refuses a card missing a part |

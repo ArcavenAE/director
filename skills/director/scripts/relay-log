@@ -28,9 +28,14 @@ text is quoted line by line, so a **Workstream:** line typed inside a message st
 quoted and links nothing.
 
 --ask names the intake record the entry answers (`dws intake` mints the id, I-<n>), and --kind says
-what sort of entry it is (relay, ruling, build, research or question). Both are written by the
+what sort of entry it is (relay, ruling, build, research, question or answer). Both are written by the
 writer as field lines after the Workstream line and checked for shape only, as --ws is: the intake
 file is never opened, so an entry written with no ask id behaves exactly as it did before.
+
+An answer entry (--kind answer) owes the operator a Reply Shelf row, and nothing else prompts for it. It needs
+--ask, and after the heading the writer prints one more line naming the shelf-row call to make, with the ask
+filled in. The line is a cue, not the write: the row needs a summary and a source that only the answering seat
+has, so shelf-row builds it and a director session applies it. Nothing is written for it.
 
 outcome adds a later note for an existing entry, stamped the same way:
 
@@ -51,7 +56,7 @@ import argparse, datetime, fcntl, os, re, subprocess, sys
 HEADING = re.compile(rb"^## R-(\d+)\b", re.M)
 SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]*$")  # dws's pattern; the writer checks the shape only
 ASK_ID = re.compile(r"^I-[0-9]+$")  # dws intake's id; the writer checks the shape only
-KINDS = ("relay", "ruling", "build", "research", "question")
+KINDS = ("relay", "ruling", "build", "research", "question", "answer")
 
 
 def find_log():
@@ -125,6 +130,8 @@ def main():
                 sys.exit(f"relay-log: --ws {w!r} is not a workstream slug (lower case letters, digits, '.', '_' or '-'); nothing written")
         if args.ask is not None and not ASK_ID.match(args.ask):
             sys.exit(f"relay-log: --ask {args.ask!r} is not an intake id (I-<n>); nothing written")
+        if args.kind == "answer" and args.ask is None:
+            sys.exit("relay-log: --kind answer needs --ask (the intake id of the ask it answers); nothing written")
         ws_line = ("**Workstream:** " + ", ".join(dict.fromkeys(args.ws)) + "\n") if args.ws else ""
         ws_line += (f"**Intake:** {args.ask}\n" if args.ask else "") + (f"**Kind:** {args.kind}\n" if args.kind else "")
 
@@ -158,6 +165,9 @@ def main():
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
     print(head)
+    if args.cmd == "append" and args.kind == "answer":
+        print(f"shelf: relayed answer for {args.ask}; build its row with shelf-row new --ask {args.ask} "
+              "--asked-by NAME --asked-of NAME --summary-file F --source S, then apply the write to replies")
 
 
 if __name__ == "__main__":

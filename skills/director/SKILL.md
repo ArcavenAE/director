@@ -169,7 +169,7 @@ release, revise or cancel (the cancel_held tool).
    same fill clears that row's operator block; the next action stays yours.
    When the operator gives an ask, record it first with
    `${DIRECTOR_HOME:-$HOME/.director}/bin/dws intake --text-file -`, which prints an ask id (I-<n>) stamped from
-   the clock. Carry the id: `relay-log append ... --ask I-<n> --kind relay|ruling|build|research|question`,
+   the clock. Carry the id: `relay-log append ... --ask I-<n> --kind relay|ruling|build|research|question|answer`,
    `card-ingest parse ... --intake I-<n>`, and `dws link <slug> intake:I-<n>` on the row. `dws asks` then joins
    each ask to its card, the answer's time, the relay entry, the row and how it was closed, with "none" for a blank.
    Close every ask when it ends: `dws ask-close I-<n> --as answered|carded|not-an-ask --ref <where to check>`
@@ -192,6 +192,11 @@ release, revise or cancel (the cancel_held tool).
    it is replaced, a plain address gets `#<id>`, and one that already has a fragment is
    used as it is). Publishing the page is yours; the `picks` collection it writes is read
    at step 3 below.
+   Every page's menu is copied from `page-nav.html` when the page is rendered, so a page published before the file
+   changed keeps the old menu. After a sweep that changed the file, export each published page to a file and run
+   `${DIRECTOR_HOME:-$HOME/.director}/bin/nav-sync check <page-file>...`: one line per page (`ok`, `stale` with the
+   labels missing or extra, `differs`, `no-nav`, `unreadable`), exit 0 only when all are `ok`. It reports and
+   writes nothing; republishing the stale ones is yours.
    Every page director publishes carries this install's namespace in its title and
    description, so two installs' pages can be told apart. The namespace is the one line in the
    instance file `page-namespace` in the state directory; with no file it is the GitHub login of
@@ -221,6 +226,9 @@ An answer the operator asked for and did not see in the stream goes on the Reply
    or a batch from a seed file with `shelf-row seed FILE [--start N]`. It prints the write and writes nothing; a
    refusal prints one line naming the field and reason. Apply the printed write or batch with ArtifactData
    (`set`, collection `replies`). List the collection first so `--n` or `--start` does not reuse an id.
+   A relay that carries an answer is written with `--kind answer --ask I-n`; `relay-log append` then prints a
+   `shelf:` line after the entry heading with the `shelf-row new` call to make. It is a cue and writes nothing
+   itself, since the row needs the summary and source the answering seat gives.
 2. On the sweep, list `replies` and relay each row whose `more` is non-empty on its source ask, then note it was
    relayed in the ask's own thread. The page never reaches the bus.
 
