@@ -8,3 +8,4 @@
 {"ask_id":"ph-ask-04","routed_to":"none","basis":"placeholder: no seat covers it","principal":"placeholder-principal","supervisor_epoch":"g1-0","routed_at":"2030-01-01T14:00:00Z","no_route":{"reason":"placeholder reason"},"cancelled_at":"2030-01-01T14:01:00Z"}
 {"ask_id":"ph-ask-03","acked_at":"2030-01-01T13:10:00Z","event":"placeholder legacy ack text","supervisor_epoch":"g1-0"}
 {"ask_id":"ph-ask-03","at":"2030-01-01T13:20:00Z","event":"placeholder legacy note text","supervisor_epoch":"g1-0"}
+{"scheduled_role":"placeholder-sweep","firing_id":"20300101T110000Z","results_sha256":"0000000000000000000000000000000000000000000000000000000000000000","acked_at":"2030-01-01T11:30:00Z"}

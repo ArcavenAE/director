@@ -56,6 +56,22 @@ counts as a close too (the record then carries no result); a ledger that closes 
 carries the result. An ask is **open** when it was
 routed and has neither a `close` nor a `cancel`.
 
+## The scheduled-firing ack row
+
+A scheduled role's firing is acknowledged by its own row, not by an ask: the supervisor role definition names its four
+fields. It sits in the same ledger because a supervisor keeps one ledger.
+
+| field | type | rule |
+|---|---|---|
+| `scheduled_role` | text | required; the role that fired |
+| `firing_id` | text | required; marvel's firing id (the nominal due time in UTC, `YYYYMMDDTHHMMSSZ`) |
+| `results_sha256` | text | required; 64 hex digits, the hash the firing's results file carries |
+| `acked_at` | time | required; when the supervisor acknowledged the results |
+
+A row with `scheduled_role` is read as this row, and the checker counts it as a firing ack. It names no ask, so it
+adds to no ask's counts. `schedule-ack` (`sim/design/schedule-ack.md`) reads these rows and does not define them.
+The row carries only these four fields; a local extra is allowed and ignored, as on the other rows.
+
 ## Legacy rows
 
 Ledgers held these shapes before this one; the checker accepts and counts them, and a supervisor moving onto
@@ -78,7 +94,7 @@ the shape stops writing them:
 `skills/director/scripts/route-ledger check FILE [--json]` reads one file and writes nothing. It prints
 
 ```
-route-ledger: rows N, asks N, routed N, acked N, closed N, cancelled N, open N, depth known K of R, event@1 N, legacy N, refused N
+route-ledger: rows N, asks N, routed N, acked N, closed N, cancelled N, open N, depth known K of R, event@1 N, legacy N, firing acks N, refused N
 ```
 
 A refused row prints `route-ledger: refused: row <line>: <field>:<reason>` on stderr, in fixed words and never the

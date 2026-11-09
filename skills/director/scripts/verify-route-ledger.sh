@@ -39,14 +39,14 @@ REC='"ask_id":"ph-1","routed_to":"role://t/builder","basis":"b","principal":"p",
 # --- the example fixture ----------------------------------------------------------------------------
 run check "$fx"
 [[ $rc -eq 0 ]] && ok "the example ledger passes (exit 0)" || bad "the example ledger passes" "rc=$rc $(cat "$root/err")"
-want='route-ledger: rows 10, asks 4, routed 4, acked 3, closed 2, cancelled 1, open 1, depth known 2 of 4, event@1 2, legacy 4, refused 0'
+want='route-ledger: rows 11, asks 4, routed 4, acked 3, closed 2, cancelled 1, open 1, depth known 2 of 4, event@1 2, legacy 4, firing acks 1, refused 0'
 [[ "$(cat "$root/out")" == "$want" ]] && ok "it reads as the documented counts" || bad "the counts" "got: $(cat "$root/out")"
 run check "$fx" --json
 python3 - "$root/out" <<'PY' && ok "--json prints the same counts as one object" || bad "--json counts" "$(head -c 300 "$root/out")"
 import json, sys
 d = json.load(open(sys.argv[1]))
-assert d == {"rows": 10, "asks": 4, "routed": 4, "acked": 3, "closed": 2, "cancelled": 1, "open": 1,
-             "depth_known": 2, "depth_total": 4, "event_v1": 2, "legacy": 4, "refused": 0}, d
+assert d == {"rows": 11, "asks": 4, "routed": 4, "acked": 3, "closed": 2, "cancelled": 1, "open": 1,
+             "depth_known": 2, "depth_total": 4, "event_v1": 2, "legacy": 4, "firing_acks": 1, "refused": 0}, d
 PY
 
 # --- records ------------------------------------------------------------------------------------------
@@ -99,6 +99,26 @@ row '{"ask_id":"ph-1","result":"r"}'; grep -qF 'closed 1' "$root/out" && ok "a b
 row '{"ask_id":"ph-1","closed_at":"2030-01-01T10:05:00Z","result":"r"}'; grep -qF 'closed 1' "$root/out" && ok "a result row with closed_at counts as closed" || bad "close with time" "$(cat "$root/out")"
 row '{"at":"2030-01-01T10:05:00Z","note":"free note with no ask"}'; [[ $rc -eq 0 ]] && ok "a legacy note with no ask_id passes" || bad "legacy note" "$(cat "$root/err")"
 row '{"ask_id":"ph-1","closed_at":"later","result":"r"}'; refused "a legacy close with an unreadable time is refused" "row 1: closed_at:time"
+
+# --- the scheduled-firing ack row (exactly scheduled_role, firing_id, results_sha256, acked_at) --------------
+H64="$(printf '0%.0s' $(seq 1 64))"
+ACK="\"scheduled_role\":\"r\",\"firing_id\":\"20300101T110000Z\",\"results_sha256\":\"$H64\",\"acked_at\":\"2030-01-01T11:30:00Z\""
+row "{$ACK}"; [[ $rc -eq 0 ]] && grep -qF 'firing acks 1' "$root/out" && grep -qF 'asks 0' "$root/out" && ok "an ack row passes, is counted as a firing ack, and names no ask" || bad "ack row" "rc=$rc $(cat "$root/out") $(cat "$root/err")"
+for f in scheduled_role firing_id results_sha256 acked_at; do
+  python3 - "$f" "$H64" >"$root/l.jsonl" <<'PY'
+import json, sys
+r = {"scheduled_role": "r", "firing_id": "20300101T110000Z", "results_sha256": sys.argv[2], "acked_at": "2030-01-01T11:30:00Z"}
+del r[sys.argv[1]]
+if sys.argv[1] == "scheduled_role":
+    r["scheduled_role"] = ""
+print(json.dumps(r))
+PY
+  run check "$root/l.jsonl"; refused "an ack row missing $f is refused" "row 1: $f:missing"
+done
+row "{${ACK/$H64/abc}}"; refused "a results_sha256 that is not a 64-digit hash is refused" "row 1: results_sha256:hash"
+row "{${ACK/2030-01-01T11:30:00Z/soon}}"; refused "an unreadable acked_at on an ack row is refused" "row 1: acked_at:time"
+row "{$ACK,\"extra\":\"kept\"}"; [[ $rc -eq 0 ]] && ok "an unknown field on an ack row is allowed (ledgers carry local extras)" || bad "ack extra" "$(cat "$root/err")"
+printf '%s\n' "{$ACK}" "{$ACK}" >"$root/l.jsonl"; run check "$root/l.jsonl"; grep -qF 'firing acks 2' "$root/out" && ok "each ack row counts, two rows count two" || bad "two acks" "$(cat "$root/out")"
 
 # --- file-level refusals ------------------------------------------------------------------------------
 printf '%s\n' "{$REC}" "not json" "{$REC}" >"$root/l.jsonl"; run check "$root/l.jsonl"
