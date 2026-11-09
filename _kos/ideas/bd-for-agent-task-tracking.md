@@ -5,7 +5,7 @@
 - **Date:** 2026-11-02
 - **Subject:** director. The question is how director records and finds the
   work it relays; bd is the store it would use, not a co-owner.
-- **Asked by:** the operator, via director (ask I-147).
+- **Asked by:** the operator, via director.
 - **Related, not merged:** `_kos/ideas/director-as-work-state-cache.md` (what
   the cache holds and how it is judged) and `_kos/ideas/task-judge.md` (who
   assesses a task before dispatch and at handoff). This idea is about where the

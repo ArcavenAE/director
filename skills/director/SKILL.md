@@ -88,8 +88,8 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    checkout the sweep starts in or at `IDLE_SHADOW_LABEL_CONVENTION`); if that file cannot be read it prints `- GAP components` and the component
    reading is GAP, never a guess from the label's shape.
    Until items carry `class:` labels the expected reading is `would-pair 0` and every item unmatched as "no class"; that is a
-   reading, not an error. Pairing is marvel's `marvel marry` verb (read only, it sends nothing); a `- GAP marry: ...` line says it could not run
-   (a marvel without the verb, an unread input, a failed call), and `- GAP seat-eligibility` says the optional seat classes, scopes and duty
+   reading, not an error. Pairing is director's own `director-mcp marry` subcommand (read only, it sends nothing, and it needs no marvel); a `- GAP marry: ...` line says it could not run
+   (a director-mcp without the subcommand, an unread input, a failed call), and `- GAP seat-eligibility` says the optional seat classes, scopes and duty
    cells file is absent or malformed, which is the expected reading until the register scope cell ships; show both. A `- would-pair ...`
    line is a shadow row: nothing was sent. It exits 0 whether it finds nothing or a lot, so read its lines, never its exit code.
    Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/introspect --since today`. It is a script, not a seat: it reads the
@@ -135,7 +135,7 @@ and that complaint is a requirement.
 
 When `$DIRECTOR_STATE/workstreams.jsonl` exists, take Blocked on you from the
 ledger: run `${DIRECTOR_HOME:-$HOME/.director}/bin/dws show --json` and list the rows whose `blocked` is
-`operator`, oldest `last_moved` first, each as `<owner> - <workstream>: <next action>`,
+`operator` and whose `stage` is not `parked`, oldest `last_moved` first, each as `<owner> - <workstream>: <next action>`,
 from the row's `owner`, `slug` and `next`, with the owner in the session slot.
 The other blocks are unchanged. With no ledger, or no CLI, build the list from
 the board and the roster as above.
@@ -171,7 +171,9 @@ release, revise or cancel (the cancel_held tool).
    `${DIRECTOR_HOME:-$HOME/.director}/bin/dws intake --text-file -`, which prints an ask id (I-<n>) stamped from
    the clock. Carry the id: `relay-log append ... --ask I-<n> --kind relay|ruling|build|research|question`,
    `card-ingest parse ... --intake I-<n>`, and `dws link <slug> intake:I-<n>` on the row. `dws asks` then joins
-   each ask to its card, the answer's time, the relay entry and the row, with "none" for a blank. Pass `--answers`
+   each ask to its card, the answer's time, the relay entry, the row and how it was closed, with "none" for a blank.
+   Close every ask when it ends: `dws ask-close I-<n> --as answered|carded|not-an-ask --ref <where to check>`
+   (`--reason` is required for not-an-ask; one close per ask). Pass `--answers`
    to `desk-snapshot write` so each read also adds one row to `desk-reads.jsonl`.
    For an entry already written, link it afterwards with
    `dws link <slug> relay:R-<n>`. Nothing is matched from message text. Read
@@ -205,6 +207,22 @@ Artifact data tool into a local JSON file, then run
 and then `dws set <slug> --blocked operator --ask <card id>`. Without a
 snapshot read in the last 24 hours, `dws` refuses and says UNREAD; do not work
 around it, read the Desk again.
+
+## Reply shelf: parked answers for the operator
+
+An answer the operator asked for and did not see in the stream goes on the Reply Shelf, a separate Artifact
+(`skills/director/shelf/shelf.html`; design in `sim/design/reply-shelf.md`). Publish it like the Desk page, from
+`${DIRECTOR_HOME:-$HOME/.director}/bin/page-namespace apply <shelf.html>`, with capabilities
+`{"db":{"rules":[{"path":"replies","write":"owner"}]},"user":{}}`.
+
+1. When you relay an answer, ask the answering seat for one paragraph and a source (an https URL, a repo path,
+   or `<host>:<absolute path>` with the file's sha256). Build the row with
+   `${DIRECTOR_HOME:-$HOME/.director}/bin/shelf-row new --ask I-n --asked-by NAME --asked-of NAME --summary-file F --source S [--sha256 H] [--n N]`,
+   or a batch from a seed file with `shelf-row seed FILE [--start N]`. It prints the write and writes nothing; a
+   refusal prints one line naming the field and reason. Apply the printed write or batch with ArtifactData
+   (`set`, collection `replies`). List the collection first so `--n` or `--start` does not reuse an id.
+2. On the sweep, list `replies` and relay each row whose `more` is non-empty on its source ask, then note it was
+   relayed in the ask's own thread. The page never reaches the bus.
 
 ## Card standard: one parse from a card file to the Desk
 
@@ -299,10 +317,13 @@ questions crowds them out. Three scripts in `scripts/` give them one.
 
 - `standing-hook` is a prompt hook. Wired as a Claude Code `UserPromptSubmit`
   hook, it prints the drain age and the three-line checklist before each
-  answer. After every drain, run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat` to record it. With no
+  answer. The director-mcp shim records a drain itself: a `wait_for_message` with `max` above 1 that returns with `remaining` 0 writes `last-drain`. Run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat` by hand only after a drain that ended another way (the silence note, or a single-message wait). With no
   heartbeat it says the age is unknown; it never invents one. Its last line gives
   the age of the last stalled-ideas scan (`dbi`, run by the sweep, then
   `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook scan-beat`), read from a file: the hook never runs the scan.
+  When an ask from the last 24 hours has neither a relay entry nor a ledger row, it adds
+  `asks in the last 24 h with no relay or row: <n> (oldest <id>)` before the waiting line, read through
+  `dws asks --json` (nothing printed at 0; `UNKNOWN (<reason>)` when the join or the relay log cannot be read).
   When something waits it adds one last line, `waiting: <n> Desk answers not relayed (...); <m> approved PRs not
   merged (...); Desk read <age> ago`, or `waiting: UNKNOWN (<reason>)` when an input is missing or too old. The
   answers come from `desk-snapshot write --answers`; the PR half comes from `dws waiting write`, which the
@@ -327,7 +348,7 @@ hook's three-line checklist asks about:
 1. Drain the bus inbox: `inbox_summary`, then `wait_for_message` with `max`
    above 1 until `remaining` is 0 or the reply is the silence note. This gives
    the messages to answer.
-2. Record the drain: `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat`. This gives `last-drain`.
+2. Record the drain. The shim writes `last-drain` when the batch wait in step 1 returns with `remaining` 0. If step 1 ended on the silence note or a single-message wait, run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat` yourself.
 3. Read answered Desk cards and refresh the snapshot: `desk-snapshot write`.
    This gives `desk-snapshot.json`. Read page picks beside it: export the work ledger
    page's `picks` collection to a file and run `dws picks --file <export>`. It prints
@@ -461,6 +482,25 @@ nothing. This is guidance, not a template. A weak episode is corrected in the
 seat's notes and handoff. A change to a role or identity file goes only as a
 proposal through ratification, and a seat is never retired over one episode.
 
+## Route ledger: one shape for every supervisor
+
+A supervisor's route ledger is JSON lines in the shape `sim/design/route-ledger.md` defines: a route-record@1 per
+routing decision and a route-event@1 per later event (ack, relay, note, close, cancel), with the queue depth at
+route and the acked and closed times. To read a ledger the same way whatever its age, run
+`${DIRECTOR_HOME:-$HOME/.director}/bin/route-ledger check FILE` (`--json` for the counts as one object). It
+reads the file and writes nothing; legacy rows are counted, and a refused row names its line and one field and
+reason, never the value. Depth that was not recorded reads as unknown, not zero.
+
+## Scheduled firings with no acked result
+
+A scheduled role that succeeded but whose result nobody acknowledged is a reminder under waiting on you, not an
+alarm. `${DIRECTOR_HOME:-$HOME/.director}/bin/schedule-ack check --describe FILE --results-dir DIR --ledger FILE --now TIME`
+reads `marvel describe team WORKSPACE/TEAM` (saved to FILE), the sweep's results directory and the supervisor's
+route ledger, and prints one `scheduled: ROLE firing ID due TIME: REASON` line per role whose last due firing has no
+succeeded run with an acked result by due plus 2 hours. Show those lines under waiting on you. It writes nothing,
+never runs or gates, and an input it cannot read prints `scheduled: UNKNOWN (...)`. The contract is
+`sim/design/schedule-ack.md`; the results file and ack row it reads wait on other work, so a live run finds none.
+
 ## Relaying
 
 Interpreting is the job. You exist because the human has one attention budget
@@ -488,6 +528,9 @@ is "very likely" acting for the user. codex, opencode and crush inject nothing.
 That borrowed safety is an artifact of the substrate, not a property of the
 fleet, and it is one of the reasons director must not be built on the feature:
 `../../sim/specs/vendor-injected-receiver-policy.md`.
+
+A correction or addendum to an order already sent names that order as
+"FRAGO to <message id>" (`reference/relay-template.md`).
 
 ## Capture triggers
 

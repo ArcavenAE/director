@@ -90,22 +90,59 @@ type cueSource interface {
 	oldestMeta(ctx context.Context) (*cueMeta, error)
 }
 
+// laneSource is the optional second half of a cue source: how many replies to
+// open asks are waiting, and the oldest of them. A source that does not
+// implement it has no lane, and the cue keeps its ordinary schedule.
+type laneSource interface {
+	laneOpen(ctx context.Context) (int, *laneItem)
+}
+
 type pendingCue struct {
-	at      time.Time
+	first   time.Time // when the cue first went out; the back-off runs from it
 	meta    *cueMeta
 	count   uint64
 	pending uint64 // messages waiting when the cue went out
-	recued  bool
+	warns   int    // cue.unanswered warnings sent for this cue
+	recues  int    // re-cues sent for this cue
+}
+
+// cueBackOffLimit is how long after the first cue an unanswered cue is re-sent
+// before one INFORM goes to director and the cue stops (aae-orc-u90tt, the
+// operator's answer: "Back off for 24 hours, then notify
+// director"). Both numbers are proposals.
+const cueBackOffLimit = 24 * time.Hour
+
+// recueOffset is when, after the first cue, the i-th re-cue is due: at W, 4W
+// and 8W, then every hour. The warnings stay at W and 2W.
+// laneRecueOffset is the schedule while a lane item is open: the cue does not
+// back off, so the i-th re-cue is due at (i+1)W: W, 2W, 3W and on.
+func laneRecueOffset(window time.Duration, i int) time.Duration {
+	return time.Duration(i+1) * window
+}
+
+func recueOffset(window time.Duration, i int) time.Duration {
+	switch i {
+	case 0:
+		return window
+	case 1:
+		return 4 * window
+	case 2:
+		return 8 * window
+	}
+	return 8*window + time.Duration(i-2)*time.Hour
 }
 
 type cue struct {
-	mu    sync.Mutex
-	cfg   cueConfig
-	src   cueSource
-	emit  func(params map[string]any)
-	warn  func(ids []string, state string)
-	now   func() time.Time
-	nonce func() string
+	mu   sync.Mutex
+	cfg  cueConfig
+	src  cueSource
+	emit func(params map[string]any)
+	warn func(ids []string, state string)
+	// giveUp is the one INFORM to director when the back-off ends (24 h after
+	// the first cue); nil sends none.
+	giveUp func(ids []string, state string)
+	now    func() time.Time
+	nonce  func() string
 
 	active        bool
 	state, reason string
@@ -399,6 +436,17 @@ func (c *cue) tick(ctx context.Context) {
 	}
 
 	n, err := c.src.count(ctx)
+	// The lane is read only once a cue has been out for a window, since only the
+	// re-cue schedule uses it.
+	laneN, laneOldest := 0, (*laneItem)(nil)
+	if ls, ok := c.src.(laneSource); ok {
+		c.mu.Lock()
+		due := c.out != nil && c.now().Sub(c.out.first) >= c.cfg.Window
+		c.mu.Unlock()
+		if due {
+			laneN, laneOldest = ls.laneOpen(ctx)
+		}
+	}
 	c.mu.Lock()
 	if err != nil {
 		// Skip the tick, so a transient error cannot read as a drop. Show it
@@ -439,13 +487,32 @@ func (c *cue) tick(ctx context.Context) {
 		c.fold = max(c.fold, n)
 	}
 	sendNew := c.fold > 0 && (c.lastCueAt.IsZero() || now.Sub(c.lastCueAt) >= c.cfg.Floor)
-	var recue, warnOut *pendingCue
-	if c.out != nil && now.Sub(c.out.at) >= c.cfg.Window {
-		warnOut = c.out
-		if !c.out.recued {
-			recue = c.out
-		} else {
-			c.out = nil // twice unanswered: back to the manual wake for these
+	var recue, warnOut, gaveUp *pendingCue
+	recueTo := 0
+	if c.out != nil {
+		age := now.Sub(c.out.first)
+		switch {
+		case age >= cueBackOffLimit:
+			gaveUp = c.out
+			c.out = nil // back to the manual wake for these
+		default:
+			if c.out.warns < 2 && age >= time.Duration(c.out.warns+1)*c.cfg.Window {
+				warnOut = c.out
+				c.out.warns++
+			}
+			// After a gap in the ticks every overdue offset has passed:
+			// catch up to the last one and send once, not one per tick.
+			offset := func(i int) time.Duration { return recueOffset(c.cfg.Window, i) }
+			if laneN > 0 {
+				offset = func(i int) time.Duration { return laneRecueOffset(c.cfg.Window, i) }
+			}
+			k := c.out.recues
+			for age >= offset(k) {
+				k++
+			}
+			if k > c.out.recues {
+				recue, recueTo = c.out, k
+			}
 		}
 	}
 	state := c.state
@@ -456,7 +523,7 @@ func (c *cue) tick(ctx context.Context) {
 		m, _ := c.src.oldestMeta(ctx)
 		c.mu.Lock()
 		p := c.params(m, c.fold, now)
-		c.out = &pendingCue{at: now, meta: m, count: c.fold, pending: n}
+		c.out = &pendingCue{first: now, meta: m, count: c.fold, pending: n}
 		c.lastCueAt, c.fold = now, 0
 		c.mu.Unlock()
 		emits = append(emits, p)
@@ -468,10 +535,22 @@ func (c *cue) tick(ctx context.Context) {
 		}
 		c.warn(ids, state)
 	}
+	if gaveUp != nil && c.giveUp != nil {
+		var ids []string
+		if gaveUp.meta != nil {
+			ids = append(ids, gaveUp.meta.MessageID)
+		}
+		c.giveUp(ids, state)
+	}
 	if recue != nil && !sendNew {
 		c.mu.Lock()
 		p := c.params(recue.meta, recue.count, now)
-		recue.at, recue.recued = now, true
+		if laneN > 0 && laneOldest != nil {
+			if m, ok := p["meta"].(map[string]any); ok {
+				m["lane_oldest"], m["lane_ask"], m["lane_open"] = laneOldest.MessageID, laneOldest.AskID, fmt.Sprint(laneN)
+			}
+		}
+		recue.recues = recueTo
 		c.lastCueAt = now
 		c.mu.Unlock()
 		emits = append(emits, p)
@@ -541,6 +620,27 @@ func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
 	return nil, err
 }
 
+// laneOpen builds the lane from what is waiting, as inbox_summary does, and
+// returns its size and its oldest item. It reads and acks nothing.
+func (s busCueSource) laneOpen(ctx context.Context) (int, *laneItem) {
+	items, _, _, err := peekWaiting(ctx, s.b.js, s.b.cons(), "local", summaryDefault)
+	if err != nil {
+		return 0, nil
+	}
+	if s.b.globalCfg != nil {
+		if g, gerr := s.b.globalReady(ctx); gerr == nil {
+			if gitems, _, _, gerr := peekWaiting(ctx, g.js, g.cons(), "global", summaryDefault); gerr == nil {
+				items = append(items, gitems...)
+			}
+		}
+	}
+	l := loadLane(items, time.Now())
+	if len(l.Items) == 0 {
+		return 0, nil
+	}
+	return len(l.Items), &l.Items[0]
+}
+
 // oldestMetaOn reads the oldest waiting message on one tier, the one the
 // pending tracker found oldest, and falls back to oldestMeta when that tier
 // has nothing to show or is not the global one.
@@ -564,7 +664,16 @@ func metaOf(e *Envelope) *cueMeta {
 // warning, never a death or loss report. It always logs, and with the global
 // tier on it also tells director.
 func warnUnanswered(ctx context.Context, bus *Bus, logf func(string, ...any), ids []string, state string) {
-	text := fmt.Sprintf("cue.unanswered: seat %s, messages %v still waiting after the receipt window, cue %s", bus.self.AgentID, ids, state)
+	tellDirector(ctx, bus, logf, "cue.unanswered", fmt.Sprintf("cue.unanswered: seat %s, messages %v still waiting after the receipt window, cue %s", bus.self.AgentID, ids, state))
+}
+
+// informGaveUp is the one INFORM that ends the cue's back-off: 24 hours after
+// the first cue the messages are still waiting, and the shim stops cueing them.
+func informGaveUp(ctx context.Context, bus *Bus, logf func(string, ...any), ids []string, state string) {
+	tellDirector(ctx, bus, logf, "cue.gave_up", fmt.Sprintf("cue.gave_up: seat %s, messages %v still waiting %s after the first cue, cue %s; no further cue for these", bus.self.AgentID, ids, cueBackOffLimit, state))
+}
+
+func tellDirector(ctx context.Context, bus *Bus, logf func(string, ...any), kind, text string) {
 	logf("WARNING %s", text)
 	if bus.globalCfg == nil {
 		return
@@ -575,6 +684,6 @@ func warnUnanswered(ctx context.Context, bus *Bus, logf func(string, ...any), id
 		_, err = bus.publish(ctx, env, ws)
 	}
 	if err != nil {
-		logf("cue.unanswered not delivered to director: %v", err)
+		logf("%s not delivered to director: %v", kind, err)
 	}
 }

@@ -25,6 +25,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -341,9 +344,20 @@ func (b *Bus) receiveBatch(ctx context.Context, timeout time.Duration, max int) 
 // tier, from consumer state. Best effort: a tier whose state cannot be read
 // is left out rather than guessed.
 func (b *Bus) remaining(ctx context.Context) map[string]uint64 {
-	out := map[string]uint64{}
+	rem, _ := b.remainingRead(ctx)
+	return rem
+}
+
+// remainingRead is remaining plus the tiers it tried to read and could not. A
+// tier that is not configured, or whose session is not attached, was not tried
+// and is not listed. last-drain reads the list: a tier left out of the map
+// because its read failed must not look like a tier with nothing waiting.
+func (b *Bus) remainingRead(ctx context.Context) (out map[string]uint64, failed []string) {
+	out = map[string]uint64{}
 	if info, err := b.cons().Info(ctx); err == nil {
 		out["local"] = info.NumPending + uint64(info.NumAckPending)
+	} else {
+		failed = append(failed, "local")
 	}
 	if b.globalCfg != nil {
 		b.globalMu.Lock()
@@ -352,10 +366,77 @@ func (b *Bus) remaining(ctx context.Context) map[string]uint64 {
 		if g != nil {
 			if info, err := g.cons().Info(ctx); err == nil {
 				out["global"] = info.NumPending + uint64(info.NumAckPending)
+			} else {
+				failed = append(failed, "global")
 			}
 		}
 	}
-	return out
+	return out, failed
+}
+
+// lastDrainFile is the beat the director skill reads to see when the inbox was
+// last drained: one RFC 3339 UTC line under the state directory, the same file
+// and format as `standing-hook beat`.
+const lastDrainFile = "last-drain"
+
+// drainedClean reports whether a remaining map says nothing is waiting. A map
+// with no tier in it is a failed read, not an empty inbox, so it is not clean.
+// Every tier the shim could read must be 0.
+func drainedClean(rem map[string]uint64) bool {
+	if len(rem) == 0 {
+		return false
+	}
+	for _, n := range rem {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// beatLastDrain writes last-drain when a batch wait returns with nothing left
+// waiting. It writes a temp file in the same directory and renames it over the
+// target, as standing-hook does, so a reader never sees a half-written line.
+// Any other return leaves the file alone, and so does a tier whose read failed. A write failure is logged and never
+// fails the wait: the mail was already taken, and the manual beat still works.
+func beatLastDrain(rem map[string]uint64, failed []string, now time.Time) {
+	if len(failed) > 0 || !drainedClean(rem) {
+		return
+	}
+	if err := writeLastDrain(now); err != nil {
+		log.Printf("director-mcp: last-drain not written: %v", err)
+	}
+}
+
+func writeLastDrain(now time.Time) error {
+	dir, err := stateDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".stamp.")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, werr := f.WriteString(now.UTC().Format("2006-01-02T15:04:05Z") + "\n")
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		_ = os.Remove(tmp)
+		return werr
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, lastDrainFile)); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // ---- unread summary ----
@@ -562,7 +643,9 @@ func peekWaiting(ctx context.Context, js jetstream.JetStream, cons jetstream.Con
 
 // summaryResult is inbox_summary's answer before shaping into JSON.
 type summaryResult struct {
-	Summary  inboxSummary
+	Summary inboxSummary
+	// Lane is the replies to open asks, listed ahead of the rest (lane.go).
+	Lane     inboxLane
 	Expected map[string]uint64
 	Read     map[string]int
 	// MaybeConsumed counts, per tier, listed messages beyond the durable's
@@ -641,6 +724,7 @@ func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, err
 		}
 		all = unread
 	}
+	res.Lane = loadLane(all, time.Now())
 	res.Summary = summarize(all)
 	return res, nil
 }

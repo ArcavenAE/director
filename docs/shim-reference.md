@@ -47,8 +47,9 @@ two are required. The role is one of exactly two words.
 
 With `DIRECTOR_GLOBAL_DOMAIN` unset the global tier is off, which is correct for
 a worker. A seat that holds the director role (`DIRECTOR_GLOBAL_ROLE=director`
-or `DIRECTOR_ROLE=director`) with the tier off gets a `WARNING` on stderr at
-start naming what is missing and what still works: it reaches no hub, shows
+or `DIRECTOR_ROLE=director`) or asks for the global supervisor role
+(`DIRECTOR_GLOBAL_ROLE=supervisor`; `DIRECTOR_ROLE=supervisor` alone does not
+count) with the tier off gets a `WARNING` on stderr at start naming what is missing and what still works: it reaches no hub, shows
 local seats only, and refuses `global://` sends, while local mail is
 unaffected. The shim warns and does not refuse; a worker or any other role
 starts silently.
@@ -167,6 +168,27 @@ Slice M (`sim/design/unread-slice-m.md`):
   count in each state. The role comes from a `role.<role>.inbox` filter, or
   else from the agent id with its replica suffix and team prefix removed.
 
+### `look`
+
+`director-mcp look [--state DIR] [--seat AGENT-ID]` is a timed look at one seat's
+unread mail. It reads and never acts: it consumes, acks, publishes and creates
+nothing, and no message body leaves it. `--state` defaults to `~/.director/look`
+and `--seat` to `DIRECTOR_AGENT_ID`, else `MARVEL_SESSION`; `NATS_URL` names the
+broker. The only broker requests it sends are `STREAM.INFO`, `CONSUMER.NAMES`,
+`CONSUMER.INFO` and a message get carrying the seat's own filter subject, so
+another seat's mail is not read.
+
+It reads the local tier's current durable for the seat (the newest by `Created`;
+older sessions get one line each) and writes, mode 0600, under the state
+directory: `digest.txt` (the text an operator reads), `notify.json` (the urgent
+gates and requests, and the gates listed in `cleared.json`, apart) and
+`heartbeat.json` (written every run, failed or not). A gate is a body with a line
+that starts with `GATE`; a request is urgent only once its `reply_by` has
+passed. A reader that fails writes a `reader:` failure line and exits 1, never a
+zero count. This version does not read the global tier and says so in the digest.
+The poster with its reminders, `look-clear` and `look-check` are separate steps,
+and the job is not scheduled by this command.
+
 ## Startup behaviour
 
 1. Validate identity and global levers; refuse on failure.
@@ -237,6 +259,8 @@ that stands in for a push the transport cannot make.
 | `in_reply_to` | no | the `message_id` being answered; also sets `correlation_id` so receipts correlate (R-88) |
 | `reply_by` | no | RFC 3339 deadline |
 | `workspace` | no | the recipient's workspace. Omit and it is resolved from the recipient's live presence; with no live presence the send is refused rather than misdelivered (R-92). Set it to address a known cold mailbox verbatim. Ignored for `global://` and `broadcast://`, whose address carries its own scope. |
+| `ask` | no | the intake id (`I-<n>`) of the operator ask this send answers. When the send is accepted, the shim runs `relay-log append` for it, so the relay entry exists without a second step. A malformed id, an id not in `$DIRECTOR_STATE/asks.jsonl`, or a `broadcast://` address refuses the send before publish. |
+| `kind` | no | with `ask`: `relay`, `ruling`, `build`, `research` or `question`, passed to the entry. Defaults to `relay` when `ask` is set; refused without `ask`. |
 
 A `broadcast://` address takes the same path as the `broadcast` tool (see
 below): one durable send per live seat in scope, the broadcast result shape,
@@ -255,6 +279,17 @@ Result:
   "note": "accepted is not delivered or read; the recipient reports those (R-08)"
 }
 ```
+
+With `ask`, an accepted result adds `"relay_entry": "R-<n>"`, the entry
+`relay-log` wrote (text verbatim, the recipient, the ask and kind, and the
+message id on the Outcome line). The send has already left by then, so a
+`relay-log` that cannot run (not at `${DIRECTOR_HOME:-$HOME/.director}/bin/relay-log`,
+no log path, a timeout) adds `"warning": "accepted, but no relay-log entry was
+written: <reason>"` instead; the result stays accepted. A send that the presence
+watch holds is not accepted, so it writes no entry then: the held result says
+`"relay_entry": "pending: ..."`, the hold keeps `ask` and `kind`, and the entry is
+written when the send is released (a presence notice says so, or says the write
+failed). A cancelled hold writes none. A send without `ask` is unchanged.
 
 `stream` and `sequence` are the broker's own word that the bytes are
 stored. A global send is refused before publish when nobody is live at the
@@ -389,6 +424,18 @@ and a repeat call returns the same answer. It reads to the end of the stream
 set is not always a prefix of the stream above the floor, and stopping at the
 count would miss the newest mail.
 
+The answer carries a `lane` field ahead of `summary`: the waiting replies to open
+operator asks, tier then sequence, each with its `ask_id`. A message joins an ask
+by `in_reply_to` only, when that id is a message director sent under the ask (the
+relay log's `Outcome: sent; message <id>` beside its `Intake: I-<n>`; the log is
+`RELAY_LOG`, else the checkout's `sim/notes/relay-log.md` when
+`$DIRECTOR_HOME/bin/relay-log` is a symlink into a checkout, as `relay-log` finds it). A reply that sets no `in_reply_to` cannot join, and nothing joins by
+sender. An ask leaves the lane when `dws ask-close` records it; the reply leaves
+when it is acked or drained. `lane.backlog` counts the open asks received before
+the relay link existed (2026-11-09T03:40:49Z) and gives the age of the oldest in
+seconds. When neither resolves, or the log cannot be read, `lane.warning` says so
+and the lane is empty by that reason, not by finding nothing.
+
 ```json
 {
   "summary": {
@@ -439,8 +486,9 @@ from both tiers are merged with a `tier` column, and global rows carry
 `cluster` and `role`.
 
 Each local row also says what its session's durable on `AGENT_INBOX` shows:
-`durable` is `present`, `missing` or `unknown`, `unread` is the durable's own
-count when it is present, and `flags` lists what is wrong or could not be
+`durable` is `present`, `missing` or `unknown`, `unread` is the durable's
+undelivered count (`NumPending`) when it is present, `ack_pending` is the count
+of mail the session fetched and has not acked, and `flags` lists what is wrong or could not be
 established. `no-durable` means the broker answered that the session has no
 durable, so mail sent to it has no reader. `durable-unchecked` means the lookup
 failed or timed out, or the row names no instance, which is unknown and not

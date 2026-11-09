@@ -22,7 +22,7 @@ run_install() { # $1 = scratch home
 
 targets() { # every target install.sh places, relative to the scratch home
   printf '%s\n' claude/skills/director claude/skills/stansfield claude/commands/director.md \
-    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install director/bin/draft-sweep director/bin/card-ingest director/bin/dbi director/bin/introspect director/bin/dash-writer director/bin/freebusy director/bin/idle-shadow director/bin/lane-ledger director/bin/composer-check director/bin/standing-hook director/bin/director-session
+    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install director/bin/draft-sweep director/bin/card-ingest director/bin/dbi director/bin/introspect director/bin/dash-writer director/bin/shelf-row director/bin/freebusy director/bin/idle-shadow director/bin/lane-ledger director/bin/composer-check director/bin/standing-hook director/bin/director-session
 }
 
 # Positive control: a clean home installs everything and exits 0.
@@ -56,13 +56,13 @@ grep -q 'run `scripts/board-html`' "$skill" \
 # The list is the skill's: every installed-path call it makes. Each must exist in the checkout as the fallback.
 BINHOME='${DIRECTOR_HOME:-$HOME/.director}/bin'
 names="$(grep -o -E '\.director\}/bin/[A-Za-z0-9_-]+' "$skill" | sed 's#.*/bin/##' | sort -u | tr '\n' ' ')"
-for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi introspect dash-writer freebusy idle-shadow; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi introspect dash-writer shelf-row freebusy idle-shadow; do
   case " $names " in *" $n "*) ok "the skill references $n";; *) bad "the skill references $n" "list: $names";; esac
 done
 for n in $names; do
   [[ -x "$here/skills/director/scripts/$n" || "$n" == board-html ]] && ok "every installed-path call resolves in the checkout: $n" || bad "every installed-path call resolves in the checkout: $n"
 done
-for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi introspect dash-writer freebusy idle-shadow; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi introspect dash-writer shelf-row freebusy idle-shadow; do
   [[ -x "$clean/director/bin/$n" ]] && ok "install puts $n in the bin home, executable" || bad "install puts $n in the bin home, executable"
   grep -qF "$BINHOME/$n" "$skill" && ok "skill calls $n from the bin home" || bad "skill calls $n from the bin home"
   [[ -x "$here/skills/director/scripts/$n" ]] && ok "the fallback scripts/$n exists in the checkout" || bad "the fallback scripts/$n exists in the checkout"
@@ -116,7 +116,7 @@ grep -qF 'refresh --local' "$fn" && grep -qF 'dws unlinked' "$fn" && grep -qF --
 # A copy install runs from the bin home with no checkout beside it.
 cp_home="$root/copy"; mkdir -p "$cp_home"
 CLAUDE_HOME="$cp_home/claude" DIRECTOR_HOME="$cp_home/director" DIRECTOR_STATE="$cp_home/state" "$here/install.sh" --copy >"$cp_home/out" 2>&1 || true
-for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi introspect dash-writer freebusy idle-shadow; do
+for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest dbi introspect dash-writer shelf-row freebusy idle-shadow; do
   [[ -f "$cp_home/director/bin/$n" && ! -L "$cp_home/director/bin/$n" && -x "$cp_home/director/bin/$n" ]] && ok "copy install puts a real executable $n in the bin home" || bad "copy install puts a real executable $n in the bin home"
 done
 # draft-sweep (5yupe) is installed for the sweep to call; it needs no checkout beside it.
@@ -178,6 +178,17 @@ done < <(
       grep -qw -- "$n" "$skill" && echo "$n"
     done
   } | sort -u)
+
+# route-ledger (rlel4): installed, executable, called by the skill from the bin home, with its fallback in the checkout.
+[[ -x "$clean/director/bin/route-ledger" ]] && ok "install puts route-ledger in the bin home, executable" || bad "install puts route-ledger in the bin home, executable"
+grep -qF "$BINHOME/route-ledger" "$skill" && ok "skill calls route-ledger from the bin home" || bad "skill calls route-ledger from the bin home"
+[[ -x "$here/skills/director/scripts/route-ledger" ]] && ok "the fallback scripts/route-ledger exists in the checkout" || bad "the fallback scripts/route-ledger exists in the checkout"
+[[ -f "$cp_home/director/bin/route-ledger" && ! -L "$cp_home/director/bin/route-ledger" && -x "$cp_home/director/bin/route-ledger" ]] && ok "copy install puts a real executable route-ledger in the bin home" || bad "copy install puts a real executable route-ledger in the bin home"
+# schedule-ack (H-6): installed, executable, called by the skill from the bin home, with its fallback in the checkout.
+[[ -x "$clean/director/bin/schedule-ack" ]] && ok "install puts schedule-ack in the bin home, executable" || bad "install puts schedule-ack in the bin home, executable"
+grep -qF "$BINHOME/schedule-ack" "$skill" && ok "skill calls schedule-ack from the bin home" || bad "skill calls schedule-ack from the bin home"
+[[ -x "$here/skills/director/scripts/schedule-ack" ]] && ok "the fallback scripts/schedule-ack exists in the checkout" || bad "the fallback scripts/schedule-ack exists in the checkout"
+[[ -f "$cp_home/director/bin/schedule-ack" && ! -L "$cp_home/director/bin/schedule-ack" && -x "$cp_home/director/bin/schedule-ack" ]] && ok "copy install puts a real executable schedule-ack in the bin home" || bad "copy install puts a real executable schedule-ack in the bin home"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

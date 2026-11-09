@@ -62,6 +62,7 @@ case "$MARVEL_ROLE" in
   sideshow-builder)  WROLE=builder; SCOPE="sideshow and sideshow-packs";;
   infra-builder)     WROLE=builder; SCOPE="the infra checkout and its MCP, as named in the private seat file; production is read-only";;
   claude-reviewer)   WROLE=reviewer; SCOPE="";;
+  daily-sweep)       WROLE=worker; SCOPE="";;
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
 esac
 [[ -n "${CAST_SCOPE:-}" ]] && SCOPE="$CAST_SCOPE"
@@ -170,7 +171,7 @@ fi
 # role's environment tells the shim to cue and loads the director server as a
 # development channel. Only the value 1 does, as in the shim.
 # It was opt-in per seat by the operator's ruling of 2026-10-01. The operator's
-# ruling I-190 (2026-11-05) replaces that for supervisor casts: a supervisor
+# ruling of 2026-11-05 replaces that for supervisor casts: a supervisor
 # (GROLE=supervisor, so research-supervisors too) gets the cue when DIRECTOR_CUE
 # is unset and the launch is not headless. A SET value always wins, so
 # DIRECTOR_CUE=0, or a set-but-empty value, keeps it off for a seat that opts

@@ -97,7 +97,7 @@ PY
 }
 
 # Header (section 4 item 1).
-want="Now: 5 streams, 2 blocked on you, 1 unmoved past threshold | ledger 6m | page 0m"
+want="Now: 4 streams, 2 blocked on you, 1 unmoved past threshold | ledger 6m | page 0m"
 got="$(text_of ledger-header | tr '\n' ' ' | sed -E 's/ +/ /g; s/ $//')"
 [[ "$got" == "$want" ]] && ok "the header counts streams, blocked on you, unmoved, ledger and page age" || bad "the header counts streams, blocked on you, unmoved, ledger and page age" "$got"
 
@@ -132,7 +132,7 @@ m = re.search(r'id="ledger-table".*?</table>', t, re.S)
 print(",".join(re.findall(r'data-slug="([^"]+)"', m.group(0))) if m else "")
 PY
 )"
-[[ "$slugs" == "ak,bn,bo,b1,pk" ]] && ok "the ledger sorts by stage, parked last" || bad "the ledger sorts by stage, parked last" "$slugs"
+[[ "$slugs" == "ak,bn,bo,b1" ]] && ok "the ledger sorts by stage and leaves the parked row out" || bad "the ledger sorts by stage and leaves the parked row out" "$slugs"
 row() { python3 - "$root/page.html" "$1" <<'PY'
 import html, re, sys
 t = open(sys.argv[1], encoding="utf-8").read()
@@ -142,7 +142,14 @@ PY
 }
 grep -qF "unmoved 30h" <<<"$(row b1)" && ok "a building row unmoved 30h carries 'unmoved 30h' as text" || bad "a building row unmoved 30h carries 'unmoved 30h' as text" "$(row b1)"
 [[ -n "$(row bo)" ]] && ! grep -q "unmoved" <<<"$(row bo)" && ok "a designed row unmoved 20h is not flagged" || bad "a designed row unmoved 20h is not flagged" "$(row bo)"
-[[ -n "$(row pk)" ]] && ! grep -q "unmoved" <<<"$(row pk)" && ok "a parked row never flags" || bad "a parked row never flags" "$(row pk)"
+done_li="$(python3 - "$root/page.html" <<'PY'
+import html, re, sys
+t = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r'id="done-last-14".*?</ul>', t, re.S)
+print(html.unescape(re.sub(r"<[^>]+>", " ", m.group(0))) if m else "")
+PY
+)"
+[[ -z "$(row pk)" ]] && grep -q "pk" <<<"$done_li" && ! grep -q "unmoved" <<<"$done_li" && ok "a parked row is in Done, last 14 days, and never flags" || bad "a parked row is in Done, last 14 days, and never flags" "$done_li"
 
 # History (item 5): board.md below, collapsed.
 grep -qE '<details id="history"( [^>]*)?>' "$root/page.html" && ! grep -qE '<details id="history"[^>]* open' "$root/page.html" \

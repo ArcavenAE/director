@@ -488,7 +488,7 @@ for v in 0 true yes; do
   fi
 done
 
-# --- I-190: the cue is the default for supervisor casts (operator ruling 2026-11-05)
+# --- the cue is the default for supervisor casts (operator ruling 2026-11-05)
 # It replaces the 2026-10-01 opt-in for supervisors only. A set DIRECTOR_CUE
 # always wins, director casts are not included, and a headless launch (-p or
 # --print) cannot use a channel, so it gets none.
@@ -532,7 +532,7 @@ if cast builder; then
     && ok "builder, cue unset: still no channel flag" \
     || bad "builder, cue unset: still no channel flag"
 else
-  bad "builder cast, cue unset (I-190)" "$(cat "$root/out/stderr")"
+  bad "builder cast, cue unset, supervisor default" "$(cat "$root/out/stderr")"
 fi
 if cast director; then
   no_cue_flag \
@@ -709,6 +709,26 @@ for role in builder director; do
     bad "$role cast with levers" "$(cat "$root/out/stderr")"
   fi
 done
+
+# --- daily-sweep: a manifest role that is the worker role ------------
+# Without a row it falls through to WROLE=$MARVEL_ROLE, there is no
+# role named daily-sweep, and slice.sh exits 1 with "no role daily-sweep". The
+# real slice.sh refuses an unknown role; the stub here echoes the role it was
+# handed, so the case checks which role id reached it. It carries no scope, and
+# as a worker it holds no global address.
+if cast daily-sweep "${GLOBAL_ON[@]}"; then
+  grep -q "stub slice for worker" "$root/out/claude.args" \
+    && ok "daily-sweep: slices the worker role" \
+    || bad "daily-sweep: slices the worker role" "$(grep -o 'stub slice for [^ ]*' "$root/out/claude.args" | head -1)"
+  grep -q "recorded by the supervisor" "$root/out/claude.args" \
+    && bad "daily-sweep: carries a cast scope it should not" \
+    || ok "daily-sweep: no cast scope"
+  has_env DIRECTOR_GLOBAL_ROLE claude.env \
+    && bad "daily-sweep: leaked a global role" \
+    || ok "daily-sweep: the global levers are cleared like any worker"
+else
+  bad "daily-sweep cast" "$(cat "$root/out/stderr")"
+fi
 
 # --- the seat reaches slice.sh, so the spawn line leads with it (ruling 44) ---
 if cast builder; then
