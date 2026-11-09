@@ -61,6 +61,8 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 					"refs":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "pointers: bd:, finding:, file:, url:, pr:"},
 					"in_reply_to":  str("optional message_id being answered"),
 					"reply_by":     str("optional RFC3339 deadline"),
+					"ask":          str("optional: the intake id (I-<n>) of the operator ask this send answers. When the send is accepted, the shim writes the relay-log entry for it (ask, recipient, text, message id). An id that is not in asks.jsonl refuses the send. One recipient only; not for broadcast addresses."),
+					"kind":         str("optional, with ask: relay, ruling, build, research or question. Defaults to relay when ask is set."),
 					"workspace":    str("optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known cold mailbox (no live presence) verbatim. Ignored for a global:// address, whose subject carries no workspace."),
 				},
 				"required": []string{"to", "performative", "text"},
@@ -219,6 +221,8 @@ type sendArgs struct {
 	InReplyTo    string `json:"in_reply_to"`
 	ReplyBy      string `json:"reply_by"`
 	Workspace    string `json:"workspace"`
+	Ask          string `json:"ask"`
+	Kind         string `json:"kind"`
 	Refs         []string
 	// FailFast is the presence watch's extra argument (presencewatch_shim.go).
 	// toolSend reads it from the raw arguments; it is declared here only so the
@@ -227,7 +231,7 @@ type sendArgs struct {
 }
 
 // sendArgNames are the send_message arguments, in the order the schema lists them.
-const sendArgNames = "to, performative, text, refs, in_reply_to, reply_by, workspace, fail_fast"
+const sendArgNames = "to, performative, text, refs, in_reply_to, reply_by, workspace, ask, kind, fail_fast"
 
 // sendArgsError names an unknown argument. A misspelled one used to be dropped
 // silently, so the caller read "content.data is empty for type text" and went
@@ -275,6 +279,9 @@ func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, err
 		// as built (LR-6).
 		return e, "", atStage("validate", err)
 	}
+	if err := checkSendAsk(a.Ask, a.Kind, a.To); err != nil {
+		return e, "", atStage("validate", err)
+	}
 	return e, a.Workspace, nil
 }
 
@@ -307,10 +314,14 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if opts.FailFast {
 		ctx = context.WithValue(ctx, holdFailFastKey{}, true)
 	}
+	ask, kind := sendRelayFields(raw)
+	if ask != "" {
+		ctx = context.WithValue(ctx, holdRelayKey{}, relayFields{ask, kind})
+	}
 	res, err := bus.publish(ctx, e, wsHint)
 	var held *heldErr
 	if errors.As(err, &held) {
-		return map[string]any{
+		out := map[string]any{
 			"status":     "held, not delivered",
 			"message_id": e.MessageID,
 			"hold_id":    held.rec.ID,
@@ -318,7 +329,11 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 			"reason":     held.rec.Reason,
 			"sell_by":    held.rec.SellBy.Format(time.RFC3339),
 			"note":       "the presence watch is holding this send: it is not delivered. It goes out when the recipient returns and its presence row is beating, within its sell-by, and is proposed for your review after that. cancel_held withdraws it; fail_fast refuses instead",
-		}, nil
+		}
+		if ask != "" {
+			out["relay_entry"] = "pending: written when the send is released; a cancelled hold writes none"
+		}
+		return out, nil
 	}
 	if err != nil {
 		return nil, bus.refuseEnvelope(ctx, e, "publish", err)
@@ -335,6 +350,15 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if res.Stream != "" {
 		out["stream"] = res.Stream
 		out["sequence"] = res.Sequence
+	}
+	if ask != "" {
+		// The send has left. A relay-log that cannot write is a warning on the accepted
+		// result, never a failed send: refusing now would invite a duplicate.
+		if entry, err := writeRelayEntry(ctx, ask, kind, e.Recipient.Address, e.Content.Data, e.MessageID); err != nil {
+			out["warning"] = "accepted, but no relay-log entry was written: " + err.Error()
+		} else {
+			out["relay_entry"] = entry
+		}
 	}
 	return out, nil
 }

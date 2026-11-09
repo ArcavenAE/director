@@ -84,7 +84,7 @@ func TestSendArgsRefuseUnknownArgumentListsValidNames(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown argument alongside valid ones was accepted")
 	}
-	want := `send_message: unknown argument "priority" (valid: to, performative, text, refs, in_reply_to, reply_by, workspace, fail_fast)`
+	want := `send_message: unknown argument "priority" (valid: to, performative, text, refs, in_reply_to, reply_by, workspace, ask, kind, fail_fast)`
 	if err.Error() != want {
 		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
