@@ -136,7 +136,10 @@ const localConsumerInactive = 8 * 24 * time.Hour
 // preflight() so both reach the broker the same way with the same credential.
 //
 //	DIRECTOR_NATS_CREDS  path to a .creds file (NKey/JWT), wins when set
-//	DIRECTOR_NATS_USER   user name, with DIRECTOR_NATS_PASS, when no creds file
+//	DIRECTOR_NATS_USER   user name, with DIRECTOR_NATS_PASS_FILE or DIRECTOR_NATS_PASS, when no creds file
+//
+// DIRECTOR_NATS_PASS_FILE names a 0600 file with the password, re-read on every
+// connect and reconnect, and wins over DIRECTOR_NATS_PASS (natspass.go).
 //
 // director#4 (R-77): the broker's authorization block binds a credential to
 // the subjects it may use, so a process holding the ops credential cannot act
@@ -158,10 +161,12 @@ func dialRing(url string, self Sender, ring *violationRing) (*nats.Conn, jetstre
 	if ring != nil {
 		opts = append(opts, nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) { ring.note(err) }))
 	}
-	if creds := os.Getenv("DIRECTOR_NATS_CREDS"); creds != "" {
-		opts = append(opts, nats.UserCredentials(creds))
-	} else if user := os.Getenv("DIRECTOR_NATS_USER"); user != "" {
-		opts = append(opts, nats.UserInfo(user, os.Getenv("DIRECTOR_NATS_PASS")))
+	auth, err := natsAuthOption()
+	if err != nil {
+		return nil, nil, err
+	}
+	if auth != nil {
+		opts = append(opts, auth)
 	}
 	nc, err := nats.Connect(url, opts...)
 	if err != nil {
