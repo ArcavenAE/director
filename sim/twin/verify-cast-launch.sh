@@ -384,13 +384,13 @@ fi
 
 # --- scoped-builder: the builder role, scope only from CAST_SCOPE ---------------
 # A manifest role with no row falls through to WROLE=$MARVEL_ROLE, and there is
-# no wardrobe role named scoped-builder. The row maps it to builder with an empty
+# no role named scoped-builder. The row maps it to builder with an empty
 # default scope, so the scope comes only from CAST_SCOPE and no scope text is
 # published in this public file.
 if cast scoped-builder CAST_SCOPE="SCOPED-SCOPE-MARK only"; then
   grep -q "stub slice for builder" "$root/out/claude.args" \
-    && ok "scoped-builder: slices the wardrobe builder role" \
-    || bad "scoped-builder: slices the wardrobe builder role" "$(cat "$root/out/claude.args")"
+    && ok "scoped-builder: slices the builder role" \
+    || bad "scoped-builder: slices the builder role" "$(cat "$root/out/claude.args")"
   grep -q "recorded by the supervisor: SCOPED-SCOPE-MARK only." "$root/out/claude.args" \
     && ok "scoped-builder: the scope comes from CAST_SCOPE" \
     || bad "scoped-builder: the scope comes from CAST_SCOPE" "$(cat "$root/out/claude.args")"
