@@ -67,6 +67,12 @@ case "$MARVEL_ROLE" in
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
 esac
 [[ -n "${CAST_SCOPE:-}" ]] && SCOPE="$CAST_SCOPE"
+# scoped-builder carries no scope text of its own, so it needs CAST_SCOPE; a
+# cast without one would be an unscoped builder, which is refused.
+if [[ "$MARVEL_ROLE" == scoped-builder && -z "$SCOPE" ]]; then
+  echo "cast-launch: role scoped-builder needs CAST_SCOPE (its scope comes only from the private seat file); set CAST_SCOPE and cast again" >&2
+  exit 1
+fi
 # Identities that compose with a role (sole_fit at proposal): director and envoy.
 case "$WROLE" in
   director) IDENTITY=assistive-agent;;

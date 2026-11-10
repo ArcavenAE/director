@@ -398,14 +398,21 @@ else
   bad "scoped-builder cast with CAST_SCOPE" "$(cat "$root/out/stderr")"
 fi
 if cast scoped-builder; then
-  grep -q "stub slice for builder" "$root/out/claude.args" \
-    && ok "scoped-builder: with CAST_SCOPE unset it still slices the builder role" \
-    || bad "scoped-builder: with CAST_SCOPE unset it still slices the builder role" "$(cat "$root/out/claude.args")"
-  grep -q "recorded by the supervisor" "$root/out/claude.args" \
-    && bad "scoped-builder: with CAST_SCOPE unset no scope line is cast" \
-    || ok "scoped-builder: with CAST_SCOPE unset no scope line is cast"
+  bad "scoped-builder: a cast with CAST_SCOPE unset was allowed" "$(cat "$root/out/claude.args")"
 else
-  bad "scoped-builder cast without CAST_SCOPE" "$(cat "$root/out/stderr")"
+  grep -q "CAST_SCOPE" "$root/out/stderr" \
+    && ok "scoped-builder: with CAST_SCOPE unset the cast is refused, naming CAST_SCOPE" \
+    || bad "scoped-builder: the refusal does not name CAST_SCOPE" "$(cat "$root/out/stderr")"
+  [[ ! -e "$root/out/claude.args" ]] \
+    && ok "scoped-builder: the refused cast never launched claude" \
+    || bad "scoped-builder: the refused cast launched claude"
+fi
+if cast scoped-builder CAST_SCOPE=""; then
+  bad "scoped-builder: an empty CAST_SCOPE was allowed"
+else
+  grep -q "CAST_SCOPE" "$root/out/stderr" \
+    && ok "scoped-builder: an empty CAST_SCOPE is refused like an unset one" \
+    || bad "scoped-builder: the empty-scope refusal does not name CAST_SCOPE" "$(cat "$root/out/stderr")"
 fi
 
 # --- C-5: the channel cue is opt-in per seat (sim/design/channel-cue.md) -------
