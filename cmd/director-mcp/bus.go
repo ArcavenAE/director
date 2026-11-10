@@ -323,7 +323,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	}
 	b.consumer = cons
 	b.local = localState{cfg: baseCfg, acked: floor, checked: time.Now()}
-	b.noteResumed("local", floor, cons, localWhy)
+	b.noteResumed("local", floor, cons, localWhy, floorSource{})
 	return b, nil
 }
 
@@ -339,12 +339,12 @@ func (b *Bus) selfSubjects() []string {
 
 // noteResumed records where a new durable started and how much was waiting,
 // for the next wait_for_message result.
-func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer, why string) {
+func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer, why string, from floorSource) {
 	var waiting uint64
 	if info := cons.CachedInfo(); info != nil {
 		waiting = info.NumPending
 	}
-	msg := resumeNote(tier, floor, waiting, why)
+	msg := resumeNote(tier, floor, waiting, why, from)
 	b.resumedMu.Lock()
 	b.resumed = append(b.resumed, msg)
 	b.resumedMu.Unlock()
@@ -352,10 +352,18 @@ func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer, wh
 
 // resumeNote is the start note for one tier: where its new durable began and
 // what waits. why, when set, is the reason the seat's earlier position could
-// not be read.
-func resumeNote(tier string, floor, waiting uint64, why string) string {
+// not be read. from, when set, names where the floor came from, so a successor
+// can tell mail its predecessor left unacked from its own.
+func resumeNote(tier string, floor, waiting uint64, why string, from floorSource) string {
 	if floor > 0 {
-		return fmt.Sprintf("%s inbox resumed after stream sequence %d, the seat's last ack, so mail already read is not replayed; %d message(s) waiting", tier, floor, waiting)
+		who := "the seat's last ack"
+		switch {
+		case from.pred != "":
+			who = "the last ack of its predecessor " + from.pred
+		case from.own:
+			who = "the last ack of this seat's own earlier durable"
+		}
+		return fmt.Sprintf("%s inbox resumed after stream sequence %d, %s, so mail already read is not replayed; %d message(s) waiting", tier, floor, who, waiting)
 	}
 	if why != "" {
 		return fmt.Sprintf("%s inbox could not read the seat's earlier position (%s), so it reads everything the stream still holds, a replay and never a loss; %d message(s) waiting", tier, why, waiting)
@@ -1380,7 +1388,7 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 			}}
 	}
 	b.global = g
-	b.noteResumed("global", g.resumedFrom, g.cons(), g.floorWhy)
+	b.noteResumed("global", g.resumedFrom, g.cons(), g.floorWhy, g.floorFrom)
 	return g, nil
 }
 
