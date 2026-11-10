@@ -79,8 +79,11 @@ fi
 export DIRECTOR_TEAM DIRECTOR_WORKSPACE
 
 # Bus auth: only fall back to the seat when the session brought no credentials
-# of its own. A marvel-managed session always does.
-if [ -z "${DIRECTOR_NATS_USER:-}" ] || [ -z "${DIRECTOR_NATS_PASS:-}" ]; then
+# of its own. A marvel-managed session always does: the user with either the
+# password (DIRECTOR_NATS_PASS) or a path to a file that holds it
+# (DIRECTOR_NATS_PASS_FILE, which director-mcp reads itself). The file is passed
+# through and never read here.
+if [ -z "${DIRECTOR_NATS_USER:-}" ] || { [ -z "${DIRECTOR_NATS_PASS:-}" ] && [ -z "${DIRECTOR_NATS_PASS_FILE:-}" ]; }; then
   if [ ! -r "$SEAT_PASS_FILE" ]; then
     echo "director-mcp-seat: no bus credentials in the environment, and no seat" >&2
     echo "  password at $SEAT_PASS_FILE." >&2
