@@ -28,7 +28,8 @@ import (
 const forRowFresh = presenceTTL
 
 var (
-	forLine   = regexp.MustCompile(`^FOR[ \t]+(.+)$`)
+	forLine   = regexp.MustCompile(`(?i)^FOR[ \t]+(.+)$`)
+	forEnd    = regexp.MustCompile(`[.;:](\s|$)`)
 	forSeat   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(@[a-z0-9-]+)?$`)
 	forRole   = regexp.MustCompile(`^role://[a-z0-9-]+/[a-z0-9-]+$`)
 	forGenSfx = regexp.MustCompile(`-g[0-9]+-[0-9]+$`)
@@ -47,7 +48,10 @@ type forFilter struct {
 }
 
 // forText returns the text after FOR on the first non-blank line of data, and
-// whether that line is a FOR line. The match is anchored and case-sensitive.
+// whether that line is a FOR line. The match is anchored and ignores case. The
+// text ends at the first ".", ";" or ":" that is followed by whitespace or the
+// end of the line, so prose after the names is not read as names, while a
+// role:// name and a dotted seat name stay whole.
 func forText(data string) (string, bool) {
 	for _, line := range strings.Split(data, "\n") {
 		line = strings.TrimRight(line, "\r")
@@ -58,19 +62,23 @@ func forText(data string) (string, bool) {
 		if m == nil {
 			return "", false
 		}
-		return m[1], true
+		text := m[1]
+		if loc := forEnd.FindStringIndex(text); loc != nil {
+			text = text[:loc[0]]
+		}
+		return text, true
 	}
 	return "", false
 }
 
 // forTokens splits the FOR text on commas and whitespace, drops the words
-// "and" and "or", and trims trailing . ; : from each token. Seat names hold no
+// "and", "or" and "only", and trims trailing . ; : from each token. Seat names hold no
 // spaces, so splitting on whitespace never cuts a name.
 func forTokens(text string) []string {
 	var out []string
 	for _, f := range strings.Fields(strings.ReplaceAll(text, ",", " ")) {
 		f = strings.TrimRight(f, ".;:")
-		if f == "" || f == "and" || f == "or" {
+		if f == "" || f == "and" || f == "or" || f == "only" {
 			continue
 		}
 		out = append(out, f)
