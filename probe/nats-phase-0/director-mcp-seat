@@ -43,7 +43,7 @@
 #
 #     -c 'mcp_servers.director.env_vars=["MARVEL_SESSION","MARVEL_TEAM",
 #          "MARVEL_WORKSPACE","DIRECTOR_NATS_USER","DIRECTOR_NATS_PASS",
-#          "NATS_URL"]'
+#          "DIRECTOR_NATS_PASS_FILE","NATS_URL"]'
 #
 # Diagnostic: if a marvel-managed agent shows up on the roster as the seat id
 # rather than its session name, that env_vars line is missing from its role.
