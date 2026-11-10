@@ -13,7 +13,7 @@
 // they come from MARVEL_SESSION, MARVEL_TEAM and MARVEL_WORKSPACE when the
 // DIRECTOR_* values are unset, and with neither the shim refuses (seatenv.go).
 // Optional broker credentials: DIRECTOR_NATS_CREDS (a .creds file) or
-// DIRECTOR_NATS_USER with DIRECTOR_NATS_PASS, else user director with the
+// DIRECTOR_NATS_USER with DIRECTOR_NATS_PASS_FILE or DIRECTOR_NATS_PASS, else user director with the
 // cluster's seat password; with none of them the connection is anonymous, as
 // before, with a note on stderr.
 //

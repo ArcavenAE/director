@@ -17,8 +17,9 @@ import (
 //	id:         DIRECTOR_AGENT_ID, else MARVEL_SESSION, else refuse
 //	team:       DIRECTOR_TEAM, else MARVEL_TEAM, else refuse
 //	workspace:  DIRECTOR_WORKSPACE, else MARVEL_WORKSPACE, else refuse
-//	credential: DIRECTOR_NATS_CREDS, else DIRECTOR_NATS_USER with _PASS (both
-//	            set), else user director with the cluster's seat password at
+//	credential: DIRECTOR_NATS_CREDS, else DIRECTOR_NATS_USER with
+//	            DIRECTOR_NATS_PASS_FILE (a refusal if the file is bad), else
+//	            DIRECTOR_NATS_USER with _PASS (both set), else user director with the cluster's seat password at
 //	            ${MARVEL_BUS_STATE:-~/.marvel/state/nats}/director.pass, else
 //	            the no-credential step below
 //
@@ -68,6 +69,15 @@ func resolveSeatEnv() (seatEnv, error) {
 		return se, errors.New(seatTeamRefusal)
 	}
 	if os.Getenv("DIRECTOR_NATS_CREDS") != "" {
+		return se, nil
+	}
+	if os.Getenv("DIRECTOR_NATS_PASS_FILE") != "" {
+		// A named password file is the credential or a refusal; it never falls
+		// through to the seat password. natsAuthOption checks the file and the
+		// user name.
+		if _, err := natsAuthOption(); err != nil {
+			return se, err
+		}
 		return se, nil
 	}
 	if os.Getenv("DIRECTOR_NATS_USER") != "" && os.Getenv("DIRECTOR_NATS_PASS") != "" {
