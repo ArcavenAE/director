@@ -465,6 +465,9 @@ type globalTier struct {
 	// handled is the bus's handled-mode state, nil when the mode is off.
 	handled *handledState
 
+	// expiry holds the once-per-gap state of expiredUnread (expiry.go).
+	expiry expiryWatch
+
 	// forFilter drops mail whose FOR line names another team's seat; nil when
 	// DIRECTOR_FOR_FILTER is not 1 (forfilter.go).
 	forFilter *forFilter
