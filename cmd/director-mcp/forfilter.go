@@ -17,6 +17,7 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -45,6 +46,15 @@ type forFilter struct {
 	roster  func(ctx context.Context) ([]map[string]any, error)
 	now     func() time.Time
 	logf    func(format string, args ...any)
+	first   sync.Once
+}
+
+// forFilterStatus is the one line printed when the global tier attaches, so a
+// seat whose filter is on but drops nothing can be told from one where it is
+// off. It carries the team the filter compares against and never the value of
+// DIRECTOR_FOR_FILTER.
+func forFilterStatus(env, team, cluster, role string) string {
+	return ""
 }
 
 // forText returns the text after FOR on the first non-blank line of data, and
