@@ -108,7 +108,7 @@ func TestForFilterStatusLine(t *testing.T) {
 func TestForFilterFirstDecisionLogsRosterRows(t *testing.T) {
 	f := shapeFilter()
 	var lines []string
-	f.logf = func(format string, args ...any) { lines = append(lines, format) }
+	f.note = func(format string, args ...any) { lines = append(lines, format) }
 	e := &Envelope{}
 	e.Content.Data = "FOR beta-supervisor. From alpha-supervisor"
 	f.drops(context.Background(), e)
