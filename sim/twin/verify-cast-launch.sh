@@ -382,6 +382,32 @@ else
   bad "builder cast with CAST_SCOPE" "$(cat "$root/out/stderr")"
 fi
 
+# --- scoped-builder: the builder role, scope only from CAST_SCOPE ---------------
+# A manifest role with no row falls through to WROLE=$MARVEL_ROLE, and there is
+# no wardrobe role named scoped-builder. The row maps it to builder with an empty
+# default scope, so the scope comes only from CAST_SCOPE and no scope text is
+# published in this public file.
+if cast scoped-builder CAST_SCOPE="SCOPED-SCOPE-MARK only"; then
+  grep -q "stub slice for builder" "$root/out/claude.args" \
+    && ok "scoped-builder: slices the wardrobe builder role" \
+    || bad "scoped-builder: slices the wardrobe builder role" "$(cat "$root/out/claude.args")"
+  grep -q "recorded by the supervisor: SCOPED-SCOPE-MARK only." "$root/out/claude.args" \
+    && ok "scoped-builder: the scope comes from CAST_SCOPE" \
+    || bad "scoped-builder: the scope comes from CAST_SCOPE" "$(cat "$root/out/claude.args")"
+else
+  bad "scoped-builder cast with CAST_SCOPE" "$(cat "$root/out/stderr")"
+fi
+if cast scoped-builder; then
+  grep -q "stub slice for builder" "$root/out/claude.args" \
+    && ok "scoped-builder: with CAST_SCOPE unset it still slices the builder role" \
+    || bad "scoped-builder: with CAST_SCOPE unset it still slices the builder role" "$(cat "$root/out/claude.args")"
+  grep -q "recorded by the supervisor" "$root/out/claude.args" \
+    && bad "scoped-builder: with CAST_SCOPE unset no scope line is cast" \
+    || ok "scoped-builder: with CAST_SCOPE unset no scope line is cast"
+else
+  bad "scoped-builder cast without CAST_SCOPE" "$(cat "$root/out/stderr")"
+fi
+
 # --- C-5: the channel cue is opt-in per seat (sim/design/channel-cue.md) -------
 # Operator rulings 2026-10-01: the development-channels flag is adopted per
 # seat. Only DIRECTOR_CUE=1, the value the shim itself honors, turns it on.

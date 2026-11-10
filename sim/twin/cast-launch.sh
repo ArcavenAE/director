@@ -61,6 +61,7 @@ case "$MARVEL_ROLE" in
   marvel-builder)    WROLE=builder; SCOPE="marvel";;
   sideshow-builder)  WROLE=builder; SCOPE="sideshow and sideshow-packs";;
   infra-builder)     WROLE=builder; SCOPE="the infra checkout and its MCP, as named in the private seat file; production is read-only";;
+  scoped-builder)    WROLE=builder; SCOPE="";;
   claude-reviewer)   WROLE=reviewer; SCOPE="";;
   daily-sweep)       WROLE=worker; SCOPE="";;
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
