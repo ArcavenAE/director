@@ -233,15 +233,15 @@ func TestBrokerGlobalJoiningALiveSeatWithoutListingGetsItsOwnCopy(t *testing.T) 
 // When the seat's earlier position cannot be read at all, the note says so
 // and why; it does not claim there was no earlier durable.
 func TestAnUnreadableFloorIsNamedNotDenied(t *testing.T) {
-	got := resumeNote("global", 0, 212, "the hub refused the listing; no departed instance was found by name")
+	got := resumeNote("global", 0, 212, "the hub refused the listing; no departed instance was found by name", floorSource{})
 	if strings.Contains(got, "no earlier durable") || !strings.Contains(got, "global inbox could not read the seat's earlier position") ||
 		!strings.Contains(got, "the hub refused the listing") || !strings.Contains(got, "212 message(s) waiting") {
 		t.Errorf("note: %q", got)
 	}
-	if got := resumeNote("global", 0, 2, ""); !strings.Contains(got, "no earlier durable") {
+	if got := resumeNote("global", 0, 2, "", floorSource{}); !strings.Contains(got, "no earlier durable") {
 		t.Errorf("with no reason, the note is unchanged: %q", got)
 	}
-	if got := resumeNote("global", 219, 0, "ignored"); !strings.Contains(got, "resumed after stream sequence 219") {
+	if got := resumeNote("global", 219, 0, "ignored", floorSource{}); !strings.Contains(got, "resumed after stream sequence 219") {
 		t.Errorf("a found floor wins: %q", got)
 	}
 }

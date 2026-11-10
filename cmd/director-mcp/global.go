@@ -486,6 +486,10 @@ type globalTier struct {
 	// the bus.
 	resumedFrom uint64
 
+	// floorFrom says whose ack floor resumedFrom is: this seat's own earlier
+	// durable, or its predecessor's. Zero when there was no floor.
+	floorFrom floorSource
+
 	// mu guards consumer (read it through cons) and the fields below. acked is the highest hub stream sequence
 	// this session has acked on its durable, or the seat floor it resumed
 	// after; a recreated durable resumes after it, so a loss does not replay
@@ -552,9 +556,15 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 		return nil
 	}
 	floor, why := g.seatFloor(ctx, agentID, instance)
+	var from floorSource
+	if floor > 0 {
+		from.own = true
+	}
 	if pf := g.predecessorFloor(ctx, agentID, instance); pf > floor {
 		floor = pf
+		from = floorSource{pred: predecessorID(agentID)}
 	}
+	g.floorFrom = from
 	g.floorWhy = why
 	start := uint64(0)
 	if floor > 0 {
@@ -574,6 +584,13 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 	g.checked = time.Now()
 	g.mu.Unlock()
 	return nil
+}
+
+// floorSource says where a resumed position came from, for the start note.
+// The zero value is no recorded source.
+type floorSource struct {
+	own  bool   // the seat's own earlier durable
+	pred string // the predecessor's agent id, when its floor was the higher
 }
 
 // floorListTimeout bounds each lookup seatFloor makes, so a request that gets
