@@ -47,7 +47,7 @@ when the notes have accumulated. Say which mode you are in, once, at the start.
 
 ## Mode: sweep
 
-The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `freebusy`, `idle-shadow`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
+The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `freebusy`, `idle-shadow`, `sweep-firings`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
 
 1. Run `${DIRECTOR_HOME:-$HOME/.director}/bin/dsi`. It writes `$DIRECTOR_STATE/sessions.json` (props) and
    `roster.md` (scenery). Defaults to `~/.director/state`, 4-day window.
@@ -92,6 +92,12 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    (a director-mcp without the subcommand, an unread input, a failed call), and `- GAP seat-eligibility` says the optional seat classes, scopes and duty
    cells file is absent or malformed, which is the expected reading until the register scope cell ships; show both. A `- would-pair ...`
    line is a shadow row: nothing was sent. It exits 0 whether it finds nothing or a lot, so read its lines, never its exit code.
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/sweep-firings` (read only: it sends, injects and writes nothing; it needs
+   `SWEEP_FIRINGS_TEAM` and `SWEEP_FIRINGS_LEDGER`, or a describe file in `SWEEP_FIRINGS_DESCRIBE`). It prints a line for each scheduled
+   firing that is two hours past due with no succeeded run, no results file or no route-ledger row for its sha256. Show its lines, its
+   `- GAP` lines and its count line in the sweep reply under `Waiting on you:`, outside the fence above: they are not appended to
+   `board.md`. A GAP line means it could not read an input; show it, never skip the step silently. It exits 0 whether it finds
+   nothing or a lot, so read its lines, never its exit code.
    Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/introspect --since today`. It is a script, not a seat: it reads the
    runtime's own record (classifier denials, bus errors, components merged but not installed, disk, the stalled-streams
    page, undrained asks) and prints a header and at most 7 lines, each a fact with one id and the owner of the fix
@@ -114,6 +120,7 @@ Stalled ideas (N)  [research or design, no live forward pointer, quiet <threshol
 10. <repo>/<path> - <title>  (quiet 16d; no pointer; as of 2026-09-21, remote unreachable)
 Stalled ideas: none  [a scan that ran and found no rows, in place of the block above]
 Unverified ideas: K  [bd: 4; remote unreachable: 2]
+Waiting on you: <sweep-firings lines, GAP lines included, or "none">
 Drafts: <draft-sweep lines, GAP lines included, or "none">
 Introspect: <introspect's header and its lines as printed, GAP lines included>
 Uncaptured: <one line each, or "none">
