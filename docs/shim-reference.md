@@ -471,6 +471,7 @@ The field never carries the variable's value.
   },
   "waiting": { "local": 30, "global": 1 },
   "read": { "local": 30, "global": 1 },
+  "for_filter": { "state": "on", "dropped": 0 },
   "note": "nothing was acked; drain in order with wait_for_message max=N"
 }
 ```
