@@ -31,6 +31,9 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 	sendDesc := "Send a director envelope to another session or role. Returns accepted-for-delivery with a message_id; this is a send acknowledgement, not a delivery or read receipt."
 	waitDesc := "Block up to timeout_seconds for the next message addressed to this session, then return it. This is a poll: the model must call it. The server cannot push a message into context on its own. One wait at a time per session: a second open wait is refused and reads nothing. With max greater than 1 it returns every waiting message up to max in one call, oldest first, and consumes them as the single form does; run inbox_summary first to see what is waiting without consuming it."
 	summaryDesc := "Summarize the messages waiting for this session without consuming any: counts by sender and by performative, the REQUEST, FAILURE and QUERY messages and any that set reply_by, say they hold custody, or await a reply, and the waiting sequence numbers oldest first. Acks nothing; drain in order afterwards with wait_for_message max=N."
+	if cueOn {
+		waitDesc = strings.Replace(waitDesc, "This is a poll: the model must call it. The server cannot push a message into context on its own.", "This server pushes: once the cue is live, a director cue notice wakes this session when mail arrives, and a wait returns at once with what is waiting instead of blocking. Call it after a cue notice, and otherwise end the turn idle. Until the cue is live it blocks as a poll.", 1)
+	}
 	rosterDesc := "List the sessions currently present, from the presence store. Absence means silence, not a negative report."
 	if gcfg != nil {
 		toDesc += ", or across hosts global://director (also written role://director) and global://{cluster}/supervisor. A global send is refused before publish when nobody is live at that address."

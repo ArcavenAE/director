@@ -246,7 +246,7 @@ func main() {
 		bus.attachCue(c)
 		bus.nc.SetReconnectHandler(func(*nats.Conn) { c.reconnected() })
 		go c.run(ctx)
-		logf("channel cue on (DIRECTOR_CUE=1): measured versions %v, poll %s, floor %s, window %s", cueCfg.Versions, cueCfg.Poll, cueCfg.Floor, cueCfg.Window)
+		logf("channel cue on (default; DIRECTOR_CUE=0 turns it off), push-only waits once live: measured versions %v, poll %s, floor %s, window %s", cueCfg.Versions, cueCfg.Poll, cueCfg.Floor, cueCfg.Window)
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.serve(ctx, os.Stdin) }()

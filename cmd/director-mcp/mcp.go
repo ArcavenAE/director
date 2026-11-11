@@ -267,6 +267,27 @@ func (s *Server) dispatch(ctx context.Context, req *rpcRequest) {
 	}
 }
 
+// pushOnlyNote is what a push-only wait adds to its result.
+const pushOnlyNote = "live: this wait did not block. End your turn now; a director cue notice wakes you when mail arrives."
+
+// pushOnlyWaitArgs rewrites a wait's timeout to the shortest the tool takes,
+// keeping max, so a seat whose cue is live drains what is waiting and returns
+// at once instead of polling. Unparseable arguments are left for toolWait.
+func pushOnlyWaitArgs(raw json.RawMessage) json.RawMessage {
+	m := map[string]any{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return raw
+		}
+	}
+	m["timeout_seconds"] = 1
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
 // callTool routes a tools/call to the bus and returns an MCP tool result. The
 // result content is text (a JSON string), which is what the model reads back.
 func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
@@ -278,6 +299,11 @@ func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
 		s.replyErr(req.ID, -32602, "bad params: "+err.Error())
 		return
 	}
+	pushOnly := p.Name == "wait_for_message" && s.cue != nil && s.cue.pushes()
+	if pushOnly {
+		p.Args = pushOnlyWaitArgs(p.Args)
+		s.cue.notePushOnly()
+	}
 	done := s.cueBefore(p.Name, p.Args)
 	// A wait holds what it fetches and acks only after its reply is written
 	// (ackafter.go); the other tools ack nothing.
@@ -286,6 +312,9 @@ func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
 		dctx, al = withAckLater(ctx)
 	}
 	res, err := dispatchTool(dctx, s.bus, p.Name, p.Args)
+	if m, ok := res.(map[string]any); ok && pushOnly {
+		m["push"] = pushOnlyNote
+	}
 	done(res)
 	if s.testBeforeReply != nil {
 		s.testBeforeReply(ctx)
