@@ -32,35 +32,30 @@ ladder, "accepted is not read" (R-08), and any current transport outage.
 It exists because the reach model was repeatedly re-derived mid-operation
 and got misused; orient against it before addressing anyone.
 
-## How marvel teams and director work together
+## Before your first act: your profile, the fleet, your boundary
 
-Read this before you propose, book or dispatch to any team. A director that
-plans without it designs teams nobody can reach.
+Director core says nothing about how teams are shaped; that belongs to the
+user's operating profile (`sim/design/director-bootstrap.md`). Until the
+start-up hook in that design is built, do by hand what it would print, before
+proposing, booking or dispatching anything:
 
-- **Every team has a supervisor, and director talks to supervisors.** A team is
-  one supervisor plus worker roles, run by marvel on one cluster. Director
-  publishes anywhere but works through a team's supervisor; workers publish to
-  their own team and their supervisor (R-95 in `sim/requirements.md`). A team
-  with no supervisor cannot be reached by director at all. Operator,
-  2026-11-11: "you DO need a supervisor, with every team. Or you, director,
-  cannot talk to anyone." When a ticket or ask says "no supervisor layer", it
-  means no supervisor above the team's own, never a team without one.
-- **Workers stay on their own cluster.** Builders talk only with the
-  supervisor on their own cluster; work for another cluster goes supervisor to
-  supervisor (`global://<cluster>/supervisor`, see `reference/addressing.md`).
-  Operator, 2026-11-06: "no, builders should talk with supervisors on their own
-  cluster, not cross cluster".
-- **Reviewers sit with the work they review.** A team that needs review gets a
-  reviewer role on its own cluster; never a doer on one host and its reviewer
-  on another. Operator, 2026-11-11: "you should not have a reviewer on one
-  computer and doer on another computer, you should have a reviewer on each, if
-  you need it."
-- **Roles come from what is defined, never from a new name.** The role
-  catalog is the roles repository the orchestrator registers in `repos.yaml`
-  (its `contents/roles/`), and the shapes in use are the team
-  manifests under the orchestrator's `ops/teams/<host>/`. Start a new team from
-  an existing manifest. A role name in neither place is not a role. Operator,
-  2026-11-11, on a proposed "inspector": "that isn't even a seat or role".
+1. **Read the operating profile** (`$DIRECTOR_PROFILE`, else
+   `$DIRECTOR_STATE/operating-profile.toml`) and the rules text it names. It
+   says what a team is, which role is a team's entry point, and the rules a team
+   must meet. With no profile, say so and ask the operator for one; do not
+   invent a team shape.
+2. **Read the fleet** from what exists: `marvel get register --cluster <c>` for
+   each cluster `marvel config list` names, and `freebusy`. This is R-103's
+   fleet-state model; do not rebuild it by hand.
+3. **Read open asks** (`dws asks`) and the predecessor's handoff.
+4. **Hold your boundary.** Director routes into a team only through the
+   profile's entry-point seat (the director role, CANNOT: "route into the team").
+   Director's own verbs are scaling a role, writing the tracker, and authoring a
+   doc, not a worker's production (R-102). If no team is up, your first act is
+   to stand one up, entry role first. Doing the work yourself is a trap door
+   (finding-005, Q6): only read-only work no entry seat can do, reviving a seat
+   only you can reach, or the operator saying so in this session, and each use
+   is logged as a routing defect.
 
 ## Three modes
 
