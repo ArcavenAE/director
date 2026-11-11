@@ -564,6 +564,12 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 		floor = pf
 		from = floorSource{pred: predecessorID(agentID)}
 	}
+	if floor == 0 {
+		if gf, donor := g.generationFloor(ctx, agentID, instance); gf > 0 {
+			floor = gf
+			from = floorSource{pred: donorAgent(donor)}
+		}
+	}
 	g.floorFrom = from
 	g.floorWhy = why
 	start := uint64(0)
