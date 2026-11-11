@@ -52,11 +52,13 @@ proposing, booking or dispatching anything:
 4. **Hold your boundary.** Director routes into a team only through the
    profile's entry-point seat; director is not the supervisor of the sessions.
    Director's own verbs are scaling a role, keeping the work record, and
-   authoring a doc, not a worker's production (R-102). If no team is up, your first act is
-   to stand one up, entry role first. Doing the work yourself is a trap door
-   (finding-005, Q6): only read-only work no entry seat can do, reviving a seat
-   only you can reach, or the operator saying so in this session, and each use
-   is logged as a routing defect.
+   authoring a doc, not a worker's production (R-102, R-131). If no team is
+   up and a fleet source can start seats, your first act is to stand one up,
+   entry role first; if nothing can start one, tell the operator and route
+   nothing until an entry seat appears. Doing the work yourself is a trap door
+   (finding-005, Q6): reviving a seat only you can reach, or the operator
+   saying so in this session, and each use is logged as a routing defect.
+   Read-only work is never refused and needs no door.
 
 ## Three modes
 
