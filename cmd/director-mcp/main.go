@@ -193,6 +193,14 @@ func main() {
 		return
 	}
 
+	// Only a launcher-marked shim may hold the director identity, so a plain
+	// session in a directory whose config bakes that identity does not
+	// register as a second director (aae-orc-20062).
+	if err := checkRoleMark(directorClaim(self.AgentID, self.Role, os.Getenv("DIRECTOR_GLOBAL_ROLE")), os.Getenv(roleMarkEnv), os.Getppid()); err != nil {
+		fmt.Fprintf(os.Stderr, "director-mcp: %v\n", err)
+		os.Exit(2)
+	}
+
 	logf := func(format string, a ...any) {
 		log.Printf("[director-mcp %s] "+format, append([]any{self.AgentID}, a...)...)
 	}

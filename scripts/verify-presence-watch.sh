@@ -208,7 +208,7 @@ call() { rpc "$1" tools/call "$(jq -nc --arg n "$2" --argjson a "$3" '{name:$n,a
 text_of() { jq -r '.result.content[0].text // "NO RESULT"'; }
 env DIRECTOR_AGENT_ID=verifydirector DIRECTOR_TEAM=ops DIRECTOR_WORKSPACE=verifyws \
     NATS_URL="nats://127.0.0.1:$LEAFP" DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=kinu \
-    DIRECTOR_GLOBAL_ROLE=director DIRECTOR_PRESENCE_WATCH=1 \
+    DIRECTOR_GLOBAL_ROLE=director DIRECTOR_PRESENCE_WATCH=1 "DIRECTOR_ROLE_MARK=$$" \
     "$SHIM" <"$work/in" >"$work/out" 2>"$work/shim.err" &
 pids+=($!)
 exec 3>"$work/in" 4<"$work/out"

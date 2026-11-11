@@ -421,6 +421,9 @@ if [[ -n "$cue_how" ]]; then
 fi
 
 echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD$cue_note$devch_note$bedrock_note" >&2
+# The role mark (aae-orc-20062): this pid survives the exec, so it is the
+# shim's parent pid; the shim holds a director identity only with it.
+export DIRECTOR_ROLE_MARK=$$
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$prompt" \

@@ -74,6 +74,12 @@
 # Check: skills/director/scripts/verify-director-session.sh
 set -euo pipefail
 
+# The role mark (aae-orc-20062): this launcher's pid, which the harness keeps
+# when it is exec'd below, so it equals the shim's parent pid. The shim holds
+# the director identity only with it; a plain session in a directory whose
+# config bakes that identity gets no mark and so no director shim.
+export DIRECTOR_ROLE_MARK=$$
+
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed -e '$d' -e 's/^# \{0,1\}//'; }
 
 own_id=""; receiver=0; channel=0; req_root=0; marvel_role=0; harness=""
@@ -258,8 +264,8 @@ if [[ $marvel_role -eq 1 ]]; then
   # fleet's launcher.
   # DIRECTOR_BUS_REQUIRED=1 tells the shim this seat was launched: with no NATS_URL
   # it exits 2 with one line instead of joining the local broker by default.
-  env_json="$(jq -n --arg id "$m_id" --arg team "$m_team" --arg ws "$m_ws" \
-    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, DIRECTOR_BUS_REQUIRED:"1"}')"
+  env_json="$(jq -n --arg id "$m_id" --arg team "$m_team" --arg ws "$m_ws" --arg mark "$DIRECTOR_ROLE_MARK" \
+    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, DIRECTOR_BUS_REQUIRED:"1", DIRECTOR_ROLE_MARK:$mark}')"
   if [[ $nats_in_env -eq 0 ]]; then env_json="$(printf '%s' "$env_json" | jq --arg n "$nats_url" '. + {NATS_URL:$n}')"; fi
   if [[ -n "${DIRECTOR_CLUSTER:-}" ]]; then
     if [[ ! "$DIRECTOR_CLUSTER" =~ ^[A-Za-z0-9_-]+$ ]]; then
@@ -323,8 +329,8 @@ if [[ -n "$own_id" ]]; then
   # message. DIRECTOR_GLOBAL_ROLE is required (director or supervisor) because the
   # launcher is generic and does not derive the role from a cast the way marvel's
   # cast-launch does.
-  env_json="$(jq -n --arg id "$own_id" --arg team "$TEAM" --arg ws "$WORKSPACE" \
-    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, DIRECTOR_BUS_REQUIRED:"1"}')"
+  env_json="$(jq -n --arg id "$own_id" --arg team "$TEAM" --arg ws "$WORKSPACE" --arg mark "$DIRECTOR_ROLE_MARK" \
+    '{DIRECTOR_AGENT_ID:$id, DIRECTOR_TEAM:$team, DIRECTOR_WORKSPACE:$ws, DIRECTOR_BUS_REQUIRED:"1", DIRECTOR_ROLE_MARK:$mark}')"
   if [[ $nats_in_env -eq 0 ]]; then env_json="$(printf '%s' "$env_json" | jq --arg n "$nats_url" '. + {NATS_URL:$n}')"; fi
   if [[ -n "${DIRECTOR_GLOBAL_DOMAIN:-}" ]]; then
     : "${DIRECTOR_CLUSTER:?DIRECTOR_GLOBAL_DOMAIN is set, so DIRECTOR_CLUSTER must name this cluster (R-94)}"
