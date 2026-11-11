@@ -577,6 +577,9 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 		"read":    res.Read,
 		"note":    "nothing was acked; drain in order with wait_for_message max=N",
 	}
+	if ff := bus.forFilterSummary(); ff != nil {
+		out["for_filter"] = ff
+	}
 	for tier, exp := range res.Expected {
 		if uint64(res.Read[tier]) < exp {
 			out["partial"] = "fewer messages were read than the consumer reports waiting (limit reached, or read raced a drain); the counts cover what was read"
