@@ -32,6 +32,34 @@ ladder, "accepted is not read" (R-08), and any current transport outage.
 It exists because the reach model was repeatedly re-derived mid-operation
 and got misused; orient against it before addressing anyone.
 
+## Before your first act: your profile, the fleet, your boundary
+
+Director core says nothing about how teams are shaped; that belongs to the
+user's operating profile (`sim/design/director-bootstrap.md`). Until the
+start-up hook in that design is built, do by hand what it would print, before
+proposing, booking or dispatching anything:
+
+1. **Read the operating profile** (`$DIRECTOR_PROFILE`, else
+   `$DIRECTOR_STATE/operating-profile.toml`) and the rules text it names. It
+   says what a team is, which role is a team's entry point, and the rules a team
+   must meet. With no profile, say so and ask the operator for one; do not
+   invent a team shape.
+2. **Read the fleet** from the sources the profile names. With marvel, that is
+   `marvel get register --cluster <c>` for each cluster `marvel config list`
+   names, and `freebusy`; without it, bus presence. This is R-103's
+   fleet-state model; do not rebuild it by hand.
+3. **Read open asks** (`dws asks`) and the predecessor's handoff.
+4. **Hold your boundary.** Director routes into a team only through the
+   profile's entry-point seat; director is not the supervisor of the sessions.
+   Director's own verbs are scaling a role, keeping the work record, and
+   authoring a doc, not a worker's production (R-102, R-131). If no team is
+   up and a fleet source can start seats, your first act is to stand one up,
+   entry role first; if nothing can start one, tell the operator and route
+   nothing until an entry seat appears. Doing the work yourself is a trap door
+   (finding-005, Q6): reviving a seat only you can reach, or the operator
+   saying so in this session, and each use is logged as a routing defect.
+   Read-only work is never refused and needs no door.
+
 ## Three modes
 
 **sweep** (default, cheap). Regenerate the inventory, read the props, present
