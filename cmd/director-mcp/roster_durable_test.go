@@ -292,10 +292,7 @@ func TestLocalInactiveOutlastsInboxMaxAge(t *testing.T) {
 		t.Fatalf("getting-started.md declares %v and README.md %v for AGENT_INBOX", declared[0], declared[1])
 	}
 	if localConsumerInactive <= declared[0] {
-		t.Errorf("localConsumerInactive = %v, not above the inbox's declared max age %v: a durable would be cleaned up while the inbox still holds its unread mail", localConsumerInactive, declared[0])
-	}
-	if declared[0] != 168*time.Hour {
-		t.Errorf("the setup instructions declare %v for AGENT_INBOX, want 168h; update this test with the declaration", declared[0])
+		t.Errorf("localConsumerInactive = %v, not above the setup example's max age %v: a durable would be cleaned up while the inbox still holds its unread mail", localConsumerInactive, declared[0])
 	}
 }
 

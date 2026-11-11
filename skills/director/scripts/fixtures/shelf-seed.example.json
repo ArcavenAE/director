@@ -1,0 +1,26 @@
+{
+  "rows": [
+    {
+      "ask": "I-900001",
+      "asked_by": "placeholder-supervisor",
+      "asked_of": "placeholder-builder",
+      "summary": "Placeholder answer one: the check ran and found nothing to change. This text stands in for the one paragraph the answering seat writes.",
+      "source": "https://example.org/placeholder/report-one"
+    },
+    {
+      "ask": "I-900002",
+      "asked_by": "placeholder-supervisor",
+      "asked_of": "placeholder-reviewer",
+      "summary": "Placeholder answer two: the report is a host-local file, so its source names the host, the absolute path and the file's hash.",
+      "source": "host-a:/srv/placeholder/report-two.md",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "ask": "I-900003",
+      "asked_by": "placeholder-supervisor",
+      "asked_of": "placeholder-research",
+      "summary": "Placeholder answer three: the finding lives in the repository, so its source is a repo path.",
+      "source": "docs/placeholder/finding-three.md"
+    }
+  ]
+}

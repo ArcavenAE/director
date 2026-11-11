@@ -61,11 +61,18 @@ case "$MARVEL_ROLE" in
   marvel-builder)    WROLE=builder; SCOPE="marvel";;
   sideshow-builder)  WROLE=builder; SCOPE="sideshow and sideshow-packs";;
   infra-builder)     WROLE=builder; SCOPE="the infra checkout and its MCP, as named in the private seat file; production is read-only";;
+  scoped-builder)    WROLE=builder; SCOPE="";;
   claude-reviewer)   WROLE=reviewer; SCOPE="";;
   daily-sweep)       WROLE=worker; SCOPE="";;
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
 esac
 [[ -n "${CAST_SCOPE:-}" ]] && SCOPE="$CAST_SCOPE"
+# scoped-builder carries no scope text of its own, so it needs CAST_SCOPE; a
+# cast without one would be an unscoped builder, which is refused.
+if [[ "$MARVEL_ROLE" == scoped-builder && -z "$SCOPE" ]]; then
+  echo "cast-launch: role scoped-builder needs CAST_SCOPE (its scope comes only from the private seat file); set CAST_SCOPE and cast again" >&2
+  exit 1
+fi
 # Identities that compose with a role (sole_fit at proposal): director and envoy.
 case "$WROLE" in
   director) IDENTITY=assistive-agent;;
@@ -171,7 +178,7 @@ fi
 # role's environment tells the shim to cue and loads the director server as a
 # development channel. Only the value 1 does, as in the shim.
 # It was opt-in per seat by the operator's ruling of 2026-10-01. The operator's
-# ruling I-190 (2026-11-05) replaces that for supervisor casts: a supervisor
+# ruling of 2026-11-05 replaces that for supervisor casts: a supervisor
 # (GROLE=supervisor, so research-supervisors too) gets the cue when DIRECTOR_CUE
 # is unset and the launch is not headless. A SET value always wins, so
 # DIRECTOR_CUE=0, or a set-but-empty value, keeps it off for a seat that opts
@@ -387,7 +394,33 @@ if [[ -f "$overlay_file" ]]; then
   echo "cast-launch: attaching backend overlay $overlay_file for role $MARVEL_ROLE (merged over marvel policy as --settings $merged)" >&2
 fi
 
-echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD$cue_note$bedrock_note" >&2
+# The development-channels prompt (aae-orc-d3rel, route R4; the operator's ruling of
+# 2026-11-09). A seat started with the dev-channels flag stops at a startup prompt until
+# someone answers it. This script ends in exec, so it cannot press a key afterwards: it
+# starts dismiss-devch, a separate file so this launcher names no keystroke tool, in the
+# background first. The helper presses option 1 only on the exact prompt, once, and
+# reports into a log beside the spawn log. A seat with no cue starts no helper, and its
+# launch and spawn lines are unchanged.
+devch_note=""
+if [[ -n "$cue_how" ]]; then
+  # An installed launcher is a symlink into lib/cast-launch/<sha>/, where the helper sits beside it.
+  devch_src="${BASH_SOURCE[0]}"
+  while [[ -L "$devch_src" ]]; do
+    devch_t="$(readlink "$devch_src")"
+    if [[ "$devch_t" == /* ]]; then devch_src="$devch_t"; else devch_src="$(dirname "$devch_src")/$devch_t"; fi
+  done
+  devch="$(cd "$(dirname "$devch_src")" && pwd)/dismiss-devch"
+  if [[ -x "$devch" && -n "${TMUX_PANE:-}" && -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1; then
+    devch_log="$(dirname "$spawn_log")/devch-$DIRECTOR_AGENT_ID.log"
+    mkdir -p "$(dirname "$devch_log")" 2>/dev/null || true
+    ( "$devch" --pane "$TMUX_PANE" --tmux-arg=-S "--tmux-arg=${TMUX%%,*}" >>"$devch_log" 2>&1 </dev/null & )
+    devch_note=", devch helper armed"
+  else
+    devch_note=", devch helper not armed (it needs dismiss-devch beside this launcher, a tmux pane and tmux on PATH)"
+  fi
+fi
+
+echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD$cue_note$devch_note$bedrock_note" >&2
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$prompt" \

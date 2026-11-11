@@ -165,7 +165,7 @@ So:
   state) to director, and re-cues;
 - after a second W it emits `cue.unanswered` again, and the cue backs off: a
   re-cue at 4W and 8W, then hourly, until 24 hours after the first cue (the
-  proposed limit, I-69 D-9). Then one INFORM (`cue.gave_up`) goes to director
+  proposed limit, aae-orc-u90tt). Then one INFORM (`cue.gave_up`) goes to director
   and the cue stops for those messages; the seat is back on today's manual wake
   for them. A drain at any point ends the back-off;
 - it never reports the seat dead or the message lost. R-89's fail-loud half

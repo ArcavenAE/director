@@ -31,6 +31,10 @@ type Bus struct {
 	waitMu    sync.Mutex
 	waitSince time.Time
 
+	// beat is the feed to marvel, nil when off (busbeat.go). Set before the
+	// heartbeat timer starts.
+	beat *busBeat
+
 	// returned is mail whose reply nobody read (a late cancel), returned first
 	// by the next wait (ackafter.go).
 	retMu    sync.Mutex
@@ -40,11 +44,14 @@ type Bus struct {
 	// violations.go); the global tier shares it because it shares nc.
 	violations *violationRing
 
-	nc       *nats.Conn
-	js       jetstream.JetStream
-	kv       jetstream.KeyValue
-	self     Sender
-	consumer jetstream.Consumer
+	nc *nats.Conn
+	js jetstream.JetStream
+	// inboxConsumers, when set, lists the AGENT_INBOX consumers in place of the
+	// broker. A test sets it to inject a list error.
+	inboxConsumers func(ctx context.Context) ([]jetstream.ConsumerConfig, error)
+	kv             jetstream.KeyValue
+	self           Sender
+	consumer       jetstream.Consumer
 
 	// The global tier (R-86), off unless the launcher set
 	// DIRECTOR_GLOBAL_DOMAIN. globalCfg is the validated configuration and is
@@ -102,6 +109,8 @@ type Bus struct {
 	// (localrecover.go), and the cue watcher reads it on another goroutine.
 	localMu sync.Mutex
 	local   localState
+	// dh counts the local durable's rebuilds (durablehealth.go).
+	dh durableHealth
 	// lookup is a test seam for the broker lookup of the local durable; nil in
 	// production (localrecover.go lookupLocal).
 	lookup func(ctx context.Context, durable string) error
@@ -112,13 +121,14 @@ type Bus struct {
 	testAfterAck   func(ctx context.Context)
 }
 
-// localConsumerInactive is the local durable's inactive threshold. The inbox
-// declares a 168h max age (docs/getting-started.md), so a durable cleaned up
+// localConsumerInactive is the local durable's inactive threshold. The setup
+// example gives the inbox a 168h max age (docs/getting-started.md; the live
+// stream's own value is read at startup, inboxage.go), so a durable cleaned up
 // after a longer idle window can only ever have replayed messages that already
 // expired, and a live seat's durable outlasts its mail (aae-orc-t77rr). It is
 // what keeps superseded instances' durables from accumulating, the same
 // reasoning as globalConsumerInactive. TestLocalInactiveOutlastsInboxMaxAge
-// reads the declared max age and fails if the two drift.
+// reads the example's max age and fails if the two drift.
 const localConsumerInactive = 8 * 24 * time.Hour
 
 // dial opens the NATS connection and JetStream context, presenting the R-77
@@ -126,7 +136,10 @@ const localConsumerInactive = 8 * 24 * time.Hour
 // preflight() so both reach the broker the same way with the same credential.
 //
 //	DIRECTOR_NATS_CREDS  path to a .creds file (NKey/JWT), wins when set
-//	DIRECTOR_NATS_USER   user name, with DIRECTOR_NATS_PASS, when no creds file
+//	DIRECTOR_NATS_USER   user name, with DIRECTOR_NATS_PASS_FILE or DIRECTOR_NATS_PASS, when no creds file
+//
+// DIRECTOR_NATS_PASS_FILE names a 0600 file with the password, re-read on every
+// connect and reconnect, and wins over DIRECTOR_NATS_PASS (natspass.go).
 //
 // director#4 (R-77): the broker's authorization block binds a credential to
 // the subjects it may use, so a process holding the ops credential cannot act
@@ -148,10 +161,12 @@ func dialRing(url string, self Sender, ring *violationRing) (*nats.Conn, jetstre
 	if ring != nil {
 		opts = append(opts, nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) { ring.note(err) }))
 	}
-	if creds := os.Getenv("DIRECTOR_NATS_CREDS"); creds != "" {
-		opts = append(opts, nats.UserCredentials(creds))
-	} else if user := os.Getenv("DIRECTOR_NATS_USER"); user != "" {
-		opts = append(opts, nats.UserInfo(user, os.Getenv("DIRECTOR_NATS_PASS")))
+	auth, err := natsAuthOption()
+	if err != nil {
+		return nil, nil, err
+	}
+	if auth != nil {
+		opts = append(opts, auth)
 	}
 	nc, err := nats.Connect(url, opts...)
 	if err != nil {
@@ -308,7 +323,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	}
 	b.consumer = cons
 	b.local = localState{cfg: baseCfg, acked: floor, checked: time.Now()}
-	b.noteResumed("local", floor, cons, localWhy)
+	b.noteResumed("local", floor, cons, localWhy, floorSource{})
 	return b, nil
 }
 
@@ -324,12 +339,12 @@ func (b *Bus) selfSubjects() []string {
 
 // noteResumed records where a new durable started and how much was waiting,
 // for the next wait_for_message result.
-func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer, why string) {
+func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer, why string, from floorSource) {
 	var waiting uint64
 	if info := cons.CachedInfo(); info != nil {
 		waiting = info.NumPending
 	}
-	msg := resumeNote(tier, floor, waiting, why)
+	msg := resumeNote(tier, floor, waiting, why, from)
 	b.resumedMu.Lock()
 	b.resumed = append(b.resumed, msg)
 	b.resumedMu.Unlock()
@@ -337,10 +352,18 @@ func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer, wh
 
 // resumeNote is the start note for one tier: where its new durable began and
 // what waits. why, when set, is the reason the seat's earlier position could
-// not be read.
-func resumeNote(tier string, floor, waiting uint64, why string) string {
+// not be read. from, when set, names where the floor came from, so a successor
+// can tell mail its predecessor left unacked from its own.
+func resumeNote(tier string, floor, waiting uint64, why string, from floorSource) string {
 	if floor > 0 {
-		return fmt.Sprintf("%s inbox resumed after stream sequence %d, the seat's last ack, so mail already read is not replayed; %d message(s) waiting", tier, floor, waiting)
+		who := "the seat's last ack"
+		switch {
+		case from.pred != "":
+			who = "the last ack of its predecessor " + from.pred
+		case from.own:
+			who = "the last ack of this seat's own earlier durable"
+		}
+		return fmt.Sprintf("%s inbox resumed after stream sequence %d, %s, so mail already read is not replayed; %d message(s) waiting", tier, floor, who, waiting)
 	}
 	if why != "" {
 		return fmt.Sprintf("%s inbox could not read the seat's earlier position (%s), so it reads everything the stream still holds, a replay and never a loss; %d message(s) waiting", tier, why, waiting)
@@ -890,6 +913,74 @@ type sendResult struct {
 	Tier     string
 	Stream   string
 	Sequence uint64
+	// NoConsumer is set on a cold send (cold: true) whose subject no durable
+	// consumer on AGENT_INBOX filters: the bytes are stored, and nobody reads
+	// them until a seat's durable comes to filter that subject.
+	NoConsumer bool
+	// CheckFailed is set on a cold send whose consumer list could not be read:
+	// whether a consumer filters the subject was not established, so the result
+	// must not say that none does.
+	CheckFailed string
+}
+
+// hintedVerdict decides a hinted send from what the consumer lookup returned. A
+// refusal is returned as an error; otherwise noConsumer says a cold send went
+// to an unfiltered subject, and notChecked carries the lookup error of a cold
+// send whose answer was not established.
+func hintedVerdict(subject, addr string, filtered bool, ferr error, cold bool) (refusal error, noConsumer bool, notChecked string) {
+	switch {
+	case ferr != nil && !cold:
+		return atStage("resolve", fmt.Errorf("whether a consumer filters %s was NOT established (%v), so %s is refused rather than sent to a subject nobody may read; send with cold: true to publish it anyway", subject, ferr, addr)), false, ""
+	case ferr != nil:
+		return nil, false, ferr.Error()
+	case !filtered && !cold:
+		return atStage("resolve", fmt.Errorf("no consumer filters %s, so %s is refused rather than sent to a subject nobody reads; check the workspace, team and id, or send with cold: true to hold it for a seat that has not started", subject, addr)), false, ""
+	case !filtered:
+		return nil, true, ""
+	}
+	return nil, false, ""
+}
+
+// coldSendKey marks a send with cold: true, which publishes a hinted send to a
+// subject no consumer filters yet (mail for a seat that has not started).
+type coldSendKey struct{}
+
+// inboxConsumerConfigs lists the consumers on AGENT_INBOX. Bus.inboxConsumers,
+// when set, replaces it so a test can inject a list error.
+func (b *Bus) inboxConsumerConfigs(ctx context.Context) ([]jetstream.ConsumerConfig, error) {
+	if b.inboxConsumers != nil {
+		return b.inboxConsumers(ctx)
+	}
+	st, err := b.js.Stream(ctx, "AGENT_INBOX")
+	if err != nil {
+		return nil, err
+	}
+	var cfgs []jetstream.ConsumerConfig
+	lister := st.ListConsumers(ctx)
+	for info := range lister.Info() {
+		cfgs = append(cfgs, info.Config)
+	}
+	if err := lister.Err(); err != nil {
+		return nil, err
+	}
+	return cfgs, nil
+}
+
+// subjectFiltered reports whether a durable consumer on AGENT_INBOX filters
+// the subject with that exact filter. An error means the answer was not
+// established, which the caller refuses on, as R-92 does for an unreadable
+// presence scan.
+func (b *Bus) subjectFiltered(ctx context.Context, subject string) (bool, error) {
+	cfgs, err := b.inboxConsumerConfigs(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, cfg := range cfgs {
+		if readsSubject(cfg, subject) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // publish sends the envelope to its recipient subject and mirrors it to the
@@ -921,9 +1012,22 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 	if err != nil {
 		return nil, atStage("resolve", err)
 	}
+	res := &sendResult{Tier: "local"}
+	// A hinted agent:// or role:// send skips the roster, so nothing has shown
+	// that anyone reads its subject. Refuse it unless a durable consumer filters
+	// the subject with that exact filter, or the sender said cold: true (mail for a seat that has not
+	// started). A refusal here is audited like any other resolve-stage one.
+	if wsHint != "" && durable && !strings.HasPrefix(e.Recipient.Address, "broadcast://") {
+		filtered, ferr := b.subjectFiltered(ctx, subject)
+		cold, _ := ctx.Value(coldSendKey{}).(bool)
+		refusal, noConsumer, notChecked := hintedVerdict(subject, e.Recipient.Address, filtered, ferr, cold)
+		if refusal != nil {
+			return nil, refusal
+		}
+		res.NoConsumer, res.CheckFailed = noConsumer, notChecked
+	}
 	msg := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
 	msg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
-	res := &sendResult{Tier: "local"}
 	if durable {
 		start := time.Now()
 		ack, err := b.js.PublishMsg(ctx, msg)
@@ -1276,6 +1380,7 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 	}
 	g.handled = b.handled
 	g.violations = b.violations
+	log.Print(forFilterStatus(os.Getenv("DIRECTOR_FOR_FILTER"), b.self.Team, gcfg.Cluster, gcfg.Role))
 	if os.Getenv("DIRECTOR_FOR_FILTER") == "1" {
 		g.forFilter = &forFilter{agentID: b.self.AgentID, team: b.self.Team, role: gcfg.Role, cluster: gcfg.Cluster, now: time.Now, logf: log.Printf,
 			roster: func(ctx context.Context) ([]map[string]any, error) {
@@ -1284,7 +1389,7 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 			}}
 	}
 	b.global = g
-	b.noteResumed("global", g.resumedFrom, g.cons(), g.floorWhy)
+	b.noteResumed("global", g.resumedFrom, g.cons(), g.floorWhy, g.floorFrom)
 	return g, nil
 }
 
@@ -1447,6 +1552,16 @@ func (b *Bus) setPresence(ctx context.Context, state string) (globalWarn string,
 	return b.writeGlobalPresenceView(ctx, state, view), nil
 }
 
+// announce writes the first presence row at connect and, when it landed, sends
+// the first bus beat so the grace before the first beat ends at once.
+func (b *Bus) announce(ctx context.Context) (globalWarn string, err error) {
+	globalWarn, err = b.setPresence(ctx, "idle")
+	if err == nil {
+		b.beat.send(ctx)
+	}
+	return globalWarn, err
+}
+
 // writeGlobalPresence puts this session's row in GLOBAL_PRESENCE, returning a
 // warning string rather than an error because every caller wants to carry on
 // without it. Off (no domain configured) returns an empty warning: nothing is
@@ -1491,11 +1606,12 @@ type presenceView struct {
 	cueOn     bool
 	cue       string
 	cueReason string
+	durable   durableSummary
 }
 
 func (b *Bus) presenceView(ctx context.Context) presenceView {
 	age, tier := b.pending.oldest(time.Now())
-	v := presenceView{oldestS: int64(age / time.Second)}
+	v := presenceView{oldestS: int64(age / time.Second), durable: b.durableSummary()}
 	if b.cueState == nil {
 		return v
 	}
@@ -1509,12 +1625,39 @@ func (b *Bus) presenceView(ctx context.Context) presenceView {
 		}
 		v.cueReason = joinReason(stalledReason(id, age, b.pending.oldestUnacked(time.Now())), v.cueReason)
 	}
+	if v.durable.Reason != "" {
+		v.cueReason = joinReason(v.cueReason, v.durable.Reason)
+	}
 	return v
+}
+
+// durableSummary folds the local tier's rebuild health with the global one's,
+// when this seat has the global tier up.
+func (b *Bus) durableSummary() durableSummary {
+	parts := []durableSummary{b.dh.summary("local")}
+	b.globalMu.Lock()
+	g := b.global
+	b.globalMu.Unlock()
+	if g != nil {
+		parts = append(parts, g.dh.summary("global"))
+	}
+	return mergeDurable(parts...)
 }
 
 // fields puts the view into a presence record.
 func (v presenceView) fields(rec map[string]any) {
 	rec["oldest_pending_s"] = v.oldestS
+	// Only once a durable has been lost: a healthy seat's row is unchanged, and a
+	// reader treats the fields' absence as present (or a shim older than P6).
+	if v.durable.State != "" && v.durable.State != durablePresent {
+		rec["durable_state"] = v.durable.State
+		rec["rebuilds_ok"] = v.durable.OK
+		rec["rebuilds_failed"] = v.durable.Failed
+	}
+	if v.durable.Reason != "" {
+		// Carried whether or not the cue is on; with the cue on it is also in cue_reason.
+		rec["durable_reason"] = v.durable.Reason
+	}
 	if v.cueOn {
 		rec["cue"] = v.cue
 		if v.cueReason != "" {
@@ -1585,7 +1728,11 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 				b.samplePending(ctx)
 			}
 			view := b.presenceView(ctx)
-			_ = b.writePresenceView(ctx, s, view)
+			// The bus beat to marvel rides this tick, and only a tick whose
+			// local presence Put succeeded sends it (aae-orc-z63a4).
+			if err := b.writePresenceView(ctx, s, view); err == nil {
+				b.beat.send(ctx)
+			}
 			b.reportGlobalWarn(b.writeGlobalPresenceView(ctx, s, view), logf)
 			b.watchTick(ctx)
 		}

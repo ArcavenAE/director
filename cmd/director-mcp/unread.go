@@ -90,15 +90,16 @@ func versionLine() string {
 // cliArgs is what the command line asked for. Anything not listed here is
 // refused, rather than ignored and a live shim started (director#75).
 type cliArgs struct {
-	mode        string // serve, preflight, version, unread, ask-reader, asks
+	mode        string // serve, preflight, version, unread, ask-reader, asks, marry
 	json        bool
 	all         bool          // unread: one row per durable, dead ones included (M1)
 	global      bool          // unread: the hub streams instead of AGENT_INBOX (M3)
 	byRole      bool          // unread: one line per team and role (M5)
 	olderThan   time.Duration // unread: mark rows older than this; 0 is unset (M4)
+	durables    []string      // unread --global: durable names to read by name when the hub cannot be listed
 	once        bool          // ask-reader: run one pass and exit
 	interval    time.Duration // ask-reader: the pass interval; 0 means the 30s default
-	file        string        // ask-reader: the JSON file it rewrites after each pass
+	file        string        // ask-reader: the JSON file it rewrites after each pass; marry: the input file
 	help        bool          // asks: print the help text
 	askID       string        // asks: report one message id and exit
 	role        string        // dossier: TEAM/ROLE
@@ -107,13 +108,17 @@ type cliArgs struct {
 	pointers    []string      // dossier: files the role keeps
 	handoffPath string        // dossier: the handoff file the manifest declares
 	handoffMark string        // dossier: the terminal marker the manifest declares
+	lookState   string        // look: the state directory
+	lookSeat    string        // look: the seat id whose inbox is read
 }
 
 const askReaderUsage = "director-mcp ask-reader [--once] [--file <path>] [--interval <duration up to 30s>]"
 
 const dossierUsage = "director-mcp dossier --role TEAM/ROLE [--predecessor AGENT-INSTANCE] [--predecessor-state DIR] [--handoff-path PATH] [--handoff-marker TEXT] [--pointer PATH]... [--json]"
 
-const unreadUsage = "director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <duration>]"
+const lookUsage = "director-mcp look [--state DIR] [--seat AGENT-ID]"
+
+const unreadUsage = "director-mcp unread [--json] [--all] [--global] [--by-role] [--older-than <duration>] [--durable NAME]..."
 
 func parseArgs(args []string) (cliArgs, error) {
 	switch {
@@ -148,6 +153,11 @@ func parseArgs(args []string) (cliArgs, error) {
 			return cliArgs{}, fmt.Errorf("asks: --id needs a message id (usage: %s)", asksUsage)
 		}
 		return out, nil
+	case args[0] == "roster":
+		if len(args) != 2 || args[1] != "--json" {
+			return cliArgs{}, fmt.Errorf("roster: usage: %s", rosterUsage)
+		}
+		return cliArgs{mode: "roster", json: true}, nil
 	case args[0] == "ask-reader":
 		out := cliArgs{mode: "ask-reader"}
 		rest := args[1:]
@@ -186,6 +196,30 @@ func parseArgs(args []string) (cliArgs, error) {
 		return out, nil
 	case args[0] == "dossier":
 		return parseDossierArgs(args[1:])
+	case args[0] == "marry":
+		if len(args) != 3 || args[1] != "--input" {
+			return cliArgs{}, fmt.Errorf("marry: usage: %s", marryUsage)
+		}
+		return cliArgs{mode: "marry", file: args[2]}, nil
+	case args[0] == "look":
+		out := cliArgs{mode: "look"}
+		rest := args[1:]
+		for i := 0; i < len(rest); i++ {
+			a := rest[i]
+			if a != "--state" && a != "--seat" {
+				return cliArgs{}, fmt.Errorf("look: unknown argument %q (usage: %s)", a, lookUsage)
+			}
+			if i+1 >= len(rest) {
+				return cliArgs{}, fmt.Errorf("look: %s needs a value (usage: %s)", a, lookUsage)
+			}
+			i++
+			if a == "--state" {
+				out.lookState = rest[i]
+			} else {
+				out.lookSeat = rest[i]
+			}
+		}
+		return out, nil
 	case args[0] == "unread":
 		out := cliArgs{mode: "unread"}
 		rest := args[1:]
@@ -200,6 +234,12 @@ func parseArgs(args []string) (cliArgs, error) {
 				out.global = true
 			case a == "--by-role":
 				out.byRole = true
+			case a == "--durable":
+				if i+1 >= len(rest) {
+					return cliArgs{}, fmt.Errorf("unread: --durable needs a durable name (usage: %s)", unreadUsage)
+				}
+				i++
+				out.durables = append(out.durables, rest[i])
 			case a == "--older-than" || strings.HasPrefix(a, "--older-than="):
 				v, ok := strings.CutPrefix(a, "--older-than=")
 				if !ok {
@@ -218,9 +258,12 @@ func parseArgs(args []string) (cliArgs, error) {
 				return cliArgs{}, fmt.Errorf("unread: unknown argument %q (usage: %s)", a, unreadUsage)
 			}
 		}
+		if len(out.durables) > 0 && !out.global {
+			return cliArgs{}, fmt.Errorf("unread: --durable names hub durables, so it needs --global; refused rather than ignored (usage: %s)", unreadUsage)
+		}
 		return out, nil
 	}
-	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage, dossierUsage)
+	return cliArgs{}, fmt.Errorf("unknown arguments %q (usage: director-mcp [--preflight] | %s | %s | %s | %s | %s | %s); refused rather than ignored, so a typo does not start a live shim (director#75)", strings.Join(args, " "), unreadUsage, asksUsage, askReaderUsage, dossierUsage, marryUsage, rosterUsage)
 }
 
 type unreadPresence struct {
@@ -228,6 +271,12 @@ type unreadPresence struct {
 	State string `json:"state"`
 	TS    string `json:"ts"`
 	Rev   string `json:"rev"`
+
+	// The durable health the shim put in its presence record (durablehealth.go).
+	// Empty on a shim older than that, which then shows no state.
+	durableState   string
+	rebuildsOK     int64
+	rebuildsFailed int64
 }
 
 type unreadDurable struct {
@@ -243,6 +292,15 @@ type unreadDurable struct {
 	OldestAgeSeconds float64         `json:"oldest_unread_age_seconds,omitempty"`
 	Presence         *unreadPresence `json:"presence"`
 	Note             string          `json:"note,omitempty"`
+
+	// DurableState is rebuilt (lost and recreated) or missing (lost, and the
+	// last rebuild failed, or no durable on the broker for a live seat); it is
+	// empty for a seat that never lost one, and for a shim older than P6. RebuildsOK and RebuildsFailed are the shim's own counts. All three
+	// come from the seat's presence record, and missing is also set here when a
+	// live seat has no durable. Diagnostic only: the exit code stays 0.
+	DurableState   string `json:"durable_state,omitempty"`
+	RebuildsOK     int64  `json:"rebuilds_ok,omitempty"`
+	RebuildsFailed int64  `json:"rebuilds_failed,omitempty"`
 
 	// Slice M. Live is presence present. State is set on live rows only:
 	// reading, behind, durable-idle or reads-outside-durable (M2).
@@ -297,6 +355,10 @@ type unreadReport struct {
 	OlderThan          string          `json:"older_than,omitempty"`
 	OverThresholdCount int             `json:"over_threshold_count,omitempty"`
 	Roles              []unreadRole    `json:"roles,omitempty"`
+	// Partial marks a report read by name, not by listing (aae-orc-e6otm): it
+	// holds only the rows the reader could name, and its Warnings say what it
+	// could not see. It is never a count of the stream's durables.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // The live states (M2).
@@ -323,24 +385,59 @@ var (
 // latest entry is a delete or purge marker (Get reports those as not found).
 // It returns no error for an empty bucket.
 func quietKeys(ctx context.Context, js jetstream.JetStream, bucket string, kv jetstream.KeyValue) ([]string, error) {
+	return quietKeysUnder(ctx, js, bucket, kv, "")
+}
+
+// keyRead is one key a stream-info subject filter named, with the one get made
+// for it: the entry, or the error that get returned (not found for a key whose
+// latest entry is a delete or purge marker).
+type keyRead struct {
+	key   string
+	entry jetstream.KeyValueEntry
+	err   error
+}
+
+// readKeysUnder names the keys that start with keyPrefix from the stream info
+// of the bucket's stream, by a subject filter, so a reader that may see one
+// cluster's presence asks for nothing else. It makes one get per key and
+// returns each result in key order, so a caller that needs the entry does not
+// get the key a second time.
+func readKeysUnder(ctx context.Context, js jetstream.JetStream, bucket string, kv jetstream.KeyValue, keyPrefix string) ([]keyRead, error) {
 	stream, err := js.Stream(ctx, "KV_"+bucket)
 	if err != nil {
 		return nil, err
 	}
 	prefix := "$KV." + bucket + "."
-	info, err := stream.Info(ctx, jetstream.WithSubjectFilter(prefix+">"))
+	info, err := stream.Info(ctx, jetstream.WithSubjectFilter(prefix+keyPrefix+">"))
 	if err != nil {
 		return nil, err
 	}
 	var keys []string
 	for subj := range info.State.Subjects {
-		k := strings.TrimPrefix(subj, prefix)
-		if _, err := kv.Get(ctx, k); errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		keys = append(keys, k)
+		keys = append(keys, strings.TrimPrefix(subj, prefix))
 	}
 	sort.Strings(keys)
+	reads := make([]keyRead, 0, len(keys))
+	for _, k := range keys {
+		e, err := kv.Get(ctx, k)
+		reads = append(reads, keyRead{key: k, entry: e, err: err})
+	}
+	return reads, nil
+}
+
+// quietKeysUnder is quietKeys limited to the keys that start with keyPrefix.
+func quietKeysUnder(ctx context.Context, js jetstream.JetStream, bucket string, kv jetstream.KeyValue, keyPrefix string) ([]string, error) {
+	reads, err := readKeysUnder(ctx, js, bucket, kv, keyPrefix)
+	if err != nil {
+		return nil, err
+	}
+	var keys []string
+	for _, r := range reads {
+		if errors.Is(r.err, jetstream.ErrKeyNotFound) {
+			continue
+		}
+		keys = append(keys, r.key)
+	}
 	return keys, nil
 }
 
@@ -372,6 +469,13 @@ func readUnread(ctx context.Context, js jetstream.JetStream, now time.Time) (unr
 					p.State, _ = rec["state"].(string)
 					p.TS, _ = rec["ts"].(string)
 					p.Rev, _ = rec["rev"].(string)
+					p.durableState, _ = rec["durable_state"].(string)
+					if v, ok := rec["rebuilds_ok"].(float64); ok {
+						p.rebuildsOK = int64(v)
+					}
+					if v, ok := rec["rebuilds_failed"].(float64); ok {
+						p.rebuildsFailed = int64(v)
+					}
 				}
 			}
 			presence[parts[2]+"."+parts[3]] = p
@@ -384,9 +488,52 @@ func readUnread(ctx context.Context, js jetstream.JetStream, now time.Time) (unr
 		return strings.TrimPrefix(name, "mcp_"), true
 	}
 	readDurables(ctx, stream, local, presence, true, now, &r)
+	addMissingDurables(presence, &r)
 	classify(ctx, []jetstream.Stream{stream}, now, &r)
 	sortDurables(&r)
 	return r, nil
+}
+
+// durableRow is the part of a durable's row that one consumer info and the
+// presence map decide: counts, filters, who holds it and whether it is live.
+// The oldest unread message and the live state need more reads and are added by
+// the caller that is allowed them.
+func durableRow(info *jetstream.ConsumerInfo, rest string, presence map[string]unreadPresence, withRev bool) unreadDurable {
+	d := unreadDurable{
+		Durable:    info.Name,
+		Pending:    info.NumPending + uint64(info.NumAckPending),
+		AckPending: info.NumAckPending,
+		AckFloor:   info.AckFloor.Stream,
+		Filters:    info.Config.FilterSubjects,
+		Delivered:  info.Delivered.Consumer,
+		created:    info.Created,
+	}
+	if !info.Created.IsZero() {
+		d.Created = info.Created.UTC().Format(time.RFC3339)
+	}
+	if len(d.Filters) == 0 && info.Config.FilterSubject != "" {
+		d.Filters = []string{info.Config.FilterSubject}
+	}
+	// <agent>_<instance>: the instance is a ULID and carries no "_",
+	// so the last "_" splits it from an agent id that may.
+	if i := strings.LastIndex(rest, "_"); i > 0 {
+		d.AgentID, d.Instance = rest[:i], rest[i+1:]
+	} else {
+		d.AgentID = rest
+	}
+	d.Team, d.Role = teamAndRole(d.AgentID, d.Filters)
+	if p, ok := presence[d.AgentID+"."+d.Instance]; ok {
+		pp := p
+		d.Presence = &pp
+		d.Live = true
+		d.DurableState, d.RebuildsOK, d.RebuildsFailed = pp.durableState, pp.rebuildsOK, pp.rebuildsFailed
+		if withRev && pp.Rev == "" {
+			d.Note = "presence carries no rev: the seat runs a shim older than LR-3"
+		}
+	} else {
+		d.Note = "no presence: this durable belongs to a session that is not live"
+	}
+	return d
 }
 
 // readDurables appends one row per durable that name accepts, with its pending
@@ -400,39 +547,8 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 		if !ok {
 			continue
 		}
-		d := unreadDurable{
-			Durable:    info.Name,
-			Pending:    info.NumPending + uint64(info.NumAckPending),
-			AckPending: info.NumAckPending,
-			AckFloor:   info.AckFloor.Stream,
-			Filters:    info.Config.FilterSubjects,
-			Delivered:  info.Delivered.Consumer,
-			created:    info.Created,
-		}
-		if !info.Created.IsZero() {
-			d.Created = info.Created.UTC().Format(time.RFC3339)
-		}
-		if len(d.Filters) == 0 && info.Config.FilterSubject != "" {
-			d.Filters = []string{info.Config.FilterSubject}
-		}
-		// <agent>_<instance>: the instance is a ULID and carries no "_",
-		// so the last "_" splits it from an agent id that may.
-		if i := strings.LastIndex(rest, "_"); i > 0 {
-			d.AgentID, d.Instance = rest[:i], rest[i+1:]
-		} else {
-			d.AgentID = rest
-		}
-		d.Team, d.Role = teamAndRole(d.AgentID, d.Filters)
-		if p, ok := presence[d.AgentID+"."+d.Instance]; ok {
-			pp := p
-			d.Presence = &pp
-			d.Live = true
-			if withRev && pp.Rev == "" {
-				d.Note = "presence carries no rev: the seat runs a shim older than LR-3"
-			}
-		} else {
-			d.Note = "no presence: this durable belongs to a session that is not live"
-		}
+		d := durableRow(info, rest, presence, withRev)
+		var ageNote string
 		if d.Pending > 0 {
 			// The first message the durable has not acked: after its ack floor,
 			// and never before where a resumed durable started.
@@ -451,9 +567,15 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 				if d.OldestSeq == 0 || m.Sequence < d.OldestSeq {
 					d.OldestSeq = m.Sequence
 					d.OldestAt = m.Time.UTC().Format(time.RFC3339)
-					d.OldestAgeSeconds = now.Sub(m.Time).Seconds()
+					d.OldestAgeSeconds, ageNote = ageOnBrokerClock(brokerClock(info, now), now, m.Time)
 				}
 			}
+		}
+		if ageNote != "" {
+			if d.Note != "" {
+				d.Note += "; "
+			}
+			d.Note += ageNote
 		}
 		if d.Live {
 			d.State = liveState(d, now)
@@ -466,6 +588,58 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 	if err := lister.Err(); err != nil {
 		r.Warnings = append(r.Warnings, "consumer listing incomplete: "+err.Error())
 	}
+}
+
+// addMissingDurables adds a row, durable_state missing, for each seat whose
+// presence is live on the local broker but which has no durable on AGENT_INBOX:
+// a lost durable has no consumer to list, so it would otherwise show nothing.
+// It adds nothing when the consumer listing was incomplete, since a durable not
+// listed is then not known to be gone. Local tier only: the hub keeps one stream
+// per cluster, so a durable absent from one stream says nothing about the seat.
+func addMissingDurables(presence map[string]unreadPresence, r *unreadReport) {
+	for _, w := range r.Warnings {
+		if strings.HasPrefix(w, "consumer listing incomplete") || strings.HasPrefix(w, "presence ") {
+			return
+		}
+	}
+	have := map[string]bool{}
+	for _, d := range r.Durables {
+		have[d.AgentID+"."+d.Instance] = true
+	}
+	for key, p := range presence {
+		if have[key] {
+			continue
+		}
+		i := strings.LastIndex(key, ".")
+		if i <= 0 {
+			continue
+		}
+		pp := p
+		d := unreadDurable{
+			AgentID: key[:i], Instance: key[i+1:], Presence: &pp, Live: true,
+			DurableState: durableMissing, RebuildsOK: pp.rebuildsOK, RebuildsFailed: pp.rebuildsFailed,
+			Note: "presence is live but the broker has no durable for this seat",
+		}
+		d.Team, _ = teamAndRole(d.AgentID, nil)
+		r.Durables = append(r.Durables, d)
+	}
+}
+
+// brokerClock is the broker's time as the consumer info reports it. A variable
+// so a test that simulates passing time by advancing the reader's clock can say
+// the broker agrees with it; nothing in the program reassigns it.
+var brokerClock = func(info *jetstream.ConsumerInfo, _ time.Time) time.Time { return info.TimeStamp }
+
+// ageOnBrokerClock ages a stored message as the broker's clock (the consumer
+// info TimeStamp) minus the message's stored time, so a reader host with a
+// skewed clock does not misreport how old the mail is. Where the server leaves
+// the time zero it falls back to the reader's clock and returns a note saying
+// so, for the row.
+func ageOnBrokerClock(brokerNow, readerNow, stored time.Time) (float64, string) {
+	if brokerNow.IsZero() {
+		return readerNow.Sub(stored).Seconds(), "age uses the reader clock: the broker gave no consumer info time"
+	}
+	return brokerNow.Sub(stored).Seconds(), ""
 }
 
 // liveState names a live row (M2). The anchor is the durable's Created: the
@@ -718,7 +892,7 @@ func applyThreshold(r *unreadReport, d time.Duration) {
 }
 
 // applyBound marks each live row whose oldest unread message is older than the
-// pending-age bound (I-190:1). Unlike applyThreshold it runs whatever
+// pending-age bound. Unlike applyThreshold it runs whatever
 // --older-than says, and reads-outside-durable rows are never marked, since
 // their pending mail was answered and is not unread mail. It changes the report
 // only; the exit code stays 0 (ADR-007, R-113).
@@ -776,6 +950,10 @@ func printUnread(w io.Writer, r unreadReport, o unreadOpts) {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(r)
+		return
+	}
+	if r.Partial {
+		printPartialUnread(w, r)
 		return
 	}
 	_, _ = fmt.Fprintf(w, "%s unread, read %s\n", r.Stream, r.ReadAt)
@@ -926,12 +1104,58 @@ func printTrailer(w io.Writer, r unreadReport) {
 	}
 }
 
+// hubAnswered reports whether err is the hub's own reply to a named read, such
+// as 404 stream not found. A reply is proof the hub is reachable, so it counts the
+// same as success when telling a list-verb gap from a down hub.
+func hubAnswered(err error) bool {
+	var apiErr *jetstream.APIError
+	if errors.As(err, &apiErr) {
+		return true
+	}
+	var jsErr jetstream.JetStreamError
+	return errors.As(err, &jsErr) && jsErr.APIError() != nil
+}
+
+// hubListError words the failure of the stream-list request. A cluster
+// credential reaches the hub through a leaf whose allow-list answers named reads
+// and leaves the list verbs without a responder (finding-006), so "no
+// responders" on that request does not mean the hub is down. It asks for one
+// named stream (the presence bucket's) to tell the two apart: if that answers,
+// the hub is reachable and this credential may not list; if not, the hub is
+// reported unreachable as before.
+func hubListError(domain string, err error, listMissing bool) error {
+	if listMissing {
+		return fmt.Errorf("hub in domain %q answers named reads, but this credential may not list streams (the leaf allow-list omits the list verbs, finding-006), so unread --global needs an admin credential: %w", domain, err)
+	}
+	return fmt.Errorf("hub in domain %q not reachable: %w", domain, err)
+}
+
+// listVerbMissing reports whether the stream-list request failed with no
+// responders while the hub answers a named read: the hub is up and this
+// credential reaches it through a leaf that does not carry the list verbs.
+func listVerbMissing(ctx context.Context, gjs jetstream.JetStream, err error) bool {
+	if !errors.Is(err, nats.ErrNoResponders) {
+		return false
+	}
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	_, nerr := gjs.Stream(pctx, "KV_"+globalPresenceBucket)
+	return nerr == nil || hubAnswered(nerr)
+}
+
 // readUnreadGlobal builds one report per hub stream (GLOBAL_TO_*), through the
 // hub's JetStream domain over the leaf, with presence from GLOBAL_PRESENCE
 // (M3). It reuses the local rules unchanged; the reply scan covers every hub
 // stream, since a supervisor's answer to director lands on GLOBAL_TO_DIRECTOR,
 // not on the stream its own durable reads.
 func readUnreadGlobal(ctx context.Context, nc *nats.Conn, domain string, now time.Time) ([]unreadReport, error) {
+	return readUnreadGlobalWith(ctx, nc, domain, now, nil)
+}
+
+// readUnreadGlobalWith is readUnreadGlobal with the durable names an operator
+// gave by --durable, which the partial read uses when the leaf will not name
+// the presence instances.
+func readUnreadGlobalWith(ctx context.Context, nc *nats.Conn, domain string, now time.Time, durables []string) ([]unreadReport, error) {
 	gjs, err := jetstream.NewWithDomain(nc, domain)
 	if err != nil {
 		return nil, fmt.Errorf("global JetStream domain %q: %w", domain, err)
@@ -944,7 +1168,11 @@ func readUnreadGlobal(ctx context.Context, nc *nats.Conn, domain string, now tim
 		}
 	}
 	if err := lister.Err(); err != nil {
-		return nil, fmt.Errorf("hub in domain %q not reachable: %w", domain, err)
+		missing := listVerbMissing(ctx, gjs, err) // one probe, so a down hub costs 3 s, not 6
+		if cluster := sessionCluster(); cluster != "" && missing {
+			return readUnreadGlobalPartial(ctx, gjs, cluster, durables, now)
+		}
+		return nil, hubListError(domain, err, missing)
 	}
 	sort.Strings(names)
 	presence := map[string]unreadPresence{}
@@ -1022,6 +1250,9 @@ func runUnreadCmd(ctx context.Context, url string, cli cliArgs, domain string, o
 	defer nc.Close()
 	opts := unreadOpts{JSON: cli.json, All: cli.all, ByRole: cli.byRole}
 	finish := func(r *unreadReport) {
+		if r.Partial {
+			return // a partial read has no totals to threshold or roll up
+		}
 		applyThreshold(r, cli.olderThan)
 		applyBound(r, pendingAgeBound)
 		if cli.byRole {
@@ -1030,7 +1261,7 @@ func runUnreadCmd(ctx context.Context, url string, cli cliArgs, domain string, o
 	}
 	if cli.global {
 		g := globalUnread{Domain: domain}
-		reports, err := readUnreadGlobal(ctx, nc, domain, time.Now())
+		reports, err := readUnreadGlobalWith(ctx, nc, domain, time.Now(), cli.durables)
 		if err != nil {
 			g.Error = err.Error()
 		}

@@ -11,7 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// The pending-age bound (I-190:1): list_roster flags a live row over it, the
+// The pending-age bound: list_roster flags a live row over it, the
 // unread reader marks a live recipient over it, and neither changes anything
 // but the report.
 
@@ -142,6 +142,7 @@ func boundRow(t *testing.T, r unreadReport, instance string) unreadDurable {
 // a reads-outside-durable one (its mail was answered) does not, and
 // --older-than neither hides nor sets the flag.
 func TestUnreadMarksALiveRecipientOverTheBound(t *testing.T) {
+	simulateAgreeingBrokerClock(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
@@ -251,6 +252,7 @@ func TestUnreadCommandOverBoundJSONAndExit(t *testing.T) {
 // unread, global tier: a live hub recipient over the bound gets over_bound, and
 // one with no presence does not.
 func TestUnreadMarksAHubRecipientOverTheBound(t *testing.T) {
+	simulateAgreeingBrokerClock(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)

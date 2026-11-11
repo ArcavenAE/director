@@ -2,6 +2,8 @@
 
 - **Status:** idea (pre-hypothesis, no commitment). No ticket and no frontier
   node yet.
+  Design ruled 2026-11-09: `sim/design/reply-shelf.md` (a separate artifact,
+  14-day recovery, read by opening); phase 1 has no Dispatch or Review.
 - **Date:** 2026-10-27
 - **Subject:** director. The shelf would be a surface director keeps and
   publishes. The Decision Desk, the ops dashboard and the digest are objects

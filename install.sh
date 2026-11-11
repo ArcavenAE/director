@@ -93,15 +93,23 @@ install_one "$SRC/skills/director/scripts/sweep-firings" "$DIRECTOR_HOME/bin/swe
 # dash-writer, the operations dashboard's writer step (ghxv2): the sweep's tick runs it from the bin home.
 install_one "$SRC/skills/director/scripts/dash-writer" "$DIRECTOR_HOME/bin/dash-writer"
 # dws is installed above; dash-writer reads it from beside itself.
+# shelf-row builds Reply Shelf rows (reply-shelf design): the session runs it by name when it relays an answer.
+install_one "$SRC/skills/director/scripts/shelf-row" "$DIRECTOR_HOME/bin/shelf-row"
+# nav-sync reports which exported pages carry a stale menu (shelf-nav-sync): the sweep runs it by name after a page export.
+install_one "$SRC/skills/director/scripts/nav-sync" "$DIRECTOR_HOME/bin/nav-sync"
 # introspect, the director introspector (a script director runs, never a seat): the sweep and harvest step 6 call it.
 install_one "$SRC/skills/director/scripts/introspect" "$DIRECTOR_HOME/bin/introspect"
 # composer-check looks at a pane before an inject that ends in Enter; standing-hook prints the drain age before each answer.
 # SKILL.md tells the session to run both by name, so a host without them cannot follow it.
 install_one "$SRC/skills/director/scripts/composer-check" "$DIRECTOR_HOME/bin/composer-check"
 install_one "$SRC/skills/director/scripts/standing-hook" "$DIRECTOR_HOME/bin/standing-hook"
-# director-session starts one director session by hand with the channel cue bound when asked
-# (ask I-91); a plain `claude` never binds it.
+# director-session starts one director session by hand with the channel cue bound when asked; a
+# plain `claude` never binds it.
 install_one "$SRC/skills/director/scripts/director-session" "$DIRECTOR_HOME/bin/director-session"
+# route-ledger reads a supervisor route ledger by the shared shape (rlel4); the skill names it by its bin-home path.
+install_one "$SRC/skills/director/scripts/route-ledger" "$DIRECTOR_HOME/bin/route-ledger"
+# schedule-ack: the sweep line for a scheduled firing with no acked result (H-6); the skill names it by its bin-home path.
+install_one "$SRC/skills/director/scripts/schedule-ack" "$DIRECTOR_HOME/bin/schedule-ack"
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"

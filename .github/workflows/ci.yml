@@ -1,7 +1,8 @@
 # What this workflow does not cover, so a green check is read for what it is:
 #   - scripts/: its verifiers (verify-install.sh, verify-skill-ledger.sh,
 #     and director-install) are not run here; draft-sweep and its verifier live in skills/director/scripts/.
-#   - sim/twin/verify-cast-launch.sh is not run here.
+#   - sim/twin/verify-cast-launch.sh is not run here; the recipes job runs its cases 4 and 6
+#     as a data table (sim/twin/parity-table.sh) against cast-launch.sh.
 #   - probe/: 23 shell scripts, 8 of them verify-*.sh, most of which need a live broker or
 #     hub and the nats CLI, and a second Go module (probe/leaf-fabric/fabtool)
 #     that the go vet and go test below never reach, since the Go job works in
@@ -104,6 +105,30 @@ jobs:
             printf 'failed: %s\n' "${failed[@]}"
             exit 1
           fi
+
+  recipes:
+    name: Recipes library checks
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Show the python version
+        # recipes_lint.py needs tomllib, which ships with Python 3.11 or newer.
+        run: python3 --version
+
+      - name: Check the recipes library
+        # Structural checks over a data file, so they may gate a merge. The script
+        # runs every case even after a miss and exits nonzero on any.
+        run: bash scripts/verify-recipes.sh
 
   hub-verifiers:
     name: Hub provisioning verifiers

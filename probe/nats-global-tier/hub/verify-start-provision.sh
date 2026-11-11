@@ -4,15 +4,18 @@
 #   A. a restart applies the declared retention: a stream set back to 72h and a
 #      director durable at 25h are at 168h and 192h after start.sh runs again;
 #   B. a provision that always fails leaves the hub answering within a few
-#      seconds, and logs exactly one failure line;
+#      seconds, logs exactly one failure line, and keeps the last attempt's own
+#      output under it (clipped to its last 20 lines);
 #   C. without jq the hub starts and the skip is logged.
-# Then two mutants of start.sh must go red: one that never runs provision, and
-# one that runs it in the foreground, before the server, so a failing provision
-# delays the hub.
+# Then four mutants of start.sh must go red: one that never runs provision, one that
+# runs it in the foreground, before the server, so a failing provision delays the
+# hub, one that drops the attempt's output from the failure, and one that does not
+# clip it.
 #
 # Throwaway nats-server on a random loopback port, in a scratch home; the hub's
-# ports 4222, 4242, 7422 and 7442 are refused. It never reaches the hub or the
-# local broker.
+# ports 3307, 4222, 4242, 6785, 7422, 7442, 8222 and 8242 are refused. It never
+# reaches the hub or the local broker. Run it under a profile that denies those
+# ports: the refusal cannot see a port the kernel never draws.
 #
 # Usage: probe/nats-global-tier/hub/verify-start-provision.sh   Exit nonzero on any miss.
 set -euo pipefail
@@ -34,7 +37,7 @@ hour=3600000000000
 port=""; url=""
 newport() {
   port="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-  case "$port" in 4222|4242|7422|7442) echo "refusing port $port"; exit 2;; esac
+  case "$port" in 3307|4222|4242|6785|7422|7442|8222|8242) echo "refusing port $port"; exit 2;; esac
   url="nats://127.0.0.1:$port"
 }
 N() { nats -s "$url" "$@"; }
@@ -95,12 +98,29 @@ case_failure() {
   wait_up 20 && ok "$label: the hub answers within four seconds while provision keeps failing" || bad "$label: the hub answers within four seconds while provision keeps failing"
   has_line() { /usr/bin/grep -q 'provision failed after 5 tries (last exit 3)' "$dir/log/provision.log" 2>/dev/null; }
   if wait_for 25 has_line; then
-    local lines; lines="$(wc -l < "$dir/log/provision.log" | tr -d ' ')"
-    [[ "$lines" == "1" ]] && ok "$label: a failed provision logs exactly one line" || bad "$label: a failed provision logs exactly one line" "$lines lines"
+    local lines; lines="$(/usr/bin/grep -c 'provision failed after' "$dir/log/provision.log" | tr -d ' ')"
+    [[ "$lines" == "1" ]] && ok "$label: a failed provision logs exactly one failure line" || bad "$label: a failed provision logs exactly one failure line" "$lines lines"
+    /usr/bin/grep -q '^  provision stand-in failing$' "$dir/log/provision.log" && ok "$label: the failure keeps provision's own reason" || bad "$label: the failure keeps provision's own reason" "$(cat "$dir/log/provision.log")"
   else
     bad "$label: a failed provision logs one failure line" "no such line in provision.log"
   fi
   up && ok "$label: the hub is still serving after the failure" || bad "$label: the hub is still serving after the failure"
+  stop_hub
+}
+
+# case_clip LABEL STARTSCRIPT: the failure keeps the last 20 lines of the last attempt, no more.
+case_clip() {
+  local label="$1" script="$2" dir="$work/$1-clip"
+  printf '#!/usr/bin/env bash\nfor n in $(seq 1 30); do echo "stand-in line $n" >&2; done\nexit 3\n' > "$work/noisy-provision.sh"
+  newport; mkhome "$dir"
+  start_hub "$dir" "$script" DIRECTOR_GLOBAL_PROVISION="$work/noisy-provision.sh" DIRECTOR_PROVISION_TRIES=2
+  has_line() { /usr/bin/grep -q 'provision failed after 2 tries (last exit 3)' "$dir/log/provision.log" 2>/dev/null; }
+  if wait_for 25 has_line; then
+    /usr/bin/grep -q '^  stand-in line 30$' "$dir/log/provision.log" && /usr/bin/grep -q '^  stand-in line 11$' "$dir/log/provision.log" && ok "$label: the last 20 lines are kept" || bad "$label: the last 20 lines are kept" "$(cat "$dir/log/provision.log")"
+    /usr/bin/grep -q 'stand-in line 10$' "$dir/log/provision.log" && bad "$label: older lines are clipped" "line 10 is in the log" || ok "$label: older lines are clipped"
+  else
+    bad "$label: the clip case logs a failure line" "no such line in provision.log"
+  fi
   stop_hub
 }
 
@@ -119,6 +139,7 @@ case_nojq() {
 
 case_restart real "$here/start.sh"
 case_failure real "$here/start.sh"
+case_clip real "$here/start.sh"
 case_nojq
 
 # The log line lands after provision.sh returns, so a start.sh that writes it a
@@ -148,6 +169,11 @@ mutant() { # label from to casefn
 }
 mutant never-provisions 'if out="$(bash "$provision" 2>&1)"; then' 'if out="$(true 2>\&1)"; then' case_restart
 mutant provision-in-foreground ') > /dev/null 2>&1 &' ') > /dev/null 2>\&1' case_failure
+
+# The attempt's output is left out of the failure: the log keeps the exit code only.
+mutant output-dropped 'tail -n 20' 'tail -n 0' case_failure
+# The output is kept whole, with no clip.
+mutant unclipped 'tail -n 20' 'cat' case_clip
 
 echo "$pass passed, $fail failed"
 (( fail == 0 ))

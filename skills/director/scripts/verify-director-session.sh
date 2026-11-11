@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prove director-session, the installed launcher for a hand-started director
-# session (ask I-91; the ID-A launcher promoted out of probe/).
+# session (the ID-A launcher promoted out of probe/).
 #
 # Broker-free: claude and the shim are stubs, nothing connects. The stub claude
 # records its argv, one word per line, and the directory it ran from.
@@ -274,8 +274,25 @@ runtty "$work/plain" "${cfgenv[@]}" -- --receiver
 runtty "$work/plain" X=1 -- --own-config seat-a --receiver
 [[ "$(count server:director)" == 1 && "$argv" == *'"DIRECTOR_CUE":"1"'* ]] || miss "own-config receiver: want server:director and DIRECTOR_CUE=1: $argv"
 
-# The launcher never answers the prompt: no keystroke tool in its source.
-if grep -n -E 'send-keys|expect |xdotool|osascript|yes \|' "$SESSION" >/dev/null; then miss "the launcher source names a way to answer a prompt"; fi
+# The launchers never answer the prompt: no keystroke tool in the session launcher, in
+# cast-launch.sh or in claude-bedrock-launch. The one exception is sim/twin/dismiss-devch
+# (aae-orc-d3rel, route R4; the operator's ruling of 2026-11-09): a separate file the cast
+# launcher starts for a cue seat, which may send one key to the dev-channels prompt and
+# nothing else. It is checked below to use tmux send-keys and no other tool, and never Enter.
+names_keystroke_tool() { grep -q -E 'send-keys|expect |xdotool|osascript|yes \|' "$1"; }
+twin="$here/../../../sim/twin"
+for f in "$SESSION" "$twin/cast-launch.sh" "$twin/claude-bedrock-launch"; do
+  [[ -f "$f" ]] || continue
+  if names_keystroke_tool "$f"; then miss "the launcher source $f names a way to answer a prompt"; fi
+done
+# The check itself fires: a file that names the tool is caught.
+printf '%s\n' 'tmux send-keys -t "$pane" 1' > "$work/keystroke-probe"
+names_keystroke_tool "$work/keystroke-probe" || miss "the keystroke scan does not catch send-keys"
+if [[ -f "$twin/dismiss-devch" ]]; then
+  grep -q 'send-keys' "$twin/dismiss-devch" || miss "dismiss-devch does not send its key with tmux send-keys"
+  if grep -q -E 'xdotool|osascript|expect |yes \|' "$twin/dismiss-devch"; then miss "dismiss-devch names a keystroke tool other than tmux send-keys"; fi
+  if grep -q -E '"(Enter|C-m|C-j|KPEnter)"' "$twin/dismiss-devch"; then miss "dismiss-devch names Enter"; fi
+fi
 
 # ---- marvel-role mode (director#461): a marvel role's own command, no role library ----
 

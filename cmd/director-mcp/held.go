@@ -41,6 +41,10 @@ type heldRec struct {
 	Stream       string    `json:"stream,omitempty"`
 	Seq          uint64    `json:"seq,omitempty"`
 	SupersededBy string    `json:"superseded_by,omitempty"`
+	// Ask and Kind are the send's relay-log fields. The first line of a record
+	// carries them, so release can write the relay entry when the send goes out.
+	Ask  string `json:"ask,omitempty"`
+	Kind string `json:"kind,omitempty"`
 }
 
 type heldStore struct {
@@ -163,6 +167,13 @@ type heldErr struct{ rec heldRec }
 func (e *heldErr) Error() string {
 	return fmt.Sprintf("held, not delivered: %s (hold id %s; released when its recipient returns and beats, or proposed for your review after %s)", e.rec.Reason, e.rec.ID, e.rec.SellBy.Format(time.RFC3339))
 }
+
+// holdRelayKey carries a send's ask and kind (relayFields) to holdRefused, so a hold
+// keeps them and release can write the relay entry when the send goes out.
+type holdRelayKey struct{}
+
+// relayFields are the send's relay-log arguments.
+type relayFields struct{ ask, kind string }
 
 // holdFailFastKey marks a send with fail_fast: true, which keeps today's refusal.
 type holdFailFastKey struct{}

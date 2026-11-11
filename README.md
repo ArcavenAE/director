@@ -167,6 +167,7 @@ Into `~/.director/bin`, one line each. Each is a script under `skills/director/s
 | `dsx` | external state verification |
 | `merge-guard` | the fail-closed read before a merge; prints PROCEED or a refusal |
 | `relay-log` | writes a relay-log entry, stamped from the clock |
+| `nav-sync` | reports which exported pages carry a menu that differs from `page-nav.html`; publishing stays the session's |
 | `desk-snapshot` | writes the local snapshot of the Desk's open cards that `dws` checks |
 | `lane-ledger` | renders the lane ledger page from director's own files |
 | `card-ingest` | turns a seat's card file into a Desk write, and refuses a card missing a part |
@@ -321,6 +322,12 @@ nats stream add AGENT_AUDIT --subjects 'agent.audit' --storage file --retention 
 nats kv add AGENT_STATE --ttl 90s --storage file
 (cd cmd/director-mcp && go build -o director-mcp .)
 ```
+
+The `--max-age` on `AGENT_INBOX` is yours to set; 168h is only the example.
+`director-mcp` reads the stream's own `max_age` when it starts, uses that for
+how long it keeps its send records, and logs the value it read. If it cannot
+read the stream, or the stream has no max age, it falls back to 168h and logs a
+warning. It never changes the stream.
 
 Then join a session by handing the harness the shim with an identity in its
 environment. The [getting-started guide](docs/getting-started.md) walks

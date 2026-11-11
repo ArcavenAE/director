@@ -190,6 +190,7 @@ run_standin() {
   nats-server -c "$dir/nats.conf" -l "$dir/broker.log" &
   pids+=($!)
   local i; for i in $(seq 1 50); do nats -s "nats://127.0.0.1:$standin_port" server check connection >/dev/null 2>&1 && break; sleep 0.2; done
+  if [[ -n "${standin_setup:-}" ]]; then "$standin_setup" "$standin_port"; fi
   standin_out="$(cd "${standin_cwd:-$PWD}" && PATH="$work/bin:$PATH" STANDIN_MATCH="$match" STANDIN_OUT="$out" STANDIN_RC="$rc" DIRECTOR_GLOBAL_URL="nats://127.0.0.1:$standin_port" DIRECTOR_GLOBAL_ADMIN_NKEY= DIRECTOR_GLOBAL_HOME="$dir" bash "$script" 2>&1)" && standin_rc=0 || standin_rc=$?
 }
 
@@ -199,11 +200,11 @@ run_standin() {
 # problem named, and nothing created.
 run_badlist() {
   local script="$1" label="$2" name out rc
-  local -a names=(failed notjson truncated number error-object empty blank)
-  local -a outs=("" "not json{" '["GLOBAL_TO_c3"' '[1]' '{"error":"no responders"}' "" $'  \n\t\n')
-  local -a rcs=(1 0 0 0 0 0 0)
+  local -a names=(failed notjson truncated number error-object empty blank two-documents)
+  local -a outs=("" "not json{" '["GLOBAL_TO_c3"' '[1]' '{"error":"no responders"}' "" $'  \n\t\n' '["GLOBAL_TO_c3"]["GLOBAL_TO_c4"]')
+  local -a rcs=(1 0 0 0 0 0 0 0)
   local n
-  for n in 0 1 2 3 4 5 6; do
+  for n in 0 1 2 3 4 5 6 7; do
     name="${names[$n]}"
     run_standin "$script" "$label-$name" "stream ls" "${outs[$n]}" "${rcs[$n]}"
     local made; made="$(nats -s "nats://127.0.0.1:$standin_port" stream ls --names --json 2>&1)"
@@ -257,7 +258,35 @@ run_glob() {
   fi
 }
 
+# setup_durable PORT: a stream GLOBAL_TO_c3 at 72h holding a director durable at 25h.
+setup_durable() {
+  local N=(nats -s "nats://127.0.0.1:$1")
+  "${N[@]}" stream add GLOBAL_TO_c3 --subjects 'global.c3.>' --storage file --retention limits --max-age 72h --max-msg-size 65536 --defaults >/dev/null
+  "${N[@]}" consumer add GLOBAL_TO_c3 mcp_global_z_1 --filter 'global.c3.>' --pull --ack explicit --deliver all --defaults --inactive-threshold 25h >/dev/null
+}
+
+# run_badconsumers SCRIPT LABEL: the consumer listing on a stream is empty, not JSON,
+# an object, an array holding a non-string, or two arrays. The stand-in leaves every
+# other call working. Each must exit nonzero, name the stream and the shape, and leave
+# the durable at 25h: without the check the run exits 0 and the durable is never raised.
+run_badconsumers() {
+  local script="$1" label="$2" name n
+  local -a names=(empty notjson object non-string two-documents)
+  local -a outs=("" "not json{" '{"error":"no responders"}' '["mcp_global_z_1",1]' '["mcp_global_z_1"]["mcp_global_z_1"]')
+  for n in 0 1 2 3 4; do
+    name="${names[$n]}"
+    standin_setup=setup_durable run_standin "$script" "$label-$name" "consumer ls GLOBAL_TO_c3" "${outs[$n]}" 0
+    local th; th="$(nats -s "nats://127.0.0.1:$standin_port" consumer info GLOBAL_TO_c3 mcp_global_z_1 --json | jq -r '.config.inactive_threshold // 0')"
+    if (( standin_rc != 0 )); then ok "$label: a $name consumer listing fails the run"; else bad "$label: a $name consumer listing fails the run" "exit 0: $standin_out"; fi
+    if printf '%s\n' "$standin_out" | /usr/bin/grep -q 'consumer ls GLOBAL_TO_c3 returned something other than a JSON array of names'; then ok "$label: a $name consumer listing is named, with its stream"; else bad "$label: a $name consumer listing is named, with its stream" "$standin_out"; fi
+    [[ "$th" == "$((25*hour))" ]] && ok "$label: a $name consumer listing leaves the durable where it was" || bad "$label: a $name consumer listing leaves the durable where it was" "got $th"
+  done
+}
+# Both listings, for a mutant of the shared shape check.
+run_badshapes() { run_badlist "$1" "$2"; run_badconsumers "$1" "$2"; }
+
 run_badlist "$here/provision.sh" real-badlist
+run_badconsumers "$here/provision.sh" real-badconsumer
 run_glob "$here/provision.sh" real-glob
 run_emptysuffix "$here/provision.sh" real-emptysuffix
 run_unnamed_fail "$here/provision.sh" real-unnamed
@@ -307,23 +336,27 @@ mutant_with run_noarg hardcoded-default '"\$listing"' '"[]"'
 # A failed listing prints its message and carries on with an empty listing.
 mutant_with run_badlist print-and-carry-on 'stream ls failed" >\&2; exit 1;' 'stream ls failed" >\&2; listing=null;'
 # A listing that is not an array of names is read as empty instead of an error.
-mutant_with run_badlist shape-unchecked 'else error("stream ls did not return an array of names")' 'else empty'
+mutant_with run_badlist shape-unchecked 'else error("not an array of names")' 'else empty'
 # The prefix filter is gone, so the presence bucket's own stream is visited as a cluster.
-mutant_with run_noarg prefix-filter-removed 'select(startswith("GLOBAL_TO_") and ' 'select('
+mutant_with run_noarg prefix-filter-removed 'select(startswith(\$p))' 'select(true)'
 # A named stream is no longer deduplicated against the list.
 mutant_with run_noarg no-dedupe 'in \*" "\$c" "\*) ;; \*) extra+=("\$c"); named="\$named\$c ";; esac' 'in *) extra+=("$c");; esac'
 # GLOBAL_TO_DIRECTOR is no longer excluded from discovery.
-mutant_with run_noarg director-not-excluded ' and . != "GLOBAL_TO_DIRECTOR"' ''
+mutant_with run_noarg director-not-excluded '"\$s" == GLOBAL_TO_DIRECTOR' '"$s" == GLOBAL_TO_NOPE'
 # Discovery runs only when no arguments were given.
 mutant_with run_withargs discovery-only-without-args 'for s in \$found; do' 'for s in $( [ "$#" -eq 0 ] \&\& printf "%s\\n" "$found" ); do'
 # The durables of an unnamed stream are not raised.
 mutant_with run_noarg unnamed-durables-skipped '^    raise_durables "\$name"' '    if [[ "$name" == GLOBAL_TO_DIRECTOR || " ${clusters[*]} " == *" ${name#GLOBAL_TO_} "* ]]; then raise_durables "$name"; fi'
 # An empty or blank listing is let through as if it were null.
-mutant_with run_badlist empty-listing-allowed 'then bad_shape; fi' 'then :; fi'
+mutant_with run_badlist empty-listing-allowed 'length != 1' 'length > 1'
 # The glob guard is off, so a name with a glob character expands against the files here.
 mutant_with run_glob glob-unguarded '; set -f$' ';'
+# The consumer listing's shape is no longer checked: the loop runs on whatever it got.
+mutant_with run_badconsumers unchecked-consumer-loop '|| bad_shape "consumer ls \$stream"' '|| true'
+# A listing of several documents is read as its first one.
+mutant_with run_badshapes two-documents-allowed 'length != 1' 'length < 1'
 # The prefix test only looks for the prefix anywhere in the name.
-mutant_with run_noarg contains-not-startswith 'select(startswith("GLOBAL_TO_") and ' 'select(contains("GLOBAL_TO_") and '
+mutant_with run_noarg contains-not-startswith 'select(startswith(\$p))' 'select(contains(\$p))'
 # The match string is joined under the newline IFS again, so no named stream matches.
 mutant_with run_noarg newline-joined-match 'case "\$named" in' 'case " ${clusters[*]} " in'
 # The unnamed streams are visited before the presence bucket again.

@@ -453,6 +453,9 @@ type globalTier struct {
 	// back.
 	selfPut atomic.Int64
 
+	// dh counts the global durable's rebuilds (durablehealth.go).
+	dh durableHealth
+
 	cfg      globalConfig
 	js       jetstream.JetStream
 	local    jetstream.JetStream // the local tier on the same connection
@@ -461,6 +464,9 @@ type globalTier struct {
 
 	// handled is the bus's handled-mode state, nil when the mode is off.
 	handled *handledState
+
+	// expiry holds the once-per-gap state of expiredUnread (expiry.go).
+	expiry expiryWatch
 
 	// forFilter drops mail whose FOR line names another team's seat; nil when
 	// DIRECTOR_FOR_FILTER is not 1 (forfilter.go).
@@ -479,6 +485,10 @@ type globalTier struct {
 	// it read from the start or bound an existing durable. Reported once by
 	// the bus.
 	resumedFrom uint64
+
+	// floorFrom says whose ack floor resumedFrom is: this seat's own earlier
+	// durable, or its predecessor's. Zero when there was no floor.
+	floorFrom floorSource
 
 	// mu guards consumer (read it through cons) and the fields below. acked is the highest hub stream sequence
 	// this session has acked on its durable, or the seat floor it resumed
@@ -546,6 +556,21 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 		return nil
 	}
 	floor, why := g.seatFloor(ctx, agentID, instance)
+	var from floorSource
+	if floor > 0 {
+		from.own = true
+	}
+	if pf := g.predecessorFloor(ctx, agentID, instance); pf > floor {
+		floor = pf
+		from = floorSource{pred: predecessorID(agentID)}
+	}
+	if floor == 0 {
+		if gf, donor := g.generationFloor(ctx, agentID, instance); gf > 0 {
+			floor = gf
+			from = floorSource{pred: donorAgent(donor)}
+		}
+	}
+	g.floorFrom = from
 	g.floorWhy = why
 	start := uint64(0)
 	if floor > 0 {
@@ -565,6 +590,13 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 	g.checked = time.Now()
 	g.mu.Unlock()
 	return nil
+}
+
+// floorSource says where a resumed position came from, for the start note.
+// The zero value is no recorded source.
+type floorSource struct {
+	own  bool   // the seat's own earlier durable
+	pred string // the predecessor's agent id, when its floor was the higher
 }
 
 // floorListTimeout bounds each lookup seatFloor makes, so a request that gets
@@ -605,6 +637,48 @@ func (g *globalTier) seatFloor(ctx context.Context, agentID, self string) (uint6
 		return 0, fmt.Sprintf("listing hub consumers failed (%v), and reading them by name failed (%v)", err, nerr)
 	}
 	return floor, ""
+}
+
+// predecessorID is the agent id of the session this one replaced, read from
+// MARVEL_PREDECESSOR, which marvel sets to "<workspace>/<name>" for a seat a
+// shift or a wake started. The name is the predecessor's agent id. It is empty
+// when there is no link, when the value has no name, or when the name is this
+// seat's own id (a restart, which the ordinary lookup already covers).
+func predecessorID(self string) string {
+	link := os.Getenv("MARVEL_PREDECESSOR")
+	name := link[strings.LastIndex(link, "/")+1:]
+	if name == "" || name == self {
+		return ""
+	}
+	return name
+}
+
+// predecessorFloor is the highest ack floor among the durables the explicit
+// predecessor left on the hub stream, 0 when there is no link or none acked
+// anything. A new generation has a new agent id, so seatFloor's prefix never
+// names the predecessor's durables. The link names the seat, so the live check
+// is not applied: the predecessor is usually still running when its successor
+// starts, and a floor that is a little stale delivers a message twice, where
+// skipping the floor would replay the whole stream. A lookup that fails
+// returns 0, the replay seatFloor would have done.
+func (g *globalTier) predecessorFloor(ctx context.Context, agentID, self string) uint64 {
+	pred := predecessorID(agentID)
+	if pred == "" {
+		return 0
+	}
+	prefix := "mcp_global_" + pred + "_"
+	filters := []string{g.cfg.inboxSubject()}
+	notLive := func(string) bool { return false }
+	lctx, lcancel := context.WithTimeout(ctx, floorListTimeout)
+	floor, err := seatAckFloor(lctx, g.js, g.cfg.streamName(), prefix, filters, nil)
+	lcancel()
+	if err == nil {
+		return floor
+	}
+	nctx, ncancel := context.WithTimeout(ctx, floorListTimeout)
+	defer ncancel()
+	byName, _ := g.floorByName(nctx, pred, self, prefix, filters, notLive)
+	return byName
 }
 
 // floorByName finds this seat's departed instances without listing the hub:
@@ -780,8 +854,11 @@ func (g *globalTier) restore(ctx context.Context, agentID, instance string) (boo
 	}
 	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), g.consumerConfig(agentID, instance, start))
 	if err != nil {
-		return false, fmt.Errorf("the hub has lost this session's global durable %s and recreating it failed: %w (%s)", durable, err, hubHint(g.cfg))
+		ferr := fmt.Errorf("the hub has lost this session's global durable %s and recreating it failed: %w (%s)", durable, err, hubHint(g.cfg))
+		g.dh.rebuildFailed(ferr)
+		return false, ferr
 	}
+	g.dh.rebuilt()
 	g.setConsumer(cons)
 	msg := fmt.Sprintf("the hub had lost this session's global durable %s; it was recreated", durable)
 	if resumed {

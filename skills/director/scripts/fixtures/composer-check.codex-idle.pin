@@ -1,0 +1,11 @@
+Source: one idle Codex pane, captured 2026-11-09 with `tmux capture-pane -p -e`, cut to the three lines
+the check reads: the composer line, the blank line below it, and the generic shortcuts line. The model,
+working directory and session-title line between them was dropped.
+
+  composer-check.codex-idle.ansi.txt  72 bytes  sha256 756df20424d260a3e3e8340aea82fbf2d0631c9c75912d222e3d51fa17f3115f
+
+The composer line is a bold U+203A mark, then the idle placeholder "Ask Codex to do anything" in the dim
+code. Codex draws no rule lines, so a capture has no frame.
+
+Why a copy: verify-composer-check.sh checks the file against the sha above before it reads it. Do not edit
+the copy by hand; a new capture replaces the file and its line here together.

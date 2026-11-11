@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # director-session: start one director session by hand, with the channel cue
-# bound when you ask for it (ask I-91). The ID-A launcher (design brief 1,
+# bound when you ask for it. The ID-A launcher (design brief 1,
 # sim/design/identity-at-spawn.md; ratified by the session-identity party
 # 2026-09-18), promoted out of probe/ and installed into
 # ${DIRECTOR_HOME:-~/.director}/bin by install.sh.

@@ -2,15 +2,30 @@ package main
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 )
 
-// inboxMaxAge is how long the inbox keeps mail, as the setup instructions
-// declare it (docs/getting-started.md; TestLocalInactiveOutlastsInboxMaxAge
-// pins that value). The send records are kept this long plus a day
+// inboxMaxAgeFallback is the inbox lifetime director-mcp assumes until it has
+// read the live stream, and keeps assuming when that read fails (README.md and
+// docs/getting-started.md show a 168h stream as their example). The running
+// value is inboxMaxAge(), which adoptInboxMaxAge sets from AGENT_INBOX's own
+// max_age at startup. The send records are kept that long plus a day
 // (delivery.go). staleAfter in askledger.go is a different figure for a
 // different thing, the ledger's own staleness and Seen-pruning window.
-const inboxMaxAge = 168 * time.Hour
+const inboxMaxAgeFallback = 168 * time.Hour
+
+// liveInboxMaxAge is the max_age read from the live stream; 0 means not read.
+var liveInboxMaxAge atomic.Int64
+
+// inboxMaxAge is how long the inbox keeps mail: the live stream's max_age once
+// adopted, else inboxMaxAgeFallback.
+func inboxMaxAge() time.Duration {
+	if d := time.Duration(liveInboxMaxAge.Load()); d > 0 {
+		return d
+	}
+	return inboxMaxAgeFallback
+}
 
 // askLookup is the answer to "what became of message <id>?".
 type askLookup struct {

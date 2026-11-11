@@ -9,10 +9,12 @@ package main
 // drains a backlog in one call (drain.go).
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -29,6 +31,9 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 	sendDesc := "Send a director envelope to another session or role. Returns accepted-for-delivery with a message_id; this is a send acknowledgement, not a delivery or read receipt."
 	waitDesc := "Block up to timeout_seconds for the next message addressed to this session, then return it. This is a poll: the model must call it. The server cannot push a message into context on its own. One wait at a time per session: a second open wait is refused and reads nothing. With max greater than 1 it returns every waiting message up to max in one call, oldest first, and consumes them as the single form does; run inbox_summary first to see what is waiting without consuming it."
 	summaryDesc := "Summarize the messages waiting for this session without consuming any: counts by sender and by performative, the REQUEST, FAILURE and QUERY messages and any that set reply_by, say they hold custody, or await a reply, and the waiting sequence numbers oldest first. Acks nothing; drain in order afterwards with wait_for_message max=N."
+	if cueOn {
+		waitDesc = strings.Replace(waitDesc, "This is a poll: the model must call it. The server cannot push a message into context on its own.", "This server pushes: once the cue is live, a director cue notice wakes this session when mail arrives, and a wait returns at once with what is waiting instead of blocking. Call it after a cue notice, and otherwise end the turn idle. Until the cue is live it blocks as a poll.", 1)
+	}
 	rosterDesc := "List the sessions currently present, from the presence store. Absence means silence, not a negative report."
 	if gcfg != nil {
 		toDesc += ", or across hosts global://director (also written role://director) and global://{cluster}/supervisor. A global send is refused before publish when nobody is live at that address."
@@ -59,7 +64,10 @@ func toolCatalog(gcfg *globalConfig, cueOn bool) []toolDef {
 					"refs":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "pointers: bd:, finding:, file:, url:, pr:"},
 					"in_reply_to":  str("optional message_id being answered"),
 					"reply_by":     str("optional RFC3339 deadline"),
-					"workspace":    str("optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known cold mailbox (no live presence) verbatim. Ignored for a global:// address, whose subject carries no workspace."),
+					"ask":          str("optional: the intake id (I-<n>) of the operator ask this send answers. When the send is accepted, the shim writes the relay-log entry for it (ask, recipient, text, message id). An id that is not in asks.jsonl refuses the send. One recipient only; not for broadcast addresses."),
+					"kind":         str("optional, with ask: relay, ruling, build, research, question or answer. Defaults to relay when ask is set."),
+					"workspace":    str("optional recipient workspace. Omit and it is resolved from the recipient's live presence; a send to a recipient with no live presence is then refused, not silently misdelivered. Set it to address a known mailbox (no live presence) verbatim; the send is then refused unless a durable consumer filters that subject with that exact filter, or cold is true. Ignored for a global:// address, whose subject carries no workspace."),
+					"cold":         map[string]any{"type": "boolean", "description": "optional. With workspace set, publish even when no durable consumer filters the subject yet, for mail to a seat that has not started; the result says no consumer filters it, or that the check could not run. Without cold, a hinted send to an unfiltered subject is refused."},
 				},
 				"required": []string{"to", "performative", "text"},
 			},
@@ -217,7 +225,35 @@ type sendArgs struct {
 	InReplyTo    string `json:"in_reply_to"`
 	ReplyBy      string `json:"reply_by"`
 	Workspace    string `json:"workspace"`
+	Ask          string `json:"ask"`
+	Kind         string `json:"kind"`
 	Refs         []string
+	// FailFast is the presence watch's extra argument (presencewatch_shim.go).
+	// toolSend reads it from the raw arguments; it is declared here only so the
+	// strict decode in buildSendEnvelope does not count it as unknown.
+	FailFast bool `json:"fail_fast"`
+	// Cold is read by toolSend from the raw args; it is declared here so a
+	// send that carries it passes an unknown-argument check on sendArgs.
+	Cold bool `json:"cold"`
+}
+
+// sendArgNames are the send_message arguments, in the order the schema lists them.
+const sendArgNames = "to, performative, text, refs, in_reply_to, reply_by, workspace, cold, ask, kind, fail_fast"
+
+// sendArgsError names an unknown argument. A misspelled one used to be dropped
+// silently, so the caller read "content.data is empty for type text" and went
+// looking at an envelope field it never set. Other decode errors pass through.
+func sendArgsError(err error) error {
+	name, ok := strings.CutPrefix(err.Error(), "json: unknown field ")
+	if !ok {
+		return err
+	}
+	name = strings.Trim(name, `"`)
+	switch name {
+	case "content", "body", "message", "data":
+		return fmt.Errorf("send_message: unknown argument %q (want text)", name)
+	}
+	return fmt.Errorf("send_message: unknown argument %q (valid: %s)", name, sendArgNames)
 }
 
 // buildSendEnvelope parses and validates send_message args into an envelope,
@@ -226,8 +262,15 @@ type sendArgs struct {
 // correlation), is testable without a broker.
 func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, error) {
 	var a sendArgs
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, "", err
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&a); err != nil {
+		return nil, "", sendArgsError(err)
+	}
+	// json.Unmarshal refused data after the object; a Decoder reads one value
+	// and stops, so check the rest is empty.
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, "", errors.New("send_message: unexpected data after the arguments")
 	}
 	e := newEnvelope(self)
 	e.Recipient.Address = a.To
@@ -241,6 +284,9 @@ func buildSendEnvelope(self Sender, raw json.RawMessage) (*Envelope, string, err
 	if err := e.validate(); err != nil {
 		// The envelope is returned with its refusal so the caller can audit it
 		// as built (LR-6).
+		return e, "", atStage("validate", err)
+	}
+	if err := checkSendAsk(a.Ask, a.Kind, a.To); err != nil {
 		return e, "", atStage("validate", err)
 	}
 	return e, a.Workspace, nil
@@ -270,15 +316,23 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	}
 	var opts struct {
 		FailFast bool `json:"fail_fast"`
+		Cold     bool `json:"cold"`
 	}
 	_ = json.Unmarshal(raw, &opts)
 	if opts.FailFast {
 		ctx = context.WithValue(ctx, holdFailFastKey{}, true)
 	}
+	if opts.Cold {
+		ctx = context.WithValue(ctx, coldSendKey{}, true)
+	}
+	ask, kind := sendRelayFields(raw)
+	if ask != "" {
+		ctx = context.WithValue(ctx, holdRelayKey{}, relayFields{ask, kind})
+	}
 	res, err := bus.publish(ctx, e, wsHint)
 	var held *heldErr
 	if errors.As(err, &held) {
-		return map[string]any{
+		out := map[string]any{
 			"status":     "held, not delivered",
 			"message_id": e.MessageID,
 			"hold_id":    held.rec.ID,
@@ -286,7 +340,11 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 			"reason":     held.rec.Reason,
 			"sell_by":    held.rec.SellBy.Format(time.RFC3339),
 			"note":       "the presence watch is holding this send: it is not delivered. It goes out when the recipient returns and its presence row is beating, within its sell-by, and is proposed for your review after that. cancel_held withdraws it; fail_fast refuses instead",
-		}, nil
+		}
+		if ask != "" {
+			out["relay_entry"] = "pending: written when the send is released; a cancelled hold writes none"
+		}
+		return out, nil
 	}
 	if err != nil {
 		return nil, bus.refuseEnvelope(ctx, e, "publish", err)
@@ -303,6 +361,25 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if res.Stream != "" {
 		out["stream"] = res.Stream
 		out["sequence"] = res.Sequence
+	}
+	if res.NoConsumer {
+		out["cold"] = "no consumer filters this subject yet: the message is stored and stays unread until a seat's durable filters it"
+	}
+	if res.CheckFailed != "" {
+		out["cold"] = "the check for a consumer on this subject could not run (" + res.CheckFailed + "): the message is stored, and whether anyone reads it was not established"
+	}
+	if ask != "" {
+		// The send has left. A relay-log that cannot write is a warning on the accepted
+		// result, never a failed send: refusing now would invite a duplicate.
+		if entry, shelf, err := writeRelayEntry(ctx, ask, kind, e.Recipient.Address, e.Content.Data, e.MessageID); err != nil {
+			out["warning"] = "accepted, but no relay-log entry was written: " + err.Error()
+		} else {
+			out["relay_entry"] = entry
+			if shelf != "" {
+				// An answer entry owes the Reply Shelf a row; the cue reaches the seat here.
+				out["shelf"] = shelf
+			}
+		}
 	}
 	return out, nil
 }
@@ -383,6 +460,9 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		if e := bus.expiredUnread(ctx); e != "" {
 			out["expired_unread"] = e
 		}
+		if e := bus.globalExpiredUnread(ctx); e != "" {
+			out["global_expired_unread"] = e
+		}
 	} else {
 		out["tier"] = res.Tier
 		if bus.handled != nil {
@@ -411,9 +491,11 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 func returnedResult(ctx context.Context, bus *Bus, a waitArgs, items []drained) map[string]any {
 	note := "returned: the reply that first carried this mail was cancelled after it was written; it is not new mail"
 	if a.Max > 1 {
+		rem, failed := bus.remainingRead(ctx)
+		beatLastDrain(rem, failed, time.Now())
 		return map[string]any{
 			"messages": items, "count": len(items), "order": batchOrderNote,
-			"returned": len(items), "returned_note": note, "remaining": bus.remaining(ctx),
+			"returned": len(items), "returned_note": note, "remaining": rem,
 		}
 	}
 	return map[string]any{
@@ -443,8 +525,13 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 		if e := bus.expiredUnread(ctx); e != "" {
 			out["expired_unread"] = e
 		}
+		if e := bus.globalExpiredUnread(ctx); e != "" {
+			out["global_expired_unread"] = e
+		}
 	} else {
-		out["remaining"] = bus.remaining(ctx)
+		rem, failed := bus.remainingRead(ctx)
+		out["remaining"] = rem
+		beatLastDrain(rem, failed, time.Now())
 	}
 	if res.Discarded > 0 {
 		out["discarded"] = res.Discarded
@@ -487,10 +574,14 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 		return nil, err
 	}
 	out := map[string]any{
+		"lane":    res.Lane,
 		"summary": res.Summary,
 		"waiting": res.Expected,
 		"read":    res.Read,
 		"note":    "nothing was acked; drain in order with wait_for_message max=N",
+	}
+	if ff := bus.forFilterSummary(); ff != nil {
+		out["for_filter"] = ff
 	}
 	for tier, exp := range res.Expected {
 		if uint64(res.Read[tier]) < exp {

@@ -56,6 +56,56 @@ curl -s http://127.0.0.1:8222/varz | head -3     # it answers
 
 The broker is reversible: kill the process and remove `~/.director/nats`.
 
+### Keep it running across logins (macOS)
+
+A broker started with `&` ends with its terminal and does not come back after
+a reboot. To have launchd start it at login, give a user launch agent the
+script, not `nats-server`: launchd starts the agent with no shell environment,
+so a `ProgramArguments` copied from `ps` (which shows only what the script
+`exec`s) fails on every start with `variable reference for
+'DIRECTOR_PHASE0_STORE' ... can not be found`, and launchd restarts it every
+`ThrottleInterval` seconds without ever reporting the job as failed.
+
+Save as `~/Library/LaunchAgents/<your.label>.director-bus.plist`, with absolute
+paths (launchd does not expand `~`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>your.label.director-bus</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/ABSOLUTE/PATH/TO/director/probe/nats-phase-0/start.sh</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+    <key>ThrottleInterval</key><integer>30</integer>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key><string>/Users/YOU</string>
+        <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>StandardErrorPath</key><string>/Users/YOU/.director/launchd-logs/director-bus.err.log</string>
+</dict>
+</plist>
+```
+
+`PATH` must reach `nats-server` and `jq` (the script provisions the inbox
+stream with them). Load it and check that it runs, not only that it loaded:
+
+```sh
+mkdir -p ~/.director/launchd-logs
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/your.label.director-bus.plist
+launchctl print gui/$(id -u)/your.label.director-bus | grep -E 'state =|last exit'   # state = running
+curl -s http://127.0.0.1:8222/varz | head -3
+```
+
+A job that reads `state = spawn scheduled` with a nonzero `last exit code` is
+failing at start; its reason is in the error log.
+
 ## 2. Provision the streams and the presence bucket
 
 A bare broker accepts a shim's connection and then strands it: the inbox
@@ -70,6 +120,12 @@ nats stream add AGENT_INBOX --subjects 'agent.*.*.*.inbox,agent.*.*.role.*.inbox
 nats stream add AGENT_AUDIT --subjects 'agent.audit' --storage file --retention limits --max-age 720h
 nats kv add AGENT_STATE --ttl 90s --storage file
 ```
+
+The `--max-age` on `AGENT_INBOX` is yours to set; 168h is only the example.
+`director-mcp` reads the stream's own `max_age` when it starts, uses that for
+how long it keeps its send records, and logs the value it read. If it cannot
+read the stream, or the stream has no max age, it falls back to 168h and logs a
+warning. It never changes the stream.
 
 Verify:
 
@@ -462,8 +518,9 @@ prerequisites", in its repository) gives the ways to keep a host awake.
 | `claude mcp list` shows the server but the tools are absent | tools load at session start | start a new session |
 | the roster is empty while a session runs | a shim build older than 2026-09-12 set presence once and never renewed | rebuild the shim; presence is on a 30s timer now |
 | a message never arrives | the receiver has not polled | it arrives on the receiver's next `wait_for_message`; there is no push |
-| did my message arrive | `send_message` says only "accepted" | `director-mcp asks --id <message_id>` reports `delivery`: `read`, `not_yet_read`, `expired_unread`, `no_reader` or `unknown`. It is a read by the receiver's durable, not a reply |
-| `send_message` refused: no live presence for the recipient | R-92: the workspace is resolved from live presence | pass `workspace` explicitly to address a cold mailbox verbatim |
+| did my message arrive | `send_message` says only "accepted" | `director-mcp asks --id <message_id>` reports `delivery`: `read`, `not_yet_read`, `expired_unread`, `no_reader` or `unknown`. `delivery` is the receiver's ack, not a reply; in handled mode (`DIRECTOR_HANDLED=1`) a seat acks only at `mark_handled`, so mail it received and has not marked handled is not yet acked |
+| `send_message` refused: no live presence for the recipient | R-92: the workspace is resolved from live presence | pass `workspace` explicitly to address a known mailbox verbatim |
+| `send_message` refused: no consumer filters the subject | a send with `workspace` set names a subject no durable consumer filters with that exact filter, often a typo in the workspace, team or id | fix the address; to leave mail for a seat that has not started, send with `cold: true` |
 | shim refuses to start naming the id | the id has a byte outside `[A-Za-z0-9_-]` | fix the launcher; the shim rejects and never rewrites |
 | a second shim logs `WARNING: ... instance ... pid ...` | two sessions share one id | give each session its own id |
 | authorization violation in the shim log | the broker requires a credential | set `DIRECTOR_NATS_USER` and `DIRECTOR_NATS_PASS` for the team |

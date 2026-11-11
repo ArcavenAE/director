@@ -66,8 +66,9 @@ Reads, each read-only and bounded by `FREEBUSY_CALL_TIMEOUT`:
   and quiet, `marvel capture <session> --cluster C -e` and a match in the script: the expired-login line, the consent dialog's title,
   and the auto-mode menu through `composer-check --file`. Captures are taken
   only for seats whose marvel state is running and that are quiet (ACTIVE% 0
-  or `-`), at most `FREEBUSY_CAPTURE_MAX` (default 40) per run, and the rest are
-  `GAP: capture cap`. The script never passes `--repaint` or `--composer` to
+  or `-`), at most `FREEBUSY_CAPTURE_MAX` (default 100) per run, split evenly across
+  the clusters read with an unused share passed on, and the rest are
+  `GAP: capture cap`, naming each cluster that lost captures. The script never passes `--repaint` or `--composer` to
   `capture`: both widen the pane by a column to force a redraw, which a seat
   that is only being read must not suffer. `-e` alone reads what the pane last
   drew. The script's own match is temporary. When marvel's

@@ -106,7 +106,7 @@ flowchart TD
   A3["broadcast://ws[/team]"] --> S3["each live seat's agent inbox<br/>fan-out to presence at send time"]
   A4["global://director"] --> S4["global.director.inbox<br/>durable on the hub, from any cluster"]
   A5["global://{cluster}/supervisor"] --> S5["global.{cluster}.supervisor.inbox<br/>durable on the hub, one per cluster"]
-  S2 -->|"no holder"| NU["NOT-UNDERSTOOD back to sender"]
+  S2 -->|"no holder"| NU["refused before publish: tool error to sender"]
 ```
 
 A global address carries no workspace token. The cluster name stands in for

@@ -8,8 +8,9 @@
 # is visited too and printed as such, so a cluster added later is never skipped
 # without a word (aae-orc-acasl). Those come after GLOBAL_PRESENCE, so a failure on
 # one cannot stop the streams or the bucket the script always provisioned. A stream
-# listing that fails, or is not a JSON array of names, stops the run before anything
-# is created.
+# listing that fails, or is not exactly one JSON array of names, stops the run before
+# anything is created. A consumer listing on a stream that is not one is a stop too,
+# naming the stream, instead of a durable left at its old threshold (aae-orc-1jbrn).
 #
 # A stream that does not exist is created with the declared max age. One that
 # does exist is only ever RAISED: a finite max age shorter than the declared one
@@ -48,14 +49,29 @@ DURABLE_INACTIVE_NS=$(( ${DURABLE_INACTIVE%h} * 3600 * 1000000000 ))
 clusters=("$@")
 [[ ${#clusters[@]} -gt 0 ]] || clusters=(kinu mokuzai)
 hours() { awk -v n="$1" 'BEGIN { if (n == 0) print "unlimited"; else printf "%gh", n / 3600000000000 }'; }
+# bad_shape LABEL: stop the run, naming the listing whose shape was wrong. Falling
+# through would leave something unraised and exit 0, which is the silent skip.
+bad_shape() { echo "$1 returned something other than a JSON array of names" >&2; exit 1; }
+# names_in LISTING PREFIX: the names in LISTING that start with PREFIX, one per line.
+# LISTING must be exactly one JSON document, either null (a bare hub lists null) or an
+# array of strings. No document, several documents, a non-string, an object or text
+# that is not JSON all fail, and the caller turns that into bad_shape. jq -s reads the
+# whole listing as an array of documents, so an empty listing and a listing of two
+# arrays are both a count other than one.
+names_in() {
+  printf '%s' "$1" | jq -rs --arg p "$2" 'if length != 1 then error("not one document") elif .[0] == null then empty elif (.[0] | type == "array" and all(.[]; type == "string")) then .[0][] | select(startswith($p)) else error("not an array of names") end'
+}
 # raise_durables lifts every consumer on one stream whose name starts with
 # mcp_global_, which is how the shim names each session's durable. The test is a
 # name prefix and nothing more, so a hand-made consumer that happened to carry
 # that prefix would be raised too; one without it is not this script's to change.
 raise_durables() {
-  local stream="$1" names c info cur
+  local stream="$1" names durables c info cur old_ifs="$IFS"
   names="$("${A[@]}" consumer ls "$stream" --names --json)" || { echo "consumer ls $stream failed" >&2; exit 1; }
-  for c in $(printf '%s' "$names" | jq -r '.[]? | select(startswith("mcp_global_"))'); do
+  durables="$(names_in "$names" mcp_global_)" || bad_shape "consumer ls $stream"
+  # Newlines only, globbing off: a name with a glob character is read as written.
+  IFS=$'\n'; set -f
+  for c in $durables; do
     info="$("${A[@]}" consumer info "$stream" "$c" --json)" || { echo "consumer info $stream $c failed" >&2; exit 1; }
     cur="$(printf '%s' "$info" | jq -r '.config.inactive_threshold // 0')"
     if (( cur > 0 && cur < DURABLE_INACTIVE_NS )); then
@@ -63,6 +79,7 @@ raise_durables() {
       echo "durable $c on $stream inactive_threshold raised $(hours "$cur") -> $DURABLE_INACTIVE"
     fi
   done
+  IFS="$old_ifs"; set +f
 }
 add_stream() {
   local name="$1" subj="$2" info cur
@@ -82,15 +99,10 @@ add_stream() {
   echo "stream $name created ($subj)"
 }
 # Every GLOBAL_TO_ stream already on the hub is visited, named or not. A failed
-# listing stops the run, and so does one that is not a JSON array of names (a bare
-# hub lists null): falling back to the bootstrap list would be the silent skip.
+# listing stops the run, and so does one that is not exactly one JSON array of names
+# (a bare hub lists null): falling back to the bootstrap list would be the silent skip.
 listing="$("${A[@]}" stream ls --names --json)" || { echo "stream ls failed" >&2; exit 1; }
-bad_shape() { echo "stream ls returned something other than a JSON array of names" >&2; exit 1; }
-# Nothing at all on stdout is not the null a bare hub lists: jq would read no input,
-# print nothing and exit 0, which is the silent skip.
-if [[ -z "${listing//[[:space:]]/}" ]]; then bad_shape; fi
-found="$(printf '%s' "$listing" | jq -r 'if . == null then empty elif (type == "array" and all(.[]; type == "string")) then .[] | select(startswith("GLOBAL_TO_") and . != "GLOBAL_TO_DIRECTOR") else error("stream ls did not return an array of names") end')" \
-  || bad_shape
+found="$(names_in "$listing" GLOBAL_TO_)" || bad_shape "stream ls"
 extra=()
 # Split on newlines only, with globbing off, so a name with a glob character is not
 # expanded against the files here (and no here-string, which bash 3.2 writes to a file).
@@ -99,6 +111,7 @@ extra=()
 named=" ${clusters[*]} "
 old_ifs="$IFS"; IFS=$'\n'; set -f
 for s in $found; do
+  if [[ "$s" == GLOBAL_TO_DIRECTOR ]]; then continue; fi
   c="${s#GLOBAL_TO_}"
   if [[ -z "$c" ]]; then echo "stream $s has no cluster name, not visited"; continue; fi
   case "$named" in *" "$c" "*) ;; *) extra+=("$c"); named="$named$c ";; esac

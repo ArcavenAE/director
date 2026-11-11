@@ -15,8 +15,11 @@ package main
 
 import (
 	"context"
+	"log"
+	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -28,7 +31,8 @@ import (
 const forRowFresh = presenceTTL
 
 var (
-	forLine   = regexp.MustCompile(`^FOR[ \t]+(.+)$`)
+	forLine   = regexp.MustCompile(`(?i)^FOR[ \t]+(.+)$`)
+	forEnd    = regexp.MustCompile(`[.;:](\s|$)`)
 	forSeat   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(@[a-z0-9-]+)?$`)
 	forRole   = regexp.MustCompile(`^role://[a-z0-9-]+/[a-z0-9-]+$`)
 	forGenSfx = regexp.MustCompile(`-g[0-9]+-[0-9]+$`)
@@ -44,10 +48,31 @@ type forFilter struct {
 	roster  func(ctx context.Context) ([]map[string]any, error)
 	now     func() time.Time
 	logf    func(format string, args ...any)
+	first   sync.Once
+	// note receives the one first-decision line; nil means the standard log.
+	// It is separate from logf so a test that counts drop lines still sees one.
+	note func(format string, args ...any)
+}
+
+// forFilterStatus is the one line printed when the global tier attaches, so a
+// seat whose filter is on but drops nothing can be told from one where it is
+// off. It carries the team the filter compares against and never the value of
+// DIRECTOR_FOR_FILTER.
+func forFilterStatus(env, team, cluster, role string) string {
+	switch env {
+	case "1":
+		return "director-mcp: for-filter on, team=" + team + " cluster=" + cluster + " role=" + role
+	case "":
+		return "director-mcp: for-filter off"
+	}
+	return "director-mcp: for-filter off (DIRECTOR_FOR_FILTER is set but not 1)"
 }
 
 // forText returns the text after FOR on the first non-blank line of data, and
-// whether that line is a FOR line. The match is anchored and case-sensitive.
+// whether that line is a FOR line. The match is anchored and ignores case. The
+// text ends at the first ".", ";" or ":" that is followed by whitespace or the
+// end of the line, so prose after the names is not read as names, while a
+// role:// name and a dotted seat name stay whole.
 func forText(data string) (string, bool) {
 	for _, line := range strings.Split(data, "\n") {
 		line = strings.TrimRight(line, "\r")
@@ -58,19 +83,23 @@ func forText(data string) (string, bool) {
 		if m == nil {
 			return "", false
 		}
-		return m[1], true
+		text := m[1]
+		if loc := forEnd.FindStringIndex(text); loc != nil {
+			text = text[:loc[0]]
+		}
+		return text, true
 	}
 	return "", false
 }
 
 // forTokens splits the FOR text on commas and whitespace, drops the words
-// "and" and "or", and trims trailing . ; : from each token. Seat names hold no
+// "and", "or" and "only", and trims trailing . ; : from each token. Seat names hold no
 // spaces, so splitting on whitespace never cuts a name.
 func forTokens(text string) []string {
 	var out []string
 	for _, f := range strings.Fields(strings.ReplaceAll(text, ",", " ")) {
 		f = strings.TrimRight(f, ".;:")
-		if f == "" || f == "and" || f == "or" {
+		if f == "" || f == "and" || f == "or" || f == "only" {
 			continue
 		}
 		out = append(out, f)
@@ -178,6 +207,13 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 	if err != nil {
 		return false, ""
 	}
+	f.first.Do(func() {
+		note := f.note
+		if note == nil {
+			note = log.Printf
+		}
+		note("director-mcp: for-filter first decision read %d roster rows (roster rows are the global presence rows)", len(rows))
+	})
 	for _, t := range toks {
 		name, cluster := forSplit(t)
 		if !f.otherTeamSeat(name, cluster, rows) {
@@ -213,4 +249,30 @@ func (g *globalTier) dropForeign(ctx context.Context, m jetstream.Msg, e *Envelo
 	g.forDrops.Add(1)
 	g.forFilter.logf("director-mcp: global ack %s FOR %s", e.MessageID, text)
 	return true
+}
+
+// forFilterSummary is the for_filter field of inbox_summary: the filter's state
+// and how many messages it has dropped since this session attached the global
+// tier. It reads a counter and the environment's shape, never a value, and
+// acks nothing. A session with no global tier has no such field.
+func (b *Bus) forFilterSummary() map[string]any {
+	if b.globalCfg == nil {
+		return nil
+	}
+	b.globalMu.Lock()
+	g := b.global
+	b.globalMu.Unlock()
+	env := os.Getenv("DIRECTOR_FOR_FILTER")
+	state := "off"
+	var dropped int64
+	switch {
+	case g != nil && g.forFilter != nil, g == nil && env == "1":
+		state = "on"
+	case env != "" && env != "1":
+		state = "set but not 1"
+	}
+	if g != nil {
+		dropped = g.forDrops.Load()
+	}
+	return map[string]any{"state": state, "dropped": dropped}
 }

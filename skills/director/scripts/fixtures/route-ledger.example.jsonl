@@ -1,0 +1,11 @@
+{"ask_id":"ph-ask-01","routed_to":"role://placeholder-team/builder","alternatives":["role://placeholder-team/reviewer"],"basis":"placeholder basis: the builder's scope covers it","principal":"placeholder-principal","supervisor_epoch":"g1-0","depth_at_route":0,"depth_observed":0,"routed_at":"2030-01-01T10:00:00Z"}
+{"ask_id":"ph-ask-01","supervisor_epoch":"g1-0","at":"2030-01-01T10:05:00Z","kind":"ack","acked_at":"2030-01-01T10:05:00Z","text":"placeholder: the builder took it"}
+{"ask_id":"ph-ask-01","supervisor_epoch":"g1-0","at":"2030-01-01T12:00:00Z","kind":"close","closed_at":"2030-01-01T12:00:00Z","result":"placeholder result: merged"}
+{"ask_id":"ph-ask-02","routed_to":"role://placeholder-team/builder","basis":"placeholder basis, an older row with no depth","principal":"placeholder-principal","supervisor_epoch":"g1-0","routed_at":"2030-01-01T11:00:00Z","acked_at":"2030-01-01T11:02:00Z"}
+{"ask_id":"ph-ask-02","event":"placeholder legacy relay text","supervisor_epoch":"g1-0"}
+{"ask_id":"ph-ask-02","result":"placeholder legacy close with no time"}
+{"ask_id":"ph-ask-03","routed_to":"role://placeholder-team/reviewer","basis":"placeholder basis","principal":"placeholder-principal","supervisor_epoch":"g1-0","depth_at_route":2,"depth_observed":3,"routed_at":"2030-01-01T13:00:00Z"}
+{"ask_id":"ph-ask-04","routed_to":"none","basis":"placeholder: no seat covers it","principal":"placeholder-principal","supervisor_epoch":"g1-0","routed_at":"2030-01-01T14:00:00Z","no_route":{"reason":"placeholder reason"},"cancelled_at":"2030-01-01T14:01:00Z"}
+{"ask_id":"ph-ask-03","acked_at":"2030-01-01T13:10:00Z","event":"placeholder legacy ack text","supervisor_epoch":"g1-0"}
+{"ask_id":"ph-ask-03","at":"2030-01-01T13:20:00Z","event":"placeholder legacy note text","supervisor_epoch":"g1-0"}
+{"scheduled_role":"placeholder-sweep","firing_id":"20300101T110000Z","results_sha256":"0000000000000000000000000000000000000000000000000000000000000000","acked_at":"2030-01-01T11:30:00Z"}

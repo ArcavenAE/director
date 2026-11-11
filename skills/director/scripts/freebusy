@@ -27,7 +27,7 @@
 #                  works from each seat durable's ack floor, creates no consumer, acks nothing and
 #                  writes no presence row; a row with over_threshold true is a live seat holding mail
 #                  older than the 300 s receipt window. This script never opens a bus connection itself
-#     over-bound   the same reader's pending-age bound (I-190:1), read twice: once as above, once more
+#     over-bound   the same reader's pending-age bound, read twice: once as above, once more
 #                  with --global, because one call returns only one tier. A row with over_bound true is
 #                  a live seat whose oldest unread message is older than the reader's bound (600 s by
 #                  default, DIRECTOR_PENDING_AGE_BOUND to override), whatever --older-than says. Each is
@@ -48,6 +48,15 @@
 # No captured pane text, token or message body reaches any file: a capture is classified in
 # memory and only the class word, the seat and the times are kept.
 # It sends nothing on the bus, injects nothing, writes no bd record and calls no gh.
+#
+# Without marvel: when marvel is not on PATH there is no cluster to read, so the seats come from
+# director's own roster (director-mcp roster --json: the presence rows, with each row's age and
+# whether it is fresh, no older than presenceTTL (cmd/director-mcp/askledger.go, 90 s today; the roster command sets fresh from that constant, so change it there only)). A fresh seat
+# with mail waiting (director-mcp unread --json, pending above 0) is busy; a fresh seat with nothing
+# waiting is free, which here means only that nothing waits for it, since no activity reading exists;
+# a seat with old presence, and every seat when unread cannot be read, is unknown, never free. Lanes
+# are still busy on open asks. Every such row says source: roster, the duty cells are absent so
+# every candidate reads ask-first, and the count line says so.
 #
 # States: free, busy, waiting, unknown. A seat is busy when its ACTIVE% is above 0,
 # free when it is 0, waiting when its role is parked (REPLICAS 0), the harness parked it,
@@ -72,7 +81,7 @@
 # (seconds for the cluster list, for each cluster read and for the asks read, default 20),
 # FREEBUSY_ASKS_MAX_AGE (seconds an asks ledger may be old, default 900),
 # FREEBUSY_LOCK_STALE_MIN (a positive integer: minutes before a lock with no usable pid is taken over, default 2),
-# FREEBUSY_CAPTURE_MAX (most seats captured per run, default 40; the rest print GAP health: capture cap),
+# FREEBUSY_CAPTURE_MAX (most seats captured per run, default 100, split evenly across the clusters read with an unused share passed on; the rest print GAP health: capture cap naming the cluster),
 # FREEBUSY_CAPTURE_TIMEOUT (seconds for the capture and version reads together, default 60),
 # FREEBUSY_TAP_FORMULA (the local file named above),
 # FREEBUSY_DIRECTOR_MCP (default director-mcp on PATH, else
@@ -89,7 +98,7 @@ legacy_conf="$state/freebusy-clusters.conf"
 exclude_file="$state/freebusy-clusters.exclude"
 call_timeout="${FREEBUSY_CALL_TIMEOUT:-20}"
 max_age="${FREEBUSY_ASKS_MAX_AGE:-900}"
-capture_max="${FREEBUSY_CAPTURE_MAX:-40}"
+capture_max="${FREEBUSY_CAPTURE_MAX:-100}"
 capture_timeout="${FREEBUSY_CAPTURE_TIMEOUT:-60}"
 tap_formula="${FREEBUSY_TAP_FORMULA:-}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -108,8 +117,8 @@ if [[ -n "${FREEBUSY_LOCK_STALE_MIN+x}" ]]; then
 fi
 
 if [[ ! "$capture_max" =~ ^[0-9]+$ ]]; then
-  echo "- GAP health: FREEBUSY_CAPTURE_MAX '${capture_max:0:20}' is not a number; using 40"
-  capture_max=40
+  echo "- GAP health: FREEBUSY_CAPTURE_MAX '${capture_max:0:20}' is not a number; using 100"
+  capture_max=100
 fi
 if [[ ! "$capture_timeout" =~ ^[1-9][0-9]*$ ]]; then
   echo "- GAP health: FREEBUSY_CAPTURE_TIMEOUT '${capture_timeout:0:20}' is not a positive integer; using 60"
@@ -232,6 +241,16 @@ wait_jobs() {
 # --- clusters ---------------------------------------------------------------
 if [[ -e "$legacy_conf" ]]; then note "clusters: freebusy-clusters.conf is no longer read"; fi
 
+# No marvel on PATH: there is no cluster to read, and the seats come from the roster below.
+roster_mode=0
+if ! command -v marvel >/dev/null 2>&1; then
+  roster_mode=1
+  note "clusters: marvel is not on PATH; the seats come from director's roster (source: roster)"
+fi
+
+cfgnames=()
+cfg_ok=0
+if [[ "$roster_mode" == 0 ]]; then
 set -m
 (
   set +e
@@ -242,8 +261,6 @@ cpid=$!
 set +m
 wait_jobs "$cpid"
 
-cfgnames=()
-cfg_ok=0
 if [[ ! -f "$tmp/cfg.rc" ]]; then
   gap "clusters: marvel config list failed (no answer within ${call_timeout}s)"
 elif [[ "$(cat "$tmp/cfg.rc")" != 0 ]]; then
@@ -259,6 +276,8 @@ else
     fi
   done < <(awk '$1 == "NAME" { next } { n = $1; if (n == "*") n = $2; else if (substr(n, 1, 1) == "*") n = substr(n, 2); if (n != "") print n }' "$tmp/cfg.out")
   if [[ ${#cfgnames[@]} -eq 0 && ! -s "$gaps" ]]; then gap "clusters: marvel config list names no cluster"; fi
+fi
+
 fi
 
 excluded=()
@@ -427,6 +446,76 @@ else
   fi
 fi
 
+# --- roster path: the seats when there is no marvel --------------------------
+# One roster read and one unread read, side by side, each bounded by the call timeout. A seat is
+# fresh when the roster says so (presence no older than the presence TTL). Fresh and with mail
+# waiting is busy; fresh with nothing waiting is free (nothing waits for it; no activity reading
+# exists); old presence is unknown; and when unread cannot be read nothing reads free.
+roster_note=""
+if [[ "$roster_mode" == 1 ]]; then
+  roster_note="source: roster (no marvel on PATH; duty cells absent, so every candidate reads ask-first)"
+  if [[ ! -x "$mcp" ]]; then
+    gap "roster: director-mcp not found at $mcp, so no seat was listed"
+  else
+    pids=()
+    set -m
+    (
+      set +e
+      "$mcp" roster --json </dev/null >"$tmp/roster.out" 2>"$tmp/roster.err"
+      echo $? >"$tmp/roster.rc"
+    ) &
+    pids+=("$!")
+    set +m
+    set -m
+    (
+      set +e
+      "$mcp" unread --json </dev/null >"$tmp/roster-unread.out" 2>"$tmp/roster-unread.err"
+      echo $? >"$tmp/roster-unread.rc"
+    ) &
+    pids+=("$!")
+    set +m
+    wait_jobs "${pids[@]}"
+    roster_ok=0
+    if [[ ! -f "$tmp/roster.rc" ]]; then
+      gap "roster: director-mcp roster gave no answer within ${call_timeout}s, so no seat was listed"
+    elif [[ "$(cat "$tmp/roster.rc")" != 0 ]]; then
+      gap "roster: director-mcp roster exited $(cat "$tmp/roster.rc") ($(first_line "$tmp/roster.err")), so no seat was listed"
+    elif ! jq -e '(.rows | type) == "array"' "$tmp/roster.out" >/dev/null 2>&1; then
+      gap "roster: director-mcp roster printed no roster ($(first_line "$tmp/roster.err")), so no seat was listed"
+    else
+      roster_ok=1
+      # a row the roster could not read is kept as not fresh (so unknown); say so, once per warning
+      while IFS= read -r rw; do
+        if [[ -n "$rw" ]]; then gap "roster: $(printf '%s' "$rw" | tr -d '[:cntrl:]')"; fi
+      done < <(jq -r '(.warnings // [])[]' "$tmp/roster.out" 2>/dev/null)
+    fi
+    unread_ok=0
+    if [[ ! -f "$tmp/roster-unread.rc" ]]; then
+      gap "roster: director-mcp unread gave no answer within ${call_timeout}s, so no seat reads free"
+    elif [[ "$(cat "$tmp/roster-unread.rc")" != 0 ]] || ! jq -e '(.durables | type) == "array"' "$tmp/roster-unread.out" >/dev/null 2>&1; then
+      gap "roster: director-mcp unread was not read ($(first_line "$tmp/roster-unread.err")), so no seat reads free"
+    else
+      unread_ok=1
+    fi
+    if [[ "$roster_ok" == 1 ]]; then
+      if [[ "$unread_ok" != 1 ]]; then echo '{"durables":[]}' >"$tmp/roster-unread.out"; fi
+      jq -c --arg at "$at" --argjson uok "$unread_ok" --slurpfile u "$tmp/roster-unread.out" '
+        ($u[0].durables // []) as $d
+        | .rows[]
+        | . as $r
+        | ([ $d[] | select(.agent_id == $r.agent_id and .instance == $r.instance) ]) as $m
+        | ($m | map(.pending // 0) | add // 0) as $pending
+        | (if $r.fresh != true then ["unknown", "presence old or unreadable"]
+           elif $uok != 1 then ["unknown", "unread not read"]
+           elif ($m | length) == 0 then ["unknown", "no unread row for this seat"]
+           elif $pending > 0 then ["busy", "unread pending"]
+           else ["free", "fresh presence, nothing waiting; no activity reading"] end) as $sr
+        | {at: $at, cluster: "roster", workspace: ($r.workspace // ""), team: $r.team, role: $r.role, name: $r.agent_id,
+           state: $sr[0], reason: $sr[1], last_active: null, active: null, last_turn: null, source: "roster"}' "$tmp/roster.out" >>"$seats_new"
+    fi
+  fi
+fi
+
 # --- lanes ------------------------------------------------------------------
 lanes_new="$tmp/lanes.new"
 jq -s -c --arg at "$at" --argjson asks "$asks_json" '
@@ -454,7 +543,8 @@ if [[ -s "$dir/health.jsonl" ]]; then jq -s -c . "$dir/health.jsonl" >"$tmp/prev
 : >"$tmp/seat.tsv"
 : >"$tmp/health.new"
 capture_skipped=0
-capture_taken=0
+: >"$tmp/cap-skipped.tsv"
+: >"$tmp/cap-counts.tsv"
 while IFS= read -r n; do
   [[ -n "$n" ]] || continue
   sed '/^@@teams$/,$d' "$tmp/$n.out" | awk 'NR == 1 { turn = ($2 == "turn"); next }
@@ -479,16 +569,28 @@ while IFS= read -r n; do
       printf "%s\t%s\t%s\t%s\t%s\t%d\n", ws, name, st, cls, why, quiet
     }' >"$tmp/$n.blk"
   awk -F'\t' -v c="$n" '$3 == "running" && $4 != "" { printf "%s\t%s\t%s\t%s\t%s\tmarvel\n", c, $1, $2, $4, $5 }' "$tmp/$n.blk" >>"$tmp/seat.tsv"
-  : >"$tmp/$n.elig"
-  while IFS=$'\t' read -r ws nm; do
-    if [[ "$capture_taken" -lt "$capture_max" ]]; then
-      printf '%s\t%s\n' "$ws" "$nm" >>"$tmp/$n.elig"
-      capture_taken=$((capture_taken + 1))
-    else
-      capture_skipped=$((capture_skipped + 1))
-    fi
-  done < <(awk -F'\t' '$3 == "running" && $4 == "" && $6 == 1 { printf "%s\t%s\n", $1, $2 }' "$tmp/$n.blk")
+  awk -F'\t' '$3 == "running" && $4 == "" && $6 == 1 { printf "%s\t%s\n", $1, $2 }' "$tmp/$n.blk" >"$tmp/$n.eligall"
+  printf '%s\t%s\n' "$(wc -l <"$tmp/$n.eligall" | tr -d ' ')" "$n" >>"$tmp/cap-counts.tsv"
 done <"$tmp/reached"
+# Each cluster read gets an even share of the cap, the smallest wanting clusters first so that
+# what one leaves unused passes to the rest. No cluster loses its captures to its place in the list.
+cap_left="$capture_max"
+cap_clusters="$(wc -l <"$tmp/cap-counts.tsv" | tr -d ' ')"
+: >"$tmp/cap-order"
+LC_ALL=C sort -t$'\t' -k1,1n -k2,2 "$tmp/cap-counts.tsv" >"$tmp/cap-order"
+while IFS=$'\t' read -r want n; do
+  [[ -n "$n" ]] || continue
+  share=$((cap_left / cap_clusters))
+  take="$want"
+  if [[ "$take" -gt "$share" ]]; then take="$share"; fi
+  awk -v k="$take" 'NR <= k' "$tmp/$n.eligall" >"$tmp/$n.elig"
+  cap_left=$((cap_left - take))
+  cap_clusters=$((cap_clusters - 1))
+  if [[ "$want" -gt "$take" ]]; then
+    printf '%s\t%s\n' "$n" $((want - take)) >>"$tmp/cap-skipped.tsv"
+    capture_skipped=$((capture_skipped + want - take))
+  fi
+done <"$tmp/cap-order"
 
 # The capture classifier: the pane is read from stdin and only a class word is printed. It looks at
 # the last lines only, so the expired-login text quoted higher in a transcript reads nothing.
@@ -574,20 +676,28 @@ unset wait_limit
 
 capture_failed=0
 capture_unfinished=0
+: >"$tmp/cap-unfinished.tsv"
 while IFS= read -r n; do
   [[ -n "$n" ]] || continue
   want="$(wc -l <"$tmp/$n.elig" | tr -d ' ')"
   got=0
   if [[ -f "$tmp/$n.caps" ]]; then got="$(wc -l <"$tmp/$n.caps" | tr -d ' ')"; fi
-  if [[ "$got" -lt "$want" ]]; then capture_unfinished=$((capture_unfinished + want - got)); fi
+  if [[ "$got" -lt "$want" ]]; then
+    capture_unfinished=$((capture_unfinished + want - got))
+    printf '%s\t%s\n' "$n" $((want - got)) >>"$tmp/cap-unfinished.tsv"
+  fi
   if [[ -f "$tmp/$n.caps" ]]; then
     capture_failed=$((capture_failed + $(awk -F'\t' '$3 == "ERR"' "$tmp/$n.caps" | wc -l | tr -d ' ')))
     awk -F'\t' -v c="$n" '$3 != "ERR" && $3 != "none" { printf "%s\t%s\t%s\t%s\t\tcapture\n", c, $1, $2, $3 }' "$tmp/$n.caps" >>"$tmp/seat.tsv"
   fi
 done <"$tmp/reached"
-if [[ "$capture_skipped" -gt 0 ]]; then gap "health: capture cap, $capture_skipped seat(s) not captured (the cap is $capture_max)"; fi
+if [[ "$capture_skipped" -gt 0 ]]; then
+  gap "health: capture cap, $capture_skipped seat(s) not captured (the cap is $capture_max, shared across the clusters read; short: $(awk -F'\t' '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $1, $2 }' "$tmp/cap-skipped.tsv"))"
+fi
 if [[ "$capture_failed" -gt 0 ]]; then gap "health: $capture_failed capture(s) could not be taken"; fi
-if [[ "$capture_unfinished" -gt 0 ]]; then gap "health: $capture_unfinished seat(s) not captured within ${capture_timeout}s"; fi
+if [[ "$capture_unfinished" -gt 0 ]]; then
+  gap "health: $capture_unfinished seat(s) not captured within ${capture_timeout}s (cut short: $(awk -F'\t' '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $1, $2 }' "$tmp/cap-unfinished.tsv"))"
+fi
 
 jq -R -c --arg at "$at" --slurpfile prev "$tmp/prev.json" '
   split("\t") as $f
@@ -597,7 +707,9 @@ jq -R -c --arg at "$at" --slurpfile prev "$tmp/prev.json" '
   | .since = ((($prev[0] // []) | map(select(.kind == "seat" and .cluster == $r.cluster and .workspace == $r.workspace and .seat == $r.seat and .class == $r.class)) | first | .since) // $at)' \
   "$tmp/seat.tsv" >>"$tmp/health.new"
 if [[ "$capture_skipped" -gt 0 ]]; then
-  jq -n -c --arg at "$at" --argjson n "$capture_skipped" '{kind: "gap", at: $at, reason: "capture cap", count: $n}' >>"$tmp/health.new"
+  while IFS=$'\t' read -r c k; do
+    jq -n -c --arg at "$at" --arg c "$c" --argjson n "$k" '{kind: "gap", at: $at, reason: "capture cap", cluster: $c, count: $n}' >>"$tmp/health.new"
+  done <"$tmp/cap-skipped.tsv"
 fi
 
 # reach, with the time the current outage began
@@ -668,7 +780,7 @@ fi
 vrow() { jq -n -c --arg at "$at" --arg h "$1" --arg v "$2" --arg s "$3" '{kind: "version", at: $at, host: $h, version: $v, source: $s}'; }
 vok() { [[ "$1" =~ ^[A-Za-z0-9._+-]{1,80}$ ]]; }
 v="$(awk 'NR == 1 && $1 == "marvel" { print $2; exit }' "$tmp/ver.client" 2>/dev/null || true)"
-if vok "$v"; then vrow client "$v" "marvel version" >>"$tmp/health.new"; else gap "version: the marvel client build could not be read"; fi
+if vok "$v"; then vrow client "$v" "marvel version" >>"$tmp/health.new"; elif [[ "$roster_mode" == 0 ]]; then gap "version: the marvel client build could not be read"; fi
 while IFS= read -r n; do
   [[ -n "$n" ]] || continue
   v="$(awk '$1 == "daemon" { print $2; exit }' "$tmp/ver.$n" 2>/dev/null || true)"
@@ -691,15 +803,19 @@ mv "$lanes_new" "$dir/lanes.jsonl"
 mv "$tmp/health.new" "$dir/health.jsonl"
 chmod 600 "$dir/seats.jsonl" "$dir/lanes.jsonl" "$dir/health.jsonl"
 jq -n -c --arg at "$at" --argjson read "$read_ok" --argjson total "$total" --arg unlisted "$unlisted" --arg asks "$asks_note" \
-  --arg seats "$seat_counts" --arg lanes "$lane_counts" \
+  --arg seats "$seat_counts" --arg lanes "$lane_counts" --arg source "${roster_note:+roster}" \
   '{at: $at, clusters_read: $read, clusters_total: $total, clusters_not_listed: ($unlisted | split(",") | map(select(. != ""))),
-    asks: $asks, seats: $seats, lanes: $lanes}' >>"$dir/flow.jsonl"
+    asks: $asks, seats: $seats, lanes: $lanes} + (if $source != "" then {source: $source} else {} end)' >>"$dir/flow.jsonl"
 chmod 600 "$dir/flow.jsonl"
 
 cat "$gaps"
 cat "$notes"
 cat "$overbound"
-line="freebusy: clusters: $read_ok of $total read; seats: $seat_counts; lanes: $lane_counts; asks: $asks_note; health: $health_counts"
+if [[ "$roster_mode" == 1 ]]; then
+  line="freebusy: $roster_note; seats: $seat_counts; lanes: $lane_counts; asks: $asks_note; health: $health_counts"
+else
+  line="freebusy: clusters: $read_ok of $total read; seats: $seat_counts; lanes: $lane_counts; asks: $asks_note; health: $health_counts"
+fi
 if [[ -n "$unlisted" ]]; then line="$line; not listed: $unlisted"; fi
 echo "$line"
 exit 0
