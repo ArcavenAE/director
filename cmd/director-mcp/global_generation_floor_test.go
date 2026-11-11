@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,5 +81,51 @@ func TestBrokerGlobalNewGenerationResumesAfterAnEarlierGenerationsFloor(t *testi
 				t.Errorf("new generation read %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// When the credential cannot list the hub's consumers, the by-name read finds
+// the same floor through the local durables each instance also holds.
+func TestBrokerGlobalGenerationFloorByName(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	if _, err := gjs.CreateStream(ctx, jetstream.StreamConfig{Name: globalStreamPrefix + "c1", Subjects: []string{"global.c1.>"}}); err != nil {
+		t.Fatal(err)
+	}
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: "supervisor"}
+	pubEnv(t, ctx, gjs, "global.c1.supervisor.inbox", "g0", "INFORM", "read by the earlier generation")
+	b1, err := connect(ctx, url, Sender{AgentID: "ops-supervisor-g1-0", Workspace: "ws1", Team: "ops"}, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err := b1.receiveTiered(ctx, 8*time.Second); err != nil || r.Env == nil || r.Env.MessageID != "g0" {
+		t.Fatalf("earlier generation first read %+v %v", r, err)
+	}
+	b1.close()
+
+	b2, err := connect(ctx, url, Sender{AgentID: "ops-supervisor-g2-0", Workspace: "ws1", Team: "ops"}, gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b2.close()
+	g, err := b2.globalReady(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	me, _ := parseGenID("ops-supervisor-g2-0")
+	got, err := g.generationFloorByName(ctx, me, "self", []string{gcfg.inboxSubject()}, func(string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("by-name floors = %v, want one durable", got)
+	}
+	for d, f := range got {
+		if !strings.HasPrefix(d, "mcp_global_ops-supervisor-g1-0_") || f == 0 {
+			t.Errorf("by-name donor %q floor %d, want the g1 durable with a floor", d, f)
+		}
 	}
 }
