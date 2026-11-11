@@ -15,8 +15,10 @@ package main
 
 import (
 	"context"
+	"log"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -45,6 +47,24 @@ type forFilter struct {
 	roster  func(ctx context.Context) ([]map[string]any, error)
 	now     func() time.Time
 	logf    func(format string, args ...any)
+	first   sync.Once
+	// note receives the one first-decision line; nil means the standard log.
+	// It is separate from logf so a test that counts drop lines still sees one.
+	note func(format string, args ...any)
+}
+
+// forFilterStatus is the one line printed when the global tier attaches, so a
+// seat whose filter is on but drops nothing can be told from one where it is
+// off. It carries the team the filter compares against and never the value of
+// DIRECTOR_FOR_FILTER.
+func forFilterStatus(env, team, cluster, role string) string {
+	switch env {
+	case "1":
+		return "director-mcp: for-filter on, team=" + team + " cluster=" + cluster + " role=" + role
+	case "":
+		return "director-mcp: for-filter off"
+	}
+	return "director-mcp: for-filter off (DIRECTOR_FOR_FILTER is set but not 1)"
 }
 
 // forText returns the text after FOR on the first non-blank line of data, and
@@ -186,6 +206,13 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 	if err != nil {
 		return false, ""
 	}
+	f.first.Do(func() {
+		note := f.note
+		if note == nil {
+			note = log.Printf
+		}
+		note("director-mcp: for-filter first decision read %d roster rows (roster rows are the global presence rows)", len(rows))
+	})
 	for _, t := range toks {
 		name, cluster := forSplit(t)
 		if !f.otherTeamSeat(name, cluster, rows) {
