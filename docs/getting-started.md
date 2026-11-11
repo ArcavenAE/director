@@ -56,6 +56,56 @@ curl -s http://127.0.0.1:8222/varz | head -3     # it answers
 
 The broker is reversible: kill the process and remove `~/.director/nats`.
 
+### Keep it running across logins (macOS)
+
+A broker started with `&` ends with its terminal and does not come back after
+a reboot. To have launchd start it at login, give a user launch agent the
+script, not `nats-server`: launchd starts the agent with no shell environment,
+so a `ProgramArguments` copied from `ps` (which shows only what the script
+`exec`s) fails on every start with `variable reference for
+'DIRECTOR_PHASE0_STORE' ... can not be found`, and launchd restarts it every
+`ThrottleInterval` seconds without ever reporting the job as failed.
+
+Save as `~/Library/LaunchAgents/<your.label>.director-bus.plist`, with absolute
+paths (launchd does not expand `~`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>your.label.director-bus</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/ABSOLUTE/PATH/TO/director/probe/nats-phase-0/start.sh</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+    <key>ThrottleInterval</key><integer>30</integer>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key><string>/Users/YOU</string>
+        <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>StandardErrorPath</key><string>/Users/YOU/.director/launchd-logs/director-bus.err.log</string>
+</dict>
+</plist>
+```
+
+`PATH` must reach `nats-server` and `jq` (the script provisions the inbox
+stream with them). Load it and check that it runs, not only that it loaded:
+
+```sh
+mkdir -p ~/.director/launchd-logs
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/your.label.director-bus.plist
+launchctl print gui/$(id -u)/your.label.director-bus | grep -E 'state =|last exit'   # state = running
+curl -s http://127.0.0.1:8222/varz | head -3
+```
+
+A job that reads `state = spawn scheduled` with a nonzero `last exit code` is
+failing at start; its reason is in the error log.
+
 ## 2. Provision the streams and the presence bucket
 
 A bare broker accepts a shim's connection and then strands it: the inbox
