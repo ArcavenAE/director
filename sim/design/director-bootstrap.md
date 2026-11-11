@@ -31,16 +31,17 @@ skill's own `standing-hook` was not wired in that session.
 This design gives director start-up and boundary mechanisms that act whether
 or not the session reads anything.
 
-## 1. Three layers, kept apart
+## 1. Four layers, kept apart
 
 Director must work for people who organize work entirely differently: with or
 without marvel, with or without any role catalog, and with nothing from the
-fleet that wrote this design. A user may have only director. So the design separates three layers:
+fleet that wrote this design. A user may have only director. So the design separates four layers:
 
 | Layer | Owner | Holds |
 |---|---|---|
-| **Director core** | this repo | Director's own boundary (custody, not production; R-102), the bootstrap sequence, the hook and guard mechanisms, and the trap-door log. Says nothing about how teams are shaped. |
-| **Operating profile** | the user, in their own repo or state directory | How this user organizes work: what a team is, which role is a team's entry point, the rules a team must satisfy, where roles are defined, where handoffs live. One profile per install. |
+| **Director core** | this repo, installed with director | Director's own instructions and role definition (custody, not production; R-102), the bootstrap sequence, the hook and guard mechanisms, the trap-door log, and one adapter per model kind. Says nothing about how teams are shaped. |
+| **Operating profile** | the user, in their own repo or state directory | A pointer: which model sources (packs, by sideshow name and version, or paths) apply at which scope, each team's entry role and rules, where handoffs live. |
+| **Model sources** | their own authors, installed and versioned by sideshow | The roles, methods and engines a deployment uses: a role catalog, BMAD, vsdd-factory, team manifests, or a mix. |
 | **Fleet sources** | adapters | Where director reads who exists and how to reach them: marvel's seat register when marvel is present, director bus presence always, or nothing. |
 
 Director core never names a role, a role catalog or a team shape. A rule like
@@ -50,41 +51,114 @@ director routes into a team only through that entry point. That is director's
 own boundary, defined here and in the skill: director is not the supervisor of
 the sessions it serves, and its verbs are its own (R-102).
 
-## 2. The operating profile
+## 2. Director's own instructions, and the operating model it points at
 
-A TOML file, `$DIRECTOR_STATE/operating-profile.toml`, or a path named by
-`DIRECTOR_PROFILE`. Fields (first build):
+### 2.1 What ships with director
+
+Director's own instructions are part of director and install with it
+(`install.sh`):
+
+- the skill;
+- director's role definition, `reference/role.md` (what director is, its loop,
+  its write domain, what it cannot do);
+- this bootstrap's by-hand steps.
+
+They are the canonical copy. A role catalog may carry a director role for its
+own users, but it derives from this one and names the director version it was
+derived from. It is never a second definition director must find.
+
+Nothing in director's own instructions depends on any catalog, method pack or
+tracker being installed.
+
+### 2.2 The operating model is a list of sources, each a versioned pack
+
+How a deployment organizes work comes from one or more **model sources**.
+Examples:
+
+- a role catalog;
+- a method pack such as BMAD;
+- a per-repo engine such as vsdd-factory;
+- a directory of team manifests;
+- nothing at all.
+
+A deployment can mix them: one team cast from a role catalog, another running
+BMAD agents inside those roles, one repo under vsdd-factory.
+
+Each source is named by its sideshow pack and version, or by a local path when
+it is not a pack. sideshow owns installing it, keeping more than one version,
+and which version is active. So director never installs, upgrades or copies a
+model source. It reads what sideshow reports (`sideshow list`) and records the
+version each team was started against, so an upgrade under a running team is
+visible rather than silent.
+
+A source can apply at four scopes:
+
+- the whole deployment;
+- a workspace;
+- a team;
+- a repo.
+
+The narrowest scope wins. This matters because some engines run inside one
+repo and not from a coordinator (vsdd-factory activates per repo).
+
+### 2.3 The profile file
+
+The profile is the pointer, not the model: a TOML file at `$DIRECTOR_PROFILE`,
+or else `$DIRECTOR_STATE/operating-profile.toml`. First-build fields:
 
 ```toml
 name = "example"
-# where director reads seats; tried in order, every one that answers is used
 fleet_sources = ["marvel-register", "bus-presence"]
-# the role that is a team's entry point; director routes only to it
-entry_role = "supervisor"
-# rules a team must satisfy, checked against the fleet read (section 5)
-[[team_rule]]
-id = "has-entry"
-require = "role:entry_role >= 1"
-[[team_rule]]
-id = "reviewer-with-pr-roles"
-require = "role:reviewer >= 1 when any role has capability:opens-pr"
-# prose the start-up hook prints verbatim: the user's own rulings, with sources
-rules_text = "path/to/rules.md"
-# where roles are defined, if anywhere; printed, never parsed by core
-role_catalog = "none"
-# where the predecessor's handoff is written and read
 handoff = "$DIRECTOR_STATE/handoff.md"
+write_domain = []
+rules_text = []          # files printed verbatim at start, in order
+
+[[model]]                # one entry per source; order is precedence at one scope
+kind = "role-catalog"    # adapter name
+pack = "my-roles@0.2.0"  # sideshow pack and version, or path = "..."
+scope = "deployment"     # deployment | workspace:<w> | team:<w>/<t> | repo:<path>
+
+[[model]]
+kind = "bmad"
+pack = "bmad@6.12.4"
+scope = "team:aae/research"
+
+[[model]]
+kind = "repo-engine"
+pack = "vsdd-factory@1.0.0-rc.23"
+scope = "repo:~/work/example"
+
+[[team]]                 # what director must know per team, whatever the source
+match = "*"              # glob over <workspace>/<team>
+entry_role = "supervisor"
+rules = ["has-entry"]
 ```
 
-With no profile, director runs with a built-in minimal one:
+### 2.4 What an adapter answers
+
+Each model kind has a small adapter in director that answers four questions
+from the installed pack, and answers `unknown` when the pack does not say:
+
+1. Which roles exist (names, versions).
+2. Which role is a team's entry point, if the model defines one. Otherwise the
+   profile's `[[team]] entry_role` decides.
+3. What each role may do that the guard and team rules read (for example,
+   "opens PRs").
+4. The pack's own version, as sideshow reports it.
+
+A kind with no adapter is listed at start as present and unread. A pack that
+is named but not installed, or installed at another version, prints as a
+mismatch. Neither is ever read as empty.
+
+### 2.5 With no profile
+
+Director runs on a minimal built-in profile:
 
 - `fleet_sources = ["bus-presence"]`;
-- `entry_role` unset, so routing into a team is refused until the user names
-  one;
-- no team rules.
+- no model sources;
+- no entry role, so routing into any team is refused until the user names one.
 
-The start-up hook says that this is the minimal profile. The rule-expression
-grammar is deliberately small and is settled in the profile ticket (9.1).
+The start-up hook says that this is the minimal profile.
 
 ## 3. Fleet sources
 
@@ -110,7 +184,9 @@ other way has no director role, and the guard treats it as an ordinary session.
 
 The `SessionStart` hook prints into context, not as a pointer to read:
 
-1. The profile's name and its `rules_text`, verbatim.
+1. The profile's name and its `rules_text`, verbatim, then each model source
+   with its scope, the version the profile names and the version sideshow has
+   active, marking any mismatch or missing pack.
 2. The fleet read (section 3) per cluster: each team, its entry-point seat, and
    that seat's readiness.
 3. Each team that fails a profile rule, by rule id.
@@ -181,8 +257,8 @@ cell that is missing.
 
 Each is one PR.
 
-1. **Profile format and loader**: the TOML shape, the minimal built-in profile,
-   the rule grammar, and `director-profile check`.
+1. **Profile format and loader**: the TOML shape of 2.3, scope precedence,
+   the minimal built-in profile, the rule grammar, and `director-profile check`.
 2. **Fleet-source adapters**: marvel-register and bus-presence, merged into
    one read.
 3. **Start-up hook and launcher wiring**: section 4. Needs 1 and 2.
@@ -190,16 +266,23 @@ Each is one PR.
 5. **Trap doors and their log**, printed by the sweep and the harvest:
    section 6. Needs 4.
 6. **Re-anchor counter in `standing-hook`**: section 7. Needs 4.
-7. **Director alone**: a verify script that installs only director into a
+7. **Director's own role definition**: `reference/role.md` shipped and
+   installed with director (2.1), with the skill pointing at it.
+8. **Model-source adapters**: the four questions of 2.4 for a role catalog,
+   BMAD and vsdd-factory, reading versions from sideshow, with `unknown`,
+   unread and mismatch states. Needs 1.
+9. **Director alone**: a verify script that installs only director into a
    scratch home (no marvel, no tracker, no role catalog, no checkout of the
    fleet that wrote this design) and proves the start-up hook, the guard and
-   the trap doors work on the minimal built-in profile. Needs 3, 4 and 5.
+   the trap doors work on the minimal built-in profile. Needs 3, 4, 5 and 7.
 
 Outside this repo, in a user's own profile:
 
 - the profile itself;
 - the user's rules text;
-- any structural check on the user's team manifests.
+- any structural check on the user's team manifests;
+- publishing a role catalog or method as a sideshow pack, which is that
+  catalog's own release work.
 
 For the fleet that prompted this design, those are tracked where its profile
 lives.
