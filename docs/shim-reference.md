@@ -449,6 +449,13 @@ the relay link existed (2026-11-09T03:40:49Z) and gives the age of the oldest in
 seconds. When neither resolves, or the log cannot be read, `lane.warning` says so
 and the lane is empty by that reason, not by finding nothing.
 
+A session with a global tier also gets a `for_filter` field: `state` is `on`, `off`
+or `set but not 1` (the `DIRECTOR_FOR_FILTER` rule above), and `dropped` counts the
+messages the filter has acked and withheld since this session attached the global
+tier. The count moves when a pull drops mail, never when `inbox_summary` runs, which
+reads without pulling and so still lists FOR-other mail that no pull has reached.
+The field never carries the variable's value.
+
 ```json
 {
   "summary": {

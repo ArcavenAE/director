@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -248,4 +249,30 @@ func (g *globalTier) dropForeign(ctx context.Context, m jetstream.Msg, e *Envelo
 	g.forDrops.Add(1)
 	g.forFilter.logf("director-mcp: global ack %s FOR %s", e.MessageID, text)
 	return true
+}
+
+// forFilterSummary is the for_filter field of inbox_summary: the filter's state
+// and how many messages it has dropped since this session attached the global
+// tier. It reads a counter and the environment's shape, never a value, and
+// acks nothing. A session with no global tier has no such field.
+func (b *Bus) forFilterSummary() map[string]any {
+	if b.globalCfg == nil {
+		return nil
+	}
+	b.globalMu.Lock()
+	g := b.global
+	b.globalMu.Unlock()
+	env := os.Getenv("DIRECTOR_FOR_FILTER")
+	state := "off"
+	var dropped int64
+	switch {
+	case g != nil && g.forFilter != nil, g == nil && env == "1":
+		state = "on"
+	case env != "" && env != "1":
+		state = "set but not 1"
+	}
+	if g != nil {
+		dropped = g.forDrops.Load()
+	}
+	return map[string]any{"state": state, "dropped": dropped}
 }
