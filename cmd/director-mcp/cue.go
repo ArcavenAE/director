@@ -69,10 +69,16 @@ func defaultCueConfig() cueConfig {
 // the Window and is not a second literal (see pendingage.go).
 func defaultPendingAgeBound() time.Duration { return 2 * defaultCueConfig().Window }
 
-// loadCueConfig reads the per-seat opt-in. Only the exact value 1 turns it on.
+// loadCueConfig reads the per-seat setting. The cue is on by default (operator
+// ask I-413: "get push turned on everywhere that supports it"); DIRECTOR_CUE=1
+// keeps it on, and any other set value, the empty string included, turns it
+// off. A client that cannot take the cue still never gets it: the handshake
+// offers it only on a measured protocol version, and push-only waits need the
+// self-test echo that only a client that received a notice can give.
 func loadCueConfig() cueConfig {
 	cfg := defaultCueConfig()
-	cfg.Enabled = os.Getenv("DIRECTOR_CUE") == "1"
+	v, set := os.LookupEnv("DIRECTOR_CUE")
+	cfg.Enabled = !set || v == "1"
 	return cfg
 }
 
@@ -155,7 +161,8 @@ type cue struct {
 	lastSeen      uint64
 	lastCueAt     time.Time
 	fold          uint64
-	rearm         bool // the last open wait ended; cue what is still waiting
+	rearm         bool   // the last open wait ended; cue what is still waiting
+	pushOnly      uint64 // waits answered without blocking because the cue is live
 	out           *pendingCue
 	reconnect     bool
 	// readErr is set while the watcher cannot read inbox state. It shows in
@@ -370,7 +377,26 @@ func joinReason(a, b string) string {
 func (c *cue) status() map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return map[string]string{"state": c.state, "reason": c.reasonLocked()}
+	return map[string]string{"state": c.state, "reason": c.reasonLocked(),
+		"push_only_waits": strconv.FormatUint(c.pushOnly, 10)}
+}
+
+// pushes reports whether this seat's waits are push-only: the cue is proven
+// (its self-test or a cue nonce was echoed) and the watcher can read inbox
+// state. A push-only wait does not block; the seat ends its turn and the next
+// cue wakes it (operator ask I-413: "disable pull/poll where push works").
+// Unverified, off, or a watcher that cannot read keeps the blocking wait.
+func (c *cue) pushes() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.active && c.state == cueStateLive && c.readErr == ""
+}
+
+// notePushOnly counts one wait answered without blocking.
+func (c *cue) notePushOnly() {
+	c.mu.Lock()
+	c.pushOnly++
+	c.mu.Unlock()
 }
 
 // reasonLocked is the reason with the watcher read failure beside it; the
