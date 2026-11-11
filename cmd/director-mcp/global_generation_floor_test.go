@@ -129,3 +129,54 @@ func TestBrokerGlobalGenerationFloorByName(t *testing.T) {
 		}
 	}
 }
+
+// A cluster credential cannot list the hub's consumers (finding-006). A new
+// generation still resumes after the earlier generation's floor, found by
+// name through the local durables, and a different replica's durable is still
+// not taken. The scratch seat user is denied CONSUMER.LIST and CONSUMER.NAMES
+// on the hub stream, so the listing path fails and only the by-name read can
+// find the floor.
+func TestBrokerGlobalNewGenerationResumesWithoutListingHubConsumers(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		pred string
+		want string
+	}{
+		{"same replica", "ops-director-g1-0", "[global:g1]"},
+		{"another replica", "ops-director-g1-1", "[global:g0 global:g1]"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			shortFloorList(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			admin, seat := startScratchServerWithSeat(t)
+			nc, _ := provision(t, ctx, admin)
+			gjs, _ := jetstream.NewWithDomain(nc, "global")
+			gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
+			pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by the earlier generation")
+			b1, err := connect(ctx, seat, Sender{AgentID: c.pred, Workspace: "ws1", Team: "ops"}, gcfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r, err := b1.receiveTiered(ctx, 8*time.Second); err != nil || r.Env == nil || r.Env.MessageID != "g0" {
+				t.Fatalf("earlier generation first read %+v %v", r, err)
+			}
+			b1.close()
+			pubEnv(t, ctx, gjs, "global.director.inbox", "g1", "INFORM", "while the seat was down")
+
+			t.Setenv("MARVEL_PREDECESSOR", "")
+			b2, err := connect(ctx, seat, Sender{AgentID: "ops-director-g2-0", Workspace: "ws1", Team: "ops"}, gcfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer b2.close()
+			res, err := b2.receiveBatch(ctx, 3*time.Second, 5)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fmt.Sprint(ids(res.Items)); got != c.want {
+				t.Errorf("new generation read %s, want %s", got, c.want)
+			}
+		})
+	}
+}
