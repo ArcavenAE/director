@@ -134,7 +134,12 @@ entry_role = "supervisor"
 rules = ["has-entry"]
 ```
 
-### 2.4 What an adapter answers
+### 2.4 What an adapter answers (later, not in the first build)
+
+The first build reads no model source itself. It prints each source the
+profile names with its version from sideshow, and takes entry roles from the
+profile. Adapters come when a deployment needs one; BMAD, for one, has no team
+or entry-role concept, so its adapter would answer `unknown` to most of this.
 
 Each model kind has a small adapter in director that answers four questions
 from the installed pack, and answers `unknown` when the pack does not say:
@@ -175,18 +180,41 @@ observed_at`, with `-` for a cell it did not observe, never a guess (R-27).
 The merged read is R-103's fleet-state model, built from instruments that
 exist rather than by hand.
 
-## 4. Start-up: a director session starts only through `director-session`
+## 4. Start-up: the role is bound where the session actually starts
 
-`director-session` (the existing launcher) also sets `DIRECTOR_ROLE=director`
-and loads director's own settings file. That file wires the hooks in sections
-4 to 7, so a director session cannot run without them. A session started any
-other way has no director role, and the guard treats it as an ordinary session.
+### 4.1 What happens today
 
-The `SessionStart` hook prints into context, not as a pointer to read:
+The operator starts director sessions with a shell function named
+`director-session` in their shell profile. It sets `DIRECTOR_PRESENCE_WATCH=1`
+and runs `claude --dangerously-load-development-channels server:director-mcp`.
+That function shadows the installed launcher of the same name in
+`~/.director/bin`. So the path actually used carries no director role and loads
+no director settings, and no hook in this design would fire. A design that
+binds to a launcher nobody runs binds to nothing.
 
-1. The profile's name and its `rules_text`, verbatim, then each model source
-   with its scope, the version the profile names and the version sideshow has
-   active, marking any mismatch or missing pack.
+### 4.2 Two bindings, both installed by `director init`
+
+1. **The start path.** `director init` installs one start path and makes it the
+   only one. The installed `director-session` sets `DIRECTOR_ROLE=director` and
+   passes `--settings` with director's own settings file, which wires the hooks
+   of sections 4 to 7. It is either the launcher itself or a shell function
+   that calls it, and init removes the shadowing: it reports any shell
+   function or alias of that name, and with the user's yes replaces it with
+   one that calls the launcher with the same flags.
+2. **The session mark.** Adopting the role in any session (`/director
+   standing`) writes `$DIRECTOR_STATE/sessions/<session_id>`, keyed by the
+   session id every hook already receives. Hooks act on a session that has the
+   env var or the mark. So a director started some other way (a marvel seat,
+   plain `claude` plus the skill) is still covered from the moment it adopts the
+   role. A session with neither is ordinary: no guard and no start-up output,
+   so a builder on the same host is never blocked.
+
+### 4.3 What the start-up output prints
+
+At session start (with the env var), or at the role adoption that writes the
+mark, director prints this into context, not as a pointer to read:
+
+1. The profile's name and its `rules_text`, verbatim.
 2. The fleet read (section 3) per cluster: each team, its entry-point seat, and
    that seat's readiness.
 3. Each team that fails a profile rule, by rule id.
@@ -198,9 +226,38 @@ The `SessionStart` hook prints into context, not as a pointer to read:
 The output is bounded: at most 60 lines, with the remainder counted rather than
 cut silently.
 
+## 4a. Install and `director init`
+
+### 4a.1 One package
+
+Director ships as one versioned package: the skill, `reference/role.md`, the
+hook scripts, the tools under `~/.director/bin`, and a settings file wiring the
+hooks. `director-mcp` installs as a release binary. A checkout plus
+`install.sh` stays the development path.
+
+The vehicle is open, and it is checked first (ticket 0): a Claude Code plugin
+is the native way to ship a skill with its hooks, and sideshow already installs
+versioned packs, some carrying their own hooks. Whether sideshow installs a
+plugin, or carries the hooks itself, decides between them.
+
+### 4a.2 `director init`
+
+`director init` is the one command a new user runs after the install:
+
+1. It detects what is there: `marvel config list`, `sideshow list`, team
+   manifests under a path the user names, an existing profile.
+2. It asks only for what it cannot detect, chiefly each team's entry role.
+3. It writes the profile, installs the start path (4.2), and runs the start-up
+   output once, so the user sees what a session will see.
+
+With nothing detected, it writes the minimal profile and says what that means:
+director runs, and routing into a team is refused until an entry role is named.
+`director init --check` re-reads everything and reports drift without writing.
+
 ## 5. The guard: a `PreToolUse` hook in director sessions
 
-In a session with `DIRECTOR_ROLE=director`, the guard refuses:
+In a director session (the env var or the session mark of 4.2), the guard
+refuses:
 
 - Edit and Write outside director's write domain. The domain is the director
   state directory, plus paths the profile lists under `write_domain`.
@@ -238,7 +295,7 @@ carries the operator's words.
 The sweep and the harvest print the trap-door log, so each use is a routing
 defect someone sees.
 
-## 7. Re-anchor counter
+## 7. Re-anchor counter (later, not in the first build)
 
 `standing-hook` adds one line before each answer: `re-anchor: N of the last 20
 tool calls were production`. Production means calls the guard would refuse
@@ -255,26 +312,27 @@ cell that is missing.
 
 ## 9. Tickets
 
-Each is one PR.
+First build, one PR each, in order:
 
-1. **Profile format and loader**: the TOML shape of 2.3, scope precedence,
-   the minimal built-in profile, the rule grammar, and `director-profile check`.
-2. **Fleet-source adapters**: marvel-register and bus-presence, merged into
-   one read.
-3. **Start-up hook and launcher wiring**: section 4. Needs 1 and 2.
-4. **Guard**: section 5. Needs 1 and 2.
-5. **Trap doors and their log**, printed by the sweep and the harvest:
-   section 6. Needs 4.
-6. **Re-anchor counter in `standing-hook`**: section 7. Needs 4.
-7. **Director's own role definition**: `reference/role.md` shipped and
+0. **The vehicle**: check whether sideshow can install a Claude Code plugin or
+   carry the hooks itself, and pick the package shape of 4a.1. A check and a
+   note, no build.
+1. **Director's own role definition**: `reference/role.md` shipped and
    installed with director (2.1), with the skill pointing at it.
-8. **Model-source adapters**: the four questions of 2.4 for a role catalog,
-   BMAD and vsdd-factory, reading versions from sideshow, with `unknown`,
-   unread and mismatch states. Needs 1.
-9. **Director alone**: a verify script that installs only director into a
+2. **Profile format and `director init`**: the TOML of 2.3, the minimal
+   profile, detection, the start path with the shadowing check (4.2), and
+   `--check`.
+3. **The session mark and the start-up output**: 4.2 item 2 and 4.3, with the
+   fleet read of section 3 (marvel register when marvel is present, bus
+   presence always).
+4. **The guard with its trap doors and their log**: sections 5 and 6.
+5. **Director alone**: a verify script that installs only director into a
    scratch home (no marvel, no tracker, no role catalog, no checkout of the
-   fleet that wrote this design) and proves the start-up hook, the guard and
-   the trap doors work on the minimal built-in profile. Needs 3, 4, 5 and 7.
+   fleet that wrote this design), runs `director init`, and proves the
+   start-up output, the guard and the trap doors on the minimal profile.
+
+Later, filed when a deployment needs them: model-source adapters (2.4), the
+re-anchor counter (7), and other harnesses' guards (10).
 
 Outside this repo, in a user's own profile:
 
