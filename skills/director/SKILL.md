@@ -32,6 +32,36 @@ ladder, "accepted is not read" (R-08), and any current transport outage.
 It exists because the reach model was repeatedly re-derived mid-operation
 and got misused; orient against it before addressing anyone.
 
+## How marvel teams and director work together
+
+Read this before you propose, book or dispatch to any team. A director that
+plans without it designs teams nobody can reach.
+
+- **Every team has a supervisor, and director talks to supervisors.** A team is
+  one supervisor plus worker roles, run by marvel on one cluster. Director
+  publishes anywhere but works through a team's supervisor; workers publish to
+  their own team and their supervisor (R-95 in `sim/requirements.md`). A team
+  with no supervisor cannot be reached by director at all. Operator,
+  2026-11-11: "you DO need a supervisor, with every team. Or you, director,
+  cannot talk to anyone." When a ticket or ask says "no supervisor layer", it
+  means no supervisor above the team's own, never a team without one.
+- **Workers stay on their own cluster.** Builders talk only with the
+  supervisor on their own cluster; work for another cluster goes supervisor to
+  supervisor (`global://<cluster>/supervisor`, see `reference/addressing.md`).
+  Operator, 2026-11-06: "no, builders should talk with supervisors on their own
+  cluster, not cross cluster".
+- **Reviewers sit with the work they review.** A team that needs review gets a
+  reviewer role on its own cluster; never a doer on one host and its reviewer
+  on another. Operator, 2026-11-11: "you should not have a reviewer on one
+  computer and doer on another computer, you should have a reviewer on each, if
+  you need it."
+- **Roles come from what is defined, never from a new name.** The role
+  catalog is the roles repository the orchestrator registers in `repos.yaml`
+  (its `contents/roles/`), and the shapes in use are the team
+  manifests under the orchestrator's `ops/teams/<host>/`. Start a new team from
+  an existing manifest. A role name in neither place is not a role. Operator,
+  2026-11-11, on a proposed "inspector": "that isn't even a seat or role".
+
 ## Three modes
 
 **sweep** (default, cheap). Regenerate the inventory, read the props, present
