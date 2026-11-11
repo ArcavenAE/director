@@ -1,7 +1,7 @@
 # Director bootstrap: what a director session knows and may do before its first act
 
-Proposal, 2026-11-11. Nothing here is built. Each mechanism is tracked by its
-own bd ticket (section 9).
+Proposal, 2026-11-11. Nothing here is built. Section 9 splits it into one ticket
+per mechanism.
 
 ## 0. Why
 
@@ -13,8 +13,8 @@ A director session started on 2026-11-11 with no teams up. Over the session it:
 - proposed a team with no supervisor, a reviewer on a different host from
   the work, and a role name that exists nowhere.
 
-Every rule it broke was already written down, in the role catalog, in
-`sim/requirements.md` (R-95, R-102, R-103) and in operator rulings. The fleet
+Every rule it broke was already written down, in this repo's
+`sim/requirements.md` (R-95, R-102, R-103) and in that fleet's own rulings. The fleet
 read it needed, a seat register in marvel, was built and was never run.
 
 Two things were missing:
@@ -33,9 +33,9 @@ or not the session reads anything.
 
 ## 1. Three layers, kept apart
 
-Director must work for people who organize work entirely differently, with or
-without marvel, and with or without any role catalog (SOUL section 2,
-component independence). So the design separates three layers:
+Director must work for people who organize work entirely differently: with or
+without marvel, with or without any role catalog, and with nothing from the
+fleet that wrote this design. A user may have only director. So the design separates three layers:
 
 | Layer | Owner | Holds |
 |---|---|---|
@@ -46,8 +46,9 @@ component independence). So the design separates three layers:
 Director core never names a role, a role catalog or a team shape. A rule like
 "every team has a supervisor" is profile content. Director core enforces only
 two things about teams: the profile names an entry point for each team, and
-director routes into a team only through that entry point (the director role,
-CANNOT: "route into the team (the supervisor's verb)").
+director routes into a team only through that entry point. That is director's
+own boundary, defined here and in the skill: director is not the supervisor of
+the sessions it serves, and its verbs are its own (R-102).
 
 ## 2. The operating profile
 
@@ -165,8 +166,8 @@ defect someone sees.
 
 `standing-hook` adds one line before each answer: `re-anchor: N of the last 20
 tool calls were production`. Production means calls the guard would refuse
-without a trap door. It informs, never blocks (`diagnostic-not-gate`); the
-guard does the blocking.
+without a trap door. It informs and never blocks: a count is a
+diagnostic, not a gate. The guard does the blocking.
 
 ## 8. Readiness before the first order
 
@@ -189,6 +190,10 @@ Each is one PR.
 5. **Trap doors and their log**, printed by the sweep and the harvest:
    section 6. Needs 4.
 6. **Re-anchor counter in `standing-hook`**: section 7. Needs 4.
+7. **Director alone**: a verify script that installs only director into a
+   scratch home (no marvel, no tracker, no role catalog, no checkout of the
+   fleet that wrote this design) and proves the start-up hook, the guard and
+   the trap doors work on the minimal built-in profile. Needs 3, 4 and 5.
 
 Outside this repo, in a user's own profile:
 
@@ -215,7 +220,6 @@ lives.
   trap doors.
 - `sim/research/supervisor-development/`: the synthesis and its
   recommendations.
-- The director role in the fleet's role catalog: section 5, CANNOT.
 - marvel `docs/design/seat-register.md`.
 - marvel `docs/design/marry-seat-key-and-classes.md`.
 - The skill's Standing checklist (`standing-hook`).

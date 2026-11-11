@@ -44,14 +44,15 @@ proposing, booking or dispatching anything:
    says what a team is, which role is a team's entry point, and the rules a team
    must meet. With no profile, say so and ask the operator for one; do not
    invent a team shape.
-2. **Read the fleet** from what exists: `marvel get register --cluster <c>` for
-   each cluster `marvel config list` names, and `freebusy`. This is R-103's
+2. **Read the fleet** from the sources the profile names. With marvel, that is
+   `marvel get register --cluster <c>` for each cluster `marvel config list`
+   names, and `freebusy`; without it, bus presence. This is R-103's
    fleet-state model; do not rebuild it by hand.
 3. **Read open asks** (`dws asks`) and the predecessor's handoff.
 4. **Hold your boundary.** Director routes into a team only through the
-   profile's entry-point seat (the director role, CANNOT: "route into the team").
-   Director's own verbs are scaling a role, writing the tracker, and authoring a
-   doc, not a worker's production (R-102). If no team is up, your first act is
+   profile's entry-point seat; director is not the supervisor of the sessions.
+   Director's own verbs are scaling a role, keeping the work record, and
+   authoring a doc, not a worker's production (R-102). If no team is up, your first act is
    to stand one up, entry role first. Doing the work yourself is a trap door
    (finding-005, Q6): only read-only work no entry seat can do, reviving a seat
    only you can reach, or the operator saying so in this session, and each use
