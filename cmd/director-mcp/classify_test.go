@@ -333,3 +333,24 @@ func TestClassifyReplyToOwnProposeIsAct(t *testing.T) {
 		t.Errorf("PROPOSE replying to the seat's own CFP: %q, want act", got)
 	}
 }
+
+func TestClassifyHandshakeLinesAreAct(t *testing.T) {
+	cases := []struct {
+		name, body string
+		want       msgClass
+	}{
+		{"Pre-GATE line", "Pre-GATE ArcavenAE/director#585@abc123", classAct},
+		{"Pre-GATE v2 line", "Pre-GATE v2 ArcavenAE/director#585@abc123", classAct},
+		{"WORD line after text", "intro\n  WORD ArcavenAE/director#585@abc123", classAct},
+		{"GATE posted line", "GATE ArcavenAE/director#585 @abc123 posted", classAct},
+		{"GATE quoted in prose", "the GATE line was fine", classRoutine},
+		{"Pre-GATE quoted in prose", "we sent a Pre-GATE earlier", classRoutine},
+		{"a word that starts with WORD", "WORDS about it", classRoutine},
+	}
+	for i, c := range cases {
+		got := newClassifier().classify("local", uint64(i+1), classifyEnv(t, "INFORM", c.body, ""), classifyNow)
+		if got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}

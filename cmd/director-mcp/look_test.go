@@ -284,3 +284,19 @@ func TestLookFilesAreModeZeroSix(t *testing.T) {
 }
 
 var _ = io.Discard
+
+func TestLookClassifiesHandshakeLinesAsGates(t *testing.T) {
+	for _, body := range []string{
+		"Pre-GATE x#2@abc",
+		"Pre-GATE v2 x#2@abc",
+		"note\nWORD x#2@abc",
+	} {
+		class, _, urgent := lookClassify("INFORM", body, "", time.Now().UTC())
+		if class != "gate" || !urgent {
+			t.Errorf("%q: got %q urgent=%v, want gate urgent=true", body, class, urgent)
+		}
+	}
+	if class, _, _ := lookClassify("INFORM", "WORDS about it", "", time.Now().UTC()); class != "other" {
+		t.Errorf("WORDS about it: got %q, want other", class)
+	}
+}
