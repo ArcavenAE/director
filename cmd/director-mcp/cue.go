@@ -713,3 +713,18 @@ func tellDirector(ctx context.Context, bus *Bus, logf func(string, ...any), kind
 		logf("%s not delivered to director: %v", kind, err)
 	}
 }
+
+// cueCounts is what the cue has sent since this shim started: the before-and-after
+// baseline for the coalescing work (aae-orc-nqler). Kept in memory; nothing is persisted
+// and nothing resets, so Since says when the count began.
+type cueCounts struct {
+	Since          string            `json:"since"`
+	Cues           uint64            `json:"cues"`
+	Recues         uint64            `json:"recues"`
+	BySender       map[string]uint64 `json:"by_sender"`
+	ByPerformative map[string]uint64 `json:"by_performative"`
+}
+
+func (c *cue) counts() cueCounts {
+	return cueCounts{}
+}
