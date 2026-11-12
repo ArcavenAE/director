@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,6 +111,8 @@ type cliArgs struct {
 	handoffMark string        // dossier: the terminal marker the manifest declares
 	lookState   string        // look: the state directory
 	lookSeat    string        // look: the seat id whose inbox is read
+	advSeat     string        // global-advance: the seat id, which must be the caller's own
+	advTo       uint64        // global-advance: stop at this stream sequence; 0 is the head
 }
 
 const askReaderUsage = "director-mcp ask-reader [--once] [--file <path>] [--interval <duration up to 30s>]"
@@ -217,6 +220,33 @@ func parseArgs(args []string) (cliArgs, error) {
 				out.lookState = rest[i]
 			} else {
 				out.lookSeat = rest[i]
+			}
+		}
+		return out, nil
+	case args[0] == "global-advance":
+		out := cliArgs{mode: "global-advance"}
+		rest := args[1:]
+		for i := 0; i < len(rest); i++ {
+			a := rest[i]
+			switch a {
+			case "--to-head":
+				out.advTo = 0
+			case "--seat", "--to":
+				if i+1 >= len(rest) {
+					return cliArgs{}, fmt.Errorf("global-advance: %s needs a value (usage: %s)", a, globalAdvanceUsage)
+				}
+				i++
+				if a == "--seat" {
+					out.advSeat = rest[i]
+					continue
+				}
+				n, err := strconv.ParseUint(rest[i], 10, 64)
+				if err != nil || n == 0 {
+					return cliArgs{}, fmt.Errorf("global-advance: --to %q is not a stream sequence of 1 or more (usage: %s)", rest[i], globalAdvanceUsage)
+				}
+				out.advTo = n
+			default:
+				return cliArgs{}, fmt.Errorf("global-advance: unknown argument %q (usage: %s)", a, globalAdvanceUsage)
 			}
 		}
 		return out, nil
