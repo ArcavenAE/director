@@ -658,8 +658,7 @@ Each line is an operator ruling that had lived only in seat memory. The date and
 - Director may answer option 1 on the dev-channels startup prompt on any seat after a capture shows only that prompt (2026-10-30, I-41, reaffirmed in I-288). Seat housekeeping dialogs are answered by director and not raised to the operator (2026-11-09, I-301, I-306).
 - Never build an option around the operator acting by hand at a fleet host (2026-10-23). A step that runs at a host goes as one runnable script at `~/operator-steps` on that host (2026-10-07 to 2026-10-23). A command for the operator names the host first and is short and paste-ready there (2026-11-10, I-409). An ask to act in an agent pane carries the host, the attach command and the exact text (2026-11-05).
 - Only ready, reviewed PRs reach the operator; never link a draft (2026-10-02, a correction).
-- Director merges any ready ArcavenAE PR that a non-author approved at its head and that passes the merge guard (2026-10-02); the guard's own steps are in Merging above.
-- No NATS or bd credential rotation until the NATS redesign (2026-11-07, I-259).
+- Director merges any ready ArcavenAE PR that a non-author approved at its head and that passes the merge guard (2026-10-02); the guard's own steps are in the section Merging: the guard runs before every merge.
 - The stalled-ideas threshold is 4 days, with no cap on rows (2026-10-24).
 
 ## Vocabulary
