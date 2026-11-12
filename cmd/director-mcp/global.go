@@ -490,6 +490,14 @@ type globalTier struct {
 	// durable, or its predecessor's. Zero when there was no floor.
 	floorFrom floorSource
 
+	// freshHead is true when the durable was created at the stream head
+	// because the seat has no earlier durable. skipped is how many messages
+	// the stream already held for the seat's inbox then, and skippedKnown is
+	// false when the credential could not count them.
+	freshHead    bool
+	skipped      uint64
+	skippedKnown bool
+
 	// mu guards consumer (read it through cons) and the fields below. acked is the highest hub stream sequence
 	// this session has acked on its durable, or the seat floor it resumed
 	// after; a recreated durable resumes after it, so a loss does not replay
@@ -576,7 +584,23 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 	if floor > 0 {
 		start = floor + 1
 	}
-	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), g.consumerConfig(agentID, instance, start))
+	cfg := g.consumerConfig(agentID, instance, start)
+	if floor == 0 && why == "" {
+		// Every lookup that could name a position answered nothing. Before the
+		// durable starts at the head, make sure no durable of this seat, its
+		// predecessor or an earlier generation exists at all: one that acked
+		// nothing, or a live sibling's, still leaves mail this seat should see.
+		found, perr := earlierDurableProbe(ctx, g, agentID, instance)
+		switch {
+		case perr != nil:
+			g.floorWhy = fmt.Sprintf("looking for earlier durables failed (%v)", perr)
+		case !found:
+			cfg.DeliverPolicy = jetstream.DeliverNewPolicy
+			g.freshHead = true
+			g.skipped, g.skippedKnown = g.earlierCount(ctx)
+		}
+	}
+	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), cfg)
 	if err != nil {
 		return fmt.Errorf("global durable on %s: %w (%s)", g.cfg.streamName(), err, hubHint(g.cfg))
 	}
@@ -1173,11 +1197,4 @@ func preflightGlobal(ctx context.Context, nc *nats.Conn, cfg globalConfig) error
 		return fmt.Errorf("stream %s missing in domain %q: %w (%s)", cfg.streamName(), cfg.Domain, err, hubHint(cfg))
 	}
 	return nil
-}
-
-// earlierDurableProbe says whether the seat, its explicit predecessor or an
-// earlier generation of its replica has left a durable on the hub stream,
-// live or departed, acked or not. A var so tests can make the lookup fail.
-var earlierDurableProbe = func(ctx context.Context, g *globalTier, agentID, self string) (bool, error) {
-	return true, nil
 }

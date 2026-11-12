@@ -35,6 +35,7 @@ func readIDs(t *testing.T, ctx context.Context, b *Bus) []string {
 }
 
 func TestBrokerFreshSeatGlobalDurableStartsAtTheHead(t *testing.T) {
+	useRealProbe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
@@ -66,6 +67,7 @@ func TestBrokerFreshSeatGlobalDurableStartsAtTheHead(t *testing.T) {
 }
 
 func TestBrokerSuccessorStillResumesFromThePredecessorFloor(t *testing.T) {
+	useRealProbe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
@@ -99,6 +101,7 @@ func TestBrokerSuccessorStillResumesFromThePredecessorFloor(t *testing.T) {
 // A predecessor that left a durable which acked nothing still leaves unread
 // mail for its successor.
 func TestBrokerSuccessorOfADurableThatAckedNothingReplays(t *testing.T) {
+	useRealProbe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
@@ -156,6 +159,7 @@ func TestBrokerFailedLookupKeepsTheReplay(t *testing.T) {
 
 // A credential that cannot count the earlier messages says UNKNOWN, not 0.
 func TestBrokerFreshSeatNoteSaysUnknownWhenTheCountIsUnreadable(t *testing.T) {
+	useRealProbe(t)
 	shortFloorList(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -184,6 +188,7 @@ func TestBrokerFreshSeatNoteSaysUnknownWhenTheCountIsUnreadable(t *testing.T) {
 // With the class-aware cue on, a fresh seat has no backlog from before it
 // started, and mail sent after it started is beyond the cue's boundary.
 func TestBrokerClassAwareCueOnAFreshSeatSeesNoOldBacklog(t *testing.T) {
+	useRealProbe(t)
 	t.Setenv("DIRECTOR_CUE_CLASS", "1")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -219,5 +224,37 @@ func TestBrokerClassAwareCueOnAFreshSeatSeesNoOldBacklog(t *testing.T) {
 	}
 	if floors["global"] < 2 {
 		t.Errorf("cue floor for global = %d, want at least the 2 old messages", floors["global"])
+	}
+}
+
+// A fresh seat whose hub durable is lost and recreated resumes at its own head,
+// not from the start of the stream: it had acked nothing, so the recreate
+// would otherwise replay the history the head start skipped.
+func TestBrokerFreshSeatRecreatedDurableStaysAtTheHead(t *testing.T) {
+	useRealProbe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
+	t.Setenv("MARVEL_PREDECESSOR", "")
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "old")
+	b, err := connect(ctx, url, freshSeat("lost-g1-0"), gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.close()
+	attach(t, ctx, b)
+	g := b.global
+	if err := gjs.DeleteConsumer(ctx, globalDirectorStream, globalDurable(b.self.AgentID, b.instance)); err != nil {
+		t.Fatal(err)
+	}
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g1", "INFORM", "sent while the durable was missing")
+	if rebuilt, err := g.restore(ctx, b.self.AgentID, b.instance); err != nil || !rebuilt {
+		t.Fatalf("restore = %v, %v; want a rebuild", rebuilt, err)
+	}
+	if got := readIDs(t, ctx, b); fmt.Sprint(got) != "[global:g1]" {
+		t.Errorf("after the rebuild the seat read %v, want only [global:g1]", got)
 	}
 }
