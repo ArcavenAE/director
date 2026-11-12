@@ -107,5 +107,52 @@ out="$(run "$PS_HEAD
 has "$out" "GAP hostb" "another host prints a GAP line"
 hasnt "$out" "GAP hosta" "the local host is not a GAP"
 
+# Fix round 1 (review of the first head). With no host list, one GAP line says the other hosts went unread.
+out="$(run "$PS_HEAD
+  200     1       05:00 /usr/bin/vim notes.txt" "" "")"
+has "$out" "- GAP other hosts (no host list; only this host was read)" "no host list prints a GAP for the unread hosts"
+out="$(run "$PS_HEAD
+  200     1       05:00 /usr/bin/vim notes.txt" "" "" UNATTACHED_HOSTS=hosta,hostb)"
+hasnt "$out" "GAP other hosts" "a host list suppresses the no-host-list GAP"
+printf 'hosta\n' >"$root/state/unattached.hosts"
+out="$(run "$PS_HEAD
+  200     1       05:00 /usr/bin/vim notes.txt" "" "")"
+has "$out" "GAP other hosts" "a host file naming only this host is still no other host read"
+rm -f "$root/state/unattached.hosts"
+
+# A parent counts as marvel by its program name, or a tmux server started with -L marvel-, not by a substring.
+out="$(run "$PS_HEAD
+  910   911       01:00 claude -p fix
+  911     1       02:00 /bin/bash /work/marvel/scripts/run-agent.sh
+  920   921       01:00 codex exec
+  921     1       02:00 tmux -L notes new -s marvel-notes
+  930   931       01:00 claude --resume
+  931     1       02:00 tmux -L marvel-1d new-session -d
+  940   941       01:00 goose run
+  941     1       02:00 /opt/bin/marvel daemon" \
+"910 /w/a
+920 /w/b
+930 /w/c
+940 /w/d" "")"
+has "$out" "pid 910 " "a claude under a script path that contains marvel is listed"
+has "$out" "pid 920 " "a codex under a tmux session named for marvel is listed"
+hasnt "$out" "pid 930 " "a seat under a tmux server started with -L marvel- is not listed"
+hasnt "$out" "pid 940 " "a goose under the marvel program is not listed"
+
+# The second word of a command names an agent only when the first word is an interpreter.
+out="$(run "$PS_HEAD
+  950     1       01:00 vim claude
+  951     1       01:00 grep codex
+  952     1       01:00 node /usr/lib/claude
+  953     1       01:00 python3 /x/goose" \
+"950 /w/a
+951 /w/b
+952 /w/c
+953 /w/d" "")"
+hasnt "$out" "pid 950 " "vim claude is not an agent"
+hasnt "$out" "pid 951 " "grep codex is not an agent"
+has "$out" "pid 952 " "node running claude is an agent"
+has "$out" "pid 953 " "python3 running goose is an agent"
+
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
