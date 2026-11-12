@@ -43,6 +43,10 @@ func startScratchServerWithSeat(t *testing.T, deny ...string) (adminURL, seatURL
 	dir := t.TempDir()
 	var quoted []string
 	for _, verb := range append([]string{"CONSUMER.LIST", "CONSUMER.NAMES"}, deny...) {
+		if strings.Contains(verb, ".AGENT_INBOX") {
+			quoted = append(quoted, fmt.Sprintf("%q", "$JS.API."+verb)) // the local stream, one exact subject
+			continue
+		}
 		for _, api := range []string{"$JS.API.", "$JS.global.API."} {
 			if strings.Contains(verb, "."+globalDirectorStream+".") {
 				quoted = append(quoted, fmt.Sprintf("%q", api+verb)) // one exact subject

@@ -1174,3 +1174,10 @@ func preflightGlobal(ctx context.Context, nc *nats.Conn, cfg globalConfig) error
 	}
 	return nil
 }
+
+// earlierDurableProbe says whether the seat, its explicit predecessor or an
+// earlier generation of its replica has left a durable on the hub stream,
+// live or departed, acked or not. A var so tests can make the lookup fail.
+var earlierDurableProbe = func(ctx context.Context, g *globalTier, agentID, self string) (bool, error) {
+	return true, nil
+}
