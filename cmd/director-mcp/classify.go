@@ -67,7 +67,7 @@ type classifier struct {
 	memo    map[classKey]classEntry
 	decodes int // messages decoded, for the once-per-message check
 	floor   map[string]uint64
-	asks    map[string]*askState // sent REQUEST or QUERY id -> who consumed it
+	asks    map[string]*askState // every sent message id -> whether it was an ask, and who answered it
 	askList []string             // insertion order, for eviction
 }
 
@@ -158,7 +158,8 @@ func (c *classifier) decide(k classKey, data []byte, now time.Time) classEntry {
 	// The ask check runs on every path below, so a first reply that is act for
 	// another reason (a passed reply_by, an unknown performative) still
 	// consumes its ask.
-	act := c.replyToOpenAsk(k, env.InReplyTo)
+	signal := env.Content.Type == "signal"
+	act := c.replyToOpenAsk(k, env.InReplyTo, signal)
 	if !performatives[env.Performative] {
 		return classEntry{class: classAct}
 	}
@@ -180,6 +181,11 @@ func (c *classifier) decide(k classKey, data []byte, now time.Time) classEntry {
 	if gateLine.MatchString(env.Content.Data) {
 		act = true
 	}
+	// A status signal changes nothing and owes no reply when it says
+	// "working"; any other signal value, blocked-on included, is act.
+	if signal && env.Content.Data != "working" {
+		act = true
+	}
 	if act {
 		return classEntry{class: classAct, replyBy: replyBy}
 	}
@@ -189,7 +195,10 @@ func (c *classifier) decide(k classKey, data []byte, now time.Time) classEntry {
 // replyToOpenAsk reports whether a message with this in_reply_to is act on
 // that account: the first reply to a sent ask, the same message again, or a
 // reply to an id the seat never recorded. The caller holds mu.
-func (c *classifier) replyToOpenAsk(k classKey, inReplyTo string) bool {
+//
+// A signal (the status a seat reports while it works) never consumes the ask,
+// so the answer that follows it is still the first reply.
+func (c *classifier) replyToOpenAsk(k classKey, inReplyTo string, signal bool) bool {
 	if inReplyTo == "" {
 		return false
 	}
@@ -197,7 +206,7 @@ func (c *classifier) replyToOpenAsk(k classKey, inReplyTo string) bool {
 	if !known {
 		return true
 	}
-	if !a.ask {
+	if !a.ask || signal {
 		return false
 	}
 	if !a.consumed {
