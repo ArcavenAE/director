@@ -116,3 +116,65 @@ func TestCueCountsAreNotResetByAnInboxSummary(t *testing.T) {
 		t.Fatalf("reading the counts must not reset them: %d", got.Cues)
 	}
 }
+
+// ---- follow-up to director#586: a message with no meta, and a count by role ----
+
+func TestACueWithNoMetaIsCountedUnderUnknownInEveryMap(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.unanswered()
+	r.src.oldest = nil
+	r.src.n = 1
+	r.step(2 * time.Second)
+	got := r.c.counts()
+	if got.Cues != 1 {
+		t.Fatalf("one mail cue was sent: %d", got.Cues)
+	}
+	for name, m := range map[string]map[string]uint64{"by_sender": got.BySender, "by_performative": got.ByPerformative, "by_role": got.ByRole} {
+		if m["unknown"] != 1 || len(m) != 1 {
+			t.Fatalf("%s must hold the nameless cue under unknown so the maps sum to cues: %v", name, m)
+		}
+	}
+}
+
+func TestCueCountsByRoleStripTheSeatGeneration(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.unanswered()
+	r.src.oldest = &cueMeta{Sender: "cue-builder-g1-0@aae", Performative: "INFORM", MessageID: "m1"}
+	r.src.n = 1
+	r.step(2 * time.Second)
+	r.src.oldest = &cueMeta{Sender: "cue-builder-g2-1@aae", Performative: "INFORM", MessageID: "m2"}
+	r.src.n++
+	r.step(6 * time.Second)
+	r.src.oldest = &cueMeta{Sender: "sup@ws", Performative: "INFORM", MessageID: "m3"}
+	r.src.n++
+	r.step(6 * time.Second)
+	got := r.c.counts()
+	if got.ByRole["cue-builder@aae"] != 2 || got.ByRole["sup@ws"] != 1 || len(got.ByRole) != 2 {
+		t.Fatalf("a shift must not split one role across keys, and an id with no generation keys as itself: %v", got.ByRole)
+	}
+	if got.BySender["cue-builder-g1-0@aae"] != 1 || got.BySender["cue-builder-g2-1@aae"] != 1 || len(got.BySender) != 3 {
+		t.Fatalf("by_sender keeps its meaning, one key per sender label: %v", got.BySender)
+	}
+}
+
+func TestInboxSummaryCueCountsCarryByRole(t *testing.T) {
+	r := newCueRig(t)
+	r.started()
+	r.unanswered()
+	r.src.n = 1
+	r.step(2 * time.Second)
+	s := &Server{cue: r.c, log: func(string, ...any) {}}
+	res := map[string]any{}
+	s.cueBefore("inbox_summary", json.RawMessage(`{}`))(res)
+	raw, _ := json.Marshal(res["cue_counts"])
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	byRole, ok := got["by_role"].(map[string]any)
+	if !ok || byRole["sup@ws"] != float64(1) || len(byRole) != 1 {
+		t.Fatalf("cue_counts must carry by_role with the one cue under its role: %s", raw)
+	}
+}
