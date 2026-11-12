@@ -280,6 +280,11 @@ other allowed keys are `DIRECTOR_CLUSTER` (`--cluster <name>` overrides it),
 `DIRECTOR_GLOBAL_DOMAIN` (empty keeps the global tier off), `DIRECTOR_GLOBAL_ROLE`,
 and `NATS_URL` (default `nats://127.0.0.1:4222`). Any other key is refused.
 
+The launcher also sets `DIRECTOR_ROLE_MARK` to its own pid before it execs
+claude. Do not put it in the seat file: the shim holds the director identity
+only when the mark equals its parent pid, so a plain `claude` in a folder whose
+config names the director gets no director server (`docs/shim-reference.md`).
+
 Then run `scripts/director start`. The session is named `director`. The
 launcher stops with the missing key names, and runs nothing, when a required key
 (`DIRECTOR_AGENT_ID`, `DIRECTOR_TEAM`, `DIRECTOR_WORKSPACE`) is absent or the

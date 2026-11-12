@@ -10,7 +10,7 @@ func TestDirectorClaim(t *testing.T) {
 	cases := []struct {
 		id, role, grole, want string
 	}{
-		{"director", "", "", "DIRECTOR_AGENT_ID=director"},
+		{"director", "", "", "agent id director"},
 		{"reviewer-a", roleDirector, "", "DIRECTOR_ROLE=director"},
 		{"x", "", roleDirector, "DIRECTOR_GLOBAL_ROLE=director"},
 		{"bootstrap-supervisor-g1-0", "supervisor", roleSupervisor, ""},
@@ -25,7 +25,7 @@ func TestDirectorClaim(t *testing.T) {
 
 func TestCheckRoleMark(t *testing.T) {
 	const ppid = 4242
-	claim := "DIRECTOR_AGENT_ID=director"
+	claim := "agent id director"
 	if err := checkRoleMark("", "", ppid); err != nil {
 		t.Errorf("no claim, no mark: %v", err)
 	}

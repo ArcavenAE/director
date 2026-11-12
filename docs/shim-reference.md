@@ -54,6 +54,21 @@ local seats only, and refuses `global://` sends, while local mail is
 unaffected. The shim warns and does not refuse; a worker or any other role
 starts silently.
 
+A director claim needs the launcher's mark (aae-orc-20062). A seat claims the
+director identity when its agent id is `director` (from `DIRECTOR_AGENT_ID` or
+`MARVEL_SESSION`), or `DIRECTOR_ROLE` or `DIRECTOR_GLOBAL_ROLE` is `director`.
+Such a shim starts only when `DIRECTOR_ROLE_MARK` equals its parent pid, and
+otherwise exits 2 with a line naming the claim. The launchers set it to their
+own pid just before they exec the harness: `scripts/director start`,
+`director-session` and `cast-launch`. So a plain harness started in a folder
+whose config bakes the director identity gets no director server, rather than
+registering as a second director. The check runs after `--preflight`, which
+cast-launch runs before it sets the mark. The mark matches only when the
+harness is the process the launcher became, which holds for Claude Code and
+the native codex binary; a harness that runs its real process as a child, such
+as an npm-installed codex wrapper, is not supported for a director claim. A
+seat with no director claim does not need the mark.
+
 The handled mode (K4, director#278). Off unless `DIRECTOR_HANDLED=1`, and
 per process, so it is set for director's own seat and no other seat's drain
 changes.

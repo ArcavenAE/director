@@ -11,7 +11,9 @@ const roleMarkEnv = "DIRECTOR_ROLE_MARK"
 
 // directorClaim names the lever that claims the director identity, or returns
 // "" when the seat claims none. The agent id "director" is a claim as well as
-// either role lever, since the bus addresses a director by that id.
+// either role lever, since the bus addresses a director by that id. The id is
+// named as "agent id", not by variable, since it may come from DIRECTOR_AGENT_ID
+// or from MARVEL_SESSION (seatenv.go).
 func directorClaim(agentID, role, globalRole string) string {
 	switch {
 	case globalRole == roleDirector:
@@ -19,7 +21,7 @@ func directorClaim(agentID, role, globalRole string) string {
 	case role == roleDirector:
 		return "DIRECTOR_ROLE=" + roleDirector
 	case agentID == roleDirector:
-		return "DIRECTOR_AGENT_ID=" + roleDirector
+		return "agent id " + roleDirector
 	}
 	return ""
 }
@@ -38,8 +40,8 @@ func checkRoleMark(claim, mark string, ppid int) error {
 	}
 	if mark == "" {
 		return fmt.Errorf("refusing the director identity (%s): this shim was not started by a director launcher (%s is unset). "+
-			"Start a director session with director-session; a plain harness in this directory is not director, "+
-			"so this server stays down for it (aae-orc-20062)", claim, roleMarkEnv)
+			"Start a director with a launcher that sets it (scripts/director start, director-session, or cast-launch); "+
+			"a plain harness in this directory is not director, so this server stays down for it (aae-orc-20062)", claim, roleMarkEnv)
 	}
 	if n, err := strconv.Atoi(mark); err != nil || n != ppid {
 		return fmt.Errorf("refusing the director identity (%s): %s=%q does not match this shim's parent pid %d, "+

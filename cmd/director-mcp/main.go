@@ -195,7 +195,10 @@ func main() {
 
 	// Only a launcher-marked shim may hold the director identity, so a plain
 	// session in a directory whose config bakes that identity does not
-	// register as a second director (aae-orc-20062).
+	// register as a second director (aae-orc-20062). The check runs after the
+	// preflight return on purpose: cast-launch runs a --preflight child before
+	// it sets the mark, so a check above that return would fail every cast
+	// director. TestShimStartHoldsTheDirectorIdentityOnlyWithTheMark pins it.
 	if err := checkRoleMark(directorClaim(self.AgentID, self.Role, os.Getenv("DIRECTOR_GLOBAL_ROLE")), os.Getenv(roleMarkEnv), os.Getppid()); err != nil {
 		fmt.Fprintf(os.Stderr, "director-mcp: %v\n", err)
 		os.Exit(2)
