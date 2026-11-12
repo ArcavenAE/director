@@ -112,6 +112,14 @@ func main() {
 	if cli.mode == "marry" {
 		os.Exit(runMarryCmd(cli, os.Stdout, os.Stderr))
 	}
+	// global-advance moves the caller's own global durable forward by acking
+	// through its backlog (director#596).
+	if cli.mode == "global-advance" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		code := runGlobalAdvanceCmd(ctx, cli, os.Stdout, os.Stderr)
+		cancel()
+		os.Exit(code)
+	}
 	// asks is a read of the ask ledger's store; ask-reader keeps it. Neither
 	// needs an identity of its own.
 	if cli.mode == "asks" {
