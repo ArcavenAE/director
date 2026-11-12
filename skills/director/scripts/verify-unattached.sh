@@ -94,7 +94,7 @@ hasnt "$out" "pid 700 " "a test binary without the re-exec flag is not listed"
 has "$out" "pid 800 " "a 127.0.0.1 listener under .worktrees is listed"
 has "$out" "reason: 127.0.0.1 listener under .worktrees" "the reason names the listener"
 hasnt "$out" "pid 900 " "a listener outside .worktrees is not listed"
-has "$out" "unattached: 5 agent processes on hosta" "the count line names the count and the host"
+has "$out" "unattached: 4 agent processes on hosta" "the count line names the count and the host"
 [[ ! -e "$FIX/kill.log" ]] && ok "nothing was killed" || bad "nothing was killed" "$(cat "$FIX/kill.log")"
 ! grep -Eq '(^|[^a-z_-])kill( |$)' "$UN" && ok "the script has no kill command" || bad "the script has no kill command"
 

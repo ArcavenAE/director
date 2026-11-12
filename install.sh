@@ -99,6 +99,8 @@ install_one "$SRC/skills/director/scripts/shelf-row" "$DIRECTOR_HOME/bin/shelf-r
 install_one "$SRC/skills/director/scripts/nav-sync" "$DIRECTOR_HOME/bin/nav-sync"
 # introspect, the director introspector (a script director runs, never a seat): the sweep and harvest step 6 call it.
 install_one "$SRC/skills/director/scripts/introspect" "$DIRECTOR_HOME/bin/introspect"
+# unattached lists agent processes on this host that no marvel owns (read-only); the sweep runs it beside introspect.
+install_one "$SRC/skills/director/scripts/unattached" "$DIRECTOR_HOME/bin/unattached"
 # composer-check looks at a pane before an inject that ends in Enter; standing-hook prints the drain age before each answer.
 # SKILL.md tells the session to run both by name, so a host without them cannot follow it.
 install_one "$SRC/skills/director/scripts/composer-check" "$DIRECTOR_HOME/bin/composer-check"

@@ -1,3 +1,133 @@
 #!/usr/bin/env bash
-# unattached: stub. The red tests run against this; the real script replaces it.
+# unattached: agent processes on this host that no marvel owns, read-only.
+#
+# Why: an agent or an agent test that outlives the session that started it keeps running with
+# nobody watching (two test children ran nine days with parent pid 1 before a person found them).
+# This lists them in the sweep so they are seen the day they appear.
+#
+# It reads the local process table with ps, and each candidate's working directory and the
+# 127.0.0.1 listeners with lsof. It prints a line per process and a count line. It kills nothing,
+# stops nothing and writes nothing; what to do with a line is a person's call.
+#
+#   unattached [--help]
+#
+# A process is listed when its parent is pid 1, or its parent is not marvel (the parent's command
+# has no "marvel" in it), and one of these holds:
+#   - its program or its first argument is named claude, codex, goose, opencode, crush or forestage
+#   - it is a *.test binary started with a "reexec" flag (a re-exec test child)
+#   - it listens on 127.0.0.1 and its working directory is under a .worktrees path
+# Each line: - unattached pid P age A parent PP (name) cwd C | reason: R
+# The last line is: unattached: N agent processes on HOST
+#
+# Other hosts: it reads only this host. Names in UNATTACHED_HOSTS (comma separated) or in
+# $DIRECTOR_STATE/unattached.hosts (one per line, "#" comments) other than this host each print
+# `- GAP HOST (cannot read another host's processes yet)`, until a cluster can report its own.
+# A tool it cannot run prints a GAP line, never a zero.
+#
+# Exit 0 on every reading, so read its lines and never its exit code. Exit 2 on a usage error.
+set -uo pipefail
+
+case "${1-}" in
+  "") ;;
+  -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "usage: unattached [--help]" >&2; exit 2 ;;
+esac
+
+host="${UNATTACHED_HOST:-$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)}"
+self=$$
+agents="claude codex goose opencode crush forestage"
+
+gaps=""
+listeners=" "
+if command -v lsof >/dev/null 2>&1; then
+  l="$(lsof -nP -iTCP@127.0.0.1 -sTCP:LISTEN -Fp 2>/dev/null)" || true
+  while IFS= read -r line; do
+    case "$line" in p*) listeners="$listeners${line#p} " ;; esac
+  done <<<"$l"
+else
+  gaps="$gaps- GAP listeners (lsof not found)"$'\n'
+  gaps="$gaps- GAP cwd (lsof not found)"$'\n'
+fi
+
+ps_out="$(ps -axo pid=,ppid=,etime=,command= 2>/dev/null)" || ps_out=""
+if [[ -z "$ps_out" ]]; then
+  gaps="$gaps- GAP processes (ps gave no output)"$'\n'
+fi
+
+# pid -> command of every process, to name each parent.
+parent_cmd() {
+  local want="$1" pid ppid et cmd
+  while read -r pid ppid et cmd; do
+    [[ "$pid" == "$want" ]] && { echo "$cmd"; return; }
+  done <<<"$ps_out"
+}
+
+base() { local w="${1%% *}"; echo "${w##*/}"; }
+
+cwd_of() {
+  command -v lsof >/dev/null 2>&1 || { echo "?"; return; }
+  local line out=""
+  while IFS= read -r line; do
+    case "$line" in n*) out="${line#n}" ;; esac
+  done < <(lsof -a -d cwd -Fn -p "$1" 2>/dev/null)
+  echo "${out:-?}"
+}
+
+count=0
+lines=""
+while read -r pid ppid et cmd; do
+  [[ "$pid" =~ ^[0-9]+$ ]] || continue
+  [[ "$pid" == "$self" || "$pid" == "$PPID" ]] && continue
+  pname=""
+  if [[ "$ppid" == 1 ]]; then
+    why_parent="parent is pid 1"
+  else
+    pc="$(parent_cmd "$ppid")"
+    case "$pc" in *marvel*) continue ;; esac
+    pname="$(base "$pc")"
+    why_parent="parent is not marvel (${pname:-unknown})"
+  fi
+  first="$(base "$cmd")"
+  rest="${cmd#* }"; [[ "$rest" == "$cmd" ]] && rest=""
+  second="$(base "$rest")"
+  reason=""
+  case "$first" in
+    *.test) case "$cmd" in *reexec*) reason="test re-exec child" ;; esac ;;
+  esac
+  if [[ -z "$reason" ]]; then
+    for a in $agents; do
+      if [[ "$first" == "$a" || "$second" == "$a" ]]; then reason="$why_parent"; break; fi
+    done
+  fi
+  cwd=""
+  if [[ -z "$reason" ]]; then
+    case "$listeners" in
+      *" $pid "*)
+        cwd="$(cwd_of "$pid")"
+        case "$cwd" in */.worktrees/*|*/.worktrees) reason="127.0.0.1 listener under .worktrees" ;; esac ;;
+    esac
+  fi
+  [[ -z "$reason" ]] && continue
+  [[ -z "$cwd" ]] && cwd="$(cwd_of "$pid")"
+  lines="$lines- unattached pid $pid age $et parent $ppid${pname:+ ($pname)} cwd $cwd | reason: $reason"$'\n'
+  count=$((count+1))
+done <<<"$ps_out"
+
+printf '%s' "$lines"
+printf '%s' "$gaps"
+echo "unattached: $count agent processes on $host"
+
+hosts="${UNATTACHED_HOSTS-}"
+if [[ -r "${DIRECTOR_STATE:-$HOME/.director/state}/unattached.hosts" ]]; then
+  hosts="$hosts,$(sed 's/#.*//' "${DIRECTOR_STATE:-$HOME/.director/state}/unattached.hosts" | tr -s ' \n' ',')"
+fi
+IFS=',' read -r -a hl <<<"$hosts"
+seen=","
+for h in ${hl[@]+"${hl[@]}"}; do
+  h="${h// /}"
+  [[ -z "$h" || "$h" == "$host" ]] && continue
+  case "$seen" in *",$h,"*) continue ;; esac
+  seen="$seen$h,"
+  echo "- GAP $h (cannot read another host's processes yet)"
+done
 exit 0
