@@ -120,7 +120,7 @@ Applicability check, one host so far. The research seat ran the signatures over 
 
 The check has reported for mokuzai. kinu, the host that runs director and where the October director row was measured, has not been checked yet, so script path forms, Artifact use and the later-record share there are still open.
 
-The check also found a counting gap in today's classifier. It reads a session's tool calls only from the first record of each message id, but later content blocks of the same message arrive as further records with the same id, and on that host 64.5% of unique tool_use ids in October appeared only in later records. The mcp-majority half of today's director rule therefore sees about a third of tool calls. Slice 0 below counts tool_use blocks by their own id across records.
+The check also found a counting gap in today's classifier. It reads a session's tool calls only from the first record of each message id, but later content blocks of the same message arrive as further records with the same id, and on that host 64.5% of unique tool_use ids in October appeared only in later records. The mcp-majority half of today's director rule therefore sees about a third of tool calls. Slice 0 (section 6) counts tool_use blocks by their own id across records.
 
 ## 8. Recommendation
 
