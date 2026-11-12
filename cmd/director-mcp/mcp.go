@@ -453,6 +453,7 @@ func (s *Server) cueBefore(name string, args json.RawMessage) func(any) {
 		return func(res any) {
 			if m, ok := res.(map[string]any); ok {
 				m["cue"] = s.cue.status()
+				m["cue_counts"] = s.cue.counts()
 			}
 		}
 	}
