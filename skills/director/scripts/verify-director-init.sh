@@ -11,7 +11,7 @@
 # Covered:
 #  - writing: detection through the
 #    marvel and sideshow stubs, --entry-role and repeatable --team GLOB=ROLE,
-#    no flags refused with one line (there is no terminal prompt), an existing
+#    no flags writing the minimal profile (there is no terminal prompt), an existing
 #    profile (refused without a yes, a backup kept), an atomic write, the summary printed, --manifests refused as
 #    not in the first build;
 #  - the shadow scan, which reports and edits nothing: a function, an alias, a
@@ -67,11 +67,18 @@ run() {
 hash_tree() { find "$home" -type f -exec shasum -a 256 {} + | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1; }
 check_profile() { env -i HOME="$home" PATH="$pydir:/usr/bin:/bin" "$PROFILE_BIN" check "$1" 2>&1; }
 
-# ---- I1: no flags: one line naming the flags, nothing written, nothing detected ----
-fresh; stub_marvel
+# ---- I1: no flags: the minimal profile, said plainly, and --check reads it clean ----
+fresh
 run --
-[[ $rc -eq 2 && "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" == "1" && "$out" == *"--entry-role"* && "$out" == *"--team"* ]] || miss "I1 no flags must refuse with one line naming the flags: rc=$rc out=$out"
-[[ ! -e "$prof" ]] || miss "I1 nothing may be written without flags"
+[[ $rc -eq 0 && -f "$prof" ]] || miss "I1 minimal profile not written: rc=$rc out=$out"
+[[ "$out" == *"routing into a team is refused until an entry role is named"* ]] || miss "I1 must say what the minimal profile means: $out"
+check_profile "$prof" | grep -qs 'profile ok' || miss "I1 the written profile must pass director-profile check"
+grep -qs '^\[\[team\]\]' "$prof" && miss "I1 the minimal profile has no [[team]]"
+grep -qs 'fleet_sources = \["bus-presence"\]' "$prof" || miss "I1 minimal fleet_sources: $(cat "$prof" 2>/dev/null)"
+run -- --check
+[[ $rc -eq 0 && "$out" == *"clean"* ]] || miss "I1 a director-only user must reach a clean --check: rc=$rc out=$out"
+run --
+[[ $rc -eq 1 && "$out" == *"already exists"* ]] || miss "I1 no flags over an existing profile needs --yes: rc=$rc out=$out"
 
 # ---- I2: detection through the stubs; sideshow is printed, never written ----
 fresh; stub_marvel; stub_sideshow
