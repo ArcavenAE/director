@@ -132,6 +132,12 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    by role. Show its output as it is under `Introspect:`; a source it cannot see prints a `GAP` line, which you show
    too and never read as zero. It exits 0 on every reading, and nothing in it needs an answer. Its bands are
    provisional (the header says until when), and `$DIRECTOR_STATE/introspector/records.jsonl` is history only.
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/unattached` (read only: it kills and stops nothing). It lists the agent
+   processes on this host whose parent is pid 1 or is not marvel (claude, codex, goose, opencode, crush, forestage, a re-exec
+   test child, or a 127.0.0.1 listener under a `.worktrees` path), one line each with pid, age, parent, cwd and the reason, then a
+   count line. Show its lines under `Unattached:` as printed. A `- GAP` line means it could not read something, or that another
+   host is listed and cannot be read yet, or that no host list is set so only this host was read; show it, never read it as zero. It exits 0 on every reading. A line is a fact for a
+   person to look at: killing the process is never this step's job.
 4. Present, in this shape and no other:
 
 ```
@@ -151,6 +157,7 @@ Unverified ideas: K  [bd: 4; remote unreachable: 2]
 Waiting on you: <sweep-firings lines, GAP lines included, or "none">
 Drafts: <draft-sweep lines, GAP lines included, or "none">
 Introspect: <introspect's header and its lines as printed, GAP lines included>
+Unattached: <unattached's lines and count line as printed, GAP lines included>
 Uncaptured: <one line each, or "none">
 ```
 
