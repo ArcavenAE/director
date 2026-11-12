@@ -734,13 +734,14 @@ type cueCounts struct {
 	Recues         uint64            `json:"recues"`
 	BySender       map[string]uint64 `json:"by_sender"`
 	ByPerformative map[string]uint64 `json:"by_performative"`
+	ByRole         map[string]uint64 `json:"by_role"`
 }
 
 func (c *cue) counts() cueCounts {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := cueCounts{Since: c.countSince.UTC().Format(time.RFC3339), Cues: c.nCues, Recues: c.nRecues,
-		BySender: map[string]uint64{}, ByPerformative: map[string]uint64{}}
+		BySender: map[string]uint64{}, ByPerformative: map[string]uint64{}, ByRole: map[string]uint64{}}
 	for k, v := range c.bySender {
 		out.BySender[k] = v
 	}
