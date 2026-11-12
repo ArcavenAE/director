@@ -50,7 +50,6 @@ TOP_KEYS = (
 )
 MODEL_KEYS = ("kind", "pack", "path", "scope")
 TEAM_KEYS = ("match", "entry_role", "rules")
-PATH_STRINGS = ("handoff",)
 PATH_LISTS = ("rules_text", "doc_domain", "write_domain")
 
 
@@ -70,9 +69,10 @@ def expand(value, base):
     if value == "~" or value.startswith("~/"):
         value = home + value[1:]
     value = value.replace("$DIRECTOR_STATE", state_dir())
-    # A pattern that starts with * already matches an absolute path, because *
+    # A pattern that starts with **/ already matches an absolute path, because **
     # crosses "/": it is left as written (the default doc_domain is "**/*.md").
-    if not value.startswith("*") and not os.path.isabs(value):
+    # Every other relative pattern, "*.log" included, is relative to base.
+    if not value.startswith("**/") and not os.path.isabs(value):
         value = os.path.join(base, value)
     return value
 

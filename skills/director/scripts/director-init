@@ -9,13 +9,11 @@ director's rulings of 2026-11-12 recorded on that ticket). It does five things:
 
   1. detects marvel (`marvel config list`) and sideshow (`sideshow list`) and
      prints what it finds;
-  2. asks for what it cannot detect, the entry role: on a terminal it prompts
-     once, otherwise it takes --entry-role ROLE (one [[team]], match "*") and
-     repeatable --team GLOB=ROLE. A blank answer, or no flag, writes the minimal
-     profile and says that routing into a team is refused until an entry role is named;
+  2. takes the entry role, which it cannot detect, from flags only:
+     --entry-role ROLE (one [[team]], match "*") and repeatable --team GLOB=ROLE.
+     There is no prompt; with neither flag it refuses with one line naming them;
   3. writes the profile atomically, after director-profile check passes on it. An
-     existing profile is replaced only on a yes (a prompt, or --yes) and a backup
-     copy is kept first;
+     existing profile is replaced only on --yes and a backup copy is kept first;
   4. prints the profile summary and the shadow scan: a function, an alias or an
      earlier PATH entry named director-session, as "file:line: kind". A function or
      alias that calls $DIRECTOR_HOME/bin/director-session is a wrapper, reported as
@@ -85,19 +83,6 @@ def profile_path(arg):
     return arg or os.environ.get("DIRECTOR_PROFILE") or os.path.join(state_dir(), "operating-profile.toml")
 
 
-def tty():
-    return sys.stdin.isatty() and sys.stdout.isatty()
-
-
-def ask(prompt):
-    sys.stdout.write(prompt)
-    sys.stdout.flush()
-    try:
-        return input().strip()
-    except EOFError:
-        return ""
-
-
 def run_tool(argv):
     """Run a tool; return its stdout lines, or None when it is missing or fails."""
     if not shutil.which(argv[0]):
@@ -145,10 +130,14 @@ def check_profile(path):
 
 def expand_text(text):
     h, dh = home(), dhome()
-    text = re.sub(r"\$\{DIRECTOR_HOME:-[^}]*\}", dh, text)
     text = text.replace("${DIRECTOR_HOME}", dh).replace("$DIRECTOR_HOME", dh)
     text = text.replace("${HOME}", h).replace("$HOME", h)
     return re.sub(r"(?<![\w$])~/", h + "/", text)
+
+
+def wraps_launcher(text, launcher):
+    """True when text names the launcher's exact path: not part of a longer path or name."""
+    return re.search(r"(?<![\w./-])%s(?![\w./-])" % re.escape(launcher), text) is not None
 
 
 def body_from(lines, start):
@@ -182,7 +171,7 @@ def shadow_scan():
             elif ALIAS_FORM.match(ln):
                 kind, text = "alias", ln
             if kind:
-                if launcher in expand_text(text):
+                if wraps_launcher(expand_text(text), launcher):
                     kind = "wraps"
                 found.append(("%s:%d" % (path, i + 1), kind))
     for entry in os.environ.get("PATH", "").split(os.pathsep):
@@ -220,16 +209,11 @@ def render(fleet, teams):
 
 
 def backup(path):
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    for n in range(100):
-        dst = "%s.bak-%s%s" % (path, stamp, "" if n == 0 else "-%d" % n)
-        try:
-            with open(path, "rb") as src, open(dst, "xb") as out:
-                shutil.copyfileobj(src, out)
-            return dst
-        except FileExistsError:
-            continue
-    raise OSError("no free backup name for %s" % path)
+    ns = time.time_ns()
+    dst = "%s.bak-%s.%09dZ" % (path, time.strftime("%Y%m%dT%H%M%S", time.gmtime(ns // 10**9)), ns % 10**9)
+    with open(path, "rb") as src, open(dst, "xb") as out:
+        shutil.copyfileobj(src, out)
+    return dst
 
 
 def do_init(opts):
@@ -237,21 +221,15 @@ def do_init(opts):
     if bad:
         err(bad)
         return 2
+    if not teams:
+        err("no entry role given: pass --entry-role ROLE or --team GLOB=ROLE")
+        return 2
     target = profile_path(opts["profile"])
     found = detect()
     print_detection(found)
-    if os.path.exists(target):
-        if tty() and not opts["yes"]:
-            if ask("overwrite %s? [y/N]: " % target).lower() not in ("y", "yes"):
-                err("%s not overwritten" % target)
-                return 1
-        elif not opts["yes"]:
-            err("%s already exists; pass --yes to replace it (a backup is kept)" % target)
-            return 1
-    if not teams and tty():
-        role = ask("entry role for every team (blank for none): ")
-        if role:
-            teams = [("*", role)]
+    if os.path.exists(target) and not opts["yes"]:
+        err("%s already exists; pass --yes to replace it (a backup is kept)" % target)
+        return 1
     fleet = ["marvel-register", "bus-presence"] if found["marvel"] is not None else ["bus-presence"]
     text = render(fleet, teams)
     os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
@@ -276,8 +254,6 @@ def do_init(opts):
     print("wrote %s" % target)
     if saved:
         print("backup kept: %s" % saved)
-    if not teams:
-        print("no entry role named: routing into a team is refused until an entry role is named")
     ok, shown = check_profile(target)
     sys.stdout.write(shown)
     for where, kind in shadow_scan():
