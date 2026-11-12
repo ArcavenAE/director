@@ -161,6 +161,8 @@ Unattached: <unattached's lines and count line as printed, GAP lines included>
 Uncaptured: <one line each, or "none">
 ```
 
+Times shown here are local (America/Chicago, with CST or CDT); see Relaying.
+
 Stalled ideas: list every row, oldest quiet first; number them on from the last
 block; the reason is the row's `reason`; a row with `remote` other than `current` shows `as of <as_of>` and,
 for `unreachable`, `remote unreachable`. Unverified ideas are counted apart and never in N; omit that line
@@ -578,6 +580,16 @@ is "very likely" acting for the user. codex, opencode and crush inject nothing.
 That borrowed safety is an artifact of the substrate, not a property of the
 fleet, and it is one of the reasons director must not be built on the feature:
 `../../sim/specs/vendor-injected-receiver-policy.md`.
+
+**Times shown to the operator are local.** Every time you show the operator is America/Chicago, with
+the zone written (CST or CDT): "13:44 CST", never "19:44Z" and never a bare UTC stamp. Read the zone from
+the named zone, not from the host clock: the standing hook's first line (`now 13:44 CST`) and the
+renderers (`board-html`, `dws digest`, the board-state block) already do. Records, logs, ledgers and bus
+text stay UTC, because other seats and scripts parse them; convert only at the moment the operator reads.
+Authored text in `board.md` is yours to write local from now on; the renderers do not rewrite stamps inside
+it. `DIRECTOR_TZ` is a test-only override of the zone, honored only with `DWS_TEST_CLOCK=1`.
+`verify-local-times.sh` proves it. The operator had to ask for this four times; it belongs here, where
+every session reads it, and not in a memory.
 
 A correction or addendum to an order already sent names that order as
 "FRAGO to <message id>" (`reference/relay-template.md`).
