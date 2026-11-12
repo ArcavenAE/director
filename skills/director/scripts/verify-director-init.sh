@@ -159,6 +159,12 @@ done
 printf '%s\n' 'director-session() { /opt/other/director-session "$@"; }' >"$home/.zshrc"
 run -- --check
 [[ $rc -eq 1 && "$out" == *"drift: $home/.zshrc:1: function"* ]] || miss "S2 a function that wraps another file is drift: rc=$rc out=$out"
+# $DIRECTOR_HOME in either form, under a set DIRECTOR_HOME, names the launcher
+for body in '${DIRECTOR_HOME}/bin/director-session "$@"' '$DIRECTOR_HOME/bin/director-session "$@"'; do
+  printf '%s\n' "director-session() { $body; }" >"$home/.zshrc"
+  run DIRECTOR_HOME="$home/.director" -- --check
+  [[ $rc -eq 0 && "$out" == *".zshrc:1: wraps"* ]] || miss "S2 DIRECTOR_HOME wrapper ($body): rc=$rc out=$out"
+done
 # the exact path, not a longer name that starts with it
 for body in '~/.director/bin/director-session-old "$@"' '$HOME/.director/bin/director-session.bak "$@"' '$HOME/.director/bin/director-session/x "$@"'; do
   printf '%s\n' "director-session() { $body; }" >"$home/.zshrc"
