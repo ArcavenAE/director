@@ -87,8 +87,8 @@ func TestAdvanceRefusals(t *testing.T) {
 	if err != nil || before.NumAckPending == 0 {
 		t.Fatalf("setup: ack pending = %v (%v), want a delivery in flight", before, err)
 	}
-	if _, err := advanceGlobalDurable(ctx, b.global, b.self.AgentID, 0); err == nil || !strings.Contains(err.Error(), "in flight") {
-		t.Errorf("with a delivery in flight: err = %v, want a refusal naming in flight", err)
+	if _, err := advanceGlobalDurable(ctx, b.global, b.self.AgentID, 0); err == nil || !strings.Contains(err.Error(), "unacked deliveries") {
+		t.Errorf("with a delivery in flight: err = %v, want a refusal naming unacked deliveries", err)
 	}
 	after, _ := cons.Info(ctx)
 	if after.AckFloor.Stream != before.AckFloor.Stream || after.NumPending != before.NumPending {

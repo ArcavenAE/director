@@ -877,19 +877,6 @@ generation's, live or departed, acked or not) starts at the stream head, and
 its start note says how many earlier messages were not delivered, or UNKNOWN
 when the credential cannot count them. When the lookups for earlier durables
 fail, the seat reads from the start of the stream, so no unread mail is lost.
-
-`director-mcp global-advance [--seat AGENT-ID] [--to-head | --to SEQ]` moves
-the caller's own global durable forward for a seat that started before the
-head-start rule and still holds a backlog (director#596). It runs from the
-seat's own environment: `--seat`, if given, must equal `DIRECTOR_AGENT_ID` (or
-`MARVEL_SESSION`), and it takes no other credential. It acks through the
-durable's undelivered messages, up to the stream head read at the start or to
-`SEQ`, so the ack floor moves; it deletes, renames and creates nothing,
-touches no other consumer and no message, and refuses while the durable has
-unacked deliveries or waiting pulls, so run it while the seat is idle. It
-prints the stream, the floor and the pending count before and after, and the
-sequence range skipped; a head it cannot read prints UNKNOWN. A run that fails
-partway leaves the messages it had pulled and not acked to return to the seat.
 To find them it lists the hub stream's consumers first. A cluster credential
 may not list them (`CONSUMER.NAMES` and `CONSUMER.LIST` answer "no
 responders"), so on that error it takes the seat's instance ids from its
@@ -903,6 +890,19 @@ contain `_`, so the prefix `mcp_global_sup_` also matches `sup_T1`'s
 durables; a name counts for the seat only when the rest of it is an instance
 id (a ULID, which never contains `_`). Each session still receives every
 message (fan-out, not a work queue).
+
+`director-mcp global-advance [--seat AGENT-ID] [--to-head | --to SEQ]` moves
+the caller's own global durable forward for a seat that started before the
+head-start rule and still holds a backlog (director#596). It runs from the
+seat's own environment: `--seat`, if given, must equal `DIRECTOR_AGENT_ID` (or
+`MARVEL_SESSION`), and it takes no other credential. That is a check against the id the environment names, not an access control: whoever can run the command with that environment can run it. It acks through the
+durable's undelivered messages, up to the stream head read at the start or to
+`SEQ`, so the ack floor moves; it deletes, renames and creates nothing,
+touches no other consumer and no message, and refuses while the durable has
+unacked deliveries or waiting pulls, so run it while the seat is idle. It
+prints the stream, the floor and the pending count before and after, and the
+sequence range skipped; a head it cannot read prints UNKNOWN. A run that fails
+partway leaves the messages it had pulled and not acked to return to the seat. With `--to SEQ`, messages it pulled past `SEQ` are returned the same way and counted in the printout; until the seat reads them or the ack wait passes, they show as unacked deliveries, and a second run is refused with a message that names this case. `--help` prints the usage and exits 0 without connecting.
 
 The first `wait_for_message` result after a start (or after the global tier
 attaches) carries `resumed`: one line per tier saying where the durable

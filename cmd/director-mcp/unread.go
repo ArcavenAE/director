@@ -231,6 +231,8 @@ func parseArgs(args []string) (cliArgs, error) {
 			switch a {
 			case "--to-head":
 				out.advTo = 0
+			case "--help", "-h":
+				out.help = true
 			case "--seat", "--to":
 				if i+1 >= len(rest) {
 					return cliArgs{}, fmt.Errorf("global-advance: %s needs a value (usage: %s)", a, globalAdvanceUsage)

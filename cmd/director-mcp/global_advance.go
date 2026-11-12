@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -27,6 +26,7 @@ type advanceResult struct {
 	AfterPending  uint64
 	Acked         uint64
 	Naked         uint64 // messages pulled past the stopping point and returned to the seat
+	Limit         uint64 // the sequence the advance stopped at; 0 when bounded by the backlog
 	Head          uint64
 	HeadKnown     bool
 }
@@ -55,7 +55,7 @@ func advanceGlobalDurable(ctx context.Context, g *globalTier, agentID string, to
 		return res, fmt.Errorf("read global durable %s: %w", name, err)
 	}
 	if before.NumAckPending > 0 || before.NumWaiting > 0 {
-		return res, fmt.Errorf("global durable %s has deliveries in flight (%d unacked, %d pulls waiting); a live seat is reading it, so nothing was changed. Run this while the seat is idle, not inside a wait", name, before.NumAckPending, before.NumWaiting)
+		return res, fmt.Errorf("global durable %s has %d unacked deliveries and %d pulls waiting, so nothing was changed. Either a live seat is reading it (run this while the seat is idle, not inside a wait), or an earlier global-advance --to returned messages it had pulled past its stopping point, which clear when the seat reads them or after the ack wait", name, before.NumAckPending, before.NumWaiting)
 	}
 	res.BeforeFloor, res.BeforePending = before.AckFloor.Stream, before.NumPending
 	// The point the advance stops at, read once: a message after it is the
@@ -71,38 +71,47 @@ func advanceGlobalDurable(ctx context.Context, g *globalTier, agentID string, to
 	if limit == 0 && res.HeadKnown {
 		limit = res.Head
 	}
-	// With neither a target nor a readable head, the bound is the backlog the
-	// durable showed at the start.
-	budget := before.NumPending
+	res.Limit = limit
+	// With neither a target nor a readable head there is no sequence to stop
+	// at, and a message's metadata carries no head sequence either. The bound
+	// is then the first message's own count of what is pending behind it, plus
+	// that message, read from its metadata (budget stays 0 until it is read).
+	var budget uint64
 	for {
-		if limit == 0 && res.Acked >= budget {
-			break
-		}
-		want := advanceBatch
-		if limit == 0 && budget-res.Acked < uint64(want) {
-			want = int(budget - res.Acked)
-		}
-		batch, ferr := cons.Fetch(want, jetstream.FetchMaxWait(2*time.Second))
+		batch, ferr := cons.FetchNoWait(advanceBatch)
 		if ferr != nil {
 			return finishAdvance(ctx, cons, res), fmt.Errorf("pull from %s: %w", name, ferr)
 		}
 		got, stop := 0, false
+		// A Nak inside the batch redelivers into the same open pull, so the
+		// messages past the stopping point are held and returned after it.
+		var past []jetstream.Msg
 		for msg := range batch.Messages() {
 			got++
 			md, merr := msg.Metadata()
 			if merr != nil {
 				return finishAdvance(ctx, cons, res), fmt.Errorf("read a message's sequence on %s: %w", name, merr)
 			}
-			if limit != 0 && md.Sequence.Stream > limit {
-				_ = msg.Nak() // past the point: the seat's to read
+			if limit == 0 && budget == 0 {
+				budget = md.NumPending + 1
+			}
+			if (limit != 0 && md.Sequence.Stream > limit) || (limit == 0 && res.Acked >= budget) {
+				past = append(past, msg) // past the stopping point: the seat's to read
 				stop = true
 				continue
 			}
-			if aerr := msg.Ack(); aerr != nil {
+			if aerr := msg.DoubleAck(ctx); aerr != nil {
 				return finishAdvance(ctx, cons, res), fmt.Errorf("ack sequence %d on %s: %w (unacked messages return to the seat)", md.Sequence.Stream, name, aerr)
 			}
 			res.Acked++
+			if md.NumPending == 0 {
+				stop = true
+			}
 		}
+		for _, m := range past {
+			_ = m.Nak()
+		}
+		res.Naked += uint64(len(past))
 		if berr := batch.Error(); berr != nil && !errors.Is(berr, jetstream.ErrNoMessages) {
 			return finishAdvance(ctx, cons, res), fmt.Errorf("pull from %s: %w", name, berr)
 		}
@@ -113,21 +122,13 @@ func advanceGlobalDurable(ctx context.Context, g *globalTier, agentID string, to
 	return finishAdvance(ctx, cons, res), nil
 }
 
-// finishAdvance reads the durable's position after the acks. An Ack is sent
-// without a reply, so the floor is read until it has taken every ack this run
-// sent, for up to a few seconds; what it reads is what the durable reports.
+// finishAdvance reads the durable's position after the acks. Each ack was
+// confirmed (DoubleAck), so the floor is already current; messages the run
+// returned are counted as unacked until the seat reads them.
 func finishAdvance(ctx context.Context, cons jetstream.Consumer, res advanceResult) advanceResult {
-	for i := 0; i < 20; i++ {
-		after, err := cons.Info(ctx)
-		if err != nil {
-			return res
-		}
+	if after, err := cons.Info(ctx); err == nil {
 		res.AfterFloor = after.AckFloor.Stream
 		res.AfterPending = after.NumPending + uint64(after.NumAckPending)
-		if after.NumAckPending == 0 {
-			return res
-		}
-		time.Sleep(250 * time.Millisecond)
 	}
 	return res
 }
@@ -211,6 +212,13 @@ func formatAdvance(r advanceResult) string {
 	} else {
 		fmt.Fprintf(&b, "  skipped: nothing, %d message(s) acked\n", r.Acked)
 	}
+	if r.Naked > 0 {
+		if r.Limit != 0 {
+			fmt.Fprintf(&b, "  returned: %d message(s) past sequence %d, left for the seat to read\n", r.Naked, r.Limit)
+		} else {
+			fmt.Fprintf(&b, "  returned: %d message(s) past the backlog bound, left for the seat to read\n", r.Naked)
+		}
+	}
 	fmt.Fprintf(&b, "  after: ack floor %d, %d message(s) pending\n", r.AfterFloor, r.AfterPending)
 	if r.HeadKnown {
 		fmt.Fprintf(&b, "  stream head when read: sequence %d\n", r.Head)
@@ -229,6 +237,10 @@ func runGlobalAdvanceCmd(ctx context.Context, cli cliArgs, out, errw io.Writer) 
 	fail := func(format string, a ...any) int {
 		_, _ = fmt.Fprintf(errw, "director-mcp global-advance: "+format+"\n", a...)
 		return 1
+	}
+	if cli.help {
+		_, _ = fmt.Fprintf(out, "usage: %s\nAdvances the caller's own global durable by acking through its backlog. Run it from the seat's own environment while the seat is idle. --seat must equal DIRECTOR_AGENT_ID. Nothing is deleted or renamed, and no other consumer or message is touched.\n", globalAdvanceUsage)
+		return 0
 	}
 	own := env("DIRECTOR_AGENT_ID", os.Getenv("MARVEL_SESSION"))
 	if own == "" {

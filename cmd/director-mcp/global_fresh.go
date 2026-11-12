@@ -67,21 +67,21 @@ func (g *globalTier) hubHasEarlier(ctx context.Context, mine func(prefix, name s
 }
 
 // headPoint reads the hub stream once: how many messages it holds for the
-// seat's inbox subject and the stream's last sequence, both as of the same
+// seat's inbox subject, the stream's first retained and last sequence, both as of the same
 // read, so the durable can start at last+1 and the start note describes the
 // same point. ok is false when the credential cannot read the stream's state,
 // so the note says UNKNOWN and never 0.
-func (g *globalTier) headPoint(ctx context.Context) (n, last uint64, ok bool) {
+func (g *globalTier) headPoint(ctx context.Context) (n, first, last uint64, ok bool) {
 	cctx, cancel := context.WithTimeout(ctx, floorListTimeout)
 	defer cancel()
 	st, err := g.js.Stream(cctx, g.cfg.streamName())
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	subj := g.cfg.inboxSubject()
 	info, err := st.Info(cctx, jetstream.WithSubjectFilter(subj))
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
-	return info.State.Subjects[subj], info.State.LastSeq, true
+	return info.State.Subjects[subj], info.State.FirstSeq, info.State.LastSeq, true
 }
