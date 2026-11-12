@@ -144,9 +144,6 @@ func TestClassifyReplyToOpenAsk(t *testing.T) {
 	if got := reply(4, "NO-SUCH-ASK"); got != classAct {
 		t.Errorf("reply to an id the seat cannot match: %q, want act (fail open)", got)
 	}
-	if got := reply(5, "INF1"); got != classAct {
-		t.Errorf("reply to an id that was not a REQUEST or QUERY: %q, want act (cannot match)", got)
-	}
 	if got := reply(6, ""); got != classRoutine {
 		t.Errorf("AGREE that replies to nothing: %q, want routine", got)
 	}
@@ -195,5 +192,73 @@ func TestClassifyBacklogIsClassifiedOnceAndKeepsItsClass(t *testing.T) {
 	}
 	if c.decodes != n {
 		t.Fatalf("decoded %d times, want %d", c.decodes, n)
+	}
+}
+
+func TestClassifyFirstReplySurvivesEviction(t *testing.T) {
+	c := newClassifier()
+	c.noteSent("ASK1", "REQUEST")
+	first := classifyEnvReply(t, "AGREE", "ok", "", "ASK1")
+	if got := c.classify("local", 1, first, classifyNow); got != classAct {
+		t.Fatalf("first reply: %q, want act", got)
+	}
+	filler := classifyEnv(t, "INFORM", "x", "")
+	for seq := uint64(2); seq <= 40000; seq++ {
+		c.classify("local", seq, filler, classifyNow)
+	}
+	if got := c.classify("local", 1, first, classifyNow); got != classAct {
+		t.Fatalf("first reply reclassified after eviction: %q, want act", got)
+	}
+	if got := c.classify("local", 50000, classifyEnvReply(t, "AGREE", "again", "", "ASK1"), classifyNow); got != classRoutine {
+		t.Fatalf("second reply after the first was evicted: %q, want routine", got)
+	}
+}
+
+func TestClassifyFirstReplyWithPassedReplyByConsumesAsk(t *testing.T) {
+	c := newClassifier()
+	c.noteSent("ASK1", "REQUEST")
+	past := classifyNow.Add(-time.Minute).Format(time.RFC3339)
+	if got := c.classify("local", 1, classifyEnvReply(t, "AGREE", "ok", past, "ASK1"), classifyNow); got != classAct {
+		t.Fatalf("first reply with a passed reply_by: %q, want act", got)
+	}
+	if got := c.classify("local", 2, classifyEnvReply(t, "AGREE", "again", "", "ASK1"), classifyNow); got != classRoutine {
+		t.Fatalf("next reply: %q, want routine, the ask was answered by the first", got)
+	}
+}
+
+func TestClassifyReplyToOwnNonAsk(t *testing.T) {
+	c := newClassifier()
+	c.noteSent("INF1", "INFORM")
+	reply := func(seq uint64, perf, body, to string) msgClass {
+		return c.classify("local", seq, classifyEnvReply(t, perf, body, "", to), classifyNow)
+	}
+	if got := reply(1, "AGREE", "ok", "INF1"); got != classRoutine {
+		t.Errorf("AGREE replying to the seat's own INFORM: %q, want routine", got)
+	}
+	if got := reply(2, "REFUSE", "no", "INF1"); got != classAct {
+		t.Errorf("REFUSE replying to the seat's own INFORM: %q, want act", got)
+	}
+	if got := reply(3, "FAILURE", "x", "INF1"); got != classAct {
+		t.Errorf("FAILURE replying to the seat's own INFORM: %q, want act", got)
+	}
+	if got := reply(4, "INFORM", "done\nGATE ArcavenAE/director#9 @abc ready", "INF1"); got != classAct {
+		t.Errorf("body GATE line replying to the seat's own INFORM: %q, want act", got)
+	}
+	if got := reply(5, "AGREE", "ok", "NEVER-SENT"); got != classAct {
+		t.Errorf("reply to an id the seat never recorded: %q, want act (fail open)", got)
+	}
+}
+
+func TestClassifySentRecordEvictionFallsBackToAct(t *testing.T) {
+	c := newClassifier()
+	c.noteSent("OLD", "INFORM")
+	for i := 0; i < 5000; i++ {
+		c.noteSent(fmt.Sprintf("NEW%d", i), "INFORM")
+	}
+	if got := c.classify("local", 1, classifyEnvReply(t, "AGREE", "ok", "", "OLD"), classifyNow); got != classAct {
+		t.Fatalf("reply to an evicted sent id: %q, want act", got)
+	}
+	if got := c.classify("local", 2, classifyEnvReply(t, "AGREE", "ok", "", "NEW4999"), classifyNow); got != classRoutine {
+		t.Fatalf("reply to a recent sent INFORM: %q, want routine", got)
 	}
 }
