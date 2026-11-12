@@ -10,11 +10,11 @@ The operator asked for director's tokens to be broken down by activity, so leade
 
 A three-round design party with five panelists settled this design, with a forced vote on every contested item. The tally and the dissent are in section 7.
 
-The classifier this targets is critic's `sim/tools/ledger-s10-axes.py`. Today a non-seat session counts as a director session when it calls the Skill tool with skill `director`, or when more than half its tool calls start with `mcp__director__` (that file's header). It reads only assistant records, and it counts a request whose tools are all bus waits as fleet "hub wait" before it looks at the session class. So today's director row holds none of director's waiting.
+The classifier this targets is critic's `sim/tools/ledger-s10-axes.py`. Today a non-seat session counts as a director session when it calls the Skill tool with skill `director`, or when more than half its tool calls start with `mcp__director__` (that file's header). It counts a message's tool calls only from the first record of each message id (lines 132-137, inside `if e is None`), so tool calls that arrive in later records of the same message are not counted; slice 0 fixes that. It reads only assistant records, and it counts a request whose tools are all bus waits as fleet "hub wait" before it looks at the session class. So today's director row holds none of director's waiting.
 
 ## 1. Unit of attribution
 
-- **One class per assistant request.** The class comes from the request's `tool_use` blocks, so the classes partition the spend and nothing is counted twice. Per-turn attribution was ruled out, because the classifier never reads user records and so cannot see turn boundaries.
+- **One class per assistant request.** The class comes from the request's `tool_use` blocks, collected across every record that carries the request's message id and deduplicated by `tool_use` id, so the classes partition the spend and nothing is counted twice. Per-turn attribution was ruled out, because the classifier never reads user records and so cannot see turn boundaries.
 - **A text-only request** inherits the class of the next tool-bearing request in the same session stream, or of the previous one when there is no next (4-1).
 - **Inheritance is visible.** The share of each class reached by inheritance is reported, split by direction, so a drift in it shows.
 
@@ -23,7 +23,7 @@ The classifier this targets is critic's `sim/tools/ledger-s10-axes.py`. Today a 
 First match wins, over the set of `tool_use` blocks in one request.
 
 - **Tool names** are as they appear in `tool_use.name`.
-- **"Bash X"** means a Bash call whose command, after leading environment assignments and a path prefix, starts with the word X.
+- **"Bash X"** means a Bash call where some segment of the command, after leading environment assignments and a path prefix, starts with the word X. The command is split into segments on `&&`, `||`, `;`, `|` and newlines; every segment is tried, not only the first. On one host about half of director's Bash calls put the listed command behind `cd`, a `for` loop or a pipe, so first-word-only matching would miss them.
 - **Command text is read, not kept.** The classifier reads the command only to match its first word; no command text leaves it.
 - **The table is data.** It lives in critic's map file as a new kind, with a version that every audit prints, so a rename moves dollars between classes without a code change.
 
@@ -35,7 +35,7 @@ First match wins, over the set of `tool_use` blocks in one request.
 | 4 | intake and relay | `mcp__director__send_message`, `broadcast`, `report_status`, `set_presence`; Bash `relay-log`, `route-ledger` | project manager |
 | 5 | operator support | other Artifact tools; Bash `desk-snapshot`, `dash-writer`, `board-html`, `nav-sync`, `page-namespace`, `shelf-row`, `freebusy` | chief of staff |
 | 6 | custody and records | Bash `bd`, `lane-ledger`, `draft-sweep`; `mcp__director__audit_lookup`; Write, Edit | scribe |
-| 7 | fleet care | Bash `marvel inject`, `marvel capture`, `marvel events`; Bash `composer-check`, `idle-shadow`, `unattached`, `standing-hook`, `sweep-firings`, `schedule-ack` | engineering manager |
+| 7 | fleet care | Bash `marvel inject`, `marvel capture`, `marvel events`; Bash `tmux`; Bash `composer-check`, `idle-shadow`, `unattached`, `standing-hook`, `sweep-firings`, `schedule-ack` | engineering manager |
 | 8 | fleet reads | `mcp__director__list_roster`; Bash `marvel get`, `marvel describe`; Bash `dsi`, `dsx`, `dws`, `dbi`, `vector-pin-drift` | engineering manager |
 | 9 | director other | everything else, Read and Grep among it, with the Read and Grep share printed as a sub-line | none assigned |
 
@@ -84,7 +84,8 @@ These are proposed as flat tickets with blocks edges. None is filed. Each red te
 
 | # | slice | red test (fails today because) | blocked by |
 |---|---|---|---|
-| 1 | critic: a `director_sig` kind in the map file, the first-match table, the version printed | a fixture request per row lands in its class; reordering the table changes the assertion (no such kind) | none |
+| 0 | critic: count tool_use blocks by their id across every record of a message, not only the first record, for both the director-session rule and the per-request tool set | a fixture message whose tool_use arrives in a second record with the same message id is counted once and classed (today it is missed by the session rule) | none |
+| 1 | critic: a `director_sig` kind in the map file, the first-match table with segment matching, the version printed | a fixture request per row lands in its class; a command `cd x && merge-guard ...` lands in merge gating; reordering the table changes the assertion (no such kind) | 0 |
 | 2 | critic: text-only inheritance, next else previous, with the inherited share by direction | a text-only request between `merge-guard` and `send_message` takes merge gating; a leading text-only request takes the previous class or the residual (no inheritance) | 1 |
 | 3 | critic: the director test before the hub-wait test, with the memo and bridge rows | new rows plus bridge equal old rows to the micro-dollar (director waits sit in hub wait) | 1 |
 | 4 | critic: the unit-cost table with named sources and "n/a" or "pending" | a zero or missing denominator prints "n/a" with its source, never 0 (no table) | 1 |
@@ -108,11 +109,22 @@ The audit re-runs on both months follow slices 1 to 4. They are the research sea
 
 Open item: in round 2, before the Desk snapshot's `answered_at` was checked, the panel settled that the per-decision unit prints "n/a". The round 3 vote for a decision-routing class with that unit came after the check. This design reads the later vote as superseding the earlier one for that unit, and says so here rather than deciding it quietly.
 
-The signatures are pending a check that both months' transcripts carry what the rules read (the Bash command, the script names as written, the Artifact tool names). The research seat is running that check, and a row it finds unreadable will be named before the classifier slice is built.
+Applicability check, one host so far. The research seat ran the signatures over one host's October and November transcripts (aggregates only). The results:
+
+- **Bash command.** It is present and untruncated on every Bash call.
+- **Script names.** They appear bare where they appear at all.
+- **Segment matching.** Many director Bash calls put the listed command after `cd`, `for` or a pipe. That is why segment matching (section 2) replaced first-word matching, and why bare `tmux` joins fleet care. Both changes were made after the vote, at the check's suggestion, and are not voted.
+- **Requests with no tool call.** About a third of director requests have none, so the inherited share (section 1) is large and must be reported.
+- **Waiting.** It is over half of the requests the rule catches there, so the waiting decision in section 3 moves most of the director row.
+- **Artifact tools.** Their names (Artifact, ArtifactComments, ArtifactData, ArtifactCheck) all match the prefix rule.
+
+The check has reported for mokuzai. kinu, the host that runs director and where the October director row was measured, has not been checked yet, so script path forms, Artifact use and the later-record share there are still open.
+
+The check also found a counting gap in today's classifier. It reads a session's tool calls only from the first record of each message id, but later content blocks of the same message arrive as further records with the same id, and on that host 64.5% of unique tool_use ids in October appeared only in later records. The mcp-majority half of today's director rule therefore sees about a third of tool calls. Slice 0 below counts tool_use blocks by their own id across records.
 
 ## 8. Recommendation
 
-Build slices 1 to 4, then re-run October and November on the new taxonomy. This recommendation is valid until 2026-11-26, or until the applicability check reports, whichever comes first. The arcaven architect seat that chaired the party re-checks it then. Nothing here takes effect on silence.
+Build slices 0 to 4, then re-run October and November on the new taxonomy. This recommendation is valid until 2026-11-26, or until the applicability check on kinu reports, whichever comes first. The arcaven architect seat that chaired the party re-checks it then. Nothing here takes effect on silence.
 
 ## 9. Prior art
 
