@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""director-init: write director's operating profile and report what shadows the launcher.
+
+  director-init [--profile FILE] [--entry-role ROLE] [--team GLOB=ROLE]... [--yes]
+  director-init --check [--profile FILE]
+
+First build (aae-orc-d2sol, sim/design/director-bootstrap.md section 4a.2, and
+director's rulings of 2026-11-12 recorded on that ticket). It does five things:
+
+  1. detects marvel (`marvel config list`) and sideshow (`sideshow list`) and
+     prints what it finds;
+  2. takes the entry role, which it cannot detect, from flags only:
+     --entry-role ROLE (one [[team]], match "*") and repeatable --team GLOB=ROLE.
+     There is no prompt; with neither flag it writes the minimal profile and says
+     that routing into a team is refused until an entry role is named;
+  3. writes the profile atomically, after director-profile check passes on it. An
+     existing profile is replaced only on --yes and a backup copy is kept first;
+  4. prints the profile summary and the shadow scan: a function, an alias or an
+     earlier PATH entry named director-session, as "file:line: kind". A function or
+     alias that calls $DIRECTOR_HOME/bin/director-session is a wrapper, reported as
+     "wraps", and is not drift. The scan edits nothing;
+  5. --check re-reads all of it and prints one "drift:" line per fault, writing
+     nothing. Exit 1 on drift, 0 when clean.
+
+It installs nothing: the launcher is install.sh's. Not in the first build, and
+refused as such: --manifests.
+
+Exit: 0 ok, 1 refused or drift, 2 usage or an interpreter that is too old.
+
+This file is parsed by every python3 a host may have, so it uses no syntax newer
+than 3.9 before the version check, and the whole file keeps to that.
+"""
+import os
+import shutil
+import sys
+
+MIN = (3, 11)
+
+if tuple(sys.version_info[:2]) < MIN:
+    # A newer python3.N on PATH is used instead; with none, one clear line.
+    for minor in range(15, MIN[1] - 1, -1):
+        found = shutil.which("python3.%d" % minor)
+        if found:
+            os.execv(found, [found] + sys.argv)
+    sys.stderr.write(
+        "director-init: needs python3 %d.%d or newer (this is python3 %s)\n"
+        % (MIN[0], MIN[1], ".".join(str(p) for p in sys.version_info[:3]))
+    )
+    sys.exit(2)
+
+import json  # noqa: E402
+import re  # noqa: E402
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
+import tomllib  # noqa: E402
+
+PROG = "director-init"
+RC_FILES = (".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile")
+FN_FORMS = (
+    re.compile(r"^\s*function\s+director-session\b"),
+    re.compile(r"^\s*director-session\s*\(\s*\)"),
+)
+ALIAS_FORM = re.compile(r"^\s*alias\s+director-session=")
+
+
+def err(msg):
+    sys.stderr.write("%s: %s\n" % (PROG, msg))
+
+
+def home():
+    return os.environ.get("HOME", "")
+
+
+def dhome():
+    return os.environ.get("DIRECTOR_HOME") or os.path.join(home(), ".director")
+
+
+def state_dir():
+    return os.environ.get("DIRECTOR_STATE") or os.path.join(home(), ".director", "state")
+
+
+def profile_path(arg):
+    return arg or os.environ.get("DIRECTOR_PROFILE") or os.path.join(state_dir(), "operating-profile.toml")
+
+
+def run_tool(argv):
+    """Run a tool; return its stdout lines, or None when it is missing or fails."""
+    if not shutil.which(argv[0]):
+        return None
+    try:
+        res = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if res.returncode != 0:
+        return None
+    return [ln for ln in res.stdout.splitlines() if ln.strip()]
+
+
+def detect():
+    return {
+        "marvel": run_tool(["marvel", "config", "list"]),
+        "sideshow": run_tool(["sideshow", "list"]),
+    }
+
+
+def print_detection(found):
+    print("marvel: %s" % ("found" if found["marvel"] is not None else "not found"))
+    if found["sideshow"] is None:
+        print("sideshow: not found")
+    else:
+        print("sideshow: found")
+        for ln in found["sideshow"]:
+            print("  %s" % ln)
+
+
+def profile_tool():
+    beside = os.path.join(os.path.dirname(os.path.realpath(__file__)), "director-profile")
+    if os.path.isfile(beside):
+        return beside
+    return os.path.join(dhome(), "bin", "director-profile")
+
+
+def check_profile(path):
+    """Run director-profile check on path; return (ok, its output)."""
+    res = subprocess.run([sys.executable, profile_tool(), "check", path], capture_output=True, text=True)
+    return res.returncode == 0, (res.stdout + res.stderr)
+
+
+# ---- the shadow scan: reads, never edits ----
+
+def expand_text(text):
+    h, dh = home(), dhome()
+    text = text.replace("${DIRECTOR_HOME}", dh).replace("$DIRECTOR_HOME", dh)
+    text = text.replace("${HOME}", h).replace("$HOME", h)
+    return re.sub(r"(?<![\w$])~/", h + "/", text)
+
+
+def wraps_launcher(text, launcher):
+    """True when text names the launcher's exact path: not part of a longer path or name."""
+    return re.search(r"(?<![\w./-])%s(?![\w./-])" % re.escape(launcher), text) is not None
+
+
+def body_from(lines, start):
+    """The function or alias text from lines[start]: to the brace that closes it, at most 40 lines."""
+    depth, taken = 0, []
+    for ln in lines[start:start + 40]:
+        taken.append(ln)
+        depth += ln.count("{") - ln.count("}")
+        if depth <= 0:
+            break
+    return "\n".join(taken)
+
+
+def shadow_scan():
+    """Return [(where, kind)] with kind function, alias, wraps or path, in scan order."""
+    launcher = os.path.join(dhome(), "bin", "director-session")
+    found = []
+    for name in RC_FILES:
+        path = os.path.join(home(), name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", errors="replace") as fh:
+                lines = fh.read().splitlines()
+        except OSError:
+            continue
+        for i, ln in enumerate(lines):
+            kind = None
+            if any(rx.match(ln) for rx in FN_FORMS):
+                kind, text = "function", body_from(lines, i)
+            elif ALIAS_FORM.match(ln):
+                kind, text = "alias", ln
+            if kind:
+                if wraps_launcher(expand_text(text), launcher):
+                    kind = "wraps"
+                found.append(("%s:%d" % (path, i + 1), kind))
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        cand = os.path.join(entry or ".", "director-session")
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            if os.path.realpath(cand) != os.path.realpath(launcher):
+                found.append((cand, "path"))
+            break
+    return found
+
+
+# ---- writing ----
+
+def parse_teams(args):
+    teams = []
+    for flag, value in args:
+        if flag == "--entry-role":
+            if not value:
+                return None, "--entry-role takes a role name, not an empty string"
+            teams.append(("*", value))
+        else:
+            glob, sep, role = value.partition("=")
+            if not sep or not glob or not role:
+                return None, "--team takes GLOB=ROLE, got %r" % value
+            teams.append((glob, role))
+    return teams, None
+
+
+def render(fleet, teams):
+    out = ["# operating profile, written by director-init", "schema_version = 1",
+           "fleet_sources = [%s]" % ", ".join(json.dumps(f) for f in fleet)]
+    for glob, role in teams:
+        out += ["", "[[team]]", "match = %s" % json.dumps(glob), "entry_role = %s" % json.dumps(role)]
+    return "\n".join(out) + "\n"
+
+
+def backup(path):
+    ns = time.time_ns()
+    dst = "%s.bak-%s.%09dZ" % (path, time.strftime("%Y%m%dT%H%M%S", time.gmtime(ns // 10**9)), ns % 10**9)
+    with open(path, "rb") as src, open(dst, "xb") as out:
+        shutil.copyfileobj(src, out)
+    return dst
+
+
+def do_init(opts):
+    teams, bad = parse_teams(opts["teams"])
+    if bad:
+        err(bad)
+        return 2
+    target = profile_path(opts["profile"])
+    found = detect()
+    print_detection(found)
+    if os.path.exists(target) and not opts["yes"]:
+        err("%s already exists; pass --yes to replace it (a backup is kept)" % target)
+        return 1
+    fleet = ["marvel-register", "bus-presence"] if found["marvel"] is not None else ["bus-presence"]
+    text = render(fleet, teams)
+    os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".operating-profile.", suffix=".tmp", dir=os.path.dirname(os.path.abspath(target)))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        ok, shown = check_profile(tmp)
+        if not ok:
+            err("the profile it would write does not pass director-profile check:")
+            sys.stderr.write(shown)
+            return 1
+        saved = backup(target) if os.path.exists(target) else None
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, target)
+        tmp = None
+    finally:
+        if tmp and os.path.exists(tmp):
+            os.unlink(tmp)
+    print("wrote %s" % target)
+    if saved:
+        print("backup kept: %s" % saved)
+    if not teams:
+        print("no entry role named: routing into a team is refused until an entry role is named")
+    ok, shown = check_profile(target)
+    sys.stdout.write(shown)
+    for where, kind in shadow_scan():
+        print("%s: %s" % (where, kind) if kind == "wraps" else "shadow: %s: %s" % (where, kind))
+    return 0
+
+
+# ---- --check ----
+
+def do_check(opts):
+    target = profile_path(opts["profile"])
+    drift = []
+    fleet = None
+    if not os.path.isfile(target):
+        drift.append("no profile file at %s (run director-init)" % target)
+    else:
+        ok, shown = check_profile(target)
+        if not ok:
+            drift.append("the profile does not pass director-profile check:\n%s" % shown.rstrip())
+        else:
+            with open(target, "rb") as fh:
+                fleet = tomllib.load(fh).get("fleet_sources", ["bus-presence"])
+    if fleet is not None:
+        marvel = detect()["marvel"] is not None
+        if marvel and "marvel-register" not in fleet:
+            drift.append("marvel is found but marvel-register is not in fleet_sources")
+        if not marvel and "marvel-register" in fleet:
+            drift.append("fleet_sources has marvel-register but marvel is not found")
+    for label, name in (("the launcher", "director-session"), ("director-profile", "director-profile")):
+        path = os.path.join(dhome(), "bin", name)
+        if not (os.path.isfile(path) and os.access(path, os.X_OK)):
+            drift.append("%s is missing: %s" % (label, path))
+    infos = []
+    for where, kind in shadow_scan():
+        if kind == "wraps":
+            infos.append("info: %s: wraps" % where)
+        else:
+            drift.append("%s: %s" % (where, kind))
+    for ln in infos:
+        print(ln)
+    for d in drift:
+        print("drift: %s" % d)
+    if not drift:
+        print("clean")
+    return 1 if drift else 0
+
+
+def usage():
+    err("usage: director-init [--profile FILE] [--entry-role ROLE] [--team GLOB=ROLE]... [--yes] | --check [--profile FILE]")
+    return 2
+
+
+def main(argv):
+    opts = {"profile": None, "teams": [], "yes": False, "check": False}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-h", "--help"):
+            sys.stdout.write(__doc__)
+            return 0
+        if a == "--check":
+            opts["check"] = True
+        elif a == "--yes":
+            opts["yes"] = True
+        elif a in ("--profile", "--entry-role", "--team", "--manifests"):
+            if a == "--manifests":
+                err("not in the first build: --manifests")
+                return 2
+            if i + 1 >= len(argv):
+                return usage()
+            i += 1
+            if a == "--profile":
+                opts["profile"] = argv[i]
+            else:
+                opts["teams"].append((a, argv[i]))
+        else:
+            return usage()
+        i += 1
+    return do_check(opts) if opts["check"] else do_init(opts)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""director-profile: read and check director's operating profile.
+
+  director-profile check [FILE]               read FILE (else $DIRECTOR_PROFILE, else
+                                              $DIRECTOR_STATE/operating-profile.toml,
+                                              else the built-in minimal profile),
+                                              print what it says, exit 1 on any refusal
+
+The first build (aae-orc-d2sol, sim/design/director-bootstrap.md section 2.3): a
+profile is a pointer, not the model. It checks structure only. What the first
+build does not do is refused with "not in the first build", never ignored:
+roles-from, same-cluster and check team rules. [[model]] entries are read and
+printed, not interpreted. Unknown keys are refused, with the key named.
+
+Paths in handoff, rules_text, doc_domain and write_domain expand ~ and
+$DIRECTOR_STATE only; a relative path is relative to the profile file's directory.
+
+Exit: 0 ok, 1 a refusal, 2 usage or an interpreter that is too old.
+
+This file is parsed by every python3 a host may have, so it uses no syntax newer
+than 3.9 before the version check, and the whole file keeps to that.
+"""
+import os
+import shutil
+import sys
+
+MIN = (3, 11)
+
+if tuple(sys.version_info[:2]) < MIN:
+    # A newer python3.N on PATH is used instead; with none, one clear line.
+    for minor in range(15, MIN[1] - 1, -1):
+        found = shutil.which("python3.%d" % minor)
+        if found:
+            os.execv(found, [found] + sys.argv)
+    sys.stderr.write(
+        "director-profile: needs python3 %d.%d or newer (this is python3 %s)\n"
+        % (MIN[0], MIN[1], ".".join(str(p) for p in sys.version_info[:3]))
+    )
+    sys.exit(2)
+
+import tomllib  # noqa: E402
+
+PROG = "director-profile"
+FLEET_SOURCES = ("marvel-register", "bus-presence")
+TEAM_RULES = ("has-entry",)
+NOT_YET = ("roles-from", "same-cluster", "check")
+TOP_KEYS = (
+    "schema_version", "name", "fleet_sources", "handoff", "doc_domain",
+    "write_domain", "rules_text", "model", "team",
+)
+MODEL_KEYS = ("kind", "pack", "path", "scope")
+TEAM_KEYS = ("match", "entry_role", "rules")
+PATH_LISTS = ("rules_text", "doc_domain", "write_domain")
+
+
+def say_err(msg):
+    sys.stderr.write("%s: %s\n" % (PROG, msg))
+
+
+def state_dir():
+    return os.environ.get("DIRECTOR_STATE") or os.path.join(
+        os.environ.get("HOME", ""), ".director", "state"
+    )
+
+
+def expand(value, base):
+    """~ and $DIRECTOR_STATE only; a relative result is joined to base."""
+    home = os.environ.get("HOME", "")
+    if value == "~" or value.startswith("~/"):
+        value = home + value[1:]
+    value = value.replace("$DIRECTOR_STATE", state_dir())
+    # A pattern that starts with **/ already matches an absolute path, because **
+    # crosses "/": it is left as written (the default doc_domain is "**/*.md").
+    # Every other relative pattern, "*.log" included, is relative to base.
+    if not value.startswith("**/") and not os.path.isabs(value):
+        value = os.path.join(base, value)
+    return value
+
+
+def validate(data):
+    """Return the list of refusals; empty means the profile is structurally sound."""
+    errs = []
+    for key in data:
+        if key not in TOP_KEYS:
+            errs.append("unknown key: %s" % key)
+    if "schema_version" not in data:
+        errs.append("schema_version = 1 is required")
+    elif data["schema_version"] != 1 or isinstance(data["schema_version"], bool):
+        errs.append("schema_version must be 1 (got %r)" % (data["schema_version"],))
+    if "name" in data and not isinstance(data["name"], str):
+        errs.append("name must be a string")
+    if "fleet_sources" in data:
+        fs = data["fleet_sources"]
+        if not isinstance(fs, list) or not all(isinstance(x, str) for x in fs):
+            errs.append("fleet_sources must be a list of strings")
+        else:
+            for x in fs:
+                if x not in FLEET_SOURCES:
+                    errs.append("unknown fleet source: %s (known: %s)" % (x, ", ".join(FLEET_SOURCES)))
+    if "handoff" in data and not isinstance(data["handoff"], str):
+        errs.append("handoff must be a string")
+    for key in PATH_LISTS:
+        if key in data:
+            v = data[key]
+            if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+                errs.append("%s must be a list of strings" % key)
+    models = data.get("model", [])
+    if not isinstance(models, list) or not all(isinstance(m, dict) for m in models):
+        errs.append("model must be an array of tables ([[model]])")
+        models = []
+    for i, m in enumerate(models, 1):
+        for key, val in m.items():
+            if key not in MODEL_KEYS:
+                errs.append("unknown key: model[%d].%s" % (i, key))
+            elif not isinstance(val, str):
+                errs.append("model[%d].%s must be a string" % (i, key))
+    teams = data.get("team", [])
+    if not isinstance(teams, list) or not all(isinstance(t, dict) for t in teams):
+        errs.append("team must be an array of tables ([[team]])")
+        teams = []
+    for i, t in enumerate(teams, 1):
+        for key in t:
+            if key in NOT_YET:
+                errs.append("team[%d]: not in the first build: %s" % (i, key))
+            elif key not in TEAM_KEYS:
+                errs.append("unknown key: team[%d].%s" % (i, key))
+        for need in ("match", "entry_role"):
+            v = t.get(need)
+            if need not in t:
+                errs.append("team[%d]: %s is required" % (i, need))
+            elif not isinstance(v, str) or not v:
+                errs.append("team[%d]: %s must be a non-empty string" % (i, need))
+        if "rules" in t:
+            rules = t["rules"]
+            if not isinstance(rules, list) or not all(isinstance(x, str) for x in rules):
+                errs.append("team[%d]: rules must be a list of strings" % i)
+            else:
+                for r in rules:
+                    if r in NOT_YET:
+                        errs.append("team[%d]: not in the first build: %s" % (i, r))
+                    elif r not in TEAM_RULES:
+                        errs.append("unknown team rule: %s" % r)
+    return errs
+
+
+def find_file(arg):
+    """The profile file to read: the argument, $DIRECTOR_PROFILE, the state file, or None."""
+    if arg:
+        return arg, True
+    env = os.environ.get("DIRECTOR_PROFILE")
+    if env:
+        return env, True
+    cand = os.path.join(state_dir(), "operating-profile.toml")
+    if os.path.isfile(cand):
+        return cand, False
+    return None, False
+
+
+def load(arg):
+    """Return (data, path, errors). data is None for the minimal built-in profile."""
+    path, explicit = find_file(arg)
+    if path is None:
+        return None, None, []
+    try:
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+    except FileNotFoundError:
+        return None, path, ["%s: no such file" % path]
+    except tomllib.TOMLDecodeError as exc:
+        return None, path, ["%s: not valid TOML: %s" % (path, exc)]
+    except OSError as exc:
+        return None, path, ["%s: %s" % (path, exc.strerror or exc)]
+    return data, path, validate(data)
+
+
+def cmd_check(arg):
+    data, path, errs = load(arg)
+    if errs:
+        for e in errs:
+            say_err(e)
+        return 1
+    if data is None:
+        print("minimal profile (no profile file found)")
+        print("fleet_sources: bus-presence")
+        print("entry_role: unset")
+        print("routing into a team is refused until an entry role is named")
+        return 0
+    base = os.path.dirname(os.path.abspath(path))
+    print("profile ok: %s" % path)
+    if "name" in data:
+        print("name: %s" % data["name"])
+    print("fleet_sources: %s" % ", ".join(data.get("fleet_sources", ["bus-presence"])))
+    if "handoff" in data:
+        print("handoff: %s" % expand(data["handoff"], base))
+    for key in PATH_LISTS:
+        for v in data.get(key, []):
+            print("%s: %s" % (key, expand(v, base)))
+    for m in data.get("model", []):
+        parts = ["model", m.get("kind", "-")]
+        for k in ("pack", "path", "scope"):
+            if k in m:
+                parts.extend([k, m[k]])
+        print(" ".join(parts))
+    for t in data.get("team", []):
+        print("team %s: entry_role %s, rules %s" % (
+            t["match"], t["entry_role"], ", ".join(t.get("rules", ["has-entry"]))))
+    return 0
+
+
+def main(argv):
+    if len(argv) >= 1 and argv[0] == "check" and len(argv) <= 2:
+        return cmd_check(argv[1] if len(argv) == 2 else None)
+    say_err("usage: director-profile check [FILE]")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
