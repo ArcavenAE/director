@@ -26,6 +26,7 @@ type advanceResult struct {
 	BeforePending uint64
 	AfterPending  uint64
 	Acked         uint64
+	Naked         uint64 // messages pulled past the stopping point and returned to the seat
 	Head          uint64
 	HeadKnown     bool
 }

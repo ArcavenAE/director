@@ -244,7 +244,7 @@ func TestBrokerClassAwareCueOnAFreshSeatSeesNoOldBacklog(t *testing.T) {
 	if err != nil || len(items) != 1 {
 		t.Fatalf("after one send the seat peeks %d (%v), want 1", len(items), err)
 	}
-	if floors["global"] < 2 {
+	if floors["global"] != 2 {
 		t.Errorf("cue floor for global = %d, want at least the 2 old messages", floors["global"])
 	}
 }
@@ -319,5 +319,59 @@ func TestBrokerMailBetweenTheCountAndTheStartIsDelivered(t *testing.T) {
 	note := strings.Join(b.takeResumed(), "\n")
 	if !strings.Contains(note, "1 earlier message(s)") || !strings.Contains(note, "sequences 1 to 1") {
 		t.Errorf("start note %q does not describe the same point the durable started at", note)
+	}
+}
+
+// The note's range starts at the stream's first retained sequence, not at 1.
+func TestBrokerFreshSeatNoteRangeStartsAtTheFirstRetainedSequence(t *testing.T) {
+	useRealProbe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
+	t.Setenv("MARVEL_PREDECESSOR", "")
+	for i := 0; i < 3; i++ {
+		pubEnv(t, ctx, gjs, "global.director.inbox", fmt.Sprintf("g%d", i), "INFORM", "old")
+	}
+	gst, err := gjs.Stream(ctx, globalDirectorStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gst.Purge(ctx, jetstream.WithPurgeSequence(3)); err != nil { // drops sequences 1 and 2
+		t.Fatal(err)
+	}
+	b, err := connect(ctx, url, freshSeat("first-g1-0"), gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.close()
+	attach(t, ctx, b)
+	note := strings.Join(b.takeResumed(), "\n")
+	if !strings.Contains(note, "1 earlier message(s)") || !strings.Contains(note, "sequences 3 to 3") {
+		t.Errorf("start note %q: want 1 message in sequences 3 to 3", note)
+	}
+}
+
+// A fresh seat on an empty stream is told the stream held nothing, not that
+// sequences 1 to 0 were skipped.
+func TestBrokerFreshSeatNoteOnAnEmptyStream(t *testing.T) {
+	useRealProbe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	provision(t, ctx, url)
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
+	t.Setenv("MARVEL_PREDECESSOR", "")
+	b, err := connect(ctx, url, freshSeat("empty-g1-0"), gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.close()
+	attach(t, ctx, b)
+	note := strings.Join(b.takeResumed(), "\n")
+	if strings.Contains(note, "1 to 0") || !strings.Contains(note, "held no earlier messages") {
+		t.Errorf("start note %q: want the stream described as holding no earlier messages", note)
 	}
 }

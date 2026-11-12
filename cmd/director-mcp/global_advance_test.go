@@ -186,3 +186,50 @@ func TestGlobalAdvanceRefusesAnotherSeat(t *testing.T) {
 		t.Errorf("code %d, stderr %q: want a refusal saying the seat is not your own", code, errw.String())
 	}
 }
+
+// --to stops at its sequence without waiting on the messages it returned: the
+// ones pulled past the limit are counted, left to the seat, and the run ends
+// at once. A rerun while they are unacked is refused with words that name
+// that case, not only a live reader.
+func TestAdvanceToReportsWhatItReturnedAndEndsAtOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	for i := 0; i < 5; i++ {
+		pubEnv(t, ctx, gjs, "global.director.inbox", fmt.Sprintf("g%d", i), "INFORM", "old")
+	}
+	b, _ := advanceRig(t, ctx, url, "naked-g1-0")
+	start := time.Now()
+	res, err := advanceGlobalDurable(ctx, b.global, b.self.AgentID, 3)
+	if err != nil {
+		t.Fatalf("advance --to 3: %v", err)
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("the run took %v, want it to end once its acks and returns are done", took)
+	}
+	if res.Naked != 2 || res.AfterFloor != 3 || res.AfterPending != 2 {
+		t.Errorf("result %+v, want 2 returned, floor 3, 2 pending", res)
+	}
+	if out := formatAdvance(res); !strings.Contains(out, "2 message(s) past sequence 3") {
+		t.Errorf("printout %q does not say how many were returned", out)
+	}
+	_, err = advanceGlobalDurable(ctx, b.global, b.self.AgentID, 0)
+	if err == nil || !strings.Contains(err.Error(), "advance --to") {
+		t.Errorf("a rerun with returned messages unacked: err = %v, want a refusal that names an earlier advance --to", err)
+	}
+}
+
+func TestGlobalAdvanceHelpPrintsUsage(t *testing.T) {
+	cli, err := parseArgs([]string{"global-advance", "--help"})
+	if err != nil || !cli.help {
+		t.Fatalf("parseArgs: %+v, %v; want help set", cli, err)
+	}
+	var out, errw strings.Builder
+	t.Setenv("DIRECTOR_AGENT_ID", "")
+	t.Setenv("MARVEL_SESSION", "")
+	if code := runGlobalAdvanceCmd(context.Background(), cli, &out, &errw); code != 0 || !strings.Contains(out.String(), globalAdvanceUsage) {
+		t.Errorf("code %d, stdout %q, stderr %q: want the usage on stdout and rc 0 with no seat environment", code, out.String(), errw.String())
+	}
+}
