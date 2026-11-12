@@ -15,7 +15,7 @@
 #    profile (refused without a yes, a backup kept), an atomic write, the summary printed, --manifests refused as
 #    not in the first build;
 #  - the shadow scan, which reports and edits nothing: a function, an alias, a
-#    PATH entry, and the wrapper the operator keeps (reported as "wraps", not
+#    PATH entry, and a wrapper that calls the launcher (reported as "wraps", not
 #    drift);
 #  - --check: clean on a sound state, one drift line per fault, exit 1 on
 #    drift, and nothing written;
@@ -149,15 +149,13 @@ run -- --entry-role supervisor
 run -- --check
 [[ "$(find "$home" -name '.zshrc' -exec shasum -a 256 {} +)" == "$before" ]] || miss "S3 the rc file hash must be unchanged after --check"
 
-# the operator's wrapper, at line 145, is intended: wraps, not drift
+# a wrapper that calls the installed launcher is wraps, not drift
 fresh
-i=1; : >"$home/.zshrc"
-while [[ $i -lt 145 ]]; do echo "# filler $i" >>"$home/.zshrc"; i=$((i+1)); done
-printf '%s\n' 'director-session() { DIRECTOR_PRESENCE_WATCH=1 ~/.director/bin/director-session --receiver "$@"; }' >>"$home/.zshrc"
+printf '%s\n' 'director-session() { DIRECTOR_PRESENCE_WATCH=1 ~/.director/bin/director-session --receiver "$@"; }' >"$home/.zshrc"
 run -- --entry-role supervisor
-[[ "$out" == *"$home/.zshrc:145: wraps"* && "$out" != *"drift"* ]] || miss "S2 the wrapper must read as wraps: rc=$rc out=$out"
+[[ "$out" == *"$home/.zshrc:1: wraps"* && "$out" != *"drift"* ]] || miss "S2 the wrapper must read as wraps: rc=$rc out=$out"
 run -- --check
-[[ $rc -eq 0 && "$out" == *"$home/.zshrc:145: wraps"* && "$out" == *"clean"* ]] || miss "S2 a wrapper is not drift: rc=$rc out=$out"
+[[ $rc -eq 0 && "$out" == *"$home/.zshrc:1: wraps"* && "$out" == *"clean"* ]] || miss "S2 a wrapper is not drift: rc=$rc out=$out"
 for body in 'DIRECTOR_PRESENCE_WATCH=1 $HOME/.director/bin/director-session "$@"' '"$HOME/.director/bin/director-session" "$@"' '~/.director/bin/director-session'; do
   printf '%s\n' "director-session() { $body; }" >"$home/.zshrc"
   run -- --check
