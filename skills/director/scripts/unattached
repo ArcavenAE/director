@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# unattached: stub. The red tests run against this; the real script replaces it.
+exit 0
