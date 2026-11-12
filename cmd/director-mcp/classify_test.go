@@ -262,3 +262,49 @@ func TestClassifySentRecordEvictionFallsBackToAct(t *testing.T) {
 		t.Fatalf("reply to a recent sent INFORM: %q, want routine", got)
 	}
 }
+
+func classifySignal(t *testing.T, data, inReplyTo string) []byte {
+	t.Helper()
+	e := Envelope{
+		SchemaVersion: 1, MessageID: "01TESTSIG", Performative: "INFORM", InReplyTo: inReplyTo,
+		Recipient: Recipient{Address: "agent://cue/x"},
+		Content:   Content{Type: "signal", Data: data},
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestClassifyWorkingSignalIsRoutineAndKeepsTheAskOpen(t *testing.T) {
+	c := newClassifier()
+	c.noteSent("ASK1", "REQUEST")
+	if got := c.classify("local", 1, classifySignal(t, "working", "ASK1"), classifyNow); got != classRoutine {
+		t.Fatalf("working signal: %q, want routine", got)
+	}
+	if got := c.classify("local", 2, classifyEnvReply(t, "AGREE", "done", "", "ASK1"), classifyNow); got != classAct {
+		t.Fatalf("the answer after a working signal: %q, want act (still the first reply)", got)
+	}
+}
+
+func TestClassifyBlockedOnSignalIsAct(t *testing.T) {
+	c := newClassifier()
+	c.noteSent("ASK1", "REQUEST")
+	if got := c.classify("local", 1, classifySignal(t, "blocked-on agent://cue/x", "ASK1"), classifyNow); got != classAct {
+		t.Fatalf("blocked-on signal: %q, want act", got)
+	}
+	if got := c.classify("local", 2, classifyEnvReply(t, "AGREE", "done", "", "ASK1"), classifyNow); got != classAct {
+		t.Fatalf("the answer after a blocked-on signal: %q, want act", got)
+	}
+}
+
+func TestClassifyUnknownSignalIsAct(t *testing.T) {
+	c := newClassifier()
+	c.noteSent("ASK1", "REQUEST")
+	for i, data := range []string{"finished", "", "working on it", "WORKING"} {
+		if got := c.classify("local", uint64(i+1), classifySignal(t, data, "ASK1"), classifyNow); got != classAct {
+			t.Errorf("signal %q: %q, want act", data, got)
+		}
+	}
+}
