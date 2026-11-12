@@ -492,10 +492,12 @@ type globalTier struct {
 
 	// freshHead is true when the durable was created at the stream head
 	// because the seat has no earlier durable. skipped is how many messages
-	// the stream already held for the seat's inbox then, and skippedKnown is
-	// false when the credential could not count them.
+	// the stream held for the seat's inbox up to headSeq, the stream's last
+	// sequence when it was read, and skippedKnown is false when the credential
+	// could not read it (the durable then starts at the head by policy).
 	freshHead    bool
 	skipped      uint64
+	headSeq      uint64
 	skippedKnown bool
 
 	// mu guards consumer (read it through cons) and the fields below. acked is the highest hub stream sequence
@@ -595,10 +597,17 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 		case perr != nil:
 			g.floorWhy = fmt.Sprintf("looking for earlier durables failed (%v)", perr)
 		case !found:
-			cfg.DeliverPolicy = jetstream.DeliverNewPolicy
 			g.freshHead = true
-			g.skipped, g.skippedKnown = g.earlierCount(ctx)
+			g.skipped, g.headSeq, g.skippedKnown = g.headPoint(ctx)
 			afterHeadRead()
+			if g.skippedKnown {
+				// Start where the count stopped, so a message published after
+				// the read is delivered, never skipped.
+				cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+				cfg.OptStartSeq = g.headSeq + 1
+			} else {
+				cfg.DeliverPolicy = jetstream.DeliverNewPolicy
+			}
 		}
 	}
 	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), cfg)
