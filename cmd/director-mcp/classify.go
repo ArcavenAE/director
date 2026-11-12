@@ -1,9 +1,28 @@
 package main
 
-// The receiver classifier (aae-orc-tk8ge). Red-test stub: every message is
-// routine, so the tests fail on their assertions.
+// The receiver classifier (aae-orc-tk8ge, T1 of the director-cue plan). It
+// sorts each message the seat receives into act or routine, once, so a later
+// cue can wake at once for act and hold routine mail. It only classifies; the
+// cue does not read it yet.
+//
+// Inputs only raise. A message is act when it is a CANCEL, FAILURE, REFUSE,
+// REQUEST or QUERY; the first reply to a REQUEST or QUERY this seat sent; a
+// body with a GATE line (the same test look.go uses, gateLine); one whose
+// reply_by has passed; or anything the classifier cannot read, which fails
+// open. Everything else is routine. A body never lowers a class, so a
+// REQUEST that says no wake is needed stays act.
+//
+// A message is classified once, keyed by tier and stream sequence (sequences
+// order messages within one tier only). The one thing that can change after
+// that is a reply_by passing, which is a comparison against the remembered
+// time and no second decode.
 
-import "time"
+import (
+	"encoding/json"
+	"sort"
+	"sync"
+	"time"
+)
 
 type msgClass string
 
@@ -12,16 +31,164 @@ const (
 	classRoutine msgClass = "routine"
 )
 
-type classifier struct{ decodes int }
+const (
+	// classifyMemoCap bounds the per-message memo. Past it, the lowest half by
+	// sequence is dropped, so a seat that falls that far behind reclassifies
+	// its oldest messages at most once more. Classification is a pure
+	// function of the message, so a reclassification gives the same class.
+	classifyMemoCap = 16384
+	// classifyAskCap bounds the sent-ask record. Past it the oldest are
+	// dropped, and a reply to a dropped ask is unmatched, so it is act.
+	classifyAskCap = 4096
+)
 
-func newClassifier() *classifier { return &classifier{} }
-
-func (c *classifier) size() int { return 0 }
-
-func (c *classifier) classify(tier string, seq uint64, data []byte, now time.Time) msgClass {
-	return classRoutine
+type classKey struct {
+	tier string
+	seq  uint64
 }
 
-func (c *classifier) noteSent(id, perf string)                {}
-func (c *classifier) setBacklogFloor(tier string, seq uint64) {}
-func (c *classifier) isBacklog(tier string, seq uint64) bool  { return false }
+type classEntry struct {
+	class   msgClass
+	replyBy time.Time // zero when the message carries none
+}
+
+type classifier struct {
+	mu      sync.Mutex
+	memo    map[classKey]classEntry
+	decodes int // messages decoded, for the once-per-message check
+	floor   map[string]uint64
+	asks    map[string]bool // sent REQUEST or QUERY id -> a reply was seen
+	askList []string        // insertion order, for eviction
+}
+
+func newClassifier() *classifier {
+	return &classifier{
+		memo:  map[classKey]classEntry{},
+		floor: map[string]uint64{},
+		asks:  map[string]bool{},
+	}
+}
+
+// noteSent records a REQUEST or QUERY this seat sent, so its first reply is
+// act. Any other performative is ignored.
+func (c *classifier) noteSent(id, perf string) {
+	if id == "" || (perf != "REQUEST" && perf != "QUERY") {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.asks[id]; ok {
+		return
+	}
+	c.asks[id] = false
+	c.askList = append(c.askList, id)
+	if len(c.askList) > classifyAskCap {
+		drop := len(c.askList) - classifyAskCap/2
+		for _, old := range c.askList[:drop] {
+			delete(c.asks, old)
+		}
+		c.askList = append([]string(nil), c.askList[drop:]...)
+	}
+}
+
+// setBacklogFloor sets the stream sequence of the tier's durable at creation.
+// Sequences are compared within the tier; clocks are never compared.
+func (c *classifier) setBacklogFloor(tier string, seq uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.floor[tier] = seq
+}
+
+// isBacklog reports a message at or below the tier's floor: it was already
+// waiting when the durable was created, so it is never cued one by one.
+func (c *classifier) isBacklog(tier string, seq uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	f, ok := c.floor[tier]
+	return ok && seq != 0 && seq <= f
+}
+
+func (c *classifier) size() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.memo)
+}
+
+// classify returns the message's class. A message with no sequence, or one
+// that does not decode into an envelope with a message id, is act.
+func (c *classifier) classify(tier string, seq uint64, data []byte, now time.Time) msgClass {
+	if seq == 0 {
+		return classAct
+	}
+	k := classKey{tier, seq}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.memo[k]; ok {
+		if e.class == classRoutine && !e.replyBy.IsZero() && e.replyBy.Before(now) {
+			e.class = classAct
+			c.memo[k] = e
+		}
+		return e.class
+	}
+	c.decodes++
+	e := c.decide(data, now)
+	if len(c.memo) >= classifyMemoCap {
+		c.evict()
+	}
+	c.memo[k] = e
+	return e.class
+}
+
+func (c *classifier) decide(data []byte, now time.Time) classEntry {
+	var env Envelope
+	if json.Unmarshal(data, &env) != nil || env.MessageID == "" {
+		return classEntry{class: classAct}
+	}
+	if !performatives[env.Performative] {
+		return classEntry{class: classAct}
+	}
+	var replyBy time.Time
+	if env.ReplyBy != "" {
+		t, err := time.Parse(time.RFC3339, env.ReplyBy)
+		if err != nil {
+			return classEntry{class: classAct}
+		}
+		replyBy = t
+		if t.Before(now) {
+			return classEntry{class: classAct, replyBy: t}
+		}
+	}
+	act := false
+	switch env.Performative {
+	case "CANCEL", "FAILURE", "REFUSE", "REQUEST", "QUERY":
+		act = true
+	}
+	if gateLine.MatchString(env.Content.Data) {
+		act = true
+	}
+	if env.InReplyTo != "" {
+		replied, known := c.asks[env.InReplyTo]
+		if !known || !replied {
+			act = true // the first reply to an open ask, or one we cannot match
+			if known {
+				c.asks[env.InReplyTo] = true
+			}
+		}
+	}
+	if act {
+		return classEntry{class: classAct, replyBy: replyBy}
+	}
+	return classEntry{class: classRoutine, replyBy: replyBy}
+}
+
+// evict drops the lowest half of the memo by sequence; the caller holds mu.
+func (c *classifier) evict() {
+	keys := make([]classKey, 0, len(c.memo))
+	for k := range c.memo {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].seq < keys[j].seq })
+	for _, k := range keys[:len(keys)/2] {
+		delete(c.memo, k)
+	}
+}
