@@ -30,6 +30,7 @@ cat >"$root/claude-stub" <<'STUB'
 # records what the launcher handed claude; never starts a session
 { printf 'ARGS:'; printf ' [%s]' "$@"; printf '\n'; } >"$STUB_OUT"
 env | grep -E '^(DIRECTOR_|NATS_URL=)' | LC_ALL=C sort >>"$STUB_OUT"
+printf 'STUBPID=%s\n' "$$" >>"$STUB_OUT"
 STUB
 chmod +x "$root/claude-stub"
 cat >"$home/.director/seat.env" <<'SEAT'
@@ -58,6 +59,10 @@ if run_start start >"$root/stdout" 2>&1; then ok "first start exits 0"; else bad
 check "first start passes the repo config" grep -q -- "\[--mcp-config\] \[$cfg\]" "$root/out"
 check "first start names the session director" grep -q -- '\[-n\] \[director\]' "$root/out"
 check "first start does not resume" bash -c "! grep -q -- '--resume' '$root/out'"
+# the role mark (aae-orc-20062): the launcher execs claude, so the stub's own pid is
+# the launcher's, and the mark it inherited must equal it
+stubpid="$(sed -n 's/^STUBPID=//p' "$root/out")"
+check "first start hands claude a role mark equal to the launcher's pid" grep -qx "DIRECTOR_ROLE_MARK=$stubpid" "$root/out"
 check "the seat file's identity reaches claude" grep -q '^DIRECTOR_TEAM=fake-team$' "$root/out"
 check "the cluster comes from the seat file" grep -q '^DIRECTOR_CLUSTER=fake-cluster$' "$root/out"
 

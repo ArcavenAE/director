@@ -350,7 +350,7 @@ AGENT_S="verify-supervisor-g1-0"
 mkfifo "$work/d.in" "$work/d.out" "$work/s.in" "$work/s.out"
 env "DIRECTOR_AGENT_ID=$AGENT_D" DIRECTOR_TEAM=ops DIRECTOR_WORKSPACE=verifyws \
     "NATS_URL=nats://127.0.0.1:$LEAF_A_PORT" \
-    "DIRECTOR_GLOBAL_DOMAIN=$DOMAIN" "DIRECTOR_CLUSTER=$CLUSTER_A" DIRECTOR_GLOBAL_ROLE=director \
+    "DIRECTOR_GLOBAL_DOMAIN=$DOMAIN" "DIRECTOR_CLUSTER=$CLUSTER_A" DIRECTOR_GLOBAL_ROLE=director "DIRECTOR_ROLE_MARK=$$" \
     "$SHIM" <"$work/d.in" >"$work/d.out" 2>"$work/d.err" &
 shim_pids+=($!); D_PID=$!
 # The two starts are staggered, and the stagger is applied to the fd opens

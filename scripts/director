@@ -124,6 +124,10 @@ for k in "${keys[@]}"; do export "$k=$(get "$k")"; done
 export DIRECTOR_MCP_SEAT="$dhome/bin/director-mcp-seat"
 id="$(date +%s)-$$"
 export DIRECTOR_LAUNCH_ID="$id"
+# The role mark (aae-orc-20062): this pid survives the exec below, so it is the
+# parent pid of the shim claude starts, and the shim holds the director identity
+# only with it.
+export DIRECTOR_ROLE_MARK=$$
 mkdir -p "$state/launches"
 printf 'id=%s\npid=%s\nstarted=%s\nconfig_sha256=%s\nsession=%s\n' "$id" "$$" "$(date +%s)" "$(sha "$config")" "${resume:-director}" >"$state/launches/$id.tmp"
 mv "$state/launches/$id.tmp" "$state/launches/$id"
