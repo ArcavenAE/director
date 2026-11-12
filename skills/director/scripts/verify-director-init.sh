@@ -36,7 +36,7 @@ PY="$(command -v python3 || true)"
 
 work="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/director-init-verify.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$work"' EXIT
-pydir="$(dirname "$PY")"
+pydir="$work/pybin"; mkdir -p "$pydir"; ln -s "$PY" "$pydir/python3"   # only python3, so no real marvel or sideshow is on the test PATH
 fail=0
 miss() { echo "MISS: $*"; fail=1; }
 
