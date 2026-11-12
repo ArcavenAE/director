@@ -289,15 +289,17 @@ What the check found:
    a `bin/` directory in one tree: `skills/`, `hooks/hooks.json`, `.mcp.json`
    and `bin/` (plugins reference, "Standard layout"). Hook scripts sit in a
    folder the hooks name; the docs' example tree uses `scripts/`.
-2. A plugin cannot carry the settings file of 4.2. Its `settings.json` honours
-   only `agent` and `subagentStatusLine` (plugins reference, "settings"). The
-   hook wiring moves into `hooks/hooks.json`.
+2. A plugin cannot carry the `--settings` file that 4.2 first named as the hook
+   wiring (director's own settings file). Its `settings.json` honours only
+   `agent` and `subagentStatusLine` (plugins reference, "settings"). The hook
+   wiring moves into `hooks/hooks.json`.
 3. A plugin can be scoped to one session. `--plugin-dir` loads it for that
    session only, as `<name>@inline`, without an `enabledPlugins` entry (plugin
    loading reference, "Find where a plugin came from"). NOT TESTED, and not
    stated in those docs: that a child `claude` started from such a session
    goes without the plugin. That is reasoning from the flag's scope on one
-   command line, and it is the property 4.2 wants from `--settings`. The
+   command line, and it is the property the earlier `--settings` file design
+   wanted, which 4.2 now expects of the flag that loads the hook wiring. The
    environment variable `CLAUDE_CODE_PLUGIN_DIRS` is listed on the Claude Code
    environment-variables page, each directory "loaded the way a `--plugin-dir`
    flag loads it", and a child inherits an environment variable (4.2, item 1).
