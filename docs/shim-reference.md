@@ -871,8 +871,12 @@ operator step tracked outside this change raises it.
 
 A new global durable resumes the way the local one does: after the highest
 ack floor among the seat's departed `mcp_global_<id>_` durables (filtered on
-the same inbox subject, no live hub presence row for the instance), or from
-the start of the stream when there are none.
+the same inbox subject, no live hub presence row for the instance). A seat
+with no durable at all on the stream (its own, its predecessor's or an earlier
+generation's, live or departed, acked or not) starts at the stream head, and
+its start note says how many earlier messages were not delivered, or UNKNOWN
+when the credential cannot count them. When the lookups for earlier durables
+fail, the seat reads from the start of the stream, so no unread mail is lost.
 To find them it lists the hub stream's consumers first. A cluster credential
 may not list them (`CONSUMER.NAMES` and `CONSUMER.LIST` answer "no
 responders"), so on that error it takes the seat's instance ids from its

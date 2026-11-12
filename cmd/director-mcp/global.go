@@ -490,6 +490,16 @@ type globalTier struct {
 	// durable, or its predecessor's. Zero when there was no floor.
 	floorFrom floorSource
 
+	// freshHead is true when the durable was created at the stream head
+	// because the seat has no earlier durable. skipped is how many messages
+	// the stream held for the seat's inbox up to headSeq, the stream's last
+	// sequence when it was read, and skippedKnown is false when the credential
+	// could not read it (the durable then starts at the head by policy).
+	freshHead    bool
+	skipped      uint64
+	headSeq      uint64
+	skippedKnown bool
+
 	// mu guards consumer (read it through cons) and the fields below. acked is the highest hub stream sequence
 	// this session has acked on its durable, or the seat floor it resumed
 	// after; a recreated durable resumes after it, so a loss does not replay
@@ -576,7 +586,31 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 	if floor > 0 {
 		start = floor + 1
 	}
-	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), g.consumerConfig(agentID, instance, start))
+	cfg := g.consumerConfig(agentID, instance, start)
+	if floor == 0 && why == "" {
+		// Every lookup that could name a position answered nothing. Before the
+		// durable starts at the head, make sure no durable of this seat, its
+		// predecessor or an earlier generation exists at all: one that acked
+		// nothing, or a live sibling's, still leaves mail this seat should see.
+		found, perr := earlierDurableProbe(ctx, g, agentID, instance)
+		switch {
+		case perr != nil:
+			g.floorWhy = fmt.Sprintf("looking for earlier durables failed (%v)", perr)
+		case !found:
+			g.freshHead = true
+			g.skipped, g.headSeq, g.skippedKnown = g.headPoint(ctx)
+			afterHeadRead()
+			if g.skippedKnown {
+				// Start where the count stopped, so a message published after
+				// the read is delivered, never skipped.
+				cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+				cfg.OptStartSeq = g.headSeq + 1
+			} else {
+				cfg.DeliverPolicy = jetstream.DeliverNewPolicy
+			}
+		}
+	}
+	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), cfg)
 	if err != nil {
 		return fmt.Errorf("global durable on %s: %w (%s)", g.cfg.streamName(), err, hubHint(g.cfg))
 	}
@@ -1174,3 +1208,7 @@ func preflightGlobal(ctx context.Context, nc *nats.Conn, cfg globalConfig) error
 	}
 	return nil
 }
+
+// afterHeadRead runs between the seat's read of the stream head and the
+// creation of its durable. A var so a test can publish in that window.
+var afterHeadRead = func() {}

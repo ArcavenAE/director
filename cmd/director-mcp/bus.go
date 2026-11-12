@@ -353,6 +353,27 @@ func (b *Bus) noteResumed(tier string, floor uint64, cons jetstream.Consumer, wh
 	b.resumedMu.Unlock()
 }
 
+// noteFreshHead records that a seat with no earlier durable started at the
+// stream head, and how many earlier messages it did not receive.
+func (b *Bus) noteFreshHead(tier, stream string, skipped, head uint64, known bool) {
+	msg := freshHeadNote(tier, stream, skipped, head, known)
+	b.resumedMu.Lock()
+	b.resumed = append(b.resumed, msg)
+	b.resumedMu.Unlock()
+}
+
+// freshHeadNote is the start note for a durable created at the head. It names
+// the hub stream and the sequence range the skipped mail sits in, which the
+// operator's stream tools can read; audit_lookup cannot, since it reads this
+// cluster's own audit stream. A count that could not be read says UNKNOWN,
+// never 0.
+func freshHeadNote(tier, stream string, skipped, head uint64, known bool) string {
+	if !known {
+		return fmt.Sprintf("%s inbox has no earlier durable for this seat, so it starts at the stream head: an UNKNOWN number of earlier messages on stream %s were not delivered (the credential cannot read the stream's state); read them from that stream with the operator's stream tools", tier, stream)
+	}
+	return fmt.Sprintf("%s inbox has no earlier durable for this seat, so it starts at the stream head: %d earlier message(s) on stream %s (sequences 1 to %d) were not delivered; read them from that stream with the operator's stream tools", tier, skipped, stream, head)
+}
+
 // resumeNote is the start note for one tier: where its new durable began and
 // what waits. why, when set, is the reason the seat's earlier position could
 // not be read. from, when set, names where the floor came from, so a successor
@@ -1408,7 +1429,11 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 			}}
 	}
 	b.global = g
-	b.noteResumed("global", g.resumedFrom, g.cons(), g.floorWhy, g.floorFrom)
+	if g.freshHead {
+		b.noteFreshHead("global", g.cfg.streamName(), g.skipped, g.headSeq, g.skippedKnown)
+	} else {
+		b.noteResumed("global", g.resumedFrom, g.cons(), g.floorWhy, g.floorFrom)
+	}
 	return g, nil
 }
 
