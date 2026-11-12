@@ -1166,6 +1166,53 @@ for f in "$LAUNCH_ORIG" "$wrapper_orig"; do
     || bad "pin: $(basename "$f") does not pin /usr/bin/security"
 done
 
+# --- the memory-off declaration (wardrobe slice.sh --env-out) ----------------
+# The launcher asks slice.sh for the declaration's one env line, checks slice.sh's
+# exit status before it reads anything, exports that exact line and nothing else,
+# and refuses any other content. Empty means no export.
+AM=CLAUDE_CODE_DISABLE_AUTO_MEMORY
+envout_reset() { rm -f "$root/out/envout.content" "$root/out/slice.refuse"; }
+envout_reset
+if cast builder; then
+  grep -qx -- --env-out "$root/out/slice.args" \
+    && ok "env-out: slice.sh is handed --env-out" \
+    || bad "env-out: slice.sh is not handed --env-out" "$(tr '\n' ' ' < "$root/out/slice.args")"
+  has_env "$AM" claude.env \
+    && bad "env-out: an empty file exports nothing" "$(grep "^$AM" "$root/out/claude.env")" \
+    || ok "env-out: an empty file exports nothing"
+else
+  bad "env-out: empty cast" "$(cat "$root/out/stderr")"
+fi
+printf '%s=1\n' "$AM" > "$root/out/envout.content"
+if cast builder; then
+  in_env "$AM" 1 claude.env \
+    && ok "env-out: the exact line is exported to claude" \
+    || bad "env-out: the exact line did not reach claude" "$(grep "^$AM" "$root/out/claude.env" || echo absent)"
+else
+  bad "env-out: exact-line cast" "$(cat "$root/out/stderr")"
+fi
+for case_ in "extra line:$AM=1\nFOO=bar\n" "other line only:FOO=bar\n" "wrong value:$AM=0\n" "blank line after:$AM=1\n\n" "no newline but padded:$AM=1 \n"; do
+  label="${case_%%:*}"; body="${case_#*:}"
+  printf "$body" > "$root/out/envout.content"
+  if cast builder; then
+    bad "env-out refusal ($label)" "the cast went through"
+  elif [[ ! -f "$root/out/claude.args" ]] && ! grep -q FOO "$root/out/claude.env" 2>/dev/null; then
+    ok "env-out refusal ($label): nonzero exit, claude not started"
+  else
+    bad "env-out refusal ($label)" "claude ran"
+  fi
+done
+envout_reset
+printf '%s=1\n' "$AM" > "$root/out/envout.content"; : > "$root/out/slice.refuse"
+if cast builder; then
+  bad "env-out: a refused slice.sh still launched" "the stale valid file was read"
+elif [[ ! -f "$root/out/claude.args" ]]; then
+  ok "env-out: slice.sh exit status is checked before the file is read (stale valid file ignored, no launch)"
+else
+  bad "env-out: refused slice.sh, claude ran"
+fi
+envout_reset
+
 # CAST_LAUNCH mode with a launcher whose name is not cast-launch.sh (an installed
 # copy): the Bedrock cases must run on a patched copy there too and never reach
 # the real keychain tool. Run this script again against a renamed copy; its own
