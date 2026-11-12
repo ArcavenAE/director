@@ -5,8 +5,8 @@
   hands off). The seat launch is an OBJECT from marvel; the role text is an
   OBJECT from the role library. Filed in the director graph per the subject test.
 - **Related:** marvel idea `naked-seat-launch`; role-library idea
-  `naked-role-shape`; the cue plan T1 to T13 (aae-orc-tk8ge and siblings, party
-  record `_bmad-output/party-mode/4ptdd-director-cue-2026-11-12/`); aae-orc
+  `naked-role-shape`; the cue plan T1 to T13 (aae-orc-tk8ge and siblings; director#585
+  and #586 landed its first two); aae-orc
   SOUL.md section 9.
 
 ## The observation
@@ -29,8 +29,8 @@ calls. This idea lowers the context each piece of work is done in.
   and others). Their content is rendered by scripts already (`dws page`,
   `board-html`, `shelf-row`); the session only makes the publish and database
   calls, inside its full context.
-- Read Desk answers and page picks and relay them, which O-2113 and O-2114 show
-  is missed when it waits on the session.
+- Read Desk answers and page picks and relay them. An answer has sat unrelayed for 9.5 hours, and
+  operator picks for 20 hours, when this waited on the session.
 - Check a PR's state, run merge-guard, rerun a failed CI job.
 - Parse card files and write Desk rows.
 
