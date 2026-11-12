@@ -5,10 +5,6 @@
                                               $DIRECTOR_STATE/operating-profile.toml,
                                               else the built-in minimal profile),
                                               print what it says, exit 1 on any refusal
-  director-profile entry [FILE] WORKSPACE/TEAM
-                                              print the entry role for a team: fnmatch
-                                              over "<workspace>/<team>", the first
-                                              [[team]] in file order that matches wins
 
 The first build (aae-orc-d2sol, sim/design/director-bootstrap.md section 2.3): a
 profile is a pointer, not the model. It checks structure only. What the first
@@ -19,7 +15,7 @@ printed, not interpreted. Unknown keys are refused, with the key named.
 Paths in handoff, rules_text, doc_domain and write_domain expand ~ and
 $DIRECTOR_STATE only; a relative path is relative to the profile file's directory.
 
-Exit: 0 ok, 1 a refusal (or no entry role), 2 usage or an interpreter that is too old.
+Exit: 0 ok, 1 a refusal, 2 usage or an interpreter that is too old.
 
 This file is parsed by every python3 a host may have, so it uses no syntax newer
 than 3.9 before the version check, and the whole file keeps to that.
@@ -42,7 +38,6 @@ if tuple(sys.version_info[:2]) < MIN:
     )
     sys.exit(2)
 
-import fnmatch  # noqa: E402
 import tomllib  # noqa: E402
 
 PROG = "director-profile"
@@ -212,36 +207,10 @@ def cmd_check(arg):
     return 0
 
 
-def cmd_entry(args):
-    if len(args) == 1:
-        arg, team = None, args[0]
-    elif len(args) == 2:
-        arg, team = args
-    else:
-        say_err("usage: director-profile entry [FILE] WORKSPACE/TEAM")
-        return 2
-    if "/" not in team:
-        say_err("a team is given as WORKSPACE/TEAM, got %r" % team)
-        return 2
-    data, _path, errs = load(arg)
-    if errs:
-        for e in errs:
-            say_err(e)
-        return 1
-    for t in (data or {}).get("team", []):
-        if fnmatch.fnmatchcase(team, t["match"]):
-            print(t["entry_role"])
-            return 0
-    say_err("no entry role for %s" % team)
-    return 1
-
-
 def main(argv):
     if len(argv) >= 1 and argv[0] == "check" and len(argv) <= 2:
         return cmd_check(argv[1] if len(argv) == 2 else None)
-    if len(argv) >= 1 and argv[0] == "entry":
-        return cmd_entry(argv[1:])
-    say_err("usage: director-profile check [FILE] | entry [FILE] WORKSPACE/TEAM")
+    say_err("usage: director-profile check [FILE]")
     return 2
 
 

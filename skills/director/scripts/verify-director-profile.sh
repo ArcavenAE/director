@@ -19,8 +19,6 @@
 #    not TOML, several errors reported together;
 #  - roles-from, same-cluster and check are refused as "not in the first build",
 #    as a [[team]] key and as a rules entry;
-#  - the entry for a team: fnmatch over "<workspace>/<team>", first match in
-#    file order wins;
 #  - path expansion: ~ and $DIRECTOR_STATE only, a relative path is relative to
 #    the profile file's directory;
 #  - the python rule: python3 older than 3.11 is refused with one line, and a
@@ -142,24 +140,6 @@ for r in roles-from same-cluster check; do
   refuse "P11 $r as a [[team]] key" "not in the first build: $r" 'schema_version = 1' '[[team]]' 'match = "*"' 'entry_role = "s"' "$r = \"x\""
   refuse "P11 $r as a rules entry" "not in the first build: $r" 'schema_version = 1' '[[team]]' 'match = "*"' 'entry_role = "s"' "rules = [\"has-entry\", \"$r\"]"
 done
-
-# ---- P14: the entry for a team, first match in file order wins ----
-wprof "$work/entry.toml" \
-  'schema_version = 1' \
-  '[[team]]' 'match = "aae/res*"' 'entry_role = "lead"' \
-  '[[team]]' 'match = "aae/*"' 'entry_role = "supervisor"' \
-  '[[team]]' 'match = "*"' 'entry_role = "catchall"'
-run -- entry "$work/entry.toml" aae/research
-[[ $rc -eq 0 && "$out" == "lead" ]] || miss "P14 first match in file order: rc=$rc out=$out"
-run -- entry "$work/entry.toml" aae/builders
-[[ $rc -eq 0 && "$out" == "supervisor" ]] || miss "P14 second entry: rc=$rc out=$out"
-run -- entry "$work/entry.toml" other/team
-[[ $rc -eq 0 && "$out" == "catchall" ]] || miss "P14 third entry (the * crosses the slash): rc=$rc out=$out"
-wprof "$work/entry2.toml" 'schema_version = 1' '[[team]]' 'match = "aae/*"' 'entry_role = "supervisor"'
-run -- entry "$work/entry2.toml" other/team
-[[ $rc -eq 1 && "$out" == *"no entry role for other/team"* ]] || miss "P14 no match must say so and exit 1: rc=$rc out=$out"
-run -- entry "$work/entry.toml" aae
-[[ $rc -eq 2 && "$out" == *"WORKSPACE/TEAM"* ]] || miss "P14 a team without a workspace is a usage error: rc=$rc out=$out"
 
 # ---- P15: path expansion, only ~ and $DIRECTOR_STATE ----
 mkdir -p "$work/prof"

@@ -128,7 +128,8 @@ run -- --entry-role supervisor
 grep -qs 'match = "\*"' "$prof" && grep -qs 'entry_role = "supervisor"' "$prof" || miss "I3 --entry-role: $(cat "$prof" 2>/dev/null)"
 fresh
 run -- --team 'aae/res*=lead' --team '*=sup'
-[[ $rc -eq 0 ]] && [[ "$(env -i HOME="$home" PATH="$pydir:/usr/bin:/bin" "$PROFILE_BIN" entry "$prof" aae/research 2>&1)" == "lead" ]] && [[ "$(env -i HOME="$home" PATH="$pydir:/usr/bin:/bin" "$PROFILE_BIN" entry "$prof" x/y 2>&1)" == "sup" ]] || miss "I3 two --team flags in order: rc=$rc $(cat "$prof" 2>/dev/null)"
+out2="$(check_profile "$prof")"
+[[ $rc -eq 0 && "$out2" == *"team aae/res*: entry_role lead, rules has-entry"*"team *: entry_role sup, rules has-entry"* ]] || miss "I3 two --team flags in order: rc=$rc out=$out2"
 fresh
 run -- --team 'no-equals-sign'
 [[ $rc -eq 2 && "$out" == *"GLOB=ROLE"* && ! -e "$prof" ]] || miss "I3 bad --team: rc=$rc out=$out"
@@ -136,7 +137,7 @@ run -- --entry-role ''
 [[ $rc -eq 2 && ! -e "$prof" ]] || miss "I3 empty role: rc=$rc out=$out"
 fresh
 run -- --entry-role 'a"b'
-[[ "$(env -i HOME="$home" PATH="$pydir:/usr/bin:/bin" "$PROFILE_BIN" entry "$prof" w/t 2>&1)" == 'a"b' ]] || miss "I8 a quote in a role must be escaped: $(cat "$prof" 2>/dev/null)"
+check_profile "$prof" | grep -qsF 'team *: entry_role a"b, rules has-entry' || miss "I8 a quote in a role must be escaped: $(cat "$prof" 2>/dev/null)"
 
 # ---- I3t: the prompt, on a terminal ----
 fresh
