@@ -300,3 +300,31 @@ func TestLookClassifiesHandshakeLinesAsGates(t *testing.T) {
 		t.Errorf("WORDS about it: got %q, want other", class)
 	}
 }
+
+// A gate-class item is labelled with the word its line starts with, so a
+// Pre-GATE or WORD message does not read as a plain GATE.
+func TestLookLabelsAGateByItsLineWord(t *testing.T) {
+	r := newLookRig(t)
+	r.pub(lookSubject, "g1", "sup", "INFORM", "GATE x#1 draft", "")
+	r.pub(lookSubject, "g2", "sup", "PROPOSE", "Pre-GATE x#2@abc", "")
+	r.pub(lookSubject, "g3", "sup", "ACCEPT-PROPOSAL", "WORD x#2@abc", "")
+	code, out := r.run()
+	if code != 0 {
+		t.Fatalf("look exited %d: %s", code, out)
+	}
+	out = r.file("digest.txt")
+	for id, label := range map[string]string{"g1": "GATE", "g2": "Pre-GATE", "g3": "WORD"} {
+		found := false
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, " "+id+" ") {
+				found = true
+				if !strings.HasPrefix(line, label+" ") {
+					t.Errorf("%s: line %q does not start with label %q", id, line, label)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: no line in the look output:\n%s", id, out)
+		}
+	}
+}

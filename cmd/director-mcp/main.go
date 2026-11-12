@@ -258,6 +258,9 @@ func main() {
 		bus.nc.SetReconnectHandler(func(*nats.Conn) { c.reconnected() })
 		go c.run(ctx)
 		logf("channel cue on (default; DIRECTOR_CUE=0 turns it off), push-only waits once live: measured versions %v, poll %s, floor %s, window %s", cueCfg.Versions, cueCfg.Poll, cueCfg.Floor, cueCfg.Window)
+		if cueCfg.ClassAware {
+			logf("class-aware cue on (DIRECTOR_CUE_CLASS=1): act mail cues at once, routine mail is held up to %s", cueCfg.Window)
+		}
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.serve(ctx, os.Stdin) }()

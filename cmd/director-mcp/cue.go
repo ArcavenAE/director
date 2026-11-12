@@ -51,6 +51,9 @@ type cueConfig struct {
 	// channel and be lost (director#188).
 	SelfTestRetries int
 	SelfTestBackoff time.Duration
+	// ClassAware turns on the class-aware cue (aae-orc-bykbv): act mail cues
+	// at once, routine mail is held up to Window. Off is today's cue.
+	ClassAware bool
 }
 
 func defaultCueConfig() cueConfig {
@@ -81,6 +84,9 @@ func loadCueConfig() cueConfig {
 	cfg := defaultCueConfig()
 	v, set := os.LookupEnv("DIRECTOR_CUE")
 	cfg.Enabled = !set || v == "1"
+	// The class-aware cue is off unless DIRECTOR_CUE_CLASS is exactly 1 (read
+	// once, at shim start); off is today's cue.
+	cfg.ClassAware = os.Getenv("DIRECTOR_CUE_CLASS") == "1"
 	return cfg
 }
 
@@ -96,6 +102,15 @@ type cueSource interface {
 	count(ctx context.Context) (uint64, error)
 	// oldestMeta reads the oldest waiting message without consuming it.
 	oldestMeta(ctx context.Context) (*cueMeta, error)
+}
+
+// waitingSource is the optional class-aware half of a cue source: the waiting
+// messages with their tier and sequence, read without acking, and each tier's
+// stream position at start (the backlog boundary). A source without it keeps
+// the ordinary cue.
+type waitingSource interface {
+	waiting(ctx context.Context) ([]summaryItem, error)
+	floors(ctx context.Context) (map[string]uint64, error)
 }
 
 // laneSource is the optional second half of a cue source: how many replies to
@@ -180,6 +195,9 @@ type cue struct {
 	// oldest is the age of the seat's oldest waiting message (Bus.oldestPending);
 	// nil leaves presence as it was.
 	oldest func() time.Duration
+	// cls is the receiver classifier, built only when ClassAware is on.
+	cls *classifier
+	cs  *classState
 	// pendingUnverified is why that age cannot be trusted for a tier right now
 	// (pendingTracker.unverified); empty, or nil, when it can.
 	pendingUnverified func() string
@@ -206,6 +224,9 @@ func newCue(cfg cueConfig, src cueSource, emit func(map[string]any), warn func([
 		state: cueStateOff, valid: map[string]time.Time{}}
 	if now != nil {
 		c.countSince = now()
+	}
+	if cfg.ClassAware {
+		c.cls, c.cs = newClassifier(), newClassState()
 	}
 	return c
 }
@@ -485,6 +506,10 @@ func (c *cue) tick(ctx context.Context) {
 			laneN, laneOldest = ls.laneOpen(ctx)
 		}
 	}
+	var cr *classRead
+	if err == nil {
+		cr = c.readClasses(ctx, n, c.now())
+	}
 	c.mu.Lock()
 	if err != nil {
 		// Skip the tick, so a transient error cannot read as a drop. Show it
@@ -502,6 +527,9 @@ func (c *cue) tick(ctx context.Context) {
 		c.readErr = ""
 		c.logOnce("channel cue watcher: inbox state readable again")
 	}
+	if c.cs != nil && n == 0 {
+		c.cs.clear() // the seat read everything: nothing is held or waiting
+	}
 	if c.reconnect {
 		c.reconnect = false
 		if n > 0 && c.openWaits == 0 {
@@ -515,10 +543,23 @@ func (c *cue) tick(ctx context.Context) {
 		c.lastSeen = n
 	}
 	if n > c.lastSeen {
+		add := n - c.lastSeen
+		if cr != nil {
+			add = c.applyClasses(cr, add, now)
+		}
 		if c.openWaits == 0 {
-			c.fold += n - c.lastSeen
+			c.fold += add
 		}
 		c.lastSeen = n
+	} else if cr != nil {
+		// The count did not rise, but a message may have arrived beside one the
+		// seat read; an act message must still count.
+		if add := c.applyClasses(cr, 0, now); c.openWaits == 0 {
+			c.fold += add
+		}
+	}
+	if cr != nil {
+		c.fireHeld(now)
 	}
 	if c.rearm && c.openWaits == 0 {
 		c.rearm = false
@@ -560,6 +601,9 @@ func (c *cue) tick(ctx context.Context) {
 	if sendNew {
 		m, _ := c.src.oldestMeta(ctx)
 		c.mu.Lock()
+		if w := c.takeWake(); w != nil {
+			m = w
+		}
 		p := c.params(m, c.fold, now)
 		c.out = &pendingCue{first: now, meta: m, count: c.fold, pending: n}
 		c.lastCueAt, c.fold = now, 0
