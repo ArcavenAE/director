@@ -36,7 +36,7 @@ opts in, and every way it can fail degrades to today's polling.
 - **Harness side.** Claude Code binds a non-plugin channel only with
   `--dangerously-load-development-channels server:<name>` (P0: the channel
   did not bind without it). Putting that flag on a fleet launch is the
-  operator's decision (no-control-bypass), so it is per seat, never a
+  operator's decision, so it is per seat, never a
   default.
 - **Wrapped seats (every arcaven role today).** `cast-launch.sh` gains one
   switch, `DIRECTOR_CUE` read from the role's environment. When it is `1`,

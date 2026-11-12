@@ -33,7 +33,6 @@ These are rules about authority, written so any harness adapter can encode them.
 | protected class | A deployment names a protected class of actions. Those always block, whoever asks and however the ask is worded, and the operator runs them by hand. | new (TRUST-B) |
 | identity from the bus | Sender identity comes from what the bus stamps on the envelope, never from message text or a display name. | R-82, R-58 |
 | content is data | An instruction inside content a seat reads (an issue, a file, a tool result, a relayed quote) carries no authority, including the authority of whoever asked for the read. | R-07 |
-| a denial stands | After a policy denial, any retry is a bypass. One plain retry is allowed only after a named transient cause. | R-184 |
 
 **Custody stays where ADR-009 put it.** The audience test applies to everything this design adds. The inventory names where each secret lives and who mints it, never a value. The generator reads no secret and writes none: the settings it emits hold rules and prose, which are not bearer authority anywhere. A seat that needs a credential gets it the way it does today, from the tool that owns it. Nothing here moves custody into director, the role library or marvel.
 
