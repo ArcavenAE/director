@@ -64,7 +64,7 @@ func (c *cue) readClasses(ctx context.Context, n uint64, now time.Time) *classRe
 		return nil
 	}
 	c.mu.Lock()
-	if !c.cfg.ClassAware || c.cls == nil || n == 0 {
+	if !c.cfg.ClassAware || c.cls == nil {
 		c.mu.Unlock()
 		return nil
 	}
@@ -72,18 +72,29 @@ func (c *cue) readClasses(ctx context.Context, n uint64, now time.Time) *classRe
 		c.cs = newClassState()
 	}
 	cs := c.cs
-	timerDue := len(cs.held) > 0 && !cs.holdStart.IsZero() && !now.Before(cs.holdStart.Add(c.cfg.Window))
-	need := n > c.lastSeen || c.reconnect || timerDue || !cs.floorsSet
 	needFloors := !cs.floorsSet
+	timerDue := len(cs.held) > 0 && !cs.holdStart.IsZero() && !now.Before(cs.holdStart.Add(c.cfg.Window))
+	// While anything is held the waiting set is read on every tick: the count
+	// alone cannot show that the seat read the held mail and a new message
+	// arrived in the same tick, and that message must not wait for a window.
+	need := n > c.lastSeen || c.reconnect || timerDue || len(cs.held) > 0
 	c.mu.Unlock()
-	if !need {
+	if n == 0 {
+		need = false // nothing is waiting, so there is nothing to classify
+	}
+	if !need && !needFloors {
 		return nil
 	}
 	cr := &classRead{}
 	if needFloors {
+		// Read on the first tick whatever is waiting, so the boundary is the
+		// stream position at cue start and a message that arrives later is
+		// never backlog.
 		cr.floors, cr.ferr = ws.floors(ctx)
 	}
-	cr.items, cr.err = ws.waiting(ctx)
+	if need {
+		cr.items, cr.err = ws.waiting(ctx)
+	}
 	return cr
 }
 

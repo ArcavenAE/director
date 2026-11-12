@@ -327,7 +327,7 @@ func TestClassAwareFloorsAreReadOnAnEmptyInbox(t *testing.T) {
 		t.Fatalf("the first fresh INFORM after an empty start was counted as backlog and cued: %v", at)
 	}
 	r.tickTo(310, &at)
-	if fmt.Sprint(at) != "[304]" {
-		t.Fatalf("held INFORM cues at %v, want [304] (D after it arrived)", at)
+	if fmt.Sprint(at) != "[305]" {
+		t.Fatalf("held INFORM cues at %v, want [305] (D after the tick that saw it, at 5 s)", at)
 	}
 }

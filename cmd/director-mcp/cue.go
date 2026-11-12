@@ -549,7 +549,11 @@ func (c *cue) tick(ctx context.Context) {
 		}
 		c.lastSeen = n
 	} else if cr != nil {
-		c.applyClasses(cr, 0, now)
+		// The count did not rise, but a message may have arrived beside one the
+		// seat read; an act message must still count.
+		if add := c.applyClasses(cr, 0, now); c.openWaits == 0 {
+			c.fold += add
+		}
 	}
 	if cr != nil {
 		c.fireHeld(now)
