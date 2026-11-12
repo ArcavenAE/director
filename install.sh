@@ -106,6 +106,11 @@ install_one "$SRC/skills/director/scripts/standing-hook" "$DIRECTOR_HOME/bin/sta
 # director-session starts one director session by hand with the channel cue bound when asked; a
 # plain `claude` never binds it.
 install_one "$SRC/skills/director/scripts/director-session" "$DIRECTOR_HOME/bin/director-session"
+# director-profile reads and checks the operating profile; director-init writes it, reports what
+# shadows the launcher, and with --check reports drift (aae-orc-d2sol). Both need python3 3.11 or
+# newer and refuse with one line otherwise. They install nothing themselves.
+install_one "$SRC/skills/director/scripts/director-profile" "$DIRECTOR_HOME/bin/director-profile"
+install_one "$SRC/skills/director/scripts/director-init" "$DIRECTOR_HOME/bin/director-init"
 # route-ledger reads a supervisor route ledger by the shared shape (rlel4); the skill names it by its bin-home path.
 install_one "$SRC/skills/director/scripts/route-ledger" "$DIRECTOR_HOME/bin/route-ledger"
 # schedule-ack: the sweep line for a scheduled firing with no acked result (H-6); the skill names it by its bin-home path.
