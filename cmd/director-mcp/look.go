@@ -53,6 +53,7 @@ type lookItem struct {
 	AgeS   int64  `json:"age_s"`
 	Stage  string `json:"stage,omitempty"`
 
+	word    string // the word a gate line starts with: GATE, Pre-GATE or WORD
 	perf    string
 	sellBy  string
 	stored  time.Time
@@ -80,8 +81,9 @@ var gateLine = regexp.MustCompile(`(?m)^\s*(?:GATE|Pre-GATE(?:\s+v\d+)?|WORD)\b.
 var gateStage = regexp.MustCompile(`(?i)\b(draft|ready)\b`)
 
 // lookClassify sorts one message into gate, request or other. A gate is a body
-// with a line that starts with GATE, whatever the performative (GATE is a text
-// convention, not a verb), and carries the stage word on that line. A request
+// with a line that starts with GATE, Pre-GATE or WORD (see gateLine), whatever
+// the performative (these are a text convention, not verbs), and carries the
+// stage word on that line. A request
 // is urgent only once its reply_by has passed; one with no reply_by never is.
 func lookClassify(perf, body, replyBy string, now time.Time) (class, stage string, urgent bool) {
 	if line := gateLine.FindString(body); line != "" {
@@ -97,6 +99,14 @@ func lookClassify(perf, body, replyBy string, now time.Time) (class, stage strin
 		return "request", "", false
 	}
 	return "other", "", false
+}
+
+// gateWord is the word the first gate line of a body starts with, or "".
+func gateWord(body string) string {
+	if f := strings.Fields(gateLine.FindString(body)); len(f) > 0 {
+		return f[0]
+	}
+	return ""
 }
 
 func writeLookFile(dir, name string, data []byte) error {
@@ -240,7 +250,7 @@ func lookFetch(ctx context.Context, o lookOpts, now time.Time) lookRead {
 			r.items = append(r.items, lookItem{
 				Tier: "local", Stream: lookStream, Seq: m.Sequence, Class: class, ID: e.MessageID,
 				Sender: senderLabel(&e), AgeS: int64(now.Sub(m.Time).Seconds()), Stage: stage,
-				perf: e.Performative, sellBy: e.ReplyBy, stored: m.Time, urgent: urgent,
+				word: gateWord(e.Content.Data), perf: e.Performative, sellBy: e.ReplyBy, stored: m.Time, urgent: urgent,
 			})
 		}
 	}
@@ -307,6 +317,9 @@ func runLook(ctx context.Context, o lookOpts, stdout, stderr io.Writer) int {
 	}
 	for _, it := range urgent {
 		label := "GATE"
+		if it.word != "" {
+			label = it.word
+		}
 		extra := ""
 		if it.Class == "request" {
 			label, extra = "REQUEST", "  past sell-by, re-check"
