@@ -136,7 +136,7 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    processes on this host whose parent is pid 1 or is not marvel (claude, codex, goose, opencode, crush, forestage, a re-exec
    test child, or a 127.0.0.1 listener under a `.worktrees` path), one line each with pid, age, parent, cwd and the reason, then a
    count line. Show its lines under `Unattached:` as printed. A `- GAP` line means it could not read something, or that another
-   host is listed and cannot be read yet; show it, never read it as zero. It exits 0 on every reading. A line is a fact for a
+   host is listed and cannot be read yet, or that no host list is set so only this host was read; show it, never read it as zero. It exits 0 on every reading. A line is a fact for a
    person to look at: killing the process is never this step's job.
 4. Present, in this shape and no other:
 

@@ -11,9 +11,10 @@
 #
 #   unattached [--help]
 #
-# A process is listed when its parent is pid 1, or its parent is not marvel (the parent's command
-# has no "marvel" in it), and one of these holds:
-#   - its program or its first argument is named claude, codex, goose, opencode, crush or forestage
+# A process is listed when its parent is pid 1, or its parent is not marvel (a program named marvel,
+# or a tmux server started with -L marvel-), and one of these holds:
+#   - its program is named claude, codex, goose, opencode, crush or forestage, or its program is an
+#     interpreter (node, bun, python) and its first argument is
 #   - it is a *.test binary started with a "reexec" flag (a re-exec test child)
 #   - it listens on 127.0.0.1 and its working directory is under a .worktrees path
 # Each line: - unattached pid P age A parent PP (name) cwd C | reason: R
@@ -21,7 +22,8 @@
 #
 # Other hosts: it reads only this host. Names in UNATTACHED_HOSTS (comma separated) or in
 # $DIRECTOR_STATE/unattached.hosts (one per line, "#" comments) other than this host each print
-# `- GAP HOST (cannot read another host's processes yet)`, until a cluster can report its own.
+# `- GAP HOST (cannot read another host's processes yet)`, until a cluster can report its own. With
+# no other host listed it prints `- GAP other hosts (no host list; only this host was read)`.
 # A tool it cannot run prints a GAP line, never a zero.
 #
 # Exit 0 on every reading, so read its lines and never its exit code. Exit 2 on a usage error.
@@ -73,6 +75,22 @@ cwd_of() {
   echo "${out:-?}"
 }
 
+# A parent is marvel when its program is marvel, or it is a tmux server started with -L marvel-
+# (every seat's parent on a marvel host). A "marvel" in a path or a session name is not enough.
+is_marvel() {
+  local b
+  b="$(base "$1")"
+  [[ "$b" == marvel ]] && return 0
+  [[ "$b" == tmux ]] && case " $1 " in *" -L marvel-"*) return 0 ;; esac
+  return 1
+}
+
+# The second word of a command names an agent only after an interpreter.
+is_interp() {
+  case "$1" in node|nodejs|bun|python|python3|python3.*) return 0 ;; esac
+  return 1
+}
+
 count=0
 lines=""
 while read -r pid ppid et cmd; do
@@ -83,7 +101,7 @@ while read -r pid ppid et cmd; do
     why_parent="parent is pid 1"
   else
     pc="$(parent_cmd "$ppid")"
-    case "$pc" in *marvel*) continue ;; esac
+    is_marvel "$pc" && continue
     pname="$(base "$pc")"
     why_parent="parent is not marvel (${pname:-unknown})"
   fi
@@ -96,7 +114,7 @@ while read -r pid ppid et cmd; do
   esac
   if [[ -z "$reason" ]]; then
     for a in $agents; do
-      if [[ "$first" == "$a" || "$second" == "$a" ]]; then reason="$why_parent"; break; fi
+      if [[ "$first" == "$a" ]] || { is_interp "$first" && [[ "$second" == "$a" ]]; }; then reason="$why_parent"; break; fi
     done
   fi
   cwd=""
@@ -123,11 +141,14 @@ if [[ -r "${DIRECTOR_STATE:-$HOME/.director/state}/unattached.hosts" ]]; then
 fi
 IFS=',' read -r -a hl <<<"$hosts"
 seen=","
+others=0
 for h in ${hl[@]+"${hl[@]}"}; do
   h="${h// /}"
   [[ -z "$h" || "$h" == "$host" ]] && continue
   case "$seen" in *",$h,"*) continue ;; esac
   seen="$seen$h,"
   echo "- GAP $h (cannot read another host's processes yet)"
+  others=$((others+1))
 done
+[[ "$others" -eq 0 ]] && echo "- GAP other hosts (no host list; only this host was read)"
 exit 0
