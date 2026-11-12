@@ -31,7 +31,10 @@ if tuple(sys.version_info[:2]) < MIN:
     for minor in range(15, MIN[1] - 1, -1):
         found = shutil.which("python3.%d" % minor)
         if found:
-            os.execv(found, [found] + sys.argv)
+            try:
+                os.execv(found, [found] + sys.argv)
+            except OSError:
+                continue  # not runnable: try the next, then the one-line refusal below
     sys.stderr.write(
         "director-profile: needs python3 %d.%d or newer (this is python3 %s)\n"
         % (MIN[0], MIN[1], ".".join(str(p) for p in sys.version_info[:3]))

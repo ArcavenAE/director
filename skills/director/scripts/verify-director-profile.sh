@@ -173,6 +173,10 @@ printf '%s\n' '#!/bin/sh' "echo found-python312 >\"$work/found\"" >"$work/newbin
 chmod +x "$work/newbin/python3.12"
 old_py "$work/newbin"
 [[ -f "$work/found" ]] || miss "P21 a python3.12 on PATH must be used when python3 is too old: rc=$rc out=$out"
+mkdir -p "$work/badbin"
+printf 'not a program\n' >"$work/badbin/python3.12"; chmod +x "$work/badbin/python3.12"
+old_py "$work/badbin"
+[[ $rc -eq 2 && "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" == "1" && "$out" == *"python3 3.11 or newer"* ]] || miss "L3 a python3.N that cannot be executed must fall through to the one-line refusal: rc=$rc out=$out"
 
 if [[ $fail -ne 0 ]]; then echo "FAIL"; exit 1; fi
 echo "ok: director-profile reads the first-build profile, refuses what is not in it, and names every key it refuses"

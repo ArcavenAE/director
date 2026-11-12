@@ -41,7 +41,10 @@ if tuple(sys.version_info[:2]) < MIN:
     for minor in range(15, MIN[1] - 1, -1):
         found = shutil.which("python3.%d" % minor)
         if found:
-            os.execv(found, [found] + sys.argv)
+            try:
+                os.execv(found, [found] + sys.argv)
+            except OSError:
+                continue  # not runnable: try the next, then the one-line refusal below
     sys.stderr.write(
         "director-init: needs python3 %d.%d or newer (this is python3 %s)\n"
         % (MIN[0], MIN[1], ".".join(str(p) for p in sys.version_info[:3]))
@@ -56,6 +59,7 @@ import time  # noqa: E402
 import tomllib  # noqa: E402
 
 PROG = "director-init"
+TOOL_TIMEOUT = 30  # seconds, for every tool this script runs
 RC_FILES = (".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile")
 FN_FORMS = (
     re.compile(r"^\s*function\s+director-session\b"),
@@ -89,7 +93,7 @@ def run_tool(argv):
     if not shutil.which(argv[0]):
         return None
     try:
-        res = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        res = subprocess.run(argv, capture_output=True, text=True, timeout=TOOL_TIMEOUT)
     except (OSError, subprocess.SubprocessError):
         return None
     if res.returncode != 0:
@@ -123,7 +127,10 @@ def profile_tool():
 
 def check_profile(path):
     """Run director-profile check on path; return (ok, its output)."""
-    res = subprocess.run([sys.executable, profile_tool(), "check", path], capture_output=True, text=True)
+    try:
+        res = subprocess.run([sys.executable, profile_tool(), "check", path], capture_output=True, text=True, timeout=TOOL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False, "director-profile check timed out after %d s\n" % TOOL_TIMEOUT
     return res.returncode == 0, (res.stdout + res.stderr)
 
 
@@ -142,7 +149,13 @@ def wraps_launcher(text, launcher):
 
 
 def body_from(lines, start):
-    """The function or alias text from lines[start]: to the brace that closes it, at most 40 lines."""
+    """The function or alias text from lines[start]: to the brace that closes it, at most 40 lines.
+
+    It counts braces line by line, so a function whose opening brace is on the
+    next line (`director-session()` then `{`) ends at its first line and the
+    body is not read: a wrapper written that way is reported as drift, not as
+    wraps. Reading it properly is not in the first build.
+    """
     depth, taken = 0, []
     for ln in lines[start:start + 40]:
         taken.append(ln)
@@ -256,6 +269,9 @@ def do_init(opts):
         print("no entry role named: routing into a team is refused until an entry role is named")
     ok, shown = check_profile(target)
     sys.stdout.write(shown)
+    if not ok:
+        err("the profile just written does not pass director-profile check")
+        return 1
     for where, kind in shadow_scan():
         print("%s: %s" % (where, kind) if kind == "wraps" else "shadow: %s: %s" % (where, kind))
     return 0
