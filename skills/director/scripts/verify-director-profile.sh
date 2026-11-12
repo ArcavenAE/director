@@ -147,11 +147,13 @@ wprof "$work/prof/paths.toml" \
   'schema_version = 1' \
   'handoff = "$DIRECTOR_STATE/handoff.md"' \
   'rules_text = ["notes.md", "~/rules.md", "$HOME/literal.md"]' \
+  'doc_domain = ["**/*.md", "*.log", "docs/**/*.md"]' \
   'write_domain = ["~/w/*", "sub/*"]'
 run -- check "$work/prof/paths.toml"
 [[ $rc -eq 0 && "$out" == *"handoff: $state/handoff.md"* ]] || miss "P15 \$DIRECTOR_STATE not expanded: rc=$rc out=$out"
 [[ "$out" == *"rules_text: $work/prof/notes.md"* && "$out" == *"rules_text: $home/rules.md"* ]] || miss "P15 relative path must be relative to the profile directory and ~ expanded: $out"
 [[ "$out" == *"rules_text: $work/prof/\$HOME/literal.md"* ]] || miss "P15 \$HOME is not expanded in the first build: $out"
+[[ "$out" == *"doc_domain: **/*.md"* && "$out" == *"doc_domain: $work/prof/*.log"* && "$out" == *"doc_domain: $work/prof/docs/**/*.md"* ]] || miss "P15 only a pattern that starts with **/ stays unjoined; *.log and docs/**/*.md join the profile directory: $out"
 [[ "$out" == *"write_domain: $home/w/*"* && "$out" == *"write_domain: $work/prof/sub/*"* ]] || miss "P15 write_domain patterns expanded: $out"
 
 # ---- P20 and P21: the python rule ----

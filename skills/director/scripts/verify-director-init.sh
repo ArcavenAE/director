@@ -9,10 +9,10 @@
 # real ~/.director, ~/.zshrc or ~/.claude.json is read or written.
 #
 # Covered:
-#  - writing: the minimal profile when nothing is given, detection through the
+#  - writing: detection through the
 #    marvel and sideshow stubs, --entry-role and repeatable --team GLOB=ROLE,
-#    the prompt on a terminal, an existing profile (refused without a yes, a
-#    backup kept), an atomic write, the summary printed, --manifests refused as
+#    no flags refused with one line (there is no terminal prompt), an existing
+#    profile (refused without a yes, a backup kept), an atomic write, the summary printed, --manifests refused as
 #    not in the first build;
 #  - the shadow scan, which reports and edits nothing: a function, an alias, a
 #    PATH entry, and the wrapper the operator keeps (reported as "wraps", not
@@ -64,53 +64,14 @@ run() {
   set -e
 }
 
-# runtty <expect=>answer|...> -- args...: the same on a pty, answering each
-# prompt in order. The pty is driven by pty.fork and a read loop that ends on
-# EOF or EIO (pty.spawn blocks forever on macOS's stock python3 3.9 at EOF).
-# Sets rc and out.
-runtty() {
-  local prompts="$1"; shift; shift
-  local code='
-import os, pty, select, sys, time
-prompts = [p.split("=>", 1) for p in os.environ.pop("PROMPTS").split("|") if p]
-env = {k: os.environ[k] for k in ("HOME", "TMPDIR", "PATH")}
-pid, fd = pty.fork()
-if pid == 0:
-    os.execve(sys.argv[1], sys.argv[1:], env)
-buf = b""; seen = 0; end = time.time() + 30
-while time.time() < end:
-    r, _, _ = select.select([fd], [], [], 1)
-    if r:
-        try:
-            chunk = os.read(fd, 4096)
-        except OSError:
-            break
-        if not chunk:
-            break
-        buf += chunk
-        if prompts and prompts[0][0].encode() in buf[seen:]:
-            os.write(fd, (prompts[0][1] + "\n").encode()); seen = len(buf); prompts.pop(0)
-_, status = os.waitpid(pid, 0)
-sys.stdout.write(buf.decode("utf-8", "replace").replace("\r", "") + "\nRC=%d\n" % (os.WEXITSTATUS(status) if os.WIFEXITED(status) else 99))
-'
-  set +e
-  out="$(PROMPTS="$prompts" HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:$pydir:/usr/bin:/bin" "$PY" -c "$code" "$BIN" "$@" 2>&1)"
-  set -e
-  rc="${out##*RC=}"; rc="${rc%%[!0-9]*}"
-  out="${out%RC=*}"
-}
-
 hash_tree() { find "$home" -type f -exec shasum -a 256 {} + | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1; }
 check_profile() { env -i HOME="$home" PATH="$pydir:/usr/bin:/bin" "$PROFILE_BIN" check "$1" 2>&1; }
 
-# ---- I1: nothing given, nothing detected: the minimal profile, said plainly ----
-fresh
+# ---- I1: no flags: one line naming the flags, nothing written, nothing detected ----
+fresh; stub_marvel
 run --
-[[ $rc -eq 0 && -f "$prof" ]] || miss "I1 minimal profile not written: rc=$rc out=$out"
-[[ "$out" == *"routing into a team is refused until an entry role is named"* ]] || miss "I1 must say what the minimal profile means: $out"
-check_profile "$prof" | grep -qs 'profile ok' || miss "I1 the written profile must pass director-profile check"
-grep -qs '^\[\[team\]\]' "$prof" && miss "I1 the minimal profile has no [[team]]"
-grep -qs 'fleet_sources = \["bus-presence"\]' "$prof" || miss "I1 minimal fleet_sources: $(cat "$prof" 2>/dev/null)"
+[[ $rc -eq 2 && "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" == "1" && "$out" == *"--entry-role"* && "$out" == *"--team"* ]] || miss "I1 no flags must refuse with one line naming the flags: rc=$rc out=$out"
+[[ ! -e "$prof" ]] || miss "I1 nothing may be written without flags"
 
 # ---- I2: detection through the stubs; sideshow is printed, never written ----
 fresh; stub_marvel; stub_sideshow
@@ -139,15 +100,6 @@ fresh
 run -- --entry-role 'a"b'
 check_profile "$prof" | grep -qsF 'team *: entry_role a"b, rules has-entry' || miss "I8 a quote in a role must be escaped: $(cat "$prof" 2>/dev/null)"
 
-# ---- I3t: the prompt, on a terminal ----
-fresh
-runtty "entry role=>supervisor" --
-[[ "$rc" == 0 && "$(grep -c 'entry role' <<<"$out")" -ge 1 ]] || miss "I3t prompt: rc=$rc out=$out"
-grep -qs 'entry_role = "supervisor"' "$prof" || miss "I3t the answer must be written: $(cat "$prof" 2>&1)"
-fresh
-runtty "entry role=>" --
-[[ "$rc" == 0 ]] && ! grep -qs '^\[\[team\]\]' "$prof" || miss "I3t a blank answer gives the minimal profile: rc=$rc $(cat "$prof" 2>&1)"
-
 # ---- I4: an existing profile ----
 fresh
 printf 'schema_version = 1\nname = "mine"\n' >"$prof"; before="$(shasum -a 256 <"$prof")"
@@ -161,12 +113,6 @@ bak="$(ls "$state"/operating-profile.toml.bak-* 2>/dev/null | head -1 || true)"
 [[ -n "$bak" && "$(shasum -a 256 <"$bak")" == "$before" ]] || miss "I4 the backup must hold the old bytes: $bak"
 run -- --entry-role other --yes
 [[ "$(ls "$state"/operating-profile.toml.bak-* | wc -l | tr -d ' ')" == "2" ]] || miss "I4 a second replace must keep both backups: $(ls "$state")"
-fresh
-printf 'schema_version = 1\nname = "mine"\n' >"$prof"; before="$(shasum -a 256 <"$prof")"
-runtty "overwrite=>n" -- --entry-role supervisor
-[[ "$rc" == 1 && "$(shasum -a 256 <"$prof")" == "$before" ]] || miss "I4 tty answer n: rc=$rc"
-runtty "overwrite=>y" -- --entry-role supervisor
-[[ "$rc" == 0 ]] && grep -qs 'entry_role = "supervisor"' "$prof" || miss "I4 tty answer y: rc=$rc out=$out"
 
 # ---- I5 and I6: atomic write, summary printed ----
 fresh
@@ -205,7 +151,7 @@ run -- --entry-role supervisor
 [[ "$out" == *"$home/.zshrc:145: wraps"* && "$out" != *"drift"* ]] || miss "S2 the wrapper must read as wraps: rc=$rc out=$out"
 run -- --check
 [[ $rc -eq 0 && "$out" == *"$home/.zshrc:145: wraps"* && "$out" == *"clean"* ]] || miss "S2 a wrapper is not drift: rc=$rc out=$out"
-for body in 'DIRECTOR_PRESENCE_WATCH=1 $HOME/.director/bin/director-session "$@"' '${DIRECTOR_HOME:-$HOME/.director}/bin/director-session "$@"'; do
+for body in 'DIRECTOR_PRESENCE_WATCH=1 $HOME/.director/bin/director-session "$@"' '"$HOME/.director/bin/director-session" "$@"' '~/.director/bin/director-session'; do
   printf '%s\n' "director-session() { $body; }" >"$home/.zshrc"
   run -- --check
   [[ $rc -eq 0 && "$out" == *".zshrc:1: wraps"* ]] || miss "S2 wrapper variant '$body': rc=$rc out=$out"
@@ -213,6 +159,12 @@ done
 printf '%s\n' 'director-session() { /opt/other/director-session "$@"; }' >"$home/.zshrc"
 run -- --check
 [[ $rc -eq 1 && "$out" == *"drift: $home/.zshrc:1: function"* ]] || miss "S2 a function that wraps another file is drift: rc=$rc out=$out"
+# the exact path, not a longer name that starts with it
+for body in '~/.director/bin/director-session-old "$@"' '$HOME/.director/bin/director-session.bak "$@"' '$HOME/.director/bin/director-session/x "$@"'; do
+  printf '%s\n' "director-session() { $body; }" >"$home/.zshrc"
+  run -- --check
+  [[ $rc -eq 1 && "$out" == *"drift: $home/.zshrc:1: function"* && "$out" != *"wraps"* ]] || miss "S2 a longer name is not the launcher ($body): rc=$rc out=$out"
+done
 printf '%s\n' 'function director-session {' '  echo shadowed' '}' >"$home/.zshrc"
 run -- --check
 [[ $rc -eq 1 && "$out" == *"drift: $home/.zshrc:1: function"* ]] || miss "S1 the function keyword form: rc=$rc out=$out"
