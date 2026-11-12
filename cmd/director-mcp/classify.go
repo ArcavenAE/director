@@ -33,12 +33,14 @@ const (
 
 const (
 	// classifyMemoCap bounds the per-message memo. Past it, the lowest half by
-	// sequence is dropped, so a seat that falls that far behind reclassifies
-	// its oldest messages at most once more. Classification is a pure
-	// function of the message, so a reclassification gives the same class.
+	// sequence is dropped, so a seat that falls that far behind decodes its
+	// oldest messages again. The class comes out the same: the ask record
+	// remembers which message was the first reply, and a reply_by is read
+	// from the message.
 	classifyMemoCap = 16384
-	// classifyAskCap bounds the sent-ask record. Past it the oldest are
-	// dropped, and a reply to a dropped ask is unmatched, so it is act.
+	// classifyAskCap bounds the record of sent ids. Past it the oldest are
+	// dropped, and a reply to a dropped id is unmatched, so it is act: an
+	// eviction costs a turn and never loses a wake.
 	classifyAskCap = 4096
 )
 
@@ -52,27 +54,36 @@ type classEntry struct {
 	replyBy time.Time // zero when the message carries none
 }
 
+// askState records the message that was the first reply to a sent ask, so
+// the same message, decoded again after a memo eviction, is still that reply.
+type askState struct {
+	ask      bool // the sent message was a REQUEST or QUERY
+	consumed bool
+	by       classKey
+}
+
 type classifier struct {
 	mu      sync.Mutex
 	memo    map[classKey]classEntry
 	decodes int // messages decoded, for the once-per-message check
 	floor   map[string]uint64
-	asks    map[string]bool // sent REQUEST or QUERY id -> a reply was seen
-	askList []string        // insertion order, for eviction
+	asks    map[string]*askState // sent REQUEST or QUERY id -> who consumed it
+	askList []string             // insertion order, for eviction
 }
 
 func newClassifier() *classifier {
 	return &classifier{
 		memo:  map[classKey]classEntry{},
 		floor: map[string]uint64{},
-		asks:  map[string]bool{},
+		asks:  map[string]*askState{},
 	}
 }
 
-// noteSent records a REQUEST or QUERY this seat sent, so its first reply is
-// act. Any other performative is ignored.
+// noteSent records every message this seat sends. The first reply to a
+// REQUEST or QUERY is act; a reply to any other recorded message falls through
+// to the ordinary rules, and a reply to an id never recorded is act.
 func (c *classifier) noteSent(id, perf string) {
-	if id == "" || (perf != "REQUEST" && perf != "QUERY") {
+	if id == "" {
 		return
 	}
 	c.mu.Lock()
@@ -80,7 +91,7 @@ func (c *classifier) noteSent(id, perf string) {
 	if _, ok := c.asks[id]; ok {
 		return
 	}
-	c.asks[id] = false
+	c.asks[id] = &askState{ask: perf == "REQUEST" || perf == "QUERY"}
 	c.askList = append(c.askList, id)
 	if len(c.askList) > classifyAskCap {
 		drop := len(c.askList) - classifyAskCap/2
@@ -131,7 +142,7 @@ func (c *classifier) classify(tier string, seq uint64, data []byte, now time.Tim
 		return e.class
 	}
 	c.decodes++
-	e := c.decide(data, now)
+	e := c.decide(k, data, now)
 	if len(c.memo) >= classifyMemoCap {
 		c.evict()
 	}
@@ -139,11 +150,15 @@ func (c *classifier) classify(tier string, seq uint64, data []byte, now time.Tim
 	return e.class
 }
 
-func (c *classifier) decide(data []byte, now time.Time) classEntry {
+func (c *classifier) decide(k classKey, data []byte, now time.Time) classEntry {
 	var env Envelope
 	if json.Unmarshal(data, &env) != nil || env.MessageID == "" {
 		return classEntry{class: classAct}
 	}
+	// The ask check runs on every path below, so a first reply that is act for
+	// another reason (a passed reply_by, an unknown performative) still
+	// consumes its ask.
+	act := c.replyToOpenAsk(k, env.InReplyTo)
 	if !performatives[env.Performative] {
 		return classEntry{class: classAct}
 	}
@@ -158,7 +173,6 @@ func (c *classifier) decide(data []byte, now time.Time) classEntry {
 			return classEntry{class: classAct, replyBy: t}
 		}
 	}
-	act := false
 	switch env.Performative {
 	case "CANCEL", "FAILURE", "REFUSE", "REQUEST", "QUERY":
 		act = true
@@ -166,19 +180,31 @@ func (c *classifier) decide(data []byte, now time.Time) classEntry {
 	if gateLine.MatchString(env.Content.Data) {
 		act = true
 	}
-	if env.InReplyTo != "" {
-		replied, known := c.asks[env.InReplyTo]
-		if !known || !replied {
-			act = true // the first reply to an open ask, or one we cannot match
-			if known {
-				c.asks[env.InReplyTo] = true
-			}
-		}
-	}
 	if act {
 		return classEntry{class: classAct, replyBy: replyBy}
 	}
 	return classEntry{class: classRoutine, replyBy: replyBy}
+}
+
+// replyToOpenAsk reports whether a message with this in_reply_to is act on
+// that account: the first reply to a sent ask, the same message again, or a
+// reply to an id the seat never recorded. The caller holds mu.
+func (c *classifier) replyToOpenAsk(k classKey, inReplyTo string) bool {
+	if inReplyTo == "" {
+		return false
+	}
+	a, known := c.asks[inReplyTo]
+	if !known {
+		return true
+	}
+	if !a.ask {
+		return false
+	}
+	if !a.consumed {
+		a.consumed, a.by = true, k
+		return true
+	}
+	return a.by == k
 }
 
 // evict drops the lowest half of the memo by sequence; the caller holds mu.
