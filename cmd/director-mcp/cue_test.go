@@ -29,6 +29,10 @@ type fakeSource struct {
 	seq, lastN uint64
 	// lane is the open lane items the source reports (cue_lane_test.go).
 	lane []laneItem
+	// items, floorMap and waitErr feed the class-aware cue (cue_class_test.go).
+	items    []summaryItem
+	floorMap map[string]uint64
+	waitErr  error
 }
 
 func (f *fakeSource) count(context.Context) (uint64, error) {

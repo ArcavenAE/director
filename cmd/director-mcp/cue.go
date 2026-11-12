@@ -49,6 +49,9 @@ type cueConfig struct {
 	// channel and be lost (director#188).
 	SelfTestRetries int
 	SelfTestBackoff time.Duration
+	// ClassAware turns on the class-aware cue (aae-orc-bykbv): act mail cues
+	// at once, routine mail is held up to Window. Off is today's cue.
+	ClassAware bool
 }
 
 func defaultCueConfig() cueConfig {
@@ -94,6 +97,15 @@ type cueSource interface {
 	count(ctx context.Context) (uint64, error)
 	// oldestMeta reads the oldest waiting message without consuming it.
 	oldestMeta(ctx context.Context) (*cueMeta, error)
+}
+
+// waitingSource is the optional class-aware half of a cue source: the waiting
+// messages with their tier and sequence, read without acking, and each tier's
+// stream position at start (the backlog boundary). A source without it keeps
+// the ordinary cue.
+type waitingSource interface {
+	waiting(ctx context.Context) ([]summaryItem, error)
+	floors(ctx context.Context) (map[string]uint64, error)
 }
 
 // laneSource is the optional second half of a cue source: how many replies to
@@ -177,6 +189,8 @@ type cue struct {
 	// oldest is the age of the seat's oldest waiting message (Bus.oldestPending);
 	// nil leaves presence as it was.
 	oldest func() time.Duration
+	// cls is the receiver classifier, built only when ClassAware is on.
+	cls *classifier
 	// pendingUnverified is why that age cannot be trusted for a tier right now
 	// (pendingTracker.unverified); empty, or nil, when it can.
 	pendingUnverified func() string

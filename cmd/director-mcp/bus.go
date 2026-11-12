@@ -95,6 +95,9 @@ type Bus struct {
 	// cueState reports the channel cue state for presence at an age of the
 	// oldest waiting message (cue.presenceAt); nil when off.
 	cueState func(age time.Duration, known bool, unverified string) (state, reason string, stalled bool)
+	// sentCls is the cue's receiver classifier, set by attachCue when the
+	// class-aware cue is on; nil otherwise.
+	sentCls *classifier
 	// cueSampling reports whether the cue watcher samples the pending tracker;
 	// nil when the cue is off.
 	cueSampling func() bool
@@ -998,6 +1001,18 @@ func (b *Bus) subjectFiltered(ctx context.Context, subject string) (bool, error)
 // no meaning there: a global subject carries no workspace token, so the
 // address alone determines it and R-92 reduces to the liveness half.
 func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendResult, error) {
+	res, err := b.publishSend(ctx, e, wsHint)
+	if err == nil {
+		b.noteSent(e)
+	}
+	return res, err
+}
+
+// noteSent tells the receiver classifier about an accepted send, so the first
+// reply to an ask is act. With the class-aware cue off there is no classifier.
+func (b *Bus) noteSent(e *Envelope) {}
+
+func (b *Bus) publishSend(ctx context.Context, e *Envelope, wsHint string) (*sendResult, error) {
 	body, err := json.Marshal(e)
 	if err != nil {
 		return nil, atStage("validate", err)
