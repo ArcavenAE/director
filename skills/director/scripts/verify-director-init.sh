@@ -228,6 +228,44 @@ rm -f "$dbin/director-profile"
 run -- --check
 [[ $rc -eq 1 && "$out" == *"drift: director-profile is missing: $dbin/director-profile"* ]] || miss "C1 director-profile missing: rc=$rc out=$out"
 
+# ---- L1: the check that follows the write must not be ignored ----
+# A copy of the script with a director-profile beside it that passes the temporary
+# file and refuses the written one: init must report the refusal and exit 1.
+mkdir -p "$work/copy"
+cp "$BIN" "$work/copy/director-init"; chmod +x "$work/copy/director-init"
+printf '%s\n' '#!/usr/bin/env python3' 'import sys' 'if sys.argv[-1].endswith(".tmp"):' '    print("profile ok: stub"); sys.exit(0)' 'sys.stderr.write("stub: refused after the write\n"); sys.exit(1)' >"$work/copy/director-profile"
+chmod +x "$work/copy/director-profile"
+fresh
+real_bin="$BIN"; BIN="$work/copy/director-init"
+run -- --entry-role supervisor
+BIN="$real_bin"
+[[ $rc -eq 1 && "$out" == *"stub: refused after the write"* ]] || miss "L1 a failing check after the write must exit 1: rc=$rc out=$out"
+
+# ---- L2: director-profile is run with a timeout, and a timeout is a refusal, not a traceback ----
+fresh
+harness='
+import runpy, subprocess, sys
+real = subprocess.run
+seen = []
+def fake(argv, *a, **k):
+    if len(argv) > 1 and str(argv[1]).endswith("director-profile"):
+        seen.append(k.get("timeout"))
+        raise subprocess.TimeoutExpired(argv, k.get("timeout") or 1)
+    return real(argv, *a, **k)
+subprocess.run = fake
+bin_path = sys.argv[1]
+sys.argv = [bin_path, "--entry-role", "supervisor"]
+try:
+    runpy.run_path(bin_path, run_name="__main__")
+except SystemExit as exc:
+    print("exit", exc.code)
+print("timeouts", seen)
+'
+set +e
+out="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:$pydir:/usr/bin:/bin" "$PY" -c "$harness" "$BIN" 2>&1 </dev/null)"
+set -e
+[[ "$out" == *"timeouts [30]"* && "$out" == *"exit 1"* && "$out" != *"Traceback"* ]] || miss "L2 director-profile needs a 30 s timeout and a timeout must exit 1: $out"
+
 # ---- the python rule ----
 fresh
 old_py() {
@@ -244,6 +282,10 @@ printf '%s\n' '#!/bin/sh' "echo found-python312 >\"$work/found\"" >"$work/newbin
 chmod +x "$work/newbin/python3.12"
 old_py "$work/newbin"
 [[ -f "$work/found" ]] || miss "P21 a python3.12 on PATH must be used when python3 is too old: rc=$rc out=$out"
+mkdir -p "$work/badbin"
+printf 'not a program\n' >"$work/badbin/python3.12"; chmod +x "$work/badbin/python3.12"
+old_py "$work/badbin"
+[[ $rc -eq 2 && "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" == "1" && "$out" == *"python3 3.11 or newer"* ]] || miss "L3 a python3.N that cannot be executed must fall through to the one-line refusal: rc=$rc out=$out"
 
 if [[ $fail -ne 0 ]]; then echo "FAIL"; exit 1; fi
 echo "ok: director-init writes the first-build profile, reports what shadows the launcher, and --check reports drift without writing"
