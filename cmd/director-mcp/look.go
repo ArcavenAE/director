@@ -73,7 +73,10 @@ type lookRead struct {
 	warnings []string
 }
 
-var gateLine = regexp.MustCompile(`(?m)^\s*GATE\b.*$`)
+// gateLine matches a handshake line at line start: GATE, Pre-GATE (with an
+// optional version, as in "Pre-GATE v2") and WORD. The line-start anchor keeps
+// a GATE quoted mid-sentence from matching.
+var gateLine = regexp.MustCompile(`(?m)^\s*(?:GATE|Pre-GATE(?:\s+v\d+)?|WORD)\b.*$`)
 var gateStage = regexp.MustCompile(`(?i)\b(draft|ready)\b`)
 
 // lookClassify sorts one message into gate, request or other. A gate is a body

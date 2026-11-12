@@ -6,8 +6,9 @@ package main
 // cue does not read it yet.
 //
 // Inputs only raise. A message is act when it is a CANCEL, FAILURE, REFUSE,
-// REQUEST or QUERY; the first reply to a REQUEST or QUERY this seat sent; a
-// body with a GATE line (the same test look.go uses, gateLine); one whose
+// REQUEST, QUERY, PROPOSE, CFP or NOT-UNDERSTOOD; the first reply to a
+// REQUEST, QUERY, PROPOSE or CFP this seat sent; a body with a GATE, Pre-GATE
+// or WORD line (the same test look.go uses, gateLine); one whose
 // reply_by has passed; or anything the classifier cannot read, which fails
 // open. Everything else is routine. A body never lowers a class, so a
 // REQUEST that says no wake is needed stays act.
@@ -43,6 +44,10 @@ const (
 	// eviction costs a turn and never loses a wake.
 	classifyAskCap = 4096
 )
+
+// askPerformatives are the sent messages that ask for a turn or a word back;
+// the first reply to one is act.
+var askPerformatives = map[string]bool{"REQUEST": true, "QUERY": true, "PROPOSE": true, "CFP": true}
 
 type classKey struct {
 	tier string
@@ -80,7 +85,7 @@ func newClassifier() *classifier {
 }
 
 // noteSent records every message this seat sends. The first reply to a
-// REQUEST or QUERY is act; a reply to any other recorded message falls through
+// REQUEST, QUERY, PROPOSE or CFP is act; a reply to any other recorded message falls through
 // to the ordinary rules, and a reply to an id never recorded is act.
 func (c *classifier) noteSent(id, perf string) {
 	if id == "" {
@@ -91,7 +96,7 @@ func (c *classifier) noteSent(id, perf string) {
 	if _, ok := c.asks[id]; ok {
 		return
 	}
-	c.asks[id] = &askState{ask: perf == "REQUEST" || perf == "QUERY"}
+	c.asks[id] = &askState{ask: askPerformatives[perf]}
 	c.askList = append(c.askList, id)
 	if len(c.askList) > classifyAskCap {
 		drop := len(c.askList) - classifyAskCap/2
@@ -175,7 +180,7 @@ func (c *classifier) decide(k classKey, data []byte, now time.Time) classEntry {
 		}
 	}
 	switch env.Performative {
-	case "CANCEL", "FAILURE", "REFUSE", "REQUEST", "QUERY":
+	case "CANCEL", "FAILURE", "REFUSE", "REQUEST", "QUERY", "PROPOSE", "CFP", "NOT-UNDERSTOOD":
 		act = true
 	}
 	if gateLine.MatchString(env.Content.Data) {
