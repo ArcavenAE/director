@@ -3511,7 +3511,7 @@ def cmd_picks(a):
 # prints what changed for the operator: a WAKE or QUEUE row that is new, changed, or moved up from
 # RECORD, and an ask closed answered or carded that no row carries (the unaccounted remainder of the
 # director role, section 8). A change that leaves every row RECORD prints nothing. The ledger has no
-# tier field, so the tier is derived from the blocked field (director ruling 01M76W13JW): on an open
+# tier field, so the tier is derived from the blocked field (director ruling on aae-orc-12p1l): on an open
 # row, blocked "operator" is WAKE, any other non-empty blocked is QUEUE; an empty blocked, a parked
 # row and a closed row are RECORD. --json names the derivation in tier_source, so a tier field on the
 # ledger can replace it later without changing what the report means.

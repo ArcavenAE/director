@@ -5,7 +5,7 @@
 # the board. A change that leaves every row RECORD prints nothing. The baseline is
 # $DIRECTOR_STATE/report-seen.json, beside picks-seen.jsonl. An ask closed answered or carded whose
 # `dws asks` row reads "none" is a custody gap, not a presentation exclusion, so it prints as
-# "unaccounted" with the ask id and the --ref of its close (director ruling 01M76VYDND; wardrobe
+# "unaccounted" with the ask id and the --ref of its close (director ruling on aae-orc-12p1l; wardrobe
 # director role section 8, "the unaccounted remainder reported separately").
 #
 # Usage: skills/director/scripts/verify-dws-report.sh   Exit nonzero on any miss.
@@ -63,7 +63,7 @@ rep "$root/o3"
 rep "$root/o4"
 [[ $rc == 0 && ! -s "$root/o4" ]] && ok "registering the row afterwards prints nothing" || bad "registered later is silent" "$(cat "$root/o4")"
 
-# --- tiers: derived from blocked (director ruling 01M76W13JW) ---------------------------------------
+# --- tiers: derived from blocked (director ruling on aae-orc-12p1l) ---------------------------------------
 # The ledger has no tier field. On an open row, blocked "operator" is WAKE, any other non-empty
 # blocked is QUEUE; an empty blocked, a parked row and a closed row are RECORD. A later tier field can
 # replace the derivation without changing what the report means, so the derivation is named in --help
