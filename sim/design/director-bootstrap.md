@@ -280,29 +280,35 @@ requirement, since a user may have only director (section 1, ticket 5).
 What the check found:
 
 1. A Claude Code plugin can carry the skill, the hooks, an MCP registration and
-   a `bin/` directory in one tree: `skills/`, `hooks/hooks.json`, `.mcp.json`,
-   `bin/` and `scripts/` (plugins reference, "Standard layout").
+   a `bin/` directory in one tree: `skills/`, `hooks/hooks.json`, `.mcp.json`
+   and `bin/` (plugins reference, "Standard layout"). Hook scripts sit in a
+   folder the hooks name; the docs' example tree uses `scripts/`.
 2. A plugin cannot carry the settings file of 4.2. Its `settings.json` honours
    only `agent` and `subagentStatusLine` (plugins reference, "settings"). The
    hook wiring moves into `hooks/hooks.json`.
 3. A plugin can be scoped to one session. `--plugin-dir` loads it for that
    session only, as `<name>@inline`, without an `enabledPlugins` entry (plugin
-   loading reference, "Find where a plugin came from"). The flag is not
-   inherited by a child `claude`, which is the property 4.2 wants from
-   `--settings`. A user-scope install would instead load the hooks in every
-   session on the host.
+   loading reference, "Find where a plugin came from"). NOT TESTED, and not
+   stated in those docs: that a child `claude` started from such a session
+   goes without the plugin. That is reasoning from the flag's scope on one
+   command line, and it is the property 4.2 wants from `--settings`. The
+   environment variable `CLAUDE_CODE_PLUGIN_DIRS` is listed on the Claude Code
+   environment-variables page, each directory "loaded the way a `--plugin-dir`
+   flag loads it", and a child inherits an environment variable (4.2, item 1).
+   A user-scope install would instead load the hooks in every session on the
+   host.
 4. sideshow cannot carry it as it stands. Its unshaping spec calls a claude
    plugin "an upstream SOURCE FORMAT, not a delivery mechanism" and says
-   sideshow "creates no harness plugin state of any kind"
-   (sideshow `docs/unshaping-spec.md`). It enables a pack by writing bindings
-   into one named repository, and never runs `claude plugin install`
-   (`docs/claude-plugin-conversion-reference.md`). A sideshow pack would
-   reach a repository, not a director session started anywhere.
+   sideshow "creates no harness plugin state of any kind" and enables a pack
+   by writing bindings into one named repository (sideshow
+   `docs/unshaping-spec.md`). It never runs `claude plugin install` (sideshow
+   `docs/claude-plugin-conversion-reference.md`). A sideshow pack would reach a
+   repository, not a director session started anywhere.
 5. A plugin tree fits the no-sideshow constraint: a release tarball unpacked
    under `~/.director/lib/plugin/<version>/`, with the launcher passing
    `--plugin-dir` at it.
-6. The binaries stay out of the plugin. A cached plugin path changes with every
-   version, so `director-mcp` and `cast-launch` stay under
+6. The binaries stay out of the plugin. The unpack path of 5 is per version, so
+   `director-mcp` and `cast-launch` stay under
    `~/.director/lib/<name>/<sha>/`, installed by `scripts/director-install`
    (atomic switch, rollback, revision check).
 7. The plugin's `.mcp.json` would register the MCP server in plugin-loaded
@@ -319,10 +325,12 @@ The check's recommendation, not a ruling: the plugin tree (skill,
 `reference/role.md`, hooks, scripts, `.mcp.json`) as the release tarball, with
 `scripts/director-install` for the shim and the launcher, and a launcher that
 passes `--plugin-dir`. sideshow carries nothing for this and stays an optional
-later channel for the tarball. Two decisions follow for director: whether the
-2 and 3 findings change the `--settings` wording of 4.2, and whether the two
+later channel for the tarball. Three decisions follow for director: whether the
+2 and 3 findings change the `--settings` wording of 4.2, whether the two
 untested points in 7 are accepted as a first step of `director init` or tried
-first.
+first, and, as an open point with no rule written, how the launcher scopes the
+plugin to one session, given the untested inheritance in 3 and the environment
+form it names.
 
 ### 4a.2 `director init`
 
