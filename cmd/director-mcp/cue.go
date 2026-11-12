@@ -17,8 +17,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -168,6 +170,7 @@ type cue struct {
 	nCues, nRecues uint64
 	bySender       map[string]uint64
 	byPerformative map[string]uint64
+	byRole         map[string]uint64
 	out            *pendingCue
 	reconnect      bool
 	// readErr is set while the watcher cannot read inbox state. It shows in
@@ -748,19 +751,40 @@ func (c *cue) counts() cueCounts {
 	for k, v := range c.byPerformative {
 		out.ByPerformative[k] = v
 	}
+	for k, v := range c.byRole {
+		out.ByRole[k] = v
+	}
 	return out
 }
 
-// countCue records one mail cue by the sender and performative of the message it names. The
+// seatGeneration is the -gN-M suffix a marvel seat id carries, which a shift changes.
+var seatGeneration = regexp.MustCompile(`-g[0-9]+-[0-9]+$`)
+
+// roleOf keys a sender label by its role: the generation before the @ is stripped and the
+// workspace kept, so a shift does not split one role across keys. A label with no generation
+// keys as itself.
+func roleOf(sender string) string {
+	id, ws, hasWS := strings.Cut(sender, "@")
+	id = seatGeneration.ReplaceAllString(id, "")
+	if hasWS {
+		return id + "@" + ws
+	}
+	return id
+}
+
+// countCue records one mail cue by the sender and performative of the message it names. A cue
+// with no message to name counts under "unknown" in every map, so each map sums to cues. The
 // caller holds mu. A self-test notice and a re-cue are not counted here.
 func (c *cue) countCue(m *cueMeta) {
 	c.nCues++
-	if m == nil {
-		return
-	}
 	if c.bySender == nil {
-		c.bySender, c.byPerformative = map[string]uint64{}, map[string]uint64{}
+		c.bySender, c.byPerformative, c.byRole = map[string]uint64{}, map[string]uint64{}, map[string]uint64{}
 	}
-	c.bySender[m.Sender]++
-	c.byPerformative[m.Performative]++
+	sender, perf, role := "unknown", "unknown", "unknown"
+	if m != nil {
+		sender, perf, role = m.Sender, m.Performative, roleOf(m.Sender)
+	}
+	c.bySender[sender]++
+	c.byPerformative[perf]++
+	c.byRole[role]++
 }
