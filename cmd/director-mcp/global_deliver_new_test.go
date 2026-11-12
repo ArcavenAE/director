@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -51,15 +52,36 @@ func TestBrokerFreshSeatGlobalDurableStartsAtTheHead(t *testing.T) {
 	}
 	defer b.close()
 	attach(t, ctx, b)
-	pubEnv(t, ctx, gjs, "global.director.inbox", "g2", "INFORM", "sent after the seat started")
+	gst, err := gjs.Stream(ctx, globalDirectorStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gsi, err := gst.Info(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := gsi.State.LastSeq
+	if ci, err := b.global.cons().Info(ctx); err != nil || ci.AckFloor.Stream != head {
+		t.Fatalf("durable floor = %v (%v), want the head %d the note reports", ci, err, head)
+	}
+	pa, err := gjs.Publish(ctx, "global.director.inbox", mustEnv("g2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pa.Sequence <= head {
+		t.Errorf("g2 landed at sequence %d, not above the head %d", pa.Sequence, head)
+	}
 	if got := readIDs(t, ctx, b); fmt.Sprint(got) != "[global:g2]" {
 		t.Errorf("fresh seat read %v, want only [global:g2]", got)
 	}
 	note := strings.Join(b.takeResumed(), "\n")
-	for _, s := range []string{"2 earlier message(s)", "not delivered"} {
+	for _, s := range []string{"2 earlier message(s)", "not delivered", globalDirectorStream, "sequences 1 to 2"} {
 		if !strings.Contains(note, s) {
 			t.Errorf("start note %q lacks %q", note, s)
 		}
+	}
+	if strings.Contains(note, "audit_lookup") {
+		t.Errorf("start note points at audit_lookup, which cannot read the hub stream: %q", note)
 	}
 	if strings.Contains(note, "global inbox has no earlier durable for this seat, so it reads everything") {
 		t.Errorf("start note still says the seat reads everything: %q", note)
@@ -180,7 +202,7 @@ func TestBrokerFreshSeatNoteSaysUnknownWhenTheCountIsUnreadable(t *testing.T) {
 		t.Errorf("read %v, want [global:g1]", got)
 	}
 	note := strings.Join(b.takeResumed(), "\n")
-	if !strings.Contains(note, "UNKNOWN") || strings.Contains(note, " 0 earlier") || strings.Contains(note, "1 earlier") {
+	if !strings.Contains(note, "UNKNOWN") || !strings.Contains(note, globalDirectorStream) || strings.Contains(note, "audit_lookup") || strings.Contains(note, " 0 earlier") || strings.Contains(note, "1 earlier") {
 		t.Errorf("start note %q: want UNKNOWN and no count", note)
 	}
 }
@@ -256,5 +278,46 @@ func TestBrokerFreshSeatRecreatedDurableStaysAtTheHead(t *testing.T) {
 	}
 	if got := readIDs(t, ctx, b); fmt.Sprint(got) != "[global:g1]" {
 		t.Errorf("after the rebuild the seat read %v, want only [global:g1]", got)
+	}
+}
+
+// mustEnv is the body pubEnv publishes for an INFORM with id.
+func mustEnv(id string) []byte {
+	e := testEnv(id, "sender-"+id, "INFORM", "sent after the seat started")
+	e.Recipient.Address = "agent://ops/operator"
+	b, _ := json.Marshal(e)
+	return b
+}
+
+// A message that lands between the seat's count of earlier mail and the
+// creation of its durable is delivered, not skipped: the count and the start
+// describe the same point.
+func TestBrokerMailBetweenTheCountAndTheStartIsDelivered(t *testing.T) {
+	useRealProbe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
+	t.Setenv("MARVEL_PREDECESSOR", "")
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "old")
+	prev := afterHeadRead
+	afterHeadRead = func() {
+		pubEnv(t, ctx, gjs, "global.director.inbox", "gmid", "INFORM", "published between the count and the start")
+	}
+	t.Cleanup(func() { afterHeadRead = prev })
+	b, err := connect(ctx, url, freshSeat("race-g1-0"), gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.close()
+	attach(t, ctx, b)
+	if got := readIDs(t, ctx, b); fmt.Sprint(got) != "[global:gmid]" {
+		t.Errorf("seat read %v, want [global:gmid]: a message between the count and the start is not skipped", got)
+	}
+	note := strings.Join(b.takeResumed(), "\n")
+	if !strings.Contains(note, "1 earlier message(s)") || !strings.Contains(note, "sequences 1 to 1") {
+		t.Errorf("start note %q does not describe the same point the durable started at", note)
 	}
 }

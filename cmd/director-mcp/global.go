@@ -598,6 +598,7 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 			cfg.DeliverPolicy = jetstream.DeliverNewPolicy
 			g.freshHead = true
 			g.skipped, g.skippedKnown = g.earlierCount(ctx)
+			afterHeadRead()
 		}
 	}
 	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), cfg)
@@ -1198,3 +1199,7 @@ func preflightGlobal(ctx context.Context, nc *nats.Conn, cfg globalConfig) error
 	}
 	return nil
 }
+
+// afterHeadRead runs between the seat's read of the stream head and the
+// creation of its durable. A var so a test can publish in that window.
+var afterHeadRead = func() {}
