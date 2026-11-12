@@ -24,7 +24,7 @@ First match wins, over the set of `tool_use` blocks in one request.
 
 - **Tool names** are as they appear in `tool_use.name`.
 - **"Bash X"** means a Bash call where some segment of the command, after leading environment assignments and a path prefix, starts with the word X. The command is split into segments on `&&`, `||`, `;`, `|` and newlines; every segment is tried, not only the first. On one host about half of director's Bash calls put the listed command behind `cd`, a `for` loop or a pipe, so first-word-only matching would miss them.
-- **Command text is read, not kept.** The classifier reads the command only to match its first word; no command text leaves it.
+- **Command text is read, not kept.** The classifier reads the command only to match the first word of each segment; no command text leaves it.
 - **The table is data.** It lives in critic's map file as a new kind, with a version that every audit prints, so a rename moves dollars between classes without a code change.
 
 | # | class | signature | human role it stands in for |
