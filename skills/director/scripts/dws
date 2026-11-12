@@ -23,6 +23,7 @@ CLI and the instance-id refusal; W2 adds refresh; W3 adds the page and the read 
   dws migrate-blocked-none [--dry-run]
   dws page [--out FILE] [--theme FILE] [--nav FILE] [--desk-url FILE]
   dws picks --file FILE
+  dws report [--json]
 
 Board lifecycle (sim/design/board-lifecycle.md, BL1): a row declares done_at, the stage that
 finishes it (default merged), and from, the ruling or idea that started it; from also joins the
@@ -3505,6 +3506,91 @@ def cmd_picks(a):
           + (f", {torn} unreadable line(s) in {path} skipped" if torn else ""), file=sys.stderr)
 
 
+# T7 (aae-orc-12p1l): `report` is the operator report as a board diff. It folds the ledger and the
+# asks store, compares them with the state it last reported ($DIRECTOR_STATE/report-seen.json), and
+# prints what changed for the operator: a WAKE or QUEUE row that is new, changed, or moved up from
+# RECORD, and an ask closed answered or carded that no row carries (the unaccounted remainder of the
+# director role, section 8). A change that leaves every row RECORD prints nothing. The ledger has no
+# tier field, so the tier is derived from the blocked field (director ruling 01M76W13JW): on an open
+# row, blocked "operator" is WAKE, any other non-empty blocked is QUEUE; an empty blocked, a parked
+# row and a closed row are RECORD. --json names the derivation in tier_source, so a tier field on the
+# ledger can replace it later without changing what the report means.
+TIER_SOURCE = "blocked"
+
+
+def derived_tier(r):
+    if finished(r) or not r["blocked"]:
+        return "RECORD"
+    return "WAKE" if r["blocked"] == "operator" else "QUEUE"
+
+
+def report_seen_path():
+    return os.path.join(STATE, "report-seen.json")
+
+
+def read_report_seen(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {}, {}
+    if not isinstance(d, dict):
+        return {}, {}
+    rows = d.get("rows") if isinstance(d.get("rows"), dict) else {}
+    una = d.get("unaccounted") if isinstance(d.get("unaccounted"), dict) else {}
+    return rows, una
+
+
+def cmd_report(a):
+    path = report_seen_path()
+    os.makedirs(STATE, exist_ok=True)
+    with Locked(path + ".lock"):
+        seen_rows, seen_una = read_report_seen(path)
+        rows, torn = fold()
+        closes = read_closes()
+        carried = {link[len("intake:"):] for r in rows.values() for link in r["links"] if INTAKE_LINK.match(link)}
+        out_rows, now_rows = [], {}
+        for slug in sorted(rows):
+            r = rows[slug]
+            tier = derived_tier(r)
+            now_rows[slug] = {"tier": tier, "blocked": r["blocked"]}
+            if tier != "RECORD" and seen_rows.get(slug) != now_rows[slug]:
+                out_rows.append({"slug": slug, "tier": tier, "tier_source": TIER_SOURCE,
+                                 "stage": r["stage"], "blocked": r["blocked"]})
+        out_una, now_una = [], dict(seen_una)
+        for ask_id in sorted(closes, key=lambda i: int(i[2:])):
+            c = closes[ask_id]
+            if c["as"] not in ("answered", "carded") or ask_id in carried or ask_id in seen_una:
+                continue
+            ref = c.get("ref") or NONE
+            out_una.append({"ask_id": ask_id, "ref": ref})
+            now_una[ask_id] = {"ref": ref}
+        data = json.dumps({"rows": now_rows, "unaccounted": now_una}, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".report-seen.tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    if a.json:
+        json.dump({"rows": out_rows, "unaccounted": out_una, "torn": torn}, sys.stdout, indent=2, ensure_ascii=False, sort_keys=True)
+        print()
+        return
+    for x in out_rows:
+        print(f"{x['tier']} {printable(x['slug'])}  {printable(x['stage'])}  blocked: {printable(x['blocked'])}")
+    for x in out_una:
+        print(f"unaccounted {x['ask_id']} ref={printable(x['ref'])}")
+    if torn:
+        print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped", file=sys.stderr)
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="dws", description="director workstream ledger (W1)")
     p.add_argument("--actor", default="director", help="the writer, a claim checked against the writer table")
@@ -3743,6 +3829,16 @@ def main(argv):
     pk = sub.add_parser("picks", help="print the ready picks from a page export that were not reported before, and record them in picks-seen.jsonl (W3)")
     pk.add_argument("--file", required=True, help="JSON list of the picks docs, as the Artifact data tool returns them")
     pk.set_defaults(fn=cmd_picks)
+
+    rp = sub.add_parser("report", help="print what changed on the board since the last report: a new or changed WAKE or QUEUE row, and an ask closed answered or carded that no row carries (unaccounted); RECORD-only changes print nothing (T7)",
+                        description="The operator report as a board diff. The tier of a row is DERIVED from its blocked field, "
+                                    "because the ledger has no tier field: on an open row, blocked 'operator' is WAKE, any other "
+                                    "non-empty blocked is QUEUE; an empty blocked, a parked row and a closed row are RECORD. "
+                                    "Prints one line per new or changed WAKE or QUEUE row, and one 'unaccounted I-n ref=R' line per ask "
+                                    "closed answered or carded that no row carries. Records what it reported in "
+                                    "$DIRECTOR_STATE/report-seen.json and writes nothing else. --json gives tier and tier_source.")
+    rp.add_argument("--json", action="store_true", help="rows (slug, tier, tier_source, stage, blocked), unaccounted (ask_id, ref) and the torn count")
+    rp.set_defaults(fn=cmd_report)
 
     mh = sub.add_parser("merge-hold", help="exit 1 with the reason when a row linking the PR waits on an unconfirmed decision; read only (D2)")
     mh.add_argument("pr", metavar="OWNER/REPO#N")

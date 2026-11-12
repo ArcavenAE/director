@@ -39,12 +39,13 @@ a1="$(ask 'ask one')"; a2="$(ask 'ask two')"; a3="$(ask 'ask three')"; a4="$(ask
 "$DWS" open rowtwo --title t2 --owner director --link "intake:$a2" >/dev/null
 # $a1 closed answered, no row: unaccounted. $a2 closed carded with a row: accounted. $a3 not an ask:
 # not a completion. $a4 still open: not a completion. $a5 closed answered, no row, no --ref.
+cp -R "$DIRECTOR_STATE" "$root/state-j"
 "$DWS" report >"$root/o1" 2>"$root/e1" && ok "report exits 0 with a completion that has no row" || bad "report exit" "$(cat "$root/e1")"
 grep -Eq "^unaccounted $a1 ref=R-9\$" "$root/o1" && ok "a completion with no row prints as unaccounted, with its ask id and --ref" || bad "unaccounted line" "$(cat "$root/o1")"
 grep -Eq "^unaccounted $a5 ref=none\$" "$root/o1" && ok "a close with no --ref prints ref=none" || bad "unaccounted without ref" "$(cat "$root/o1")"
 [[ "$(grep -c '^unaccounted ' "$root/o1")" == "2" ]] && ok "only the two unregistered completions are unaccounted: a row, a not-an-ask and an open ask are not" || bad "unaccounted count" "$(cat "$root/o1")"
 grep -q "^unaccounted " "$root/o1" && ! grep -qi exclu "$root/o1" && ok "it is never called an exclusion" || bad "no exclusion wording" "$(cat "$root/o1")"
-"$DWS" report --json >"$root/j1" 2>/dev/null || true
+DIRECTOR_STATE="$root/state-j" "$DWS" report --json >"$root/j1" 2>/dev/null || true
 [[ "$(python3 -c "import json,sys; d=json.load(open('$root/j1')); print(sorted((x['ask_id'], x['ref']) for x in d['unaccounted']))")" == "[('$a1', 'R-9'), ('$a5', 'none')]" ]] && ok "--json carries the unaccounted list" || bad "--json unaccounted" "$(cat "$root/j1")"
 
 # --- the baseline: a reported item is not reported twice ------------------------------------------
