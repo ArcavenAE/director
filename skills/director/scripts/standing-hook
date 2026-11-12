@@ -6,6 +6,7 @@ their own: they run only inside turns the operator starts, so a fast run of
 questions crowds them out. This hook is the cue. Wired as a Claude Code
 UserPromptSubmit hook, it prints, before each answer:
 
+  now <HH:MM> <CST|CDT>
   drain age: <N>m since the last drain (<stamp>)
   Before you answer:
   1. ...three lines...
@@ -73,6 +74,7 @@ the dash and scan stamps, and the two inputs above. The waiting line widens the 
 "reads one file" stated, on purpose.
 """
 import datetime, json, math, os, re, shutil, subprocess, sys, tempfile
+import zoneinfo
 
 CHECKLIST = """Before you answer:
 1. Drained, and answered Desk cards and page picks read, since my last answer? If not, do them first.
@@ -80,6 +82,33 @@ CHECKLIST = """Before you answer:
 3. Where does this text land, and does that file or seat own it?"""
 
 FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+# Every time shown to the operator is local, America/Chicago (CST or CDT), read from the tz database by
+# name and never from the host clock's zone. Records, logs, ledgers and bus text stay UTC.
+LOCAL_ZONE = "America/Chicago"
+
+
+def clock_utc():
+    """The clock for the local-time line. DWS_NOW overrides it only with DWS_TEST_CLOCK=1 (the verify
+    scripts); the ages below keep the real clock."""
+    fixed = os.environ.get("DWS_NOW") if os.environ.get("DWS_TEST_CLOCK") == "1" else None
+    if fixed:
+        return datetime.datetime.strptime(fixed, FMT).replace(tzinfo=datetime.timezone.utc)
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def clock_line():
+    """First line of the hook: the local clock, so each turn starts from the operator's time. DIRECTOR_TZ
+    is a test-only override of the zone, honored only with DWS_TEST_CLOCK=1. A zone this host cannot read
+    is said, and the time then shows as UTC, never as a guess."""
+    t = clock_utc()
+    name = LOCAL_ZONE
+    if os.environ.get("DWS_TEST_CLOCK") == "1" and os.environ.get("DIRECTOR_TZ"):
+        name = os.environ["DIRECTOR_TZ"]
+    try:
+        return "now " + t.astimezone(zoneinfo.ZoneInfo(name)).strftime("%H:%M %Z")
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, KeyError, OSError) as err:
+        return t.strftime("now %H:%M UTC") + f" (the {name} zone is unreadable here: {type(err).__name__})"
 
 
 def state_file():
@@ -387,6 +416,7 @@ def main():
     if len(sys.argv) == 2:
         (beat if sys.argv[1] == "beat" else scan_beat)()
         return
+    print(clock_line())
     print(age_line())
     print(CHECKLIST)
     print(dash_line())

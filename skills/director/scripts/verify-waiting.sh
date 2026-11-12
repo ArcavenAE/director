@@ -90,7 +90,7 @@ printf '{"read_at":"2999-01-01T00:00:00Z","cards":1,"answered":[],"answered_not_
 # --- the line is last, the rest is as it was -------------------------------------------------------------------
 reads_row 1 '[{"card":"ca-1"}]'; prs_file 1 '[]'
 out="$("$H")"
-[[ "$(printf '%s\n' "$out" | tail -n 1)" == "waiting: "* && "$(printf '%s\n' "$out" | sed -n 2p)" == "Before you answer:" && "$(printf '%s\n' "$out" | grep -c '^[123]\. ')" == 3 ]] && ok "the waiting line is last and the checklist is as it was" || bad "line order" "$out"
+[[ "$(printf '%s\n' "$out" | tail -n 1)" == "waiting: "* && "$(printf '%s\n' "$out" | sed -n 3p)" == "Before you answer:" && "$(printf '%s\n' "$out" | grep -c '^[123]\. ')" == 3 ]] && ok "the waiting line is last and the checklist is as it was" || bad "line order" "$out"
 [[ "$(printf '%s\n' "$out" | sed '$d')" == "$before" ]] && ok "every other line matches the output with no inputs" || bad "the other lines changed"
 
 # --- no network, no gh, inside the time budget ---------------------------------------------------------------------

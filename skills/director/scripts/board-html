@@ -15,6 +15,7 @@ after editing board.md, run this if board.html already exists (opt-in by
 existence; a director that never made the page pays nothing).
 """
 import datetime
+import zoneinfo
 import html as htmlmod
 import json
 import os
@@ -54,6 +55,22 @@ LEDGER_CSS = """<style>
 #history{max-width:1280px;margin:8px auto}
 #history>summary{cursor:pointer;padding:6px 16px;font-weight:650}
 </style>"""
+
+
+# Every time the page shows the operator is local, America/Chicago (CST or CDT), read from the tz database
+# by name and never from the host clock's zone. DIRECTOR_TZ is a test-only override, honored only with
+# DWS_TEST_CLOCK=1. Stored values stay UTC.
+LOCAL_ZONE = "America/Chicago"
+
+
+def local_stamp(t: datetime.datetime) -> str:
+    name = LOCAL_ZONE
+    if os.environ.get("DWS_TEST_CLOCK") == "1" and os.environ.get("DIRECTOR_TZ"):
+        name = os.environ["DIRECTOR_TZ"]
+    try:
+        return t.astimezone(zoneinfo.ZoneInfo(name)).strftime("%Y-%m-%d %H:%M %Z")
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, KeyError, OSError) as err:
+        return t.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC") + f" ({name} unreadable: {type(err).__name__})"
 
 
 def now_utc() -> datetime.datetime:
@@ -701,7 +718,7 @@ def main() -> None:
         sys.exit(f"board-html: no board at {SRC} (set DIRECTOR_STATE to point elsewhere)")
     # Escape every "<" so board content can never close the script element.
     payload = json.dumps(text).replace("<", "\\u003c")
-    generated = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    generated = local_stamp(now_utc())
     src_label = str(SRC).replace(str(HOME), "~", 1)
     ledger = load_ledger()
     head, tail = "", ""

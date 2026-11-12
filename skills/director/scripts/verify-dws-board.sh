@@ -53,7 +53,7 @@ cmp -s "$BOARD" "$root/run1" && ok "a second run is byte for byte the same" || b
 "$DWS" set beta --next "ship it" >/dev/null
 DWS_NOW=2026-10-20T13:00:00Z "$DWS" board-state >/dev/null 2>&1
 [[ "$(grep -c "^$B\$" "$BOARD")" == 1 && "$(grep -c "^$E\$" "$BOARD")" == 1 ]] && ok "still exactly one marker pair" || bad "one marker pair"
-sed -n "/^$B\$/,/^$E\$/p" "$BOARD" | grep -qF '2026-10-20T13:00:00Z' && ok "the block was rewritten with the new read time" || bad "block rewritten"
+sed -n "/^$B\$/,/^$E\$/p" "$BOARD" | grep -qF '2026-10-20 08:00 CDT' && ok "the block was rewritten with the new read time, in local time" || bad "block rewritten"
 sed "1,/^$E\$/d" "$BOARD" | diff - "$root/rest" >/dev/null && ok "text outside the markers is unchanged by a rewrite" || bad "outside text unchanged"
 
 # --- authored text between and around markers placed by the director stays where it is -----------

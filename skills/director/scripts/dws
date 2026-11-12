@@ -142,7 +142,7 @@ writes nothing.
 The actor is a claim, not an identity: the writer table is an allowlist over
 --actor, and a caller that passes --actor refresh is believed (section 6).
 """
-import argparse, datetime, fcntl, hashlib, html as htmlmod, json, os, re, subprocess, sys, tempfile, time, unicodedata
+import argparse, datetime, fcntl, hashlib, html as htmlmod, json, os, re, subprocess, sys, tempfile, time, unicodedata, zoneinfo
 
 HOME = os.path.expanduser("~")
 STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
@@ -204,6 +204,28 @@ def now():
     if fixed:
         return fixed
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# Every time shown to the operator is local, America/Chicago (CST or CDT), read from the tz database by
+# name and never from the host clock's zone; stored and bus values stay UTC. DIRECTOR_TZ is a test-only
+# override of the zone, honored only with DWS_TEST_CLOCK=1.
+LOCAL_ZONE = "America/Chicago"
+
+
+def local_text(stamp):
+    """A UTC stamp as the operator reads it: "2026-11-12 13:44 CST". A value that is not a UTC stamp, or
+    a zone this host cannot read, comes back as it was, with the zone problem said, never guessed."""
+    name = LOCAL_ZONE
+    if os.environ.get("DWS_TEST_CLOCK") == "1" and os.environ.get("DIRECTOR_TZ"):
+        name = os.environ["DIRECTOR_TZ"]
+    try:
+        t = datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except (ValueError, TypeError):
+        return stamp
+    try:
+        return t.astimezone(zoneinfo.ZoneInfo(name)).strftime("%Y-%m-%d %H:%M %Z")
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, KeyError, OSError) as err:
+        return f"{stamp} ({name} unreadable: {type(err).__name__})"
 
 
 def stored_form(value):
@@ -1644,9 +1666,9 @@ def board_sources():
 def board_block(t_now):
     rows, lsrc, snap, dsrc = board_sources()
     out = [BOARD_BEGIN,
-           f"## State (generated {t_now} by dws board-state; it is rewritten, so edit the text outside these markers)"]
-    ltxt = f"read {t_now}" + (f" (torn {lsrc['torn']})" if lsrc.get("torn") else "") if lsrc["state"] == "read" else f"UNREAD ({lsrc['why']})"
-    dtxt = f"read {dsrc['read_at']}" if dsrc["state"] == "read" else f"UNREAD ({dsrc['why']})"
+           f"## State (generated {local_text(t_now)} by dws board-state; it is rewritten, so edit the text outside these markers)"]
+    ltxt = f"read {local_text(t_now)}" + (f" (torn {lsrc['torn']})" if lsrc.get("torn") else "") if lsrc["state"] == "read" else f"UNREAD ({lsrc['why']})"
+    dtxt = f"read {local_text(dsrc['read_at'])}" if dsrc["state"] == "read" else f"UNREAD ({dsrc['why']})"
     out.append(f"sources: ledger {ltxt}; desk {dtxt}")
     out.append(f"open Desk cards: {len(snap['open']) if snap else 'UNREAD'}")
     if rows is None:
@@ -1862,9 +1884,9 @@ def cmd_digest(a):
     src = rec["sources"]
 
     def stext(v):
-        return f"read {v['read_at']}" if v["state"] == "read" else f"UNREAD ({v['why']})"
+        return f"read {local_text(v['read_at'])}" if v["state"] == "read" else f"UNREAD ({v['why']})"
 
-    out = [f"# Digest, generated {t_now} by dws digest (on demand)", "",
+    out = [f"# Digest, generated {local_text(t_now)} by dws digest (on demand)", "",
            "sources: " + "; ".join(f"{k} {stext(v)}" for k, v in sorted(src.items())), "",
            "## Interrupts",
            "The default list (Q1 b); the operator edits DIGEST_INTERRUPTS in dws."]

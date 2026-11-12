@@ -23,12 +23,15 @@ pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 
+# The hook now prints the local clock first (verify-local-times.sh); these checks read what follows it.
+hook() { "$H" "$@" | sed 1d; }
+
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
 export DIRECTOR_STATE="$root/state"
 export HOME="$root/home"; mkdir -p "$HOME"
 
-out="$("$H")"
+out="$(hook)"
 first="$(printf '%s\n' "$out" | sed -n 1p)"
 [[ "$first" == "drain age: unknown, no drain recorded"* ]] && ok "no heartbeat reads as unknown" || bad "no heartbeat reads as unknown" "$first"
 
@@ -37,20 +40,20 @@ t0="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 t1="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 st="$(cat "$DIRECTOR_STATE/last-drain")"
 [[ ! "$st" < "$t0" && ! "$st" > "$t1" ]] && ok "the heartbeat stamp comes from the clock" || bad "the heartbeat stamp comes from the clock" "$t0 <= $st <= $t1"
-first="$("$H" | sed -n 1p)"
+first="$(hook | sed -n 1p)"
 [[ "$first" == "drain age: 0m since the last drain ($st)" ]] && ok "a fresh heartbeat reads 0m" || bad "a fresh heartbeat reads 0m" "$first"
 
 old="$(python3 -c 'import datetime as d;print((d.datetime.now(d.timezone.utc)-d.timedelta(minutes=150,seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 echo "$old" >"$DIRECTOR_STATE/last-drain"
-first="$("$H" | sed -n 1p)"
+first="$(hook | sed -n 1p)"
 [[ "$first" == "drain age: 150m since the last drain ($old)" ]] && ok "an old heartbeat reads its age in minutes" || bad "an old heartbeat reads its age" "$first"
 
 echo "2999-01-01T00:00:00Z" >"$DIRECTOR_STATE/last-drain"
-"$H" | sed -n 1p | grep -q 'unknown, the last drain stamp' && ok "a future stamp reads as unknown" || bad "a future stamp reads as unknown"
+hook | sed -n 1p | grep -q 'unknown, the last drain stamp' && ok "a future stamp reads as unknown" || bad "a future stamp reads as unknown"
 echo "garbage" >"$DIRECTOR_STATE/last-drain"
-"$H" | sed -n 1p | grep -q '^drain age: unknown' && ok "a garbled file reads as unknown" || bad "a garbled file reads as unknown"
+hook | sed -n 1p | grep -q '^drain age: unknown' && ok "a garbled file reads as unknown" || bad "a garbled file reads as unknown"
 
-out="$("$H")"
+out="$(hook)"
 [[ "$(printf '%s\n' "$out" | sed -n 2p)" == "Before you answer:" ]] && ok "the checklist follows the age line" || bad "the checklist follows the age line"
 [[ "$(printf '%s\n' "$out" | grep -c '^[123]\. ')" == 3 ]] && ok "the checklist has three numbered lines" || bad "the checklist has three numbered lines"
 printf '%s\n' "$out" | grep -q '^1\. Drained, and answered Desk cards and page picks read, since my last answer' && ok "line 1 is the drain, cards and page picks check" || bad "line 1 wording"
@@ -67,21 +70,21 @@ cmp -s "$root/link" "$root/link.bytes" && ok "beat replaces by rename (the old i
 # --- the default state path, with DIRECTOR_STATE unset --------------------------------
 ( unset DIRECTOR_STATE; "$H" beat )
 [[ -s "$HOME/.director/state/last-drain" ]] && ok "with DIRECTOR_STATE unset the heartbeat lands under \$HOME/.director/state" || bad "the default state path"
-first="$(unset DIRECTOR_STATE; "$H" | sed -n 1p)"
+first="$(unset DIRECTOR_STATE; hook | sed -n 1p)"
 [[ "$first" == "drain age: 0m since the last drain ("* ]] && ok "and the hook reads it back from there" || bad "the hook reads the default path" "$first"
 
 # --- the stalled-ideas cue (ld16k): a read of one file, never a scan ----------------------
 # The waiting line (item A) comes after it when present, so the stalled-ideas line is last
 # otherwise: the waiting line, when present, is last; else the stalled-ideas line is.
-tail1() { "$H" | grep -v '^waiting: ' | tail -n 1; }
-out="$("$H")"
+tail1() { hook | grep -v '^waiting: ' | tail -n 1; }
+out="$(hook)"
 if printf '%s\n' "$out" | grep -q '^waiting: '; then
   [[ "$(printf '%s\n' "$out" | tail -n 1)" == "waiting: "* ]] && ok "the waiting line, when present, is last" || bad "the waiting line is not last"
 fi
 rm -f "$DIRECTOR_STATE/last-stalled-scan"
 last="$(tail1)"
 [[ "$last" == "stalled ideas: unknown, no scan recorded"* ]] && ok "no scan recorded reads as unknown" || bad "no scan recorded reads as unknown" "$last"
-[[ "$("$H" | sed -n 2p)" == "Before you answer:" && "$("$H" | grep -c '^[123]\. ')" == 3 ]] && ok "the cue sits after the checklist and leaves it as it was" || bad "the cue leaves the checklist as it was"
+[[ "$(hook | sed -n 2p)" == "Before you answer:" && "$(hook | grep -c '^[123]\. ')" == 3 ]] && ok "the cue sits after the checklist and leaves it as it was" || bad "the cue leaves the checklist as it was"
 t0="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 "$H" scan-beat
 t1="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -97,22 +100,22 @@ if "$H" scan-beat 2000-01-01T00:00:00Z >/dev/null 2>&1; then bad "scan-beat refu
 
 # --- the dash cue: the last batch the session applied, read from dash-writer.json -------------------
 rm -f "$DIRECTOR_STATE/dash-writer.json"
-out="$("$H")"
+out="$(hook)"
 [[ "$(printf '%s\n' "$out" | grep -c '^dash last applied: ')" == 1 ]] && ok "the dash line is printed once" || bad "the dash line is printed once"
 [[ "$(printf '%s\n' "$out" | grep '^dash last applied: ')" == "dash last applied: unknown, no batch recorded"* ]] && ok "no dash-writer.json reads as unknown" || bad "no dash-writer.json reads as unknown"
 [[ ! -e "$DIRECTOR_STATE/dash-writer.json" ]] && ok "the hook does not create dash-writer.json" || bad "the hook created dash-writer.json"
 echo '{"last_run": "2026-10-22T09:30:00Z", "runs": 4, "days": []}' >"$DIRECTOR_STATE/dash-writer.json"
-[[ "$("$H" | grep '^dash last applied: ')" == "dash last applied: 2026-10-22T09:30:00Z" ]] && ok "the line carries the last_run dash-writer ack recorded" || bad "the line carries last_run" "$("$H" | grep '^dash last applied: ')"
-out="$("$H")"
+[[ "$(hook | grep '^dash last applied: ')" == "dash last applied: 2026-10-22T09:30:00Z" ]] && ok "the line carries the last_run dash-writer ack recorded" || bad "the line carries last_run" "$(hook | grep '^dash last applied: ')"
+out="$(hook)"
 [[ "$(printf '%s\n' "$out" | sed -n 2p)" == "Before you answer:" && "$(printf '%s\n' "$out" | grep -c '^[123]\. ')" == 3 ]] && ok "the dash line leaves the age line and the checklist as they were" || bad "the dash line moved the checklist"
 n_dash="$(printf '%s\n' "$out" | grep -n '^dash last applied: ' | cut -d: -f1)"; n_chk="$(printf '%s\n' "$out" | grep -n '^3\. ' | cut -d: -f1)"; n_scan="$(printf '%s\n' "$out" | grep -n '^stalled ideas: ' | cut -d: -f1)"
 [[ "$n_dash" -gt "$n_chk" && "$n_scan" -gt "$n_dash" ]] && ok "the dash line sits after the checklist and before the stalled-ideas line" || bad "the dash line order" "$n_chk $n_dash $n_scan"
 echo '{not json' >"$DIRECTOR_STATE/dash-writer.json"
-"$H" | grep -q '^dash last applied: unknown' && ok "a garbled dash-writer.json reads as unknown" || bad "a garbled dash-writer.json reads as unknown"
+hook | grep -q '^dash last applied: unknown' && ok "a garbled dash-writer.json reads as unknown" || bad "a garbled dash-writer.json reads as unknown"
 echo '{"last_run": "yesterday-ish"}' >"$DIRECTOR_STATE/dash-writer.json"
-"$H" | grep -q '^dash last applied: unknown' && ok "a last_run that is not a time reads as unknown, never echoed" || bad "a bad last_run is echoed"
+hook | grep -q '^dash last applied: unknown' && ok "a last_run that is not a time reads as unknown, never echoed" || bad "a bad last_run is echoed"
 echo '{"runs": 2}' >"$DIRECTOR_STATE/dash-writer.json"
-"$H" | grep -q '^dash last applied: unknown' && ok "a file with no last_run reads as unknown" || bad "no last_run reads as unknown"
+hook | grep -q '^dash last applied: unknown' && ok "a file with no last_run reads as unknown" || bad "no last_run reads as unknown"
 rm -f "$DIRECTOR_STATE/dash-writer.json"
 
 # --- the unlinked-asks line: asks of the last 24 h with neither a relay entry nor a row ----------------
@@ -122,7 +125,7 @@ ASKLINE='^asks in the last 24 h with no relay or row: '
 export RELAY_LOG="$root/relay-log.md"
 rm -f "$DIRECTOR_STATE/asks.jsonl" "$DIRECTOR_STATE/workstreams.jsonl" "$RELAY_LOG" "$RELAY_LOG.lock"
 : >"$RELAY_LOG"
-before="$("$H")"
+before="$(hook)"
 ! printf '%s\n' "$before" | grep -q "$ASKLINE" && ok "no asks recorded prints no asks line" || bad "no asks recorded prints no asks line"
 ago() { python3 -c 'import datetime as d,sys;print((d.datetime.now(d.timezone.utc)-d.timedelta(hours=float(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1"; }
 mkask() { printf '{"ask_id": "%s", "received_at": "%s", "text": "fixture", "source": "operator"}\n' "$1" "$(ago "$2")" >>"$DIRECTOR_STATE/asks.jsonl"; }
@@ -135,7 +138,7 @@ mkask I-5 3       # gets a ledger row link
 "$here/dws" open fixture-row --title fixture --link intake:I-5 >/dev/null
 "$here/dws" asks --json 2>/dev/null | python3 -c 'import json,sys;r={e["ask_id"]:e for e in json.load(sys.stdin)};sys.exit(0 if r["I-4"]["relay"]!="none" and r["I-5"]["row"]!="none" else 1)' \
   || { echo "fixture is wrong: dws asks does not show the relay and row links"; exit 2; }
-out="$("$H")"
+out="$(hook)"
 [[ "$(printf '%s\n' "$out" | grep "$ASKLINE")" == "asks in the last 24 h with no relay or row: 2 (oldest I-3)" ]] && ok "counts the unlinked asks of the last 24 h and names the oldest" || bad "counts the unlinked asks" "$(printf '%s\n' "$out" | grep "$ASKLINE")"
 [[ "$(printf '%s\n' "$out" | grep -c "$ASKLINE")" == 1 ]] && ok "the asks line is printed once" || bad "the asks line is printed once"
 [[ "$(printf '%s\n' "$out" | sed -n 2p)" == "Before you answer:" && "$(printf '%s\n' "$out" | grep -c '^[123]\. ')" == 3 ]] && ok "the asks line leaves the age line and the checklist as they were" || bad "the asks line moved the checklist"
@@ -144,30 +147,30 @@ n_scan="$(printf '%s\n' "$out" | grep -n '^stalled ideas: ' | cut -d: -f1 || tru
 # linking the two remaining asks takes the count to 0 and the line away
 "$here/relay-log" append --to agent://x/y --ask I-2 --kind relay --text "fixture" >/dev/null
 "$here/relay-log" append --to agent://x/y --ask I-3 --kind relay --text "fixture" >/dev/null
-! "$H" | grep -q "$ASKLINE" && ok "all linked prints nothing, no empty line and no zero" || bad "all linked prints nothing"
-[[ "$("$H" | grep -c '^$')" == "$(printf '%s\n' "$before" | grep -c '^$')" ]] && ok "and adds no blank line" || bad "blank line added"
+! hook | grep -q "$ASKLINE" && ok "all linked prints nothing, no empty line and no zero" || bad "all linked prints nothing"
+[[ "$(hook | grep -c '^$')" == "$(printf '%s\n' "$before" | grep -c '^$')" ]] && ok "and adds no blank line" || bad "blank line added"
 # the oldest is by received_at, not by id order
 rm -f "$RELAY_LOG" "$RELAY_LOG.lock"; : >"$RELAY_LOG"
-"$H" | grep -q "no relay or row: 3 (oldest I-3)" && ok "the oldest is the earliest received, not the lowest id" || bad "oldest by received_at"
+hook | grep -q "no relay or row: 3 (oldest I-3)" && ok "the oldest is the earliest received, not the lowest id" || bad "oldest by received_at"
 # a closed ask is no longer unlinked: closing I-2 takes the count from 3 to 2
 "$here/dws" ask-close I-2 --as answered --ref pr:x/y#1 >/dev/null 2>&1 || true
-"$H" | grep -q "no relay or row: 2 (oldest I-3)" && ok "a closed ask drops out of the unlinked count" || bad "a closed ask still counted" "$("$H" | grep "$ASKLINE")"
+hook | grep -q "no relay or row: 2 (oldest I-3)" && ok "a closed ask drops out of the unlinked count" || bad "a closed ask still counted" "$(hook | grep "$ASKLINE")"
 # the hook reads: it writes none of the files it looks at
 sum_before="$(cksum "$DIRECTOR_STATE/asks.jsonl" "$DIRECTOR_STATE/workstreams.jsonl" "$RELAY_LOG" | tr '\n' ' ')"; "$H" >/dev/null
 [[ "$sum_before" == "$(cksum "$DIRECTOR_STATE/asks.jsonl" "$DIRECTOR_STATE/workstreams.jsonl" "$RELAY_LOG" | tr '\n' ' ')" ]] && ok "the hook writes none of the stores it reads" || bad "the hook wrote a store"
 # the join cannot be read: UNKNOWN, never a silent nothing
 stub="$root/dws-fail"; printf '#!/bin/sh\necho boom >&2\nexit 3\n' >"$stub"; chmod +x "$stub"
-STANDING_HOOK_DWS="$stub" "$H" | grep -q '^asks in the last 24 h with no relay or row: UNKNOWN (' && ok "a failing join reads as UNKNOWN" || bad "a failing join reads as UNKNOWN"
+STANDING_HOOK_DWS="$stub" hook | grep -q '^asks in the last 24 h with no relay or row: UNKNOWN (' && ok "a failing join reads as UNKNOWN" || bad "a failing join reads as UNKNOWN"
 stub="$root/dws-slow"; printf '#!/bin/sh\nsleep 30\n' >"$stub"; chmod +x "$stub"
-t0s="$(date +%s)"; slow="$(STANDING_HOOK_DWS="$stub" STANDING_HOOK_ASKS_TIMEOUT=1 "$H" | grep "$ASKLINE")"; t1s="$(date +%s)"
+t0s="$(date +%s)"; slow="$(STANDING_HOOK_DWS="$stub" STANDING_HOOK_ASKS_TIMEOUT=1 hook | grep "$ASKLINE")"; t1s="$(date +%s)"
 [[ "$slow" == *"UNKNOWN ("* && $((t1s - t0s)) -lt 10 ]] && ok "a slow join times out and reads as UNKNOWN" || bad "a slow join" "$slow after $((t1s - t0s))s"
 stub="$root/dws-junk"; printf '#!/bin/sh\necho not-json\n' >"$stub"; chmod +x "$stub"
-STANDING_HOOK_DWS="$stub" "$H" | grep -q "${ASKLINE}UNKNOWN (" && ok "a join that is not JSON reads as UNKNOWN" || bad "junk join reads as UNKNOWN"
+STANDING_HOOK_DWS="$stub" hook | grep -q "${ASKLINE}UNKNOWN (" && ok "a join that is not JSON reads as UNKNOWN" || bad "junk join reads as UNKNOWN"
 # an unreadable relay log must not make every ask look unlinked
-RELAY_LOG="$root/no-such-dir/relay-log.md" "$H" | grep -q "${ASKLINE}UNKNOWN (.*relay" && ok "an unreadable relay log reads as UNKNOWN, not as every ask unlinked" || bad "an unreadable relay log reads as UNKNOWN"
+RELAY_LOG="$root/no-such-dir/relay-log.md" hook | grep -q "${ASKLINE}UNKNOWN (.*relay" && ok "an unreadable relay log reads as UNKNOWN, not as every ask unlinked" || bad "an unreadable relay log reads as UNKNOWN"
 # and with no ask in the window the same unreadable log prints nothing
 mv "$DIRECTOR_STATE/asks.jsonl" "$root/asks.keep"; mkask I-9 40
-! RELAY_LOG="$root/no-such-dir/relay-log.md" "$H" | grep -q "$ASKLINE" && ok "no ask in the window prints nothing, whatever the relay log" || bad "no ask in the window"
+! RELAY_LOG="$root/no-such-dir/relay-log.md" hook | grep -q "$ASKLINE" && ok "no ask in the window prints nothing, whatever the relay log" || bad "no ask in the window"
 mv "$root/asks.keep" "$DIRECTOR_STATE/asks.jsonl"
 
 # --- the asks line with a waiting line: the waiting line stays last --------------------------------------
@@ -178,7 +181,7 @@ mkask I-1 1
 nowz="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '{"read_at": "%s", "answered_not_relayed": []}\n' "$nowz" >"$DIRECTOR_STATE/desk-reads.jsonl"
 printf '{"written_at": "%s", "checked": 1, "approved_not_merged": [{"pr": "o/r#1", "approved_at": "%s"}]}\n' "$nowz" "$nowz" >"$DIRECTOR_STATE/waiting-prs.json"
-out="$("$H")"
+out="$(hook)"
 [[ "$(printf '%s\n' "$out" | tail -n 1)" == "waiting: "* ]] && ok "with both lines present the waiting line is last" || bad "the waiting line is not last" "$(printf '%s\n' "$out" | tail -n 1)"
 [[ "$(printf '%s\n' "$out" | tail -n 2 | head -n 1)" == "asks in the last 24 h with no relay or row: 1 (oldest I-1)" ]] && ok "and the asks line is the line just before it" || bad "the asks line is not just before the waiting line"
 rm -f "$DIRECTOR_STATE/desk-reads.jsonl" "$DIRECTOR_STATE/waiting-prs.json"
@@ -201,38 +204,38 @@ out="$(STANDING_HOOK_MCP="$m" "$H")"
 [[ "$(printf '%s\n' "$out" | grep "$ALARM")" == "director inbox: oldest unread seq 43501 is 10m old (bound 10m)" ]] && ok "at the bound (2 windows) one line names the oldest seq and its age" || bad "alarm at the bound" "$(printf '%s\n' "$out" | grep "$ALARM")"
 [[ "$(printf '%s\n' "$out" | grep -c "$ALARM")" == 1 ]] && ok "the alarm is printed once" || bad "alarm printed once"
 m="$(mcp_stub under 299)"
-! STANDING_HOOK_MCP="$m" "$H" | grep -q "$ALARM" && ok "one second under a window prints nothing" || bad "alarm under the bound"
+! STANDING_HOOK_MCP="$m" hook | grep -q "$ALARM" && ok "one second under a window prints nothing" || bad "alarm under the bound"
 m="$(mcp_stub just-under 599)"
-! STANDING_HOOK_MCP="$m" "$H" | grep -q "$ALARM" && ok "and so does one second under the bound" || bad "alarm just under the bound"
+! STANDING_HOOK_MCP="$m" hook | grep -q "$ALARM" && ok "and so does one second under the bound" || bad "alarm just under the bound"
 m="$(mcp_stub other-agent 5 43501 someone-else)"
-! STANDING_HOOK_MCP="$m" "$H" | grep -q "$ALARM" && ok "another seat's old backlog is not this seat's alarm" || bad "other seat alarmed"
+! STANDING_HOOK_MCP="$m" hook | grep -q "$ALARM" && ok "another seat's old backlog is not this seat's alarm" || bad "other seat alarmed"
 m="$(mcp_stub env-bound 150)"
-STANDING_HOOK_MCP="$m" DIRECTOR_PENDING_AGE_BOUND=2m "$H" | grep -q "^director inbox: oldest unread seq 43501 is 2m old (bound 2m)$" && ok "DIRECTOR_PENDING_AGE_BOUND moves the bound" || bad "env bound"
-! STANDING_HOOK_MCP="$m" DIRECTOR_PENDING_AGE_BOUND=nonsense "$H" | grep -q "$ALARM" && ok "a bound that is not a Go duration falls back to 10m" || bad "bad bound"
+STANDING_HOOK_MCP="$m" DIRECTOR_PENDING_AGE_BOUND=2m hook | grep -q "^director inbox: oldest unread seq 43501 is 2m old (bound 2m)$" && ok "DIRECTOR_PENDING_AGE_BOUND moves the bound" || bad "env bound"
+! STANDING_HOOK_MCP="$m" DIRECTOR_PENDING_AGE_BOUND=nonsense hook | grep -q "$ALARM" && ok "a bound that is not a Go duration falls back to 10m" || bad "bad bound"
 m="$(mcp_stub order 900)"; mkask I-1 1
 out="$(STANDING_HOOK_MCP="$m" "$H")"
 n_a="$(printf '%s\n' "$out" | grep -n '^asks in the last 24 h' | cut -d: -f1)"; n_i="$(printf '%s\n' "$out" | grep -n "$ALARM" | cut -d: -f1)"
 [[ -n "$n_a" && "$n_i" == $((n_a + 1)) ]] && ok "the alarm sits right after the asks line" || bad "alarm order" "$n_a $n_i"
 printf '{"read_at": "%s", "answered_not_relayed": []}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$DIRECTOR_STATE/desk-reads.jsonl"
 printf '{"written_at": "%s", "checked": 1, "approved_not_merged": [{"pr": "o/r#1", "approved_at": "%s"}]}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$DIRECTOR_STATE/waiting-prs.json"
-[[ "$(STANDING_HOOK_MCP="$m" "$H" | tail -n 1)" == "waiting: "* ]] && ok "the waiting line stays last" || bad "waiting line not last"
+[[ "$(STANDING_HOOK_MCP="$m" hook | tail -n 1)" == "waiting: "* ]] && ok "the waiting line stays last" || bad "waiting line not last"
 rm -f "$DIRECTOR_STATE/desk-reads.jsonl" "$DIRECTOR_STATE/waiting-prs.json" "$DIRECTOR_STATE/asks.jsonl"
 stub="$root/mcp-fail"; printf '#!/bin/sh\necho boom >&2\nexit 3\n' >"$stub"; chmod +x "$stub"
-STANDING_HOOK_MCP="$stub" "$H" | grep -q "${ALARM}UNKNOWN (" && ok "a failing reader reads as UNKNOWN" || bad "failing reader"
+STANDING_HOOK_MCP="$stub" hook | grep -q "${ALARM}UNKNOWN (" && ok "a failing reader reads as UNKNOWN" || bad "failing reader"
 stub="$root/mcp-junk"; printf '#!/bin/sh\necho not-json\n' >"$stub"; chmod +x "$stub"
-STANDING_HOOK_MCP="$stub" "$H" | grep -q "${ALARM}UNKNOWN (" && ok "output that is not JSON reads as UNKNOWN" || bad "junk reader"
+STANDING_HOOK_MCP="$stub" hook | grep -q "${ALARM}UNKNOWN (" && ok "output that is not JSON reads as UNKNOWN" || bad "junk reader"
 stub="$root/mcp-slow"; printf '#!/bin/sh\nsleep 30\n' >"$stub"; chmod +x "$stub"
-t0s="$(date +%s)"; slow="$(STANDING_HOOK_MCP="$stub" STANDING_HOOK_UNREAD_TIMEOUT=1 "$H" | grep "$ALARM")"; t1s="$(date +%s)"
+t0s="$(date +%s)"; slow="$(STANDING_HOOK_MCP="$stub" STANDING_HOOK_UNREAD_TIMEOUT=1 hook | grep "$ALARM")"; t1s="$(date +%s)"
 [[ "$slow" == *"UNKNOWN ("* && $((t1s - t0s)) -lt 10 ]] && ok "a slow reader times out and reads as UNKNOWN" || bad "slow reader" "$slow after $((t1s - t0s))s"
-! STANDING_HOOK_MCP="$root/no-such-binary" "$H" | grep -q "$ALARM" && ok "no director-mcp at all prints nothing" || bad "missing binary printed"
-! "$H" | grep -q "$ALARM" && ok "and the default lookup finds none under a scratch HOME" || bad "default lookup"
+! STANDING_HOOK_MCP="$root/no-such-binary" hook | grep -q "$ALARM" && ok "no director-mcp at all prints nothing" || bad "missing binary printed"
+! hook | grep -q "$ALARM" && ok "and the default lookup finds none under a scratch HOME" || bad "default lookup"
 unset DIRECTOR_AGENT_ID
 mkask I-1 1     # the timeout cases below count this ask
 
 # --- STANDING_HOOK_ASKS_TIMEOUT: any value that is not finite and above 0 falls back to 3 -----------------
 for v in inf -inf nan 0 -1 1e999 abc ""; do
   out="$(STANDING_HOOK_ASKS_TIMEOUT="$v" "$H" 2>&1)" && rc=0 || rc=$?
-  [[ $rc -eq 0 && "$(printf '%s\n' "$out" | sed -n 1p)" == "drain age: "* && "$out" != *Traceback* ]] && ok "timeout '$v' does not crash the hook" || bad "timeout '$v' crashes the hook" "rc=$rc $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"
+  [[ $rc -eq 0 && "$(printf '%s\n' "$out" | sed -n 2p)" == "drain age: "* && "$out" != *Traceback* ]] && ok "timeout '$v' does not crash the hook" || bad "timeout '$v' crashes the hook" "rc=$rc $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"
   printf '%s\n' "$out" | grep -q '^asks in the last 24 h with no relay or row: 1 (oldest I-1)$' && ok "timeout '$v' still counts the unlinked ask" || bad "timeout '$v' loses the asks line"
 done
 

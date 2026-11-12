@@ -73,8 +73,8 @@ done
 # --- the rule --------------------------------------------------------------------------------------
 sec="$(sed -n '/^## Relaying/,/^## Capture triggers/p' "$SKILL")"
 printf '%s\n' "$sec" | grep -q 'America/Chicago' && ok "SKILL.md names America/Chicago under Relaying" || bad "SKILL.md names America/Chicago under Relaying"
-printf '%s\n' "$sec" | grep -Eq 'records, logs, ledgers and bus text stay UTC' && ok "SKILL.md keeps records, logs, ledgers and bus text UTC" || bad "SKILL.md keeps stored text UTC"
-grep -q 'times shown here are local' "$SKILL" && ok "the sweep shape points at the local-time rule" || bad "the sweep shape points at the local-time rule"
+printf '%s\n' "$sec" | tr '\n' ' ' | grep -Eiq 'records, logs, ledgers and bus text stay UTC' && ok "SKILL.md keeps records, logs, ledgers and bus text UTC" || bad "SKILL.md keeps stored text UTC"
+tr '\n' ' ' <"$SKILL" | grep -Eiq 'times shown here are local' && ok "the sweep shape points at the local-time rule" || bad "the sweep shape points at the local-time rule"
 
 echo "passed $pass, failed $fail"
 [[ "$fail" == 0 ]]
