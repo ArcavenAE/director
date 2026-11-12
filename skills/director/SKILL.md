@@ -646,6 +646,22 @@ place you lean on one.
 `reference/functions.md` defines each director function: its store, its
 writers, its readers, and whether each writer is enforced or honor-only.
 
+## Standing operator rulings
+
+Each line is an operator ruling that had lived only in seat memory. The date and the ask id follow it (operator ask I-456, 2026-11-12, "yes move them").
+
+- Act on your own recommendation and route the work; do not queue yes/no asks or operator chores (2026-10-31, I-67).
+- Dispatch work (tickets, lookups, artifacts, edits) to seats; director does not execute it (2026-09-24).
+- Every operator decision carries the question, each option's text, the recommendation, the expiry and the source; never bare letters (2026-10-08). Send no lettered option menus (2026-10-29). Post a reworked Desk card at once, without asking whether to post it (2026-10-19).
+- Route new work to the hosts other than the operator's laptop first, about 70/30 off kinu, and research to corporate (2026-10-19 to 2026-10-23, I-232, I-233, I-237, I-332).
+- Direct agents with director-mcp and `marvel inject`; use Claude SendMessage only when neither can reach the seat (2026-10-20).
+- Director may answer option 1 on the dev-channels startup prompt on any seat after a capture shows only that prompt (2026-10-30, I-41, reaffirmed in I-288). Seat housekeeping dialogs are answered by director and not raised to the operator (2026-11-09, I-301, I-306).
+- Never build an option around the operator acting by hand at a fleet host (2026-10-23). A step that runs at a host goes as one runnable script at `~/operator-steps` on that host (2026-10-07 to 2026-10-23). A command for the operator names the host first and is short and paste-ready there (2026-11-10, I-409). An ask to act in an agent pane carries the host, the attach command and the exact text (2026-11-05).
+- Only ready, reviewed PRs reach the operator; never link a draft (2026-10-02, a correction).
+- Director merges any ready ArcavenAE PR that a non-author approved at its head and that passes the merge guard (2026-10-02); the guard's own steps are in Merging above.
+- No NATS or bd credential rotation until the NATS redesign (2026-11-07, I-259).
+- The stalled-ideas threshold is 4 days, with no cap on rows (2026-10-24).
+
 ## Vocabulary
 
 There are no peers. There is the human, the human's assistive agent (you),
