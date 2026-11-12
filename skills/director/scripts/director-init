@@ -11,7 +11,8 @@ director's rulings of 2026-11-12 recorded on that ticket). It does five things:
      prints what it finds;
   2. takes the entry role, which it cannot detect, from flags only:
      --entry-role ROLE (one [[team]], match "*") and repeatable --team GLOB=ROLE.
-     There is no prompt; with neither flag it refuses with one line naming them;
+     There is no prompt; with neither flag it writes the minimal profile and says
+     that routing into a team is refused until an entry role is named;
   3. writes the profile atomically, after director-profile check passes on it. An
      existing profile is replaced only on --yes and a backup copy is kept first;
   4. prints the profile summary and the shadow scan: a function, an alias or an
@@ -221,9 +222,6 @@ def do_init(opts):
     if bad:
         err(bad)
         return 2
-    if not teams:
-        err("no entry role given: pass --entry-role ROLE or --team GLOB=ROLE")
-        return 2
     target = profile_path(opts["profile"])
     found = detect()
     print_detection(found)
@@ -254,6 +252,8 @@ def do_init(opts):
     print("wrote %s" % target)
     if saved:
         print("backup kept: %s" % saved)
+    if not teams:
+        print("no entry role named: routing into a team is refused until an entry role is named")
     ok, shown = check_profile(target)
     sys.stdout.write(shown)
     for where, kind in shadow_scan():
