@@ -1,0 +1,140 @@
+id: brief-work-queue-depth-owner
+type: brief
+confidence: frontier
+title: "Per-seat work-queue depth and wait: who owns the count, and where does it come from?"
+content: |
+  The operator asked (2026-11-12, I-459): "do we rely on them [supervisors]
+  to do this work? Seems like marvel could support it in some way, provide
+  metrics that supervisors could increment/keep counts maybe? or is this a
+  director/supervisor function entirely?" This brief scopes the probe that
+  answers it. It is a study, not a build.
+
+  ## Question
+
+  Where should per-seat work-queue depth (items waiting on a seat) and wait
+  (age of the oldest one) come from, and which component owns the count?
+
+  - (a) marvel holds it: a per-seat counter or work-item resource that
+    supervisors increment, shown in `marvel get sessions`.
+  - (b) director derives it from what already exists: bus unread and oldest
+    pending per seat (`director-mcp unread`), the ask ledger built from
+    `report_status` signals, bd claims per assignee, and the supervisor
+    route ledgers (route-record@1 `depth_at_route`, route-event@1;
+    sim/design/route-ledger.md; R-115 in sim/requirements.md).
+  - (c) a split between the two.
+
+  ## Why it is filed here
+
+  The orchestrator's subject test for filing: if director did
+  not exist, would this question be filed? No. The items being counted are
+  director's protocol objects (asks, routes, mail, the replies that close
+  them), and the requirement it answers is director's own R-115 ("director
+  keeps a per-seat dispatch ledger ... and can report queue depth and
+  oldest wait per seat and per role"). marvel is an object here, as a
+  candidate display surface. A separate marvel question (whether
+  `get sessions` should show a value another component supplies) belongs in
+  marvel's graph if this probe finds a reason to ask it.
+
+  ## What the ledgers give today (measured 2026-11-12)
+
+  `route-ledger check`, run read-only. The first row was run by the author
+  on a scratch copy, with the script from director main bfb89f9. The other
+  three were run by director on kinu with its installed `route-ledger` and
+  relayed verbatim.
+
+  | ledger | rows | asks | routed | depth known | legacy | refused |
+  |---|---|---|---|---|---|---|
+  | arcaven supervisor, current | 100 | 6 | 5 | 5 of 5 | 35 | 55 |
+  | second team supervisor, current | 28 | 6 | 6 | 6 of 6 | 0 | 10 |
+  | review supervisor, current | 71 | 34 | 6 | 5 of 6 | 30 | 34 |
+  | second team supervisor, predecessor | 14200 | 4019 | 122 | 117 of 122 | 10059 | 4019 |
+
+  Read as evidence, not verdict:
+
+  - Where a route-record@1 row exists, `depth_at_route` is nearly always
+    present (133 of 139 across the four).
+  - But routed records cover a small share of asks: 6 of 34 on the review
+    ledger, 122 of 4019 on the predecessor. Most dispatches leave no
+    route record, so a count built only from route ledgers misses most of
+    the work.
+  - `depth_at_route` is the supervisor's reading at the moment of routing,
+    not a live count, and nothing decrements it.
+  - A retired seat's ledger stops, so its open rows go stale (the
+    predecessor reports 77 open that are likely closed or abandoned).
+  - Every one of these properties depends on supervisor discipline, which
+    is the reliance the operator questioned.
+
+  One more observation from the author's own seat: `inbox_summary` at seat
+  start reported "RELAY_LOG is not set and no relay log was found beside
+  the installed relay-log; replies cannot be joined to asks, so the lane is
+  not built" (cmd/director-mcp/lane.go:204-222). On that host the ask lane,
+  the mechanical join of asks to replies and `report_status`, does not run.
+
+  ## Candidates against component independence (the orchestrator's ADR-005)
+
+  - (a) fails it. If the count lives in marvel, director's coordination
+    view needs marvel to answer "how deep is this seat's queue", and
+    director is meant to coordinate any agent that speaks its protocol with
+    or without marvel. It also does not remove the reliance on supervisors:
+    a counter supervisors increment is a ledger with a different home.
+  - (b) passes. Every source is director's or the agent's own: the bus
+    (unread and oldest pending need no supervisor action, cmd/director-mcp/
+    unread.go), seat-emitted `report_status`, and supervisor ledgers as an
+    annotation. It degrades by source: with no route ledger, depth still
+    comes from the bus and the ask lane.
+  - (c) passes only in one shape: director owns and computes the count, and
+    marvel at most displays a value a coordinator hands it, opaque to
+    marvel, absent when no coordinator runs. Any shape where marvel stores
+    or increments work state fails (a).
+
+  ## Hypothesis
+
+  Per-seat depth and wait can be derived by director from mechanical
+  sources (bus unread and oldest pending, plus the ask lane's
+  accepted-not-closed set from `report_status` and replies), with route
+  ledgers kept as context rather than as the count. A derived count agrees
+  with what a supervisor would report by hand closely enough that no seat
+  needs to keep a counter.
+
+  ## Approach
+
+  1. Turn the ask lane on where it is off (RELAY_LOG), on one cluster, and
+     confirm it builds. That is a director configuration step for the
+     operator or director, not for this probe's author.
+  2. For 24 hours on that cluster, sample per seat every 15 minutes:
+     unread depth and oldest pending (`director-mcp unread`), the lane's
+     open asks per holder with their working or blocked-on state, bd
+     in-progress claims per assignee, and the latest `depth_at_route` per
+     destination.
+  3. Three times in the window, ask each supervisor for its own count of
+     what each of its seats holds, as the reference.
+  4. Compare. Report per source: coverage (seats it can speak for),
+     agreement with the reference, lag, and what each one misses.
+
+  ## Recommendation pending the probe
+
+  (b), director derives the count, with no counter in marvel. Do not rely
+  on supervisors incrementing anything; supervisors' route ledgers stay as
+  the why behind a routing, not as the queue. If the operator wants depth
+  in `marvel get sessions`, that is a marvel display question to file after
+  this probe, in marvel's graph, under the (c) shape above. This
+  recommendation is valid until 2026-11-26; the arcaven architect seat
+  re-checks it then against the probe's state.
+
+  ## Harvest
+
+  A finding in this graph naming each source's coverage and agreement, and
+  an update to R-115 if the derived count meets it. If it does not, the
+  finding names which missing signal a seat or supervisor would have to
+  emit.
+edges: []
+provenance:
+  created_by: agent
+  session: arcaven team architect seat, 2026-11-12, operator ask I-459 relayed via director and the arcaven supervisor
+  created_at: "2026-11-12"
+brief:
+  hypothesis: "director can derive per-seat queue depth and oldest wait from bus unread, oldest pending and the ask lane, without any seat or supervisor keeping a counter, and the derived count agrees with supervisors' own counts."
+  excluded_scope: "Building any counter or resource in marvel; changing route-ledger shapes; display in marvel get sessions; judging individual supervisors."
+  success_signal: "Over 24 hours on one cluster, the bus-plus-lane count covers every live seat and matches each supervisor's hand count at all three reference points within one item, while the route-ledger depth alone covers fewer seats."
+  timebox: "24 hours of sampling once the ask lane is on, then one day to write the finding."
+  predicted_confidence: 0.6
