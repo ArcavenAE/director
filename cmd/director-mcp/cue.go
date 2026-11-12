@@ -163,8 +163,13 @@ type cue struct {
 	fold          uint64
 	rearm         bool   // the last open wait ended; cue what is still waiting
 	pushOnly      uint64 // waits answered without blocking because the cue is live
-	out           *pendingCue
-	reconnect     bool
+	// the cue counters (aae-orc-nqler): in memory, never reset, counted from countSince
+	countSince     time.Time
+	nCues, nRecues uint64
+	bySender       map[string]uint64
+	byPerformative map[string]uint64
+	out            *pendingCue
+	reconnect      bool
 	// readErr is set while the watcher cannot read inbox state. It shows in
 	// the reason beside, never instead of, the self-test reason.
 	readErr string
@@ -194,8 +199,12 @@ func stalledReason(id string, age time.Duration, unacked bool) string {
 }
 
 func newCue(cfg cueConfig, src cueSource, emit func(map[string]any), warn func([]string, string), now func() time.Time, nonce func() string) *cue {
-	return &cue{cfg: cfg, src: src, emit: emit, warn: warn, now: now, nonce: nonce,
+	c := &cue{cfg: cfg, src: src, emit: emit, warn: warn, now: now, nonce: nonce,
 		state: cueStateOff, valid: map[string]time.Time{}}
+	if now != nil {
+		c.countSince = now()
+	}
+	return c
 }
 
 func randomNonce() string {
@@ -551,6 +560,7 @@ func (c *cue) tick(ctx context.Context) {
 		p := c.params(m, c.fold, now)
 		c.out = &pendingCue{first: now, meta: m, count: c.fold, pending: n}
 		c.lastCueAt, c.fold = now, 0
+		c.countCue(m)
 		c.mu.Unlock()
 		emits = append(emits, p)
 	}
@@ -577,6 +587,7 @@ func (c *cue) tick(ctx context.Context) {
 			}
 		}
 		recue.recues = recueTo
+		c.nRecues++
 		c.lastCueAt = now
 		c.mu.Unlock()
 		emits = append(emits, p)
@@ -726,5 +737,29 @@ type cueCounts struct {
 }
 
 func (c *cue) counts() cueCounts {
-	return cueCounts{}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := cueCounts{Since: c.countSince.UTC().Format(time.RFC3339), Cues: c.nCues, Recues: c.nRecues,
+		BySender: map[string]uint64{}, ByPerformative: map[string]uint64{}}
+	for k, v := range c.bySender {
+		out.BySender[k] = v
+	}
+	for k, v := range c.byPerformative {
+		out.ByPerformative[k] = v
+	}
+	return out
+}
+
+// countCue records one mail cue by the sender and performative of the message it names. The
+// caller holds mu. A self-test notice and a re-cue are not counted here.
+func (c *cue) countCue(m *cueMeta) {
+	c.nCues++
+	if m == nil {
+		return
+	}
+	if c.bySender == nil {
+		c.bySender, c.byPerformative = map[string]uint64{}, map[string]uint64{}
+	}
+	c.bySender[m.Sender]++
+	c.byPerformative[m.Performative]++
 }
