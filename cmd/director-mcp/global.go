@@ -497,6 +497,7 @@ type globalTier struct {
 	// could not read it (the durable then starts at the head by policy).
 	freshHead    bool
 	skipped      uint64
+	firstSeq     uint64
 	headSeq      uint64
 	skippedKnown bool
 
@@ -598,7 +599,7 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 			g.floorWhy = fmt.Sprintf("looking for earlier durables failed (%v)", perr)
 		case !found:
 			g.freshHead = true
-			g.skipped, g.headSeq, g.skippedKnown = g.headPoint(ctx)
+			g.skipped, g.firstSeq, g.headSeq, g.skippedKnown = g.headPoint(ctx)
 			afterHeadRead()
 			if g.skippedKnown {
 				// Start where the count stopped, so a message published after
