@@ -1010,7 +1010,11 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 
 // noteSent tells the receiver classifier about an accepted send, so the first
 // reply to an ask is act. With the class-aware cue off there is no classifier.
-func (b *Bus) noteSent(e *Envelope) {}
+func (b *Bus) noteSent(e *Envelope) {
+	if b.sentCls != nil {
+		b.sentCls.noteSent(e.MessageID, e.Performative)
+	}
+}
 
 func (b *Bus) publishSend(ctx context.Context, e *Envelope, wsHint string) (*sendResult, error) {
 	body, err := json.Marshal(e)
@@ -1610,6 +1614,7 @@ func (b *Bus) attachCue(c *cue) {
 	c.oldestUnacked = func() bool { return b.pending.oldestUnacked(time.Now()) }
 	c.mu.Unlock()
 	b.cueState, b.cueSampling = c.presenceAt, c.sampling
+	b.sentCls = c.cls
 }
 
 // presenceView is what both presence rows carry beside the identity: the age
