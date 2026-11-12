@@ -16,6 +16,15 @@ import (
 
 func freshSeat(name string) Sender { return Sender{AgentID: name, Workspace: "ws1", Team: "ops"} }
 
+// attach creates the seat's global durable now. The tier attaches on first
+// use, so a test that publishes "after the seat started" attaches first.
+func attach(t *testing.T, ctx context.Context, b *Bus) {
+	t.Helper()
+	if _, err := b.globalReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func readIDs(t *testing.T, ctx context.Context, b *Bus) []string {
 	t.Helper()
 	res, err := b.receiveBatch(ctx, 3*time.Second, 10)
@@ -40,6 +49,7 @@ func TestBrokerFreshSeatGlobalDurableStartsAtTheHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.close()
+	attach(t, ctx, b)
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g2", "INFORM", "sent after the seat started")
 	if got := readIDs(t, ctx, b); fmt.Sprint(got) != "[global:g2]" {
 		t.Errorf("fresh seat read %v, want only [global:g2]", got)
@@ -50,7 +60,7 @@ func TestBrokerFreshSeatGlobalDurableStartsAtTheHead(t *testing.T) {
 			t.Errorf("start note %q lacks %q", note, s)
 		}
 	}
-	if strings.Contains(note, "reads everything") {
+	if strings.Contains(note, "global inbox has no earlier durable for this seat, so it reads everything") {
 		t.Errorf("start note still says the seat reads everything: %q", note)
 	}
 }
@@ -64,11 +74,12 @@ func TestBrokerSuccessorStillResumesFromThePredecessorFloor(t *testing.T) {
 	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
 	pred, succ := freshSeat("worker-g1-0"), freshSeat("worker-g2-0")
 	t.Setenv("MARVEL_PREDECESSOR", "")
-	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by the predecessor")
 	b1, err := connect(ctx, url, pred, gcfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	attach(t, ctx, b1)
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "read by the predecessor")
 	if r, err := b1.receiveTiered(ctx, 8*time.Second); err != nil || r.Env == nil || r.Env.MessageID != "g0" {
 		t.Fatalf("predecessor read %+v %v", r, err)
 	}
@@ -96,11 +107,12 @@ func TestBrokerSuccessorOfADurableThatAckedNothingReplays(t *testing.T) {
 	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
 	pred, succ := freshSeat("worker-g1-0"), freshSeat("worker-g2-0")
 	t.Setenv("MARVEL_PREDECESSOR", "")
-	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "never read by the predecessor")
 	b1, err := connect(ctx, url, pred, gcfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	attach(t, ctx, b1)
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "never read by the predecessor")
 	b1.close()
 	t.Setenv("MARVEL_PREDECESSOR", "ws1/"+pred.AgentID)
 	b2, err := connect(ctx, url, succ, gcfg)
@@ -158,6 +170,7 @@ func TestBrokerFreshSeatNoteSaysUnknownWhenTheCountIsUnreadable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.close()
+	attach(t, ctx, b)
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g1", "INFORM", "new")
 	if got := readIDs(t, ctx, b); fmt.Sprint(got) != "[global:g1]" {
 		t.Errorf("read %v, want [global:g1]", got)
