@@ -162,7 +162,7 @@ before any seat time is spent.
   degrades to today's polling rather than to loss.
 - **The development flag.** A non-plugin server needs
   `--dangerously-load-development-channels`. Putting that in every fleet
-  launch is the operator's decision (no-control-bypass). Packaging director-mcp
+  launch is the operator's decision. Packaging director-mcp
   as a plugin may remove the need; unverified.
 - **Account policy.** An organization can switch channels off
   (`channelsEnabled`), and they are unavailable on Bedrock, Vertex and
