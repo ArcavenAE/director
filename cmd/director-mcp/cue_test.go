@@ -32,6 +32,7 @@ type fakeSource struct {
 	// items, floorMap and waitErr feed the class-aware cue (cue_class_test.go).
 	items    []summaryItem
 	floorMap map[string]uint64
+	floorFn  func() map[string]uint64
 	waitErr  error
 }
 

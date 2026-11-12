@@ -62,6 +62,9 @@ func (f *fakeSource) waiting(context.Context) ([]summaryItem, error) {
 }
 
 func (f *fakeSource) floors(context.Context) (map[string]uint64, error) {
+	if f.floorFn != nil {
+		return f.floorFn(), nil
+	}
 	return f.floorMap, nil
 }
 
@@ -282,4 +285,49 @@ func TestClassAwareOffSendRecordsNothing(t *testing.T) {
 		t.Fatal("switch off: the bus holds a classifier")
 	}
 	r.send(t, "ask1", "REQUEST")
+}
+
+func TestClassAwareReadMailAndNewRequestInOneTickCuesAndNamesIt(t *testing.T) {
+	for _, held := range []int{1, 3} {
+		t.Run(fmt.Sprintf("held%d", held), func(t *testing.T) {
+			r := newClassRig(t, true)
+			var at []int
+			for i := 0; i < held; i++ {
+				r.arrive("INFORM", fmt.Sprintf("inf%d", i))
+			}
+			r.tickTo(4, &at)
+			if len(at) != 0 {
+				t.Fatalf("held=%d: a held INFORM cued: %v", held, at)
+			}
+			// The seat reads what was held; a REQUEST arrives before the next tick.
+			// The waiting count is 1 again: equal to the last count for one held
+			// message, below it for three.
+			r.src.items, r.src.n = nil, 0
+			r.arrive("REQUEST", "req1")
+			r.tickTo(4+int(r.c.cfg.Floor/time.Second), &at)
+			cues := r.mailCues()
+			if len(cues) != 1 {
+				t.Fatalf("held=%d: want one cue for the REQUEST within Floor, got %d at %v", held, len(cues), at)
+			}
+			if m := meta(t, cues[0]); m["message_id"] != "req1" || m["performative"] != "REQUEST" {
+				t.Fatalf("held=%d: the cue names %v, want the REQUEST req1", held, m)
+			}
+		})
+	}
+}
+
+func TestClassAwareFloorsAreReadOnAnEmptyInbox(t *testing.T) {
+	r := newClassRig(t, true)
+	r.src.floorFn = func() map[string]uint64 { return map[string]uint64{"local": r.seq} }
+	var at []int
+	r.tickTo(4, &at) // empty inbox: the floor is read now, at sequence 0
+	r.arrive("INFORM", "inf1")
+	r.tickTo(10, &at)
+	if len(at) != 0 {
+		t.Fatalf("the first fresh INFORM after an empty start was counted as backlog and cued: %v", at)
+	}
+	r.tickTo(310, &at)
+	if fmt.Sprint(at) != "[304]" {
+		t.Fatalf("held INFORM cues at %v, want [304] (D after it arrived)", at)
+	}
 }
