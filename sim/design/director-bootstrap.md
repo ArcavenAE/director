@@ -216,20 +216,26 @@ binds to nothing.
 ### 4.2 Two bindings, both installed by `director init`
 
 1. **The start path.** `director init` installs one start path and makes it the
-   only one. The installed `director-session` passes `--settings` with
-   director's own settings file, which wires the hooks of sections 4 to 7. It
-   is either the launcher itself or a shell function that calls it, and init
-   removes the shadowing: it reports any shell function or alias of that name,
-   and with the user's yes replaces it with one that calls the launcher with
-   the same flags.
+   only one. The installed `director-session` loads the hooks of sections 4 to
+   7 for that session. By the ruling of 2026-11-12 (4a.1) the first method is
+   the Claude Code plugin: `director-session` passes `--plugin-dir` at the
+   director plugin, and the plugin's `hooks/hooks.json` wires the hooks. A
+   harness-neutral install path stays open; how it wires its hooks is not
+   decided here. Where later sections say "the settings file", they mean the
+   hook wiring that the method in use loaded. The start path is either the
+   launcher itself or a shell function that calls it, and init removes the
+   shadowing: it reports any shell function or alias of that name, and with
+   the user's yes replaces it with one that calls the launcher with the same
+   flags.
 
-   The trigger is the settings file, not an environment variable. A
-   `--settings` flag is not inherited, so a child `claude` that a director
-   session starts loads no director hooks. An environment variable would be
-   inherited by every child. `DIRECTOR_ROLE` in particular already means
-   something: director-mcp turns it into a bus subject token and reads that
-   role's inbox as fan-out, and marvel seats carry other values such as
-   `supervisor`. This design does not set or read it.
+   The trigger is the loaded hook wiring, not an environment variable. A flag
+   that loads it is expected not to be inherited, so a child `claude` that a
+   director session starts loads no director hooks; for `--plugin-dir` that is
+   NOT TESTED (4a.1, finding 3), and trying it is the first step of ticket 2.
+   An environment variable would be inherited by every child. `DIRECTOR_ROLE`
+   in particular already means something: director-mcp turns it into a bus
+   subject token and reads that role's inbox as fan-out, and marvel seats carry
+   other values such as `supervisor`. This design does not set or read it.
 2. **The session mark.** The SessionStart hook in that settings file writes
    `$DIRECTOR_STATE/sessions/<session_id>`, keyed by the session id every hook
    receives, on startup, compact and clear alike. Adopting the role in a
@@ -267,16 +273,82 @@ cut silently.
 ### 4a.1 One package
 
 Director ships as one versioned package: the skill, `reference/role.md`, the
-hook scripts, the tools under `~/.director/bin`, and a settings file wiring the
-hooks. `director-mcp` installs as a release binary. A checkout plus
+hook scripts, the tools under `~/.director/bin`, and the wiring of the hooks.
+`director-mcp` installs as a release binary. A checkout plus
 `install.sh` stays the development path.
 
-The vehicle is open, and it is checked first (ticket 0): a Claude Code plugin
-is the native way to ship a skill with its hooks, and sideshow already has a
-plugin activation class (`mechanism: claude-plugin`). One constraint holds
-whichever is chosen: director installs and runs its hooks without sideshow.
-sideshow may be one vehicle; it is never a requirement, since a user may have
-only director (section 1, ticket 5).
+The vehicle was checked first (ticket 0, bd aae-orc-y1k9g), read only, against
+the Claude Code 2.1.322 plugin documentation and sideshow's own docs. One
+constraint holds whichever vehicle is chosen: director installs and runs its
+hooks without sideshow. sideshow may be one vehicle; it is never a
+requirement, since a user may have only director (section 1, ticket 5).
+
+What the check found:
+
+1. A Claude Code plugin can carry the skill, the hooks, an MCP registration and
+   a `bin/` directory in one tree: `skills/`, `hooks/hooks.json`, `.mcp.json`
+   and `bin/` (plugins reference, "Standard layout"). Hook scripts sit in a
+   folder the hooks name; the docs' example tree uses `scripts/`.
+2. A plugin cannot carry the settings file of 4.2. Its `settings.json` honours
+   only `agent` and `subagentStatusLine` (plugins reference, "settings"). The
+   hook wiring moves into `hooks/hooks.json`.
+3. A plugin can be scoped to one session. `--plugin-dir` loads it for that
+   session only, as `<name>@inline`, without an `enabledPlugins` entry (plugin
+   loading reference, "Find where a plugin came from"). NOT TESTED, and not
+   stated in those docs: that a child `claude` started from such a session
+   goes without the plugin. That is reasoning from the flag's scope on one
+   command line, and it is the property 4.2 wants from `--settings`. The
+   environment variable `CLAUDE_CODE_PLUGIN_DIRS` is listed on the Claude Code
+   environment-variables page, each directory "loaded the way a `--plugin-dir`
+   flag loads it", and a child inherits an environment variable (4.2, item 1).
+   A user-scope install would instead load the hooks in every session on the
+   host.
+4. sideshow cannot carry it as it stands. Its unshaping spec calls a claude
+   plugin "an upstream SOURCE FORMAT, not a delivery mechanism" and says
+   sideshow "creates no harness plugin state of any kind" and enables a pack
+   by writing bindings into one named repository (sideshow
+   `docs/unshaping-spec.md`). It never runs `claude plugin install` (sideshow
+   `docs/claude-plugin-conversion-reference.md`). A sideshow pack would reach a
+   repository, not a director session started anywhere.
+5. A plugin tree fits the no-sideshow constraint: a release tarball unpacked
+   under `~/.director/lib/plugin/<version>/`, with the launcher passing
+   `--plugin-dir` at it.
+6. The binaries stay out of the plugin. The unpack path of 5 is per version, so
+   `director-mcp` and `cast-launch` stay under
+   `~/.director/lib/<name>/<sha>/`, installed by `scripts/director-install`
+   (atomic switch, rollback, revision check).
+7. The plugin's `.mcp.json` would register the MCP server in plugin-loaded
+   sessions, which removes the dependence on the `~/work/aae-orc` project
+   scope. NOT TESTED: whether `--dangerously-load-development-channels`
+   accepts `plugin:director@inline` (the documented form is
+   `plugin:<name>@<marketplace>`). NOT TESTED: whether the shim's launcher
+   mark survives a server the plugin spawns. Each needs one interactive trial.
+8. A plugin cannot add a shell function or launcher flags, so the launcher and
+   the shim installer stay outside it. `director-session` remains an installed
+   script that passes `--plugin-dir`.
+
+The check's recommendation was the plugin tree (skill, `reference/role.md`,
+hooks, scripts, `.mcp.json`) as the release tarball, with
+`scripts/director-install` for the shim and the launcher, and a launcher that
+passes `--plugin-dir`. sideshow carries nothing for this and stays an optional
+later channel for the tarball.
+
+Ruled 2026-11-12 (the operator, relayed by director), verbatim: "a plugin would
+make director dependent on claude, which violates the spirit of BYOH, but it is
+fine for now as one method, proceed, but it will not be the only method long
+term". Read as director reads it:
+
+- The plugin is the first install method, for the Claude Code harness, and not
+  the only one. The recommendation above is the shape of that method. A
+  harness-neutral install path stays open; this section does not design it,
+  and how it wires its hooks is open.
+- The 4.2 wording changes: item 1 now names the plugin's `hooks/hooks.json` as
+  the hook wiring of the first method.
+- The untested points (finding 3's inheritance and finding 7's two) are tried
+  as the first step of ticket 2 (`director init`, bd aae-orc-d2sol).
+
+Not ruled, so open: how the launcher scopes the plugin to one session, given
+the untested inheritance in 3 and the environment form it names.
 
 ### 4a.2 `director init`
 
