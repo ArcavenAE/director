@@ -308,3 +308,28 @@ func TestClassifyUnknownSignalIsAct(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyProposalFamilyIsAct(t *testing.T) {
+	for i, perf := range []string{"PROPOSE", "CFP", "NOT-UNDERSTOOD"} {
+		got := newClassifier().classify("local", uint64(i+1), classifyEnv(t, perf, "x", ""), classifyNow)
+		if got != classAct {
+			t.Errorf("%s: %q, want act", perf, got)
+		}
+	}
+}
+
+func TestClassifyReplyToOwnProposeIsAct(t *testing.T) {
+	for i, perf := range []string{"ACCEPT-PROPOSAL", "REJECT-PROPOSAL"} {
+		c := newClassifier()
+		c.noteSent("PROP1", "PROPOSE")
+		got := c.classify("local", uint64(i+1), classifyEnvReply(t, perf, "x", "", "PROP1"), classifyNow)
+		if got != classAct {
+			t.Errorf("%s replying to the seat's own PROPOSE: %q, want act", perf, got)
+		}
+	}
+	c := newClassifier()
+	c.noteSent("CFP1", "CFP")
+	if got := c.classify("local", 1, classifyEnvReply(t, "PROPOSE", "x", "", "CFP1"), classifyNow); got != classAct {
+		t.Errorf("PROPOSE replying to the seat's own CFP: %q, want act", got)
+	}
+}
