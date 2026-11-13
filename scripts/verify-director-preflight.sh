@@ -24,6 +24,10 @@
 #     utility fails here on purpose.
 #   - it writes nothing: not to the home, the cwd or the TMPDIR; no network.
 #
+# Not covered, on purpose: the check opens no network socket (nothing here traps a
+# bash /dev/tcp connection) and writes to no fixed path outside the scratch dirs
+# (only the home, cwd and TMPDIR it is given are inspected).
+#
 # Each case builds a scratch PATH of symlinks to those utilities plus stub tools
 # that answer --version, then removes, ages or breaks one tool.
 #
@@ -44,8 +48,10 @@ trap 'rm -rf "$root"' EXIT
 REQUIRED="python3 jq git nats-server nats"
 OPTIONAL="gh claude marvel tmux lsof go"
 
-# what the check may call (above) and what this verifier itself calls
-core="bash awk grep head uname dirname cat tr sort sed printf  ls wc rm mkdir env tail cut basename sh"
+# the utilities the check may call, and only those, are linked into the scratch PATH.
+# The verifier's own helpers (ls, wc, rm, mkdir, env, tail, cut, basename) run under
+# the verifier's PATH, outside the check's, so a check that calls one of them fails here.
+allowed="bash awk grep head uname dirname cat tr sort sed printf"
 
 # real --version first lines, so a stub reads as the tool does
 ver_text() {
@@ -79,7 +85,7 @@ stub_uname() { # stub_uname DIR OS
 new_path() { # new_path DIR [OS]: a PATH dir with the utilities, every stub tool, and uname answering OS (default Darwin)
   local d="$1" c t q
   rm -rf "$d"; mkdir -p "$d"
-  for c in $core; do
+  for c in $allowed; do
     for q in /usr/bin /bin; do if [[ -x "$q/$c" ]]; then ln -s "$q/$c" "$d/$c"; break; fi; done
   done
   for t in $REQUIRED $OPTIONAL; do stub "$d" "$t"; done
@@ -142,12 +148,12 @@ done
 # 3b: the hint follows the OS: Linux gets the apt or dnf hint and no brew
 p="$root/p3b"; new_path "$p" Linux; rm -f "$p/jq" "$p/tmux"; run "$p"
 l="$(line MISSING jq)"
-grep -qE "install: .*(apt|dnf)" <<<"$l" && ! grep -q "brew" <<<"$l" && ok "3b on Linux a missing jq gets the apt or dnf hint and no brew" || bad "3b linux jq hint" "$l"
+grep -qE "install: .*(^|[^[:alpha:]])(apt|dnf)([^[:alpha:]]|\$)" <<<"$l" && ! grep -q "brew" <<<"$l" && ok "3b on Linux a missing jq gets the apt or dnf hint and no brew" || bad "3b linux jq hint" "$l"
 l="$(line MISSING tmux)"
-grep -qE "install: .*(apt|dnf)" <<<"$l" && ! grep -q "brew" <<<"$l" && ok "3b on Linux a missing tmux gets the apt or dnf hint and no brew" || bad "3b linux tmux hint" "$l"
+grep -qE "install: .*(^|[^[:alpha:]])(apt|dnf)([^[:alpha:]]|\$)" <<<"$l" && ! grep -q "brew" <<<"$l" && ok "3b on Linux a missing tmux gets the apt or dnf hint and no brew" || bad "3b linux tmux hint" "$l"
 p="$root/p3c"; new_path "$p" Darwin; rm -f "$p/jq"; run "$p"
 l="$(line MISSING jq)"
-grep -q "brew" <<<"$l" && ! grep -qE "apt|dnf" <<<"$l" && ok "3b on macOS a missing jq gets the brew hint and no apt or dnf" || bad "3b mac jq hint" "$l"
+grep -q "brew" <<<"$l" && ! grep -qE "(^|[^[:alpha:]])(apt|dnf)([^[:alpha:]]|\$)" <<<"$l" && ok "3b on macOS a missing jq gets the brew hint and no apt or dnf" || bad "3b mac jq hint" "$l"
 
 # 4: several missing: every one is named in one run, and the required ones make it exit 1
 p="$root/p4"; new_path "$p"; rm -f "$p/jq" "$p/git" "$p/tmux"; run "$p"
@@ -186,6 +192,41 @@ p="$root/p7b"; new_path "$p"; stub "$p" go "no version here"; run "$p"
 grep -qE "^UNREADABLE +go " "$root/out" && [[ "$(rc)" == 0 ]] && ok "7  an optional go with an unparseable version is named and does not fail the run" || bad "7  go unreadable" "rc $(rc): $(cat "$root/out")"
 p="$root/p7c"; new_path "$p"; stub_broken "$p" jq; run "$p"
 grep -qE "^OK +jq" "$root/out" && [[ "$(rc)" == 0 ]] && ok "7  jq, which has no minimum, is OK even when its --version fails" || bad "7  jq broken" "rc $(rc): $(cat "$root/out")"
+
+# 7d: a tool that prints its version on stderr, as some do
+p="$root/p7d"; new_path "$p"; printf '#!/bin/sh\necho "Python 3.12.1" >&2\n' >"$p/python3"; chmod +x "$p/python3"; run "$p"
+grep -qE '^OK +python3 +3\.12\.1' "$root/out" && ok "7  a version printed on stderr is read" || bad "7  stderr version" "$(cat "$root/out")"
+
+# 7e: a file that is not executable, or a directory, named like a tool is not that tool
+p="$root/p7e"; new_path "$p"; rm -f "$p/jq" "$p/gh"; printf '#!/bin/sh\n' >"$p/jq"; chmod -x "$p/jq"; mkdir "$p/gh"; run "$p"
+[[ -n "$(line MISSING jq)" ]] && ok "7  a non-executable file named jq is MISSING" || bad "7  non-exec jq" "$(cat "$root/out")"
+[[ -n "$(line MISSING gh)" ]] && ok "7  a directory named gh is MISSING" || bad "7  dir gh" "$(cat "$root/out")"
+
+# 9: the check reads the manifest: a copy of the check beside an edited manifest follows the edit
+copy_with() { # copy_with AWK_PROGRAM: copy the check and the manifest into a fresh dir, edit the manifest with awk, echo the check's path
+  local d="$root/copy"
+  rm -rf "$d"; mkdir -p "$d"
+  cp "$PF" "$d/director-preflight"; chmod +x "$d/director-preflight"
+  if [[ -r "$MANIFEST" ]]; then awk -F'\t' -v OFS='\t' "$1" "$MANIFEST" >"$d/director-preflight.tsv"; else : >"$d/director-preflight.tsv"; fi
+  echo "$d/director-preflight"
+}
+real_pf="$PF"
+p="$root/p9"; new_path "$p"; rm -f "$p/tmux"
+PF="$(copy_with '$1 == "tmux" { $2 = "required" } { print }')"; run "$p"
+l="$(line MISSING tmux)"
+grep -q "(required)" <<<"$l" && [[ "$(rc)" == 1 ]] && ok "9  tmux marked required in the manifest makes its absence exit 1" || bad "9  tmux required" "rc $(rc): $(cat "$root/out")"
+p="$root/p9b"; new_path "$p"
+PF="$(copy_with '$1 == "python3" { $3 = "3.13" } { print }')"; run "$p"
+grep -qE "^OLD +python3 .*3\.12\.1.*3\.13" "$root/out" && [[ "$(rc)" == 1 ]] && ok "9  python3 minimum raised to 3.13 in the manifest names 3.12.1 OLD" || bad "9  python3 minimum" "rc $(rc): $(cat "$root/out")"
+p="$root/p9c"; new_path "$p"; rm -f "$p/jq"
+PF="$(copy_with '$1 != "jq" { print }')"; run "$p"
+[[ -z "$(line MISSING jq)" && "$(rc)" == 0 ]] && grep -q '^OK ' "$root/out" && ok "9  a tool removed from the manifest is no longer checked" || bad "9  jq removed" "rc $(rc): $(cat "$root/out")"
+PF="$real_pf"
+# the minimums the other cases rely on are the manifest's own
+for pair in python3:3.11 nats-server:2.11 go:1.26; do
+  t="${pair%%:*}"; m="${pair##*:}"
+  awk -F'\t' -v t="$t" -v m="$m" '$1 == t && $3 == m { f = 1 } END { exit !f }' "$MANIFEST" 2>/dev/null && ok "9  the manifest sets $t minimum $m" || bad "9  $t minimum $m"
+done
 
 # 8: the check writes nothing: not to the home, the cwd or the TMPDIR
 p="$root/p8"; new_path "$p"; run "$p"
