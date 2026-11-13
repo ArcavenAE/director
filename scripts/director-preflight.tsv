@@ -1,0 +1,14 @@
+# Tools a director install uses. One row per tool, tab separated:
+# tool, class (required|optional), minimum version (- for none), version command, needed by, macOS hint, Linux hint
+# Read by scripts/director-preflight. A required tool that is missing or too old makes the check exit 1; an optional one is only named.
+python3	required	3.11	python3 --version	most scripts; recipes lint needs tomllib	brew install python@3.12	apt install python3 (3.11 or newer; on older releases use the deadsnakes or pyenv route)
+jq	required	-	jq --version	director-session, freebusy, idle-shadow, merge-guard, draft-sweep	brew install jq	apt install jq, or dnf install jq
+git	required	-	git --version	install.sh, director-install, probe scripts	xcode-select --install, or brew install git	apt install git, or dnf install git
+nats-server	required	2.11	nats-server --version	the broker and the hub (probe/nats-phase-0, probe/nats-global-tier)	brew install nats-server	download a release from the nats-server GitHub releases page; there is no apt package from the project
+nats	required	-	nats --version	hub provisioning and its verifiers	brew install nats-io/nats-tools/nats	download a release from the natscli GitHub releases page
+gh	optional	-	gh --version	dbi, draft-sweep, dsx, dws, lane-ledger, merge-guard, page-namespace, vector-pin-drift	brew install gh	apt install gh (after adding GitHub's apt repository), or dnf install gh
+claude	optional	-	claude --version	director-session, dsi (a harness that speaks MCP)	see the Claude Code install page; brew install claude-code also works	see the Claude Code install page
+marvel	optional	-	marvel version	freebusy, introspect, sweep-firings (director runs without it)	brew install arcavenae/tap/marvel	download from the marvel release page, or build from source
+tmux	optional	-	tmux -V	composer-check	brew install tmux	apt install tmux, or dnf install tmux
+lsof	optional	-	lsof -v	unattached	already present on macOS	apt install lsof, or dnf install lsof
+go	optional	1.26	go version	building the shim from source (a release download does not need it)	brew install go, or mise use go@1.26	apt install golang is usually older; use a go.dev tarball or mise use go@1.26
