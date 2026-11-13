@@ -6,6 +6,8 @@
 #                                              (default origin/main)
 #   director-install cast-launch --rollback    switch back to the previous install
 #   director-install director-mcp --ref REF    build the shim at REF and install it
+#   director-install director-mcp --release TAG|latest-alpha
+#                                              install a published release, no Go needed
 #   director-install director-mcp --rollback   switch the shim back to the previous install
 #   director-install --status                  what is installed and how far behind
 #   director-install -h | --help
@@ -31,7 +33,21 @@
 # or connection), must report rev <sha>. $DIRECTOR_HOME/bin/director-mcp then switches
 # atomically. A binary or symlink already there that this installer did not put
 # there is kept under lib/director-mcp/legacy-<time>/, and --rollback returns to
-# the one that was live before. Release download and attestation are not here.
+# the one that was live before.
+#
+# A published release installs with curl and gh, and no Go: --release TAG fetches
+# the host's binary, checksums.txt and the attestation bundle from the release,
+# then, in order and stopping at the first failure with nothing switched:
+#   1. the binary's sha256 must match its line in checksums.txt (the bytes arrived
+#      whole; both files come from one place, so this proves nothing about origin);
+#   2. `gh attestation verify` must accept the binary against this repository, the
+#      release workflow and the bundle (the origin). With no gh the install stops
+#      and says so; nothing weaker is offered;
+#   3. the guarded --version run as above, which must report a full rev, and for
+#      an alpha tag the commit the tag names.
+# The STAMP records the tag, the commit, the channel and origin=verified, and
+# --status shows them. `latest-alpha` resolves once, to the newest alpha tag in
+# the releases listing, and the STAMP keeps that tag. Nothing upgrades by itself.
 #
 # --status is a diagnostic, not a gate (diagnostic-not-gate.md): it always exits
 # 0. The one pass/fail step is the verify before the switch, which is a
@@ -42,11 +58,18 @@
 #   DIRECTOR_SRC_URL        default https://github.com/ArcavenAE/director.git
 #                           (used only to create the mirror)
 #   DIRECTOR_MANIFESTS_DIR  default ~/.marvel/manifests (--status wrapper check)
+#   DIRECTOR_REPO           default ArcavenAE/director (the repository --release verifies against)
+#   DIRECTOR_RELEASE_BASE   default https://github.com/ArcavenAE/director/releases/download
+#   DIRECTOR_RELEASES_API   default https://api.github.com/repos/ArcavenAE/director/releases?per_page=30
 set -euo pipefail
 
 DIRECTOR_HOME="${DIRECTOR_HOME:-$HOME/.director}"
 SRC_URL="${DIRECTOR_SRC_URL:-https://github.com/ArcavenAE/director.git}"
 MANIFESTS="${DIRECTOR_MANIFESTS_DIR:-$HOME/.marvel/manifests}"
+REPO="${DIRECTOR_REPO:-ArcavenAE/director}"
+RELEASE_BASE="${DIRECTOR_RELEASE_BASE:-https://github.com/$REPO/releases/download}"
+RELEASES_API="${DIRECTOR_RELEASES_API:-https://api.github.com/repos/$REPO/releases?per_page=30}"
+RELEASE_WORKFLOW=".github/workflows/release-director-mcp.yml"
 MIRROR="$DIRECTOR_HOME/src/director.git"
 LIB="$DIRECTOR_HOME/lib/cast-launch"
 BIN="$DIRECTOR_HOME/bin"
@@ -55,7 +78,7 @@ MLIB="$DIRECTOR_HOME/lib/director-mcp"
 MLINK="$BIN/director-mcp"
 
 die() { echo "director-install: $*" >&2; exit 1; }
-usage() { sed -n '5,11p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '5,13p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Create the mirror on first use; fetch it otherwise.
 sync_mirror() {
@@ -223,6 +246,90 @@ install_director_mcp() {
   echo "director-install: director-mcp -> $sha ($ref)"
 }
 
+# --- director-mcp from a published release ------------------------------------
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else sha256sum "$1" | awk '{print $1}'; fi
+}
+
+# The newest alpha tag in the releases listing, chosen by its stamp and by
+# nothing else: not by position, and not a stable tag or another project's.
+latest_alpha_tag() {
+  local listing tag
+  listing="$(curl -fsSL --max-time 30 "$RELEASES_API")" \
+    || die "could not read the releases listing at $RELEASES_API; nothing was switched"
+  tag="$(grep -o '"tag_name": *"director-mcp-alpha-[0-9]\{8\}-[0-9]\{6\}-[0-9a-f]\{7\}"' <<<"$listing" \
+    | sed 's/.*"\(director-mcp-alpha-[^"]*\)"/\1/' | LC_ALL=C sort | tail -n 1 || true)"
+  [[ -n "$tag" ]] || die "no director-mcp alpha release in the listing at $RELEASES_API; nothing was switched"
+  printf '%s\n' "$tag"
+}
+
+install_director_mcp_release() {
+  local tag="$1" os arch asset stage want got info rc rev version channel t7
+  command -v curl >/dev/null 2>&1 || die "curl is not on PATH; a release is downloaded with curl. Nothing was switched."
+  command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 \
+    || die "neither shasum nor sha256sum is on PATH; a download is checked against checksums.txt. Nothing was switched."
+  if [[ "$tag" == latest-alpha ]]; then tag="$(latest_alpha_tag)"; fi
+  [[ "$tag" =~ ^director-mcp-[A-Za-z0-9._-]+$ ]] \
+    || die "release tag '$tag' is not a director-mcp tag name (director-mcp-<channel>-...); nothing was downloaded"
+  case "$(uname -s)" in Darwin) os=darwin ;; Linux) os=linux ;; *) die "no release binary for $(uname -s)" ;; esac
+  case "$(uname -m)" in arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=amd64 ;; *) die "no release binary for $(uname -m)" ;; esac
+  asset="director-mcp-$os-$arch"
+  mkdir -p "$MLIB"
+  stage="$(mktemp -d "$MLIB/.stage.XXXXXX")"
+  trap 'rm -rf "$stage"' EXIT
+  for t7 in "$asset" checksums.txt attestations.sigstore.json; do
+    curl -fsSL --max-time 300 -o "$stage/$t7" "$RELEASE_BASE/$tag/$t7" \
+      || die "download of $t7 from $RELEASE_BASE/$tag failed; nothing was switched"
+  done
+  # 1. the bytes arrived whole.
+  want="$(awk -v n="$asset" '$2 == n {print $1}' "$stage/checksums.txt")"
+  [[ -n "$want" ]] || die "checksums.txt of $tag has no line for $asset; nothing was switched"
+  got="$(sha256_of "$stage/$asset")"
+  [[ "$got" == "$want" ]] || die "checksum mismatch for $asset of $tag (checksums.txt says $want, the download is $got); nothing was switched"
+  # 2. the bytes came from this repository's release workflow.
+  command -v gh >/dev/null 2>&1 \
+    || die "gh is not on PATH, so the origin of $tag cannot be verified. Install gh (https://cli.github.com), or build from source with --ref. Nothing was switched."
+  gh attestation verify "$stage/$asset" --repo "$REPO" --signer-workflow "$REPO/$RELEASE_WORKFLOW" \
+      --bundle "$stage/attestations.sigstore.json" >"$stage/verify.log" 2>&1 \
+    || { echo "director-install: the origin check (gh attestation verify) rejected $asset of $tag; nothing was switched. Last lines:" >&2; tail -5 "$stage/verify.log" >&2; exit 1; }
+  # 3. the first run, guarded as --ref's is, only after the origin is shown.
+  chmod +x "$stage/$asset"
+  rc=0
+  info="$(env -i PATH="$PATH" NATS_URL=nats://127.0.0.1:1 perl -e 'alarm 5; exec @ARGV or die "exec $ARGV[0]: $!\n"' "$stage/$asset" --version </dev/null 2>&1)" || rc=$?
+  if [[ $rc -eq 142 ]]; then die "the shim timed out on --version (stopped after 5 seconds) for $tag; nothing was switched"; fi
+  [[ $rc -eq 0 ]] || die "the shim did not run --version cleanly for $tag; nothing was switched. Output: $info"
+  [[ "$info" =~ ^director-mcp\ ([^\ ]+)\ rev\ ([0-9a-f]{40})\ channel\ ([^\ ]+)$ ]] \
+    || die "the shim's --version line is not 'director-mcp <version> rev <sha> channel <channel>' (it said: $info); nothing was switched"
+  version="${BASH_REMATCH[1]}" rev="${BASH_REMATCH[2]}" channel="${BASH_REMATCH[3]}"
+  if [[ "$tag" =~ ^director-mcp-alpha-[0-9]{8}-[0-9]{6}-([0-9a-f]{7})$ && "${rev:0:7}" != "${BASH_REMATCH[1]}" ]]; then
+    die "the shim reports rev $rev but $tag names commit ${BASH_REMATCH[1]}; nothing was switched"
+  fi
+  if [[ -d "$MLIB/$rev" ]]; then
+    echo "director-install: $rev is already installed and checked"
+  else
+    mv "$stage/$asset" "$stage/director-mcp"
+    rm -f "$stage/checksums.txt" "$stage/attestations.sigstore.json" "$stage/verify.log"
+    {
+      echo "sha=$rev"
+      echo "version=$version"
+      echo "channel=$channel"
+      echo "ref=$tag"
+      echo "release=$tag"
+      echo "origin=verified"
+      echo "origin_check=gh attestation verify, repo $REPO, workflow $RELEASE_WORKFLOW"
+      echo "source=$RELEASE_BASE/$tag"
+      echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$stage/STAMP"
+    mv "$stage" "$MLIB/$rev"
+    echo "director-install: fetched and checked $rev ($version) from $tag"
+  fi
+  trap - EXIT
+  rm -rf "$stage" 2>/dev/null || true
+  switch_mcp "$rev"
+  echo "director-install: director-mcp -> $rev ($tag)"
+}
+
 rollback_director_mcp() {
   local prev
   prev="$(cat "$MLIB/.previous" 2>/dev/null || true)"
@@ -255,7 +362,10 @@ status() {
   local msha
   msha="$(current_mcp)"
   if [[ -n "$msha" ]]; then
-    echo "director-mcp: ${msha:0:12} ($(sed -n 's/^version=//p' "$MLIB/$msha/STAMP" 2>/dev/null)) installed $(sed -n 's/^installed_at=//p' "$MLIB/$msha/STAMP" 2>/dev/null)"
+    local rel org
+    rel="$(sed -n 's/^release=//p' "$MLIB/$msha/STAMP" 2>/dev/null)"
+    org="$(sed -n 's/^origin=//p' "$MLIB/$msha/STAMP" 2>/dev/null)"
+    echo "director-mcp: ${msha:0:12} ($(sed -n 's/^version=//p' "$MLIB/$msha/STAMP" 2>/dev/null)) installed $(sed -n 's/^installed_at=//p' "$MLIB/$msha/STAMP" 2>/dev/null)${rel:+, release $rel, origin ${org:-not recorded}}"
   elif [[ -e "$MLINK" || -L "$MLINK" ]]; then
     echo "WARN: $MLINK was not installed by director-install; install: director-install director-mcp --ref origin/main"
   else
@@ -287,16 +397,20 @@ case "${1:-}" in
     ;;
   director-mcp)
     shift
-    ref="origin/main" action=install
+    ref="origin/main" action=install release="" ref_given=""
     while (($#)); do
       case "$1" in
-        --ref) [[ $# -ge 2 ]] || die "--ref needs a value"; ref="$2"; shift ;;
+        --ref) [[ $# -ge 2 ]] || die "--ref needs a value"; ref="$2"; ref_given=1; shift ;;
+        --release) [[ $# -ge 2 ]] || die "--release needs a value"; release="$2"; shift ;;
         --rollback) action=rollback ;;
         *) die "unknown argument: $1" ;;
       esac
       shift
     done
-    if [[ "$action" == rollback ]]; then rollback_director_mcp; else install_director_mcp "$ref"; fi
+    [[ -z "$release" || -z "$ref_given" ]] || die "--release and --ref are not both allowed: a release is downloaded, a ref is built"
+    if [[ "$action" == rollback ]]; then rollback_director_mcp
+    elif [[ -n "$release" ]]; then install_director_mcp_release "$release"
+    else install_director_mcp "$ref"; fi
     ;;
   --status) status || true; exit 0 ;;
   -h|--help) usage ;;
