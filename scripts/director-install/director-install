@@ -387,6 +387,15 @@ install_director_mcp_release() {
   fi
   if [[ -d "$MLIB/$rev" ]]; then
     echo "director-install: $rev is already installed and checked"
+    # The directory may be from a --ref build, which has no wrapper. The wrapper just checked
+    # and verified belongs in it, so the seat link has something to point at.
+    if [[ "$seat_state" == included && ! -e "$MLIB/$rev/director-mcp-seat" ]]; then
+      chmod +x "$stage/director-mcp-seat"
+      mv "$stage/director-mcp-seat" "$MLIB/$rev/director-mcp-seat"
+      { grep -v '^seat=' "$MLIB/$rev/STAMP" || true; echo "seat=included"; } > "$MLIB/$rev/STAMP.new" \
+        && mv "$MLIB/$rev/STAMP.new" "$MLIB/$rev/STAMP"
+      echo "director-install: added the verified director-mcp-seat of $tag to $rev"
+    fi
   else
     mv "$stage/$asset" "$stage/director-mcp"
     [[ "$seat_state" == included ]] && chmod +x "$stage/director-mcp-seat"
