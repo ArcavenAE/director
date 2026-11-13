@@ -204,6 +204,18 @@ accounts {
 		}
 	}
 	h.provision()
+	// The pid guard reads the server's command line. Under sandbox-exec the
+	// setuid ps cannot run, so the scratch hub answers for its own pid and any
+	// other pid reads as an unrelated process; TestHubPidGuardReadsTheRealPs
+	// exercises the real ps.
+	oldArgs := hubProcArgs
+	hubProcArgs = func(pid int) (string, error) {
+		if h.cmd != nil && h.cmd.Process != nil && pid == h.cmd.Process.Pid {
+			return "nats-server -c " + h.conf + " -P " + h.pidfile, nil
+		}
+		return "sleep 60", nil
+	}
+	t.Cleanup(func() { hubProcArgs = oldArgs })
 	if o.lateSettings != "" {
 		b, _ := os.ReadFile(h.settings)
 		if err := os.WriteFile(h.settings, append(b, []byte(o.lateSettings)...), 0o600); err != nil {

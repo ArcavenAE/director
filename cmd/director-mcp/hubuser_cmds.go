@@ -243,14 +243,23 @@ func hubPid(cfg hubCfg) (int, error) {
 	if err := syscall.Kill(pid, 0); err != nil {
 		return 0, fmt.Errorf("the hub's pid %d is not running: %v", pid, err)
 	}
-	out, err := exec.Command("ps", "-o", "args=", "-p", fmt.Sprint(pid)).Output()
+	out, err := hubProcArgs(pid)
 	if err != nil {
 		return 0, fmt.Errorf("cannot read the command line of pid %d (ps: %v)", pid, err)
 	}
-	if !argsRunNatsServerWithConf(string(out), cfg.conf) {
-		return 0, fmt.Errorf("pid %d from %s is not this hub's nats-server (its command line is %q; want nats-server -c %s)", pid, cfg.pidfile, strings.TrimSpace(string(out)), cfg.conf)
+	if !argsRunNatsServerWithConf(out, cfg.conf) {
+		return 0, fmt.Errorf("pid %d from %s is not this hub's nats-server (its command line is %q; want nats-server -c %s)", pid, cfg.pidfile, strings.TrimSpace(out), cfg.conf)
 	}
 	return pid, nil
+}
+
+// hubProcArgs returns a process's command line. It is a variable so tests can
+// run where the setuid ps cannot (a sandbox-exec profile); one test uses the real one.
+var hubProcArgs = realHubProcArgs
+
+func realHubProcArgs(pid int) (string, error) {
+	out, err := exec.Command("ps", "-o", "args=", "-p", fmt.Sprint(pid)).Output()
+	return string(out), err
 }
 
 // argsRunNatsServerWithConf reports whether a ps args line is nats-server run

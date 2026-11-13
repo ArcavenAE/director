@@ -1043,3 +1043,34 @@ func TestHubUserUnknownVerbExitsTwoAndStartsNoShim(t *testing.T) {
 		t.Errorf("parseArgs hub = %+v, %v; want mode hub carrying its words, so main runs the hub command and never serves", cli, err)
 	}
 }
+
+// TestHubPidGuardReadsTheRealPs is the one case that runs the real ps. It cannot
+// run under sandbox-exec (ps is setuid), so a sandboxed run skips it with
+// -skip TestHubPidGuardReadsTheRealPs and it runs unsandboxed in CI.
+func TestHubPidGuardReadsTheRealPs(t *testing.T) {
+	h := newHubScratch(t, hubScratchOpts{})
+	hubProcArgs = realHubProcArgs
+	if _, err := hubPid(hubCfgOf(t, h)); err != nil {
+		t.Errorf("the real ps does not show this hub's nats-server for its own pid: %v", err)
+	}
+	other := exec.Command("sleep", "60")
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = other.Process.Kill(); _ = other.Wait() })
+	if err := os.WriteFile(h.pidfile, []byte(fmt.Sprintf("%d\n", other.Process.Pid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hubPid(hubCfgOf(t, h)); err == nil || !strings.Contains(err.Error(), "not this hub's nats-server") {
+		t.Errorf("the real ps accepted a sleep process as the hub: %v", err)
+	}
+}
+
+func hubCfgOf(t *testing.T, h *hubScratch) hubCfg {
+	t.Helper()
+	c, err := hubCfgFrom(h.env())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
