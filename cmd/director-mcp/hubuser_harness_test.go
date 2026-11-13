@@ -46,21 +46,23 @@ type hubScratchOpts struct {
 	brokenConf   bool   // the live conf has a syntax error; the server runs from a valid sibling conf
 	adminOutside bool   // the admin seed lives outside keys/, and keys/ does not exist
 	serverEnv    []string
+	badMonitor   bool // the command's monitor URL points at a closed port, so /varz cannot be read
 }
 
 type hubScratch struct {
-	t         *testing.T
-	home      string
-	conf      string
-	settings  string
-	keys      string
-	pidfile   string
-	logfile   string
-	port      int
-	monPort   int
-	adminSeed string
-	adminPub  string
-	cmd       *exec.Cmd
+	t          *testing.T
+	home       string
+	conf       string
+	settings   string
+	keys       string
+	pidfile    string
+	logfile    string
+	port       int
+	monPort    int
+	adminSeed  string
+	adminPub   string
+	cmd        *exec.Cmd
+	badMonitor bool
 }
 
 // newSeedFile mints a user key into path (0600) and returns its public key.
@@ -96,7 +98,7 @@ func newHubScratch(t *testing.T, o hubScratchOpts) *hubScratch {
 		// server fails them instead of passing by skipping. CI installs nats-server.
 		t.Fatalf("nats-server is not on PATH; the hub user tests need it (CI installs one)")
 	}
-	h := &hubScratch{t: t}
+	h := &hubScratch{t: t, badMonitor: o.badMonitor}
 	h.home = t.TempDir()
 	h.conf = filepath.Join(h.home, "nats-server.conf")
 	h.settings = filepath.Join(h.home, "settings.conf")
@@ -159,7 +161,22 @@ accounts {
 			t.Fatal(err)
 		}
 	}
-	if o.noSettings || o.brokenConf {
+	if o.noSettings && !o.brokenConf {
+		// A real old hub: the server runs from the conf the command reads, with
+		// the variable it references in its own environment. A reload then reads
+		// the conf the command wrote, so a test can tell the new conf went live.
+		env := o.serverEnv
+		hasName := false
+		for _, e := range env {
+			if strings.HasPrefix(e, "HUB_NAME=") {
+				hasName = true
+			}
+		}
+		if !hasName {
+			env = append(append([]string{}, env...), "HUB_NAME=hub")
+		}
+		h.startServer(bin, h.conf, env)
+	} else if o.brokenConf {
 		// The server cannot read a conf the test made unreadable on purpose, so the
 		// scratch hub is started from a sibling conf that is valid. The conf under
 		// test stays the one the command reads.
@@ -258,6 +275,9 @@ func (h *hubScratch) env() func(string) string {
 		"DIRECTOR_GLOBAL_HOME":     h.home,
 		"DIRECTOR_HUB_ADMIN_URL":   h.url(),
 		"DIRECTOR_HUB_MONITOR_URL": fmt.Sprintf("http://127.0.0.1:%d", h.monPort),
+	}
+	if h.badMonitor {
+		m["DIRECTOR_HUB_MONITOR_URL"] = fmt.Sprintf("http://127.0.0.1:%d", freePort(h.t))
 	}
 	if filepath.Dir(h.adminSeed) != h.keys {
 		m["DIRECTOR_HUB_ADMIN_NKEY"] = h.adminSeed

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -196,7 +197,7 @@ func TestHubSettingsInitRefusesWhileAReferenceHasNoValue(t *testing.T) {
 	// missing value and refuses before any write.
 	h := newHubScratch(t, hubScratchOpts{noSettings: true, noRegion: true, refTag: true, serverEnv: []string{"HUB_TAG=from-env"}})
 	confBefore, listing := string(h.readConf()), h.homeListing()
-	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=zed")
+	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=hub")
 	if code != 1 || !strings.Contains(out+errOut, "HUB_TAG") {
 		t.Errorf("exit = %d, want 1 naming HUB_TAG\n%s%s", code, out, errOut)
 	}
@@ -214,7 +215,7 @@ func TestHubSettingsInitMovesAnOldHubToTheIncludeAndRegion(t *testing.T) {
 	confBefore := string(h.readConf())
 	pid, reloads := h.pid(), h.reloads()
 
-	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=zed")
+	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=hub")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0\nstdout: %s\nstderr: %s", code, out, errOut)
 	}
@@ -233,8 +234,8 @@ func TestHubSettingsInitMovesAnOldHubToTheIncludeAndRegion(t *testing.T) {
 		t.Errorf("settings.conf mode = %v, want 0600", st.Mode().Perm())
 	}
 	b, _ := os.ReadFile(h.settings)
-	if !strings.Contains(string(b), "HUB_NAME") || !strings.Contains(string(b), "zed") {
-		t.Errorf("settings.conf does not define HUB_NAME as zed: %q", b)
+	if !strings.Contains(string(b), "HUB_NAME") || !strings.Contains(string(b), "hub") {
+		t.Errorf("settings.conf does not define HUB_NAME as hub: %q", b)
 	}
 	if got := h.backups(); len(got) != 1 {
 		t.Errorf("backups = %v, want one", got)
@@ -253,15 +254,65 @@ func TestHubSettingsInitMovesAnOldHubToTheIncludeAndRegion(t *testing.T) {
 	if code, _, _ := h.run("settings", "check"); code != 0 {
 		t.Errorf("settings check after init exits %d, want 0", code)
 	}
+	// The hub runs from the conf init wrote, so a reload that took effect shows in
+	// what only the new conf holds: an add writes its user into the new region,
+	// and the add's own verify connects as that key after a second reload.
+	if code, out, errOut := h.run("user", "add", "probe", "--class", "observer", "--param", "holder=director"); code != 0 {
+		t.Errorf("an add after init exits %d: the new conf is not what the hub runs\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+}
+
+func TestHubSettingsInitRefusesAServerNameThatDiffersFromTheRunningOne(t *testing.T) {
+	// nats-server 2.14.6 refuses a server_name change on reload ("config reload not
+	// supported for ServerName: old=one, new=two") and keeps the old name. Init
+	// moves values and never changes one, so it refuses up front, before any write.
+	h := newHubScratch(t, hubScratchOpts{noSettings: true, noRegion: true})
+	confBefore, listing := string(h.readConf()), h.homeListing()
+	reloads := h.reloads()
+	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=zed")
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	msg := out + errOut
+	if !strings.Contains(msg, "hub") || !strings.Contains(msg, "zed") || !strings.Contains(msg, "server_name") {
+		t.Errorf("the message does not name server_name, the running value hub and the given value zed: %q", msg)
+	}
+	if string(h.readConf()) != confBefore || h.homeListing() != listing || len(h.backups()) != 0 {
+		t.Errorf("the hub home changed: before\n%s\nafter\n%s", listing, h.homeListing())
+	}
+	if _, err := os.Stat(h.settings); err == nil {
+		t.Errorf("settings.conf was written")
+	}
+	if h.reloads() != reloads {
+		t.Errorf("the hub was reloaded (%d before, %d now); a refusal comes before any reload", reloads, h.reloads())
+	}
+	if got := h.serverName(); got != "hub" {
+		t.Errorf("the running server_name = %q, want hub", got)
+	}
+}
+
+func TestHubSettingsInitRefusesWhenTheRunningValueCannotBeRead(t *testing.T) {
+	h := newHubScratch(t, hubScratchOpts{noSettings: true, noRegion: true, badMonitor: true})
+	confBefore, listing := string(h.readConf()), h.homeListing()
+	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=hub")
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	if !strings.Contains(out+errOut, "/varz") || !strings.Contains(out+errOut, "server_name") {
+		t.Errorf("the message does not say /varz could not be read for server_name: %q", out+errOut)
+	}
+	if string(h.readConf()) != confBefore || h.homeListing() != listing || len(h.backups()) != 0 {
+		t.Errorf("the hub home changed after the refusal")
+	}
 }
 
 func TestHubSettingsInitRefusesASecondRun(t *testing.T) {
 	h := newHubScratch(t, hubScratchOpts{noSettings: true, noRegion: true})
-	if code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=zed"); code != 0 {
+	if code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=hub"); code != 0 {
 		t.Fatalf("first init exit = %d\n%s%s", code, out, errOut)
 	}
 	confAfter, listing := string(h.readConf()), h.homeListing()
-	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=other")
+	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=hub")
 	if code != 1 {
 		t.Errorf("a second init exits %d, want 1\n%s%s", code, out, errOut)
 	}
@@ -271,7 +322,7 @@ func TestHubSettingsInitRefusesASecondRun(t *testing.T) {
 	if string(h.readConf()) != confAfter || h.homeListing() != listing {
 		t.Errorf("a refused second init changed the hub home")
 	}
-	if b, _ := os.ReadFile(h.settings); strings.Contains(string(b), "other") {
+	if b, _ := os.ReadFile(h.settings); strings.Contains(string(b), "HUB_NAME: \"other\"") {
 		t.Errorf("settings.conf was rewritten by the second init: %q", b)
 	}
 }
@@ -283,7 +334,7 @@ func TestHubSettingsInitWritesNothingWhenTheCandidateFailsTheServerTest(t *testi
 	// anything is written.
 	h := newHubScratch(t, hubScratchOpts{noSettings: true, noRegion: true, brokenConf: true})
 	confBefore, listing := string(h.readConf()), h.homeListing()
-	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=zed")
+	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=hub")
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1\nstdout: %s\nstderr: %s", code, out, errOut)
 	}
@@ -317,7 +368,7 @@ func TestHubSettingsInitRestoresWhenTheReloadDropsALeaf(t *testing.T) {
 	confBefore := string(h.readConf())
 	reloads := h.reloads()
 
-	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=zed")
+	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=hub")
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1\nstdout: %s\nstderr: %s", code, out, errOut)
 	}
@@ -471,10 +522,13 @@ func TestHubUserAddRefusesANameThatIsADanglingSymlink(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(h.keys, "obs.nk")); err != nil {
 		t.Fatal(err)
 	}
-	confBefore := string(h.readConf())
+	confBefore, listing, seeds := string(h.readConf()), h.homeListing(), h.seedFiles()
 	code, out, errOut := h.run("user", "add", "obs", "--class", "observer", "--param", "holder=director")
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	if got := h.seedFiles(); !reflect.DeepEqual(got, seeds) || h.homeListing() != listing {
+		t.Errorf("the refusal changed the keys: seeds before %v, after %v", seeds, got)
 	}
 	if _, err := os.Stat(target); err == nil {
 		t.Errorf("the command followed the symlink and wrote a seed at %s", target)
@@ -677,6 +731,49 @@ func TestHubUserAddRefusesBadInput(t *testing.T) {
 	code, out, errOut := h.run("user", "add", "obs", "--class", "observer", "--param", "holder=director")
 	if code != 1 || !strings.Contains(out+errOut, "obs") || !strings.Contains(out+errOut, "already") {
 		t.Errorf("a second add of the same name: exit = %d, message %q; want 1 saying obs already exists", code, out+errOut)
+	}
+}
+
+func TestHubUserAddHoldsTheLockAgainstASecondAdd(t *testing.T) {
+	// A hook holds the first add inside its lock, so the second add arrives while
+	// the lock is certainly held; the lost update the old test could only make
+	// likely is made certain.
+	h := newHubScratch(t, hubScratchOpts{})
+	inside, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	hubInLock = func(verb string) {
+		once.Do(func() {
+			close(inside)
+			<-release
+		})
+	}
+	defer func() { hubInLock = nil }()
+	done := make(chan [3]any, 1)
+	go func() {
+		c, o, e := h.run("user", "add", "obs-a", "--class", "observer", "--param", "holder=a")
+		done <- [3]any{c, o, e}
+	}()
+	select {
+	case <-inside:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatalf("the first add never reached the lock hook")
+	}
+	code, out, errOut := h.run("user", "add", "obs-b", "--class", "observer", "--param", "holder=b")
+	close(release)
+	r := <-done
+	if code != 1 || !strings.Contains(out+errOut, "another hub command") {
+		t.Errorf("the second add: exit = %d, message %q; want 1 saying another hub command holds the lock", code, out+errOut)
+	}
+	if r[0].(int) != 0 {
+		t.Errorf("the first add exit = %v, want 0\n%v%v", r[0], r[1], r[2])
+	}
+	users := h.registryUsers()
+	if len(users) != 1 || users[0]["name"] != "obs-a" {
+		t.Errorf("registry users = %v, want only obs-a", users)
+	}
+	if got := strings.Count(regionOf(h.readConf()), "nkey:"); got != 1 {
+		t.Errorf("the region holds %d users, want 1", got)
 	}
 }
 

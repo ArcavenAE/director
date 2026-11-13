@@ -20,6 +20,11 @@ var hubClassFS fs.FS
 // hub and before it verifies. It lets a test act while the new conf is live.
 var hubAfterReload func()
 
+// hubInLock, when a test sets it, runs once a changing verb holds the hub home's
+// lock, before the verb does anything else. It lets a test hold the lock while a
+// second command runs.
+var hubInLock func(verb string)
+
 // writeFileExcl creates path with mode, failing if the name exists (a dangling
 // symlink included), and sets the mode on the open descriptor so the umask
 // does not decide it.
