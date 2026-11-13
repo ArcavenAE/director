@@ -88,6 +88,7 @@ printf '[{"tag_name":"%s"},\n{"tag_name":"%s"},\n{"tag_name":"director-mcp-v0.1.
 # bundle that names another workflow (the way a real verify would).
 printf '%s\n' \
   '#!/bin/sh' \
+  '[ "$1" = --version ] && { echo "gh version ${FAKE_GH_VERSION:-2.102.0} (2026-09-30)"; echo "https://github.com/cli/cli/releases/tag/v${FAKE_GH_VERSION:-2.102.0}"; exit 0; }' \
   '[ "$1" = attestation ] && [ "$2" = --help ] && exit "${FAKE_GH_HELP_RC:-0}"' \
   '[ "$1" = attestation ] && [ "$2" = verify ] && [ "$3" = --help ] && { echo "      --repo string        Repository"; [ -n "$FAKE_GH_NO_SOURCE_REF" ] || echo "      --source-ref string  Enforce the git ref"; exit 0; }' \
   'echo "$*" >> "$FAKE_GH_LOG"' \
@@ -108,7 +109,7 @@ di() {
   local pre="$1"; shift
   env -i HOME="$root/h" DIRECTOR_HOME="$home" PATH="${pre:+$pre:}$BASEPATH" LANG=en_US.UTF-8 \
       DIRECTOR_RELEASE_BASE="$BASE" DIRECTOR_RELEASES_API="$API" \
-      DIRECTOR_MANIFESTS_DIR="$root/manifests" FAKE_GH_LOG="$ghlog" ${FAKE_GH_RC:+FAKE_GH_RC="$FAKE_GH_RC"} ${FAKE_GH_HELP_RC:+FAKE_GH_HELP_RC="$FAKE_GH_HELP_RC"} ${FAKE_GH_REJECT:+FAKE_GH_REJECT="$FAKE_GH_REJECT"} ${FAKE_GH_NO_SOURCE_REF:+FAKE_GH_NO_SOURCE_REF="$FAKE_GH_NO_SOURCE_REF"} \
+      DIRECTOR_MANIFESTS_DIR="$root/manifests" FAKE_GH_LOG="$ghlog" ${FAKE_GH_RC:+FAKE_GH_RC="$FAKE_GH_RC"} ${FAKE_GH_HELP_RC:+FAKE_GH_HELP_RC="$FAKE_GH_HELP_RC"} ${FAKE_GH_REJECT:+FAKE_GH_REJECT="$FAKE_GH_REJECT"} ${FAKE_GH_NO_SOURCE_REF:+FAKE_GH_NO_SOURCE_REF="$FAKE_GH_NO_SOURCE_REF"} ${FAKE_GH_VERSION:+FAKE_GH_VERSION="$FAKE_GH_VERSION"} \
       "$INSTALLER" "$@" >"$out/stdout" 2>"$out/stderr"
 }
 mlink() { readlink "$home/bin/director-mcp" 2>/dev/null || echo none; }
@@ -138,6 +139,7 @@ if di "$fake" director-mcp --release "$A_TAG"; then
   grep -qx "sha=$A_REV" "$stamp" 2>/dev/null          || miss+=" sha"
   grep -qx "release=$A_TAG" "$stamp" 2>/dev/null      || miss+=" release"
   grep -qx "origin=verified" "$stamp" 2>/dev/null     || miss+=" origin"
+  grep -qx "gh_version=2.102.0" "$stamp" 2>/dev/null  || miss+=" gh_version"
   grep -q '^version=0.1.0-alpha' "$stamp" 2>/dev/null || miss+=" version"
   grep -q '^source=http://127.0.0.1' "$stamp" 2>/dev/null || miss+=" source"
   grep -qx "channel=alpha" "$stamp" 2>/dev/null       || miss+=" channel"
@@ -280,6 +282,41 @@ else
     || bad "no --source-ref flag" "$(cat "$out/stderr") | requests: $(cat "$reqlog")"
 fi
 
+# --- 5e. a gh below 2.102.0 is refused before any download -----------------------
+# Before 2.102.0 gh matched --source-ref case-insensitively and --signer-workflow by prefix, so
+# both pins are weaker than they read. There is no override.
+for v in 2.101.9 1.99.0; do
+  before="$(mlink)"; : > "$reqlog"; : > "$ghlog"
+  if FAKE_GH_VERSION="$v" di "$fake" director-mcp --release "$A_TAG"; then
+    bad "an install with gh $v succeeded"
+  else
+    [[ "$(mlink)" == "$before" && ! -s "$reqlog" && ! -s "$ghlog" ]] \
+      && refuses_for "$(printf '%s' "$v" | sed 's/\./\\./g')" && refuses_for '2\.102\.0' && refuses_for 'case' && refuses_for 'workflow' && refuses_for '--ref' \
+      && ! grep -qi 'rejected' "$out/stderr" \
+      && ok "gh $v is refused before any request, naming the version found, the floor, both fixed behaviours and the source build" \
+      || bad "gh $v floor" "$(cat "$out/stderr") | requests: $(cat "$reqlog")"
+  fi
+done
+# A version that cannot be read is refused the same way.
+before="$(mlink)"; : > "$reqlog"
+if FAKE_GH_VERSION=banana di "$fake" director-mcp --release "$A_TAG"; then
+  bad "an install with an unreadable gh version succeeded"
+else
+  [[ "$(mlink)" == "$before" && ! -s "$reqlog" ]] && refuses_for 'gh --version' && refuses_for '2\.102\.0' \
+    && ok "a gh whose version cannot be read is refused before any request, naming the floor" \
+    || bad "unreadable gh version" "$(cat "$out/stderr") | requests: $(cat "$reqlog")"
+fi
+# The comparison is numeric: 2.1000.0 is above 2.102.0, and 2.102.0 itself passes (test 1).
+home_keep="$home"; home="$root/home4"
+if FAKE_GH_VERSION=2.1000.0 di "$fake" director-mcp --release "$A_TAG"; then
+  [[ "$(mlink)" == "$(want "$A_REV")" ]] && grep -qx 'gh_version=2.1000.0' "$home/lib/director-mcp/$A_REV/STAMP" \
+    && ok "gh 2.1000.0 passes the floor, so the comparison is numeric, and the STAMP records it" \
+    || bad "gh 2.1000.0" "$(mlink) $(cat "$home/lib/director-mcp/$A_REV/STAMP" 2>/dev/null)"
+else
+  bad "gh 2.1000.0 was refused" "$(cat "$out/stderr")"
+fi
+home="$home_keep"
+
 # --- 6. the binary must report the commit its tag names ------------------------
 W_TAG="director-mcp-alpha-20261113-150000-fffffff"
 mkrelease "$W_TAG" "9999999000000000000000000000000000000099"
@@ -343,8 +380,8 @@ fi
 
 # --- 10. --status names the release and the origin result -----------------------
 di "$fake" --status || true
-grep -q "director-mcp: ${A_REV:0:12}" "$out/stdout" && grep -q "$A_TAG" "$out/stdout" && grep -q 'origin verified' "$out/stdout" \
-  && ok "--status shows the release tag and that its origin was verified" \
+grep -q "director-mcp: ${A_REV:0:12}" "$out/stdout" && grep -q "$A_TAG" "$out/stdout" && grep -q 'origin verified' "$out/stdout" && grep -q 'gh 2\.102\.0' "$out/stdout" \
+  && ok "--status shows the release tag, that its origin was verified, and the gh that verified it" \
   || bad "--status" "$(cat "$out/stdout")"
 
 # --- 10b. a tampered seat wrapper refuses the whole install --------------------
