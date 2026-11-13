@@ -39,11 +39,14 @@ prs_file() {  # WRITTEN_AGE_H PRS_JSON
   printf '{"written_at":"%s","checked":2,"approved_not_merged":%s}\n' "$(stamp "$1")" "$2" >"$PRS"
 }
 last() { "$H" | tail -n 1; }
+# noclock: drop the hook's first line, the local clock ("now HH:MM ZONE"), which changes with the minute.
+# Comparing two hook runs without this fails whenever the runs straddle a minute boundary.
+noclock() { sed '1{/^now /d;}'; }
 count() { "$H" | grep -c '^waiting: ' || true; }
 
 # --- no input at all: UNKNOWN naming both, the other lines as they were ------------------------------
 full="$("$H")"
-before="$(printf '%s\n' "$full" | sed '$d')"
+before="$(printf '%s\n' "$full" | sed '$d' | noclock)"
 [[ "$(printf '%s\n' "$full" | tail -n 1)" == "waiting: UNKNOWN (desk-reads.jsonl missing"*"; waiting-prs.json missing"* && "$(count)" == 1 ]] && ok "with neither input the hook prints UNKNOWN naming both" || bad "no inputs" "$full"
 [[ "$(printf '%s\n' "$before" | tail -n 1)" == "stalled ideas: "* ]] && ok "and the stalled-ideas line is the last of the rest" || bad "the rest" "$before"
 
@@ -91,7 +94,12 @@ printf '{"read_at":"2999-01-01T00:00:00Z","cards":1,"answered":[],"answered_not_
 reads_row 1 '[{"card":"ca-1"}]'; prs_file 1 '[]'
 out="$("$H")"
 [[ "$(printf '%s\n' "$out" | tail -n 1)" == "waiting: "* && "$(printf '%s\n' "$out" | sed -n 3p)" == "Before you answer:" && "$(printf '%s\n' "$out" | grep -c '^[123]\. ')" == 3 ]] && ok "the waiting line is last and the checklist is as it was" || bad "line order" "$out"
-[[ "$(printf '%s\n' "$out" | sed '$d')" == "$before" ]] && ok "every other line matches the output with no inputs" || bad "the other lines changed"
+[[ "$(printf '%s\n' "$out" | sed '$d' | noclock)" == "$before" ]] && ok "every other line matches the output with no inputs" || bad "the other lines changed"
+# The clock line moves with the minute; a faked clock across a minute boundary shows the compare ignores it.
+a="$(DWS_TEST_CLOCK=1 DWS_NOW=2026-01-15T12:00:30Z DIRECTOR_TZ=UTC "$H")"; b="$(DWS_TEST_CLOCK=1 DWS_NOW=2026-01-15T12:01:30Z DIRECTOR_TZ=UTC "$H")"
+[[ "$(printf '%s\n' "$a" | head -n 1)" != "$(printf '%s\n' "$b" | head -n 1)" ]] && ok "control: the faked clock moves the first line across a minute" || bad "the faked clock did not move the first line" "$(printf '%s\n' "$a" | head -n 1) / $(printf '%s\n' "$b" | head -n 1)"
+[[ "$(printf '%s\n' "$a" | noclock)" == "$(printf '%s\n' "$b" | noclock)" ]] && ok "two runs a minute apart match once the clock line is dropped" || bad "runs differ beyond the clock line"
+[[ "$(printf '%s\n' "$a" | sed '$d')" != "$(printf '%s\n' "$b" | sed '$d')" ]] && ok "control: without the strip the same runs differ" || bad "control: the unstripped runs matched, so the test cannot fail without the strip"
 
 # --- no network, no gh, inside the time budget ---------------------------------------------------------------------
 mkdir -p "$root/bin" "$root/gh"
