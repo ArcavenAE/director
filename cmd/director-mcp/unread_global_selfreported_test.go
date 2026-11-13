@@ -301,3 +301,160 @@ func TestSelfReportedFallbackIsNotUsedWhenTheObserverReads(t *testing.T) {
 		t.Errorf("the observer's read of GLOBAL_TO_other = %+v, want the one seat with 5 pending", r.Durables)
 	}
 }
+
+// Presence rows the fallback cannot read are counted per cluster and named, so a
+// cluster whose rows all fail does not vanish as "no presence row" (a false
+// reason). The report carries "unreadable_rows": N, and a warning that says
+// "N presence row(s) unreadable". Tests read it through the JSON form.
+
+// putHubPresenceRaw writes raw bytes at a presence key as admin.
+func putHubPresenceRaw(t *testing.T, ctx context.Context, adminURL, key string, raw []byte) {
+	t.Helper()
+	nc, _ := provision(t, ctx, adminURL)
+	gjs, err := jetstream.NewWithDomain(nc, "global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kv, err := gjs.KeyValue(ctx, globalPresenceBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kv.Put(ctx, key, raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const otherKeyB = "presence.other.supervisor." + partialInstB
+
+func unreadableRowsOf(m map[string]any) float64 {
+	n, _ := m["unreadable_rows"].(float64)
+	return n
+}
+
+func warningsText(r unreadReport) string { return strings.Join(r.Warnings, "\n") }
+
+func TestSelfReportedUnreadableRowFromAReadFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, true) // key gets are refused
+	seedPartialHub(t, ctx, adminURL)
+	t.Setenv("DIRECTOR_CLUSTER", "mokuzai")
+
+	reports, err := readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, r := selfReportedReport(t, reports, "GLOBAL_TO_other")
+	if unreadableRowsOf(m) != 1 {
+		t.Errorf("unreadable_rows = %v, want 1 for the row whose get failed: %v", m["unreadable_rows"], m)
+	}
+	if !strings.Contains(warningsText(r), "1 presence row unreadable") {
+		t.Errorf("the warnings do not say 1 presence row unreadable: %v", r.Warnings)
+	}
+}
+
+func TestSelfReportedUnreadableRowNotJSON(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	putHubPresenceRaw(t, ctx, adminURL, otherKeyB, []byte("this is not json"))
+	t.Setenv("DIRECTOR_CLUSTER", "mokuzai")
+
+	reports, err := readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, r := selfReportedReport(t, reports, "GLOBAL_TO_other")
+	if unreadableRowsOf(m) != 1 || !strings.Contains(warningsText(r), "1 presence row unreadable") {
+		t.Errorf("a row that is not JSON is not counted and named: unreadable_rows %v, warnings %v", m["unreadable_rows"], r.Warnings)
+	}
+}
+
+func TestSelfReportedUnreadableRowMissingAField(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	for name, body := range map[string]string{"no instance": `{"agent_id":"other-supervisor","oldest_pending_s":900}`, "no agent_id": `{"instance":"` + partialInstB + `","oldest_pending_s":900}`} {
+		putHubPresenceRaw(t, ctx, adminURL, otherKeyB, []byte(body))
+		t.Setenv("DIRECTOR_CLUSTER", "mokuzai")
+		reports, err := readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, r := selfReportedReport(t, reports, "GLOBAL_TO_other")
+		if unreadableRowsOf(m) != 1 || !strings.Contains(warningsText(r), "1 presence row unreadable") {
+			t.Errorf("%s: the row is not counted and named: unreadable_rows %v, warnings %v", name, m["unreadable_rows"], r.Warnings)
+		}
+		if len(seatsOf(t, m)) != 0 {
+			t.Errorf("%s: a row without an identity became a seat: %v", name, seatsOf(t, m))
+		}
+	}
+}
+
+func TestSelfReportedAClusterWhoseRowsAllFailIsNotNoPresenceRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	putHubPresenceRaw(t, ctx, adminURL, otherKeyB, []byte("garbage"))
+	putHubPresenceRaw(t, ctx, adminURL, "presence.other.supervisor.01M6CCCCCCCCCCCCCCCCCCCCCC", []byte(`{"agent_id":"x"}`))
+	t.Setenv("DIRECTOR_CLUSTER", "mokuzai")
+
+	reports, err := readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, r := selfReportedReport(t, reports, "GLOBAL_TO_other")
+	if unreadableRowsOf(m) != 2 || !strings.Contains(warningsText(r), "2 presence rows unreadable") {
+		t.Errorf("both rows are bad but unreadable_rows is %v, warnings %v", m["unreadable_rows"], r.Warnings)
+	}
+	var out strings.Builder
+	printUnread(&out, r, unreadOpts{})
+	if !strings.Contains(out.String(), "2 presence rows unreadable") {
+		t.Errorf("the printed report does not say 2 presence rows unreadable: %q", out.String())
+	}
+	if strings.Contains(out.String(), "no presence row") {
+		t.Errorf("a cluster whose rows all fail is printed as having no presence row: %q", out.String())
+	}
+}
+
+func TestSelfReportedOneBadRowBesideAGoodOne(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	putHubPresence(t, ctx, adminURL, "other", "other-supervisor", partialInstB, map[string]any{"oldest_pending_s": 40})
+	putHubPresenceRaw(t, ctx, adminURL, "presence.other.supervisor.01M6CCCCCCCCCCCCCCCCCCCCCC", []byte("garbage"))
+	t.Setenv("DIRECTOR_CLUSTER", "mokuzai")
+
+	reports, err := readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, r := selfReportedReport(t, reports, "GLOBAL_TO_other")
+	if len(seatsOf(t, m)) != 1 {
+		t.Errorf("the good row is not a seat: %v", m)
+	}
+	if unreadableRowsOf(m) != 1 || !strings.Contains(warningsText(r), "1 presence row unreadable") {
+		t.Errorf("the bad row beside it is not counted and named: unreadable_rows %v, warnings %v", m["unreadable_rows"], r.Warnings)
+	}
+}
+
+func TestSelfReportedAllRowsReadableCountsNoneUnreadable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	t.Setenv("DIRECTOR_CLUSTER", "mokuzai")
+
+	reports, err := readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, r := selfReportedReport(t, reports, "GLOBAL_TO_other")
+	if _, has := m["unreadable_rows"]; has || strings.Contains(warningsText(r), "unreadable") {
+		t.Errorf("a cluster whose rows all read is reported with unreadable rows: %v %v", m, r.Warnings)
+	}
+}
