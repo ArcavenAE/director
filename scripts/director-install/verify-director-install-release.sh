@@ -85,10 +85,13 @@ printf '[{"tag_name":"%s"},\n{"tag_name":"%s"},\n{"tag_name":"director-mcp-v0.1.
 # bundle that names another workflow (the way a real verify would).
 printf '%s\n' \
   '#!/bin/sh' \
+  '[ "$1" = attestation ] && [ "$2" = --help ] && exit "${FAKE_GH_HELP_RC:-0}"' \
   'echo "$*" >> "$FAKE_GH_LOG"' \
+  'pinned=""; case " $* " in *" --source-ref refs/heads/main "*) pinned=1 ;; esac' \
   'bundle=""' \
   'while [ $# -gt 0 ]; do [ "$1" = "--bundle" ] && bundle="$2"; shift; done' \
   '[ -n "$bundle" ] && grep -q OTHER-WORKFLOW "$bundle" 2>/dev/null && exit 1' \
+  '[ -n "$bundle" ] && [ -n "$pinned" ] && grep -q OTHER-BRANCH "$bundle" 2>/dev/null && exit 1' \
   'exit "${FAKE_GH_RC:-0}"' > "$fake/gh"
 chmod +x "$fake/gh"
 
@@ -100,7 +103,7 @@ di() {
   local pre="$1"; shift
   env -i HOME="$root/h" DIRECTOR_HOME="$home" PATH="${pre:+$pre:}$BASEPATH" LANG=en_US.UTF-8 \
       DIRECTOR_RELEASE_BASE="$BASE" DIRECTOR_RELEASES_API="$API" \
-      DIRECTOR_MANIFESTS_DIR="$root/manifests" FAKE_GH_LOG="$ghlog" ${FAKE_GH_RC:+FAKE_GH_RC="$FAKE_GH_RC"} \
+      DIRECTOR_MANIFESTS_DIR="$root/manifests" FAKE_GH_LOG="$ghlog" ${FAKE_GH_RC:+FAKE_GH_RC="$FAKE_GH_RC"} ${FAKE_GH_HELP_RC:+FAKE_GH_HELP_RC="$FAKE_GH_HELP_RC"} \
       "$INSTALLER" "$@" >"$out/stdout" 2>"$out/stderr"
 }
 mlink() { readlink "$home/bin/director-mcp" 2>/dev/null || echo none; }
@@ -138,9 +141,9 @@ if di "$fake" director-mcp --release "$A_TAG"; then
   line="$(head -1 "$ghlog" 2>/dev/null || true)"
   [[ "$line" == "attestation verify "* && "$line" == *"--repo ArcavenAE/director"* \
      && "$line" == *"--signer-workflow ArcavenAE/director/.github/workflows/release-director-mcp.yml"* \
-     && "$line" == *"--bundle "* ]] \
+     && "$line" == *"--source-ref refs/heads/main"* && "$line" == *"--bundle "* ]] \
     && printf '%s\n' "$line" | grep -qE "(^| |/)director-mcp-$hos-$harch( |\$)" \
-    && ok "the verify names this repository, this release workflow, the bundle and the host's binary as the subject" \
+    && ok "the verify names this repository, this release workflow, refs/heads/main as the source ref, the bundle and the host's binary as the subject" \
     || bad "gh arguments" "$line"
   r="$(cat "$ranlog")"
   [[ -n "$r" ]] && ! grep -qvx 'ran stdin_tty=no stdin_bytes=0 NATS_URL=nats://127.0.0.1:1' "$ranlog" \
@@ -212,6 +215,32 @@ else
     || bad "other-workflow bundle: state changed"
   refuses_for 'attestation|origin' && ok "the other-workflow refusal names the origin check" || bad "other-workflow refusal text" "$(cat "$out/stderr")"
   [[ ! -s "$ranlog" ]] && ok "the binary does not run when its bundle is refused" || bad "a binary with a refused bundle ran" "$(cat "$ranlog")"
+fi
+
+# --- 5b. a bundle for the right workflow run from another branch is refused -----
+# The release workflow runs only on a push to main, so the verify must pin --source-ref.
+B2_TAG="director-mcp-alpha-20261113-145000-9a9a9a9"; B2_REV="9a9a9a9000000000000000000000000000000099"
+mkrelease "$B2_TAG" "$B2_REV"
+echo '{"bundle":"OTHER-BRANCH"}' > "$srv/dl/$B2_TAG/attestations.sigstore.json"
+before="$(mlink)"; : > "$ranlog"
+if di "$fake" director-mcp --release "$B2_TAG"; then
+  bad "a bundle built from another branch was accepted"
+else
+  [[ "$(mlink)" == "$before" && ! -e "$home/lib/director-mcp/$B2_REV" && ! -s "$ranlog" ]] \
+    && refuses_for 'attestation|origin' \
+    && ok "a bundle from another branch is refused: no link moves and no binary runs" \
+    || bad "other-branch bundle" "$(cat "$out/stderr")"
+fi
+
+# --- 5c. a gh with no attestation command is named as such, before any download --
+before="$(mlink)"; : > "$reqlog"
+if FAKE_GH_HELP_RC=1 di "$fake" director-mcp --release "$A_TAG"; then
+  bad "an install with a gh that has no attestation command succeeded"
+else
+  [[ "$(mlink)" == "$before" && ! -s "$reqlog" ]] \
+    && refuses_for 'no attestation command' && refuses_for '2\.49' && ! grep -qi 'rejected' "$out/stderr" \
+    && ok "a gh with no attestation command is named as that, with the version it needs, before any download" \
+    || bad "no-attestation gh" "$(cat "$out/stderr") | requests: $(cat "$reqlog")"
 fi
 
 # --- 6. the binary must report the commit its tag names ------------------------
