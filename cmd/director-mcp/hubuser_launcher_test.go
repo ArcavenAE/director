@@ -341,6 +341,23 @@ func TestHubSettingsInitEnvRefusesWhatItCannotUse(t *testing.T) {
 	}
 }
 
+func TestHubSettingsInitEnvWithAValueRefusesAMissingNameWhenTheHubEnvironmentIsReadable(t *testing.T) {
+	// The running hub's environment can be read and does not hold the name, so
+	// the name is not one the launcher supplies. A value on the flag must not
+	// make it one: the refusal points at --set.
+	l := newLauncherHub(t, "127.0.0.1:7501")
+	hubProcEnv = func(pid int) (map[string]string, error) { return map[string]string{"HUB_NAME": "hub"}, nil }
+	confBefore, regBefore := string(l.readConf()), string(l.readRegistry())
+	listing := l.homeListing()
+	code, _, errOut := l.run("settings", "init", "--set", "HUB_NAME=hub", "--env", "HUB_LEAF_ADVERTISE=127.0.0.1:7501")
+	if code != 1 || !strings.Contains(errOut, "does not supply HUB_LEAF_ADVERTISE") || !strings.Contains(errOut, "--set") {
+		t.Errorf("exit = %d, stderr = %q, want 1, the does-not-supply message and a pointer to --set", code, errOut)
+	}
+	if string(l.readConf()) != confBefore || string(l.readRegistry()) != regBefore || l.homeListing() != listing {
+		t.Errorf("a refused init left something behind")
+	}
+}
+
 func TestHubSettingsInitWritesAllDigitValuesUnquoted(t *testing.T) {
 	// The conf reads the leafnode port from a variable. nats-server rejects a
 	// quoted string where it wants a number, so the value is written bare.
@@ -357,19 +374,50 @@ func TestHubSettingsInitWritesAllDigitValuesUnquoted(t *testing.T) {
 }
 
 func TestHubSettingLiteralQuotesOnlyWhatIsNotAPlainNumber(t *testing.T) {
+	// Director's ruling (2026-11-13): all-digit values up to 18 digits stay
+	// unquoted; a leading zero, and 19 or more digits, are quoted. nats-server
+	// reads a bare number as an int64, and rejects a quoted string where it
+	// wants one.
 	for in, want := range map[string]string{
-		"7422":       "7422",
-		"0":          "0",
-		"hub":        `"hub"`,
-		"0123":       `"0123"`, // a leading zero would change the value
-		"12a":        `"12a"`,
-		"1234567890": `"1234567890"`, // ten digits can overflow an int, so it stays a string
-		"":           `""`,
-		"1.5":        `"1.5"`,
+		"7422":                `7422`,
+		"0":                   `0`,
+		"1073741824":          `1073741824`, // 2^30: a size limit above the int32 range
+		"1234567890":          `1234567890`,
+		"999999999999999999":  `999999999999999999`,    // 18 digits
+		"1000000000000000000": `"1000000000000000000"`, // 19 digits: can overflow an int64
+		"hub":                 `"hub"`,
+		"0123":                `"0123"`, // a leading zero would change the value when read bare
+		"00":                  `"00"`,
+		"12a":                 `"12a"`,
+		"":                    `""`,
+		"1.5":                 `"1.5"`,
 	} {
 		if got := hubSettingLiteral(in); got != want {
 			t.Errorf("hubSettingLiteral(%q) = %s, want %s", in, got, want)
 		}
+	}
+}
+
+func TestHubSettingsInitWritesALargeNumberUnquotedAndTheServerAcceptsIt(t *testing.T) {
+	// 1073741824 is above the int32 range. nats-server reads a bare one as an
+	// int64 and rejects the quoted string, so the value is written bare and
+	// init's -t run and reload accept it.
+	l := newLauncherHub(t, "127.0.0.1:7501")
+	conf := string(l.readConf())
+	edited := strings.Replace(conf, "jetstream { ", "jetstream { max_memory_store: $HUB_MEM, ", 1)
+	if edited == conf {
+		t.Fatal("setup: the conf edit did not apply")
+	}
+	if err := os.WriteFile(l.conf, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l.restart(t, "127.0.0.1:7501", "HUB_MEM=1073741824")
+	code, out, errOut := l.run("settings", "init", "--set", "HUB_NAME=hub", "--set", "HUB_MEM=1073741824", "--env", "HUB_LEAF_ADVERTISE")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	if got, want := l.settingsText(), "HUB_NAME: \"hub\"\nHUB_MEM: 1073741824\n"; got != want {
+		t.Errorf("settings.conf = %q, want %q", got, want)
 	}
 }
 
