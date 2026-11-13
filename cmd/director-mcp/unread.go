@@ -1192,6 +1192,15 @@ func readUnreadGlobalWith(ctx context.Context, nc *nats.Conn, domain string, now
 	if err != nil {
 		return nil, fmt.Errorf("global JetStream domain %q: %w", domain, err)
 	}
+	return readUnreadGlobalJS(ctx, gjs, domain, now, durables, true)
+}
+
+// readUnreadGlobalJS is the global read over a JetStream handle. leaf is true for
+// the handle that reaches the hub through the local broker's leaf, where a list
+// that finds no responder falls to the partial read by name; the observer's
+// handle (observer.go) is a direct connection that may list, so a failed list
+// there is its own error and the caller falls back.
+func readUnreadGlobalJS(ctx context.Context, gjs jetstream.JetStream, domain string, now time.Time, durables []string, leaf bool) ([]unreadReport, error) {
 	var names []string
 	lister := gjs.StreamNames(ctx)
 	for n := range lister.Name() {
@@ -1200,6 +1209,9 @@ func readUnreadGlobalWith(ctx context.Context, nc *nats.Conn, domain string, now
 		}
 	}
 	if err := lister.Err(); err != nil {
+		if !leaf {
+			return nil, fmt.Errorf("listing the hub's streams: %w", err)
+		}
 		missing := listVerbMissing(ctx, gjs, err) // one probe, so a down hub costs 3 s, not 6
 		if cluster := sessionCluster(); cluster != "" && missing {
 			return readUnreadGlobalPartial(ctx, gjs, cluster, durables, now)
@@ -1293,7 +1305,7 @@ func runUnreadCmd(ctx context.Context, url string, cli cliArgs, domain string, o
 	}
 	if cli.global {
 		g := globalUnread{Domain: domain}
-		reports, err := readUnreadGlobalWith(ctx, nc, domain, time.Now(), cli.durables)
+		reports, err := readUnreadGlobalObserved(ctx, nc, domain, time.Now(), cli.durables)
 		if err != nil {
 			g.Error = err.Error()
 		}

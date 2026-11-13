@@ -137,6 +137,14 @@ func (b *Bus) checkLocalDurable(ctx context.Context, row map[string]any, durable
 // and a leaf link that does not answer looks the same, so a lookup that fails
 // for any reason but "no such durable" marks the row unknown, never missing.
 func (g *globalTier) flagGlobalRows(ctx context.Context, rows []map[string]any) {
+	g.flagGlobalRowsObserved(ctx, rows)
+}
+
+// flagGlobalRowsOn is flagGlobalRows over one JetStream handle: the leaf's, or
+// the hub observer's (observer.go). gap, when set, is the observer's connect
+// failure and is added to every row's durable_note; viaObserver marks a handle
+// that is the observer, so a failed lookup names it.
+func (g *globalTier) flagGlobalRowsOn(ctx context.Context, js jetstream.JetStream, gap string, viaObserver bool, rows []map[string]any) {
 	flagRows(ctx, rows, func(ctx context.Context, r map[string]any) []string {
 		flags := flagsOfAge(r)
 		agent, _ := r["agent_id"].(string)
@@ -155,7 +163,19 @@ func (g *globalTier) flagGlobalRows(ctx context.Context, rows []map[string]any) 
 			r["durable_note"] = "the presence row names no agent id, instance or cluster, so its durable cannot be looked up"
 			return append(flags, flagDurableUnchecked)
 		}
-		durableCheck(ctx, g.js, stream, globalDurable(agent, inst), r, &flags)
+		durableCheck(ctx, js, stream, globalDurable(agent, inst), r, &flags)
+		if viaObserver && r["durable"] == "unknown" {
+			if n, _ := r["durable_note"].(string); n != "" {
+				r["durable_note"] = "through the hub observer: " + n
+			}
+		}
+		if gap != "" {
+			n, _ := r["durable_note"].(string)
+			if n != "" {
+				n += "; "
+			}
+			r["durable_note"] = n + gap
+		}
 		return flags
 	})
 }
