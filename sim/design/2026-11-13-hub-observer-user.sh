@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# `director hub user add` replaces this script (sim/design/hub-user-lifecycle.md): superseded; if run before the command ships, use bash 5.
 # At-host script for kinu (~/operator-steps). NOT RUN by its author.
 # I-469: add the read-only observer user `observer.director` to the global hub.
 # Design: sim/design/hub-observer.md (draft, architect seat, 2026-11-13).

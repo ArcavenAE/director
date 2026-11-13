@@ -95,6 +95,11 @@ func main() {
 	// The pending-age bound is read once, where the reader runs.
 	pendingAgeBound = loadPendingAgeBound(os.Getenv, os.Stderr)
 	preflightMode := cli.mode == "preflight"
+	// hub manages the global hub's users and settings on the hub's host: no bus
+	// connection and no identity of its own.
+	if cli.mode == "hub" {
+		os.Exit(runHubCmd(cli.hubArgs, os.Getenv, os.Stdout, os.Stderr))
+	}
 	// unread is a read-only report over every seat's durable: it needs no
 	// identity of its own and never registers one (LR-3).
 	if cli.mode == "unread" {
