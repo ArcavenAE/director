@@ -37,6 +37,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PF="${PF:-$here/director-preflight}"
 MANIFEST="${MANIFEST:-$here/director-preflight.tsv}"
+real_pf="$PF"
 pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
@@ -206,11 +207,10 @@ p="$root/p7e"; new_path "$p"; rm -f "$p/jq" "$p/gh"; printf '#!/bin/sh\n' >"$p/j
 copy_with() { # copy_with AWK_PROGRAM: copy the check and the manifest into a fresh dir, edit the manifest with awk, echo the check's path
   local d="$root/copy"
   rm -rf "$d"; mkdir -p "$d"
-  cp "$PF" "$d/director-preflight"; chmod +x "$d/director-preflight"
+  cp "$real_pf" "$d/director-preflight"; chmod +x "$d/director-preflight"
   if [[ -r "$MANIFEST" ]]; then awk -F'\t' -v OFS='\t' "$1" "$MANIFEST" >"$d/director-preflight.tsv"; else : >"$d/director-preflight.tsv"; fi
   echo "$d/director-preflight"
 }
-real_pf="$PF"
 p="$root/p9"; new_path "$p"; rm -f "$p/tmux"
 PF="$(copy_with '$1 == "tmux" { $2 = "required" } { print }')"; run "$p"
 l="$(line MISSING tmux)"
