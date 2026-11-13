@@ -37,7 +37,7 @@ func readUnreadGlobalPartial(ctx context.Context, gjs jetstream.JetStream, clust
 	}
 	r := unreadReport{Stream: name, ReadAt: now.UTC().Format(time.RFC3339), Partial: true}
 	keyPrefix := "presence." + cluster + ".supervisor."
-	r.Warnings = append(r.Warnings, fmt.Sprintf("partial: this credential reaches the hub through a leaf that does not carry the list verbs, so %s was read by name (stream and consumer info, and an exact-key get of %s<instance>). Other clusters' streams are not read; durables with no live presence are not listed; the oldest-unread age, the live state, the reply scan and any total are not read", name, keyPrefix))
+	r.Warnings = append(r.Warnings, fmt.Sprintf("partial: this credential reaches the hub through a leaf that does not carry the list verbs, so %s was read by name (stream and consumer info, and an exact-key get of %s<instance>). Other clusters' streams are not read, and a cluster with no presence row is not reported; durables with no live presence are not listed; the oldest-unread age, the live state, the reply scan and any total are not read", name, keyPrefix))
 
 	presence := map[string]unreadPresence{}
 	have := map[string]bool{}
@@ -48,10 +48,19 @@ func readUnreadGlobalPartial(ctx context.Context, gjs jetstream.JetStream, clust
 			durables = append(durables, d)
 		}
 	}
-	var reads []keyRead
+	var reads, otherReads []keyRead
 	kv, err := gjs.KeyValue(ctx, globalPresenceBucket)
 	if err == nil {
-		reads, err = readKeysUnder(ctx, gjs, globalPresenceBucket, kv, keyPrefix)
+		var all []keyRead
+		all, err = readKeysUnder(ctx, gjs, globalPresenceBucket, kv, "presence.")
+		for _, kr := range all {
+			switch {
+			case strings.HasPrefix(kr.key, keyPrefix):
+				reads = append(reads, kr)
+			case !strings.HasPrefix(kr.key, "presence."+cluster+"."):
+				otherReads = append(otherReads, kr)
+			}
+		}
 	}
 	if err != nil {
 		r.Warnings = append(r.Warnings, fmt.Sprintf("GAP presence instances not listed: %v; pass --durable NAME for each durable to read", err))
@@ -100,7 +109,82 @@ func readUnreadGlobalPartial(ctx context.Context, gjs jetstream.JetStream, clust
 		r.Durables = append(r.Durables, durableRow(c.CachedInfo(), rest, presence, false))
 	}
 	sortDurables(&r)
-	return []unreadReport{r}, nil
+	out := []unreadReport{r}
+	out = append(out, selfReportedReports(otherReads, now)...)
+	return out, nil
+}
+
+// selfReportedReports turns the presence rows of other clusters' seats into one
+// self-reported report per cluster, the fallback for a stream this credential
+// cannot read (I-467 rec 2). It makes no call: the rows were read already, each
+// by an exact-key get. A cluster with no presence row has no report, since a
+// report would read as a quiet cluster; the own cluster's warning says so.
+func selfReportedReports(reads []keyRead, now time.Time) []unreadReport {
+	byCluster := map[string][]selfReportedSeat{}
+	for _, kr := range reads {
+		if kr.err != nil {
+			continue
+		}
+		parts := strings.SplitN(kr.key, ".", 4) // presence.<cluster>.<role>.<instance>
+		if len(parts) < 4 {
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal(kr.entry.Value(), &rec) != nil {
+			continue
+		}
+		agent, _ := rec["agent_id"].(string)
+		inst, _ := rec["instance"].(string)
+		if agent == "" || inst == "" {
+			continue
+		}
+		seat := selfReportedSeat{AgentID: agent, Instance: inst}
+		seat.PresenceTS, _ = rec["ts"].(string)
+		if v, ok := rec["oldest_pending_s"]; ok {
+			if age, ok := ageSeconds(v); ok {
+				n := int64(age)
+				seat.Reported = true
+				seat.OldestPendingS = &n
+				seat.OverBound = age > pendingAgeBound.Seconds()
+			}
+		}
+		byCluster[parts[1]] = append(byCluster[parts[1]], seat)
+	}
+	clusters := make([]string, 0, len(byCluster))
+	for c := range byCluster {
+		clusters = append(clusters, c)
+	}
+	sort.Strings(clusters)
+	var out []unreadReport
+	for _, c := range clusters {
+		seats := byCluster[c]
+		sort.Slice(seats, func(i, j int) bool { return seats[i].AgentID < seats[j].AgentID })
+		name := globalStreamPrefix + c
+		out = append(out, unreadReport{
+			Stream: name, ReadAt: now.UTC().Format(time.RFC3339), Partial: true, SelfReported: true, Seats: seats,
+			Warnings: []string{fmt.Sprintf("self-reported: %s was not read; each seat's own presence row was. oldest_pending_s covers both tiers (the oldest message waiting on either), it is an age, not a count, and it is what the seat wrote about itself. A seat with no row, or a row with no age, is not reported, never 0", name)},
+		})
+	}
+	return out
+}
+
+// printSelfReportedUnread prints a self-reported report: a header that says it
+// is not a stream read, one line per seat, and the warning that names the limits.
+func printSelfReportedUnread(w io.Writer, r unreadReport) {
+	_, _ = fmt.Fprintf(w, "%s SELF-REPORTED by presence, not read from the stream, read %s\n", r.Stream, r.ReadAt)
+	for _, s := range r.Seats {
+		switch {
+		case !s.Reported:
+			_, _ = fmt.Fprintf(w, "%s  not reported (the presence row carries no age)\n", s.AgentID)
+		case s.OverBound:
+			_, _ = fmt.Fprintf(w, "%s  oldest pending %ds (self-reported)  OVER BOUND\n", s.AgentID, *s.OldestPendingS)
+		default:
+			_, _ = fmt.Fprintf(w, "%s  oldest pending %ds (self-reported)\n", s.AgentID, *s.OldestPendingS)
+		}
+	}
+	for _, warn := range r.Warnings {
+		_, _ = fmt.Fprintf(w, "WARNING: %s\n", warn)
+	}
 }
 
 // printPartialUnread prints a partial report: a header that says it is partial,

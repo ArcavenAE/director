@@ -147,8 +147,16 @@ func TestSelfReportedFallbackNeverReadsAnAbsentAgeAsZero(t *testing.T) {
 	}
 	var out strings.Builder
 	printUnread(&out, reportOf(t, reports, "GLOBAL_TO_other"), unreadOpts{})
-	if !strings.Contains(out.String(), "not reported") {
-		t.Errorf("the printed report does not say not reported: %q", out.String())
+	// the seat's own line says so; the warning's wording about "not reported"
+	// would satisfy a check on the whole text
+	seatLine := ""
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(l, "other-supervisor") {
+			seatLine = l
+		}
+	}
+	if !strings.Contains(seatLine, "not reported") || strings.Contains(seatLine, "0s") {
+		t.Errorf("the seat's printed line does not say not reported, or prints an age: %q (in %q)", seatLine, out.String())
 	}
 }
 
@@ -272,6 +280,18 @@ func TestSelfReportedFallbackIsNotUsedWhenTheObserverReads(t *testing.T) {
 	reports, err := readUnreadGlobalObserved(ctx, dialLeaf(t, h.leafURL), "global", time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	perStream := map[string]int{}
+	for _, rep := range reports {
+		perStream[rep.Stream]++
+		if rep.SelfReported || len(rep.Seats) != 0 {
+			t.Errorf("report %s is self-reported though the observer read every stream in full", rep.Stream)
+		}
+	}
+	for stream, n := range perStream {
+		if n != 1 {
+			t.Errorf("%d reports for %s, want exactly one (a fallback must not sit beside the observer's read)", n, stream)
+		}
 	}
 	m, r := selfReportedReport(t, reports, "GLOBAL_TO_other")
 	if m["self_reported"] == true || r.Partial {

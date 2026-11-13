@@ -423,11 +423,18 @@ func TestUnreadGlobalPartialGetsEachPresenceKeyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reports) != 1 || len(reports[0].Durables) != 1 {
-		t.Fatalf("reports = %+v, want the one mokuzai seat read", reports)
+	if len(reports) != 2 || len(reports[0].Durables) != 1 {
+		t.Fatalf("reports = %+v, want the one mokuzai seat read and the other cluster's self-reported report", reports)
 	}
-	key := "presence.mokuzai.supervisor." + partialInstA
-	if counted.gets[key] != 1 || len(counted.gets) != 1 {
-		t.Errorf("gets = %v, want exactly one get of %s", counted.gets, key)
+	// Each presence key, the own cluster's and the other's for the fallback,
+	// is got once, from the one listing.
+	keys := []string{"presence.mokuzai.supervisor." + partialInstA, "presence.other.supervisor." + partialInstB}
+	for _, key := range keys {
+		if counted.gets[key] != 1 {
+			t.Errorf("gets = %v, want exactly one get of %s", counted.gets, key)
+		}
+	}
+	if len(counted.gets) != len(keys) {
+		t.Errorf("gets = %v, want only the keys %v", counted.gets, keys)
 	}
 }
