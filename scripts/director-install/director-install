@@ -41,7 +41,8 @@
 #   1. the binary's sha256 must match its line in checksums.txt (the bytes arrived
 #      whole; both files come from one place, so this proves nothing about origin);
 #   2. `gh attestation verify` must accept the binary against this repository, the
-#      release workflow and the bundle (the origin). With no gh the install stops
+#      release workflow run from refs/heads/main (the workflow runs only on a push to
+#      main, so another ref is refused) and the bundle (the origin). With no gh the install stops
 #      and says so; nothing weaker is offered;
 #   3. the guarded --version run as above, which must report a full rev, and for
 #      an alpha tag the commit the tag names.
@@ -269,6 +270,12 @@ install_director_mcp_release() {
   command -v curl >/dev/null 2>&1 || die "curl is not on PATH; a release is downloaded with curl. Nothing was switched."
   command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 \
     || die "neither shasum nor sha256sum is on PATH; a download is checked against checksums.txt. Nothing was switched."
+  # The origin check needs gh with its attestation command (gh 2.49 or later); say which
+  # is missing before anything is downloaded.
+  command -v gh >/dev/null 2>&1 \
+    || die "gh is not on PATH, so the origin of a release cannot be verified. Install gh (https://cli.github.com), or build from source with --ref. Nothing was switched."
+  gh attestation --help >/dev/null 2>&1 \
+    || die "this gh has no attestation command (gh 2.49 or later is needed to verify where a release came from). Update gh, or build from source with --ref. Nothing was switched."
   if [[ "$tag" == latest-alpha ]]; then tag="$(latest_alpha_tag)"; fi
   [[ "$tag" =~ ^director-mcp-[A-Za-z0-9._-]+$ ]] \
     || die "release tag '$tag' is not a director-mcp tag name (director-mcp-<channel>-...); nothing was downloaded"
@@ -288,10 +295,8 @@ install_director_mcp_release() {
   got="$(sha256_of "$stage/$asset")"
   [[ "$got" == "$want" ]] || die "checksum mismatch for $asset of $tag (checksums.txt says $want, the download is $got); nothing was switched"
   # 2. the bytes came from this repository's release workflow.
-  command -v gh >/dev/null 2>&1 \
-    || die "gh is not on PATH, so the origin of $tag cannot be verified. Install gh (https://cli.github.com), or build from source with --ref. Nothing was switched."
   gh attestation verify "$stage/$asset" --repo "$REPO" --signer-workflow "$REPO/$RELEASE_WORKFLOW" \
-      --bundle "$stage/attestations.sigstore.json" >"$stage/verify.log" 2>&1 \
+      --source-ref refs/heads/main --bundle "$stage/attestations.sigstore.json" >"$stage/verify.log" 2>&1 \
     || { echo "director-install: the origin check (gh attestation verify) rejected $asset of $tag; nothing was switched. Last lines:" >&2; tail -5 "$stage/verify.log" >&2; exit 1; }
   # 3. the first run, guarded as --ref's is, only after the origin is shown.
   chmod +x "$stage/$asset"
@@ -317,7 +322,7 @@ install_director_mcp_release() {
       echo "ref=$tag"
       echo "release=$tag"
       echo "origin=verified"
-      echo "origin_check=gh attestation verify, repo $REPO, workflow $RELEASE_WORKFLOW"
+      echo "origin_check=gh attestation verify, repo $REPO, workflow $RELEASE_WORKFLOW, ref refs/heads/main"
       echo "source=$RELEASE_BASE/$tag"
       echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     } > "$stage/STAMP"
