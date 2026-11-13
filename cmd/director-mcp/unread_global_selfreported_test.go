@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -456,5 +457,137 @@ func TestSelfReportedAllRowsReadableCountsNoneUnreadable(t *testing.T) {
 	m, r := selfReportedReport(t, reports, "GLOBAL_TO_other")
 	if _, has := m["unreadable_rows"]; has || strings.Contains(warningsText(r), "unreadable") {
 		t.Errorf("a cluster whose rows all read is reported with unreadable rows: %v %v", m, r.Warnings)
+	}
+}
+
+// I-467 live fallback: the way a script runs the command. freebusy calls
+// `director-mcp unread --json --global` from the caller's shell, where the
+// session's DIRECTOR_CLUSTER (and the other DIRECTOR_GLOBAL_* variables) are not
+// set: director-session hands them to the MCP server's env, not to the shell. The
+// leaf has no list verbs. These tests go through runUnreadCmd, which main calls,
+// with those variables empty, and set nothing else for the read.
+
+func clearGlobalEnv(t *testing.T) {
+	t.Helper()
+	// freebusy's shell carries none of a seat's variables, so a test run from a seat
+	// must not see them either: every DIRECTOR_* and MARVEL_* variable and NATS_URL
+	// is unset (restored when the test ends).
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(k, "DIRECTOR_") || strings.HasPrefix(k, "MARVEL_") || k == "NATS_URL" {
+			t.Setenv(k, "") // registers the restore
+			_ = os.Unsetenv(k)
+		}
+	}
+}
+
+func TestUnreadGlobalAsAScriptRunsItFallsBackToPresence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	putHubPresence(t, ctx, adminURL, "other", "other-supervisor", partialInstB, map[string]any{"oldest_pending_s": 900})
+	putHubPresence(t, ctx, adminURL, "mokuzai", "mokuzai-supervisor", partialInstA, map[string]any{"oldest_pending_s": 12})
+	clearGlobalEnv(t)
+
+	var out, errw strings.Builder
+	runUnreadCmd(ctx, leafURL, cliArgs{global: true, json: true}, "global", &out, &errw)
+	var g struct {
+		Error   string           `json:"error"`
+		Reports []map[string]any `json:"reports"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &g); err != nil {
+		t.Fatalf("the output is not JSON: %v: %q", err, out.String())
+	}
+	if g.Error != "" {
+		t.Fatalf("unread --json --global reported an error where the presence fallback can answer: %s", g.Error)
+	}
+	byStream := map[string]map[string]any{}
+	for _, r := range g.Reports {
+		byStream[r["stream"].(string)] = r
+	}
+	for _, c := range []string{"GLOBAL_TO_other", "GLOBAL_TO_mokuzai"} {
+		r, ok := byStream[c]
+		if !ok {
+			t.Errorf("no report for %s (reports: %v)", c, g.Reports)
+			continue
+		}
+		if r["self_reported"] != true {
+			t.Errorf("%s is not marked self-reported though nothing was read from its stream: %v", c, r)
+		}
+	}
+	for _, c := range []string{"GLOBAL_TO_other", "GLOBAL_TO_mokuzai"} {
+		if w := strings.Join(strSlice(byStream[c]["warnings"]), "\n"); !strings.Contains(w, "DIRECTOR_CLUSTER is unset, so no stream was read by name") || !strings.Contains(w, "every cluster, this one included, is self-reported") {
+			t.Errorf("%s does not say in plain words that no stream was read by name because DIRECTOR_CLUSTER is unset: %q", c, w)
+		}
+	}
+	seats, _ := byStream["GLOBAL_TO_other"]["self_reported_seats"].([]any)
+	if len(seats) != 1 {
+		t.Fatalf("GLOBAL_TO_other seats = %v, want other-supervisor with its 900 s age", seats)
+	}
+	if seat, _ := seats[0].(map[string]any); seat["oldest_pending_s"] != float64(900) || seat["over_bound"] != true {
+		t.Errorf("the other cluster's seat = %v, want oldest_pending_s 900 and over_bound", seat)
+	}
+	mseats, _ := byStream["GLOBAL_TO_mokuzai"]["self_reported_seats"].([]any)
+	if seat := firstSeat(mseats); seat["oldest_pending_s"] != float64(12) {
+		t.Errorf("the own cluster's seat = %v, want oldest_pending_s 12 (self-reported like any other)", seat)
+	}
+}
+
+func firstSeat(seats []any) map[string]any {
+	if len(seats) == 0 {
+		return map[string]any{}
+	}
+	m, _ := seats[0].(map[string]any)
+	return m
+}
+
+func strSlice(v any) []string {
+	var out []string
+	raw, _ := v.([]any)
+	for _, x := range raw {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func TestUnreadGlobalAsAScriptRunsItPrintsTheFallbackNotAnError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	clearGlobalEnv(t)
+
+	var out, errw strings.Builder
+	runUnreadCmd(ctx, leafURL, cliArgs{global: true}, "global", &out, &errw)
+	if strings.Contains(out.String(), "global unread not read") {
+		t.Errorf("the text read printed the error where the fallback can answer: %q", out.String())
+	}
+	for _, c := range []string{"GLOBAL_TO_other SELF-REPORTED", "GLOBAL_TO_mokuzai SELF-REPORTED"} {
+		if !strings.Contains(out.String(), c) {
+			t.Errorf("the text read did not print %q: %q", c, out.String())
+		}
+	}
+	if !strings.Contains(out.String(), "DIRECTOR_CLUSTER is unset, so no stream was read by name") {
+		t.Errorf("the text read does not say no stream was read by name because DIRECTOR_CLUSTER is unset: %q", out.String())
+	}
+}
+
+// With no cluster named and no presence row readable at all, the read still says
+// the credential may not list streams: the fallback does not hide that.
+func TestUnreadGlobalAsAScriptRunsItKeepsTheErrorWhenPresenceIsEmpty(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	nc, _ := provision(t, ctx, adminURL) // the hub and its buckets, with no seat and no presence row
+	_ = nc
+	clearGlobalEnv(t)
+
+	var out, errw strings.Builder
+	runUnreadCmd(ctx, leafURL, cliArgs{global: true}, "global", &out, &errw)
+	if !strings.Contains(out.String(), "may not list streams") {
+		t.Errorf("with no presence row the read should keep the list-verb error, got %q", out.String())
 	}
 }

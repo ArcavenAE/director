@@ -114,6 +114,28 @@ func readUnreadGlobalPartial(ctx context.Context, gjs jetstream.JetStream, clust
 	return out, nil
 }
 
+// readUnreadGlobalPresenceOnly is the read when the leaf will not list streams and
+// no cluster is named: no stream is read by name, and every cluster's seats come
+// from their own presence rows, self-reported (I-467). It returns nothing when
+// the presence rows cannot be listed or none exists, so the caller keeps the
+// list-verb error rather than print an empty answer.
+func readUnreadGlobalPresenceOnly(ctx context.Context, gjs jetstream.JetStream, now time.Time) []unreadReport {
+	kv, err := gjs.KeyValue(ctx, globalPresenceBucket)
+	if err != nil {
+		return nil
+	}
+	reads, err := readKeysUnder(ctx, gjs, globalPresenceBucket, kv, "presence.")
+	if err != nil {
+		return nil
+	}
+	reports := selfReportedReports(reads, now)
+	note := "DIRECTOR_CLUSTER is unset, so no stream was read by name; every cluster, this one included, is self-reported"
+	for i := range reports {
+		reports[i].Warnings = append([]string{note}, reports[i].Warnings...)
+	}
+	return reports
+}
+
 // selfReportedReports turns the presence rows of other clusters' seats into one
 // self-reported report per cluster, the fallback for a stream this credential
 // cannot read (I-467 rec 2). It makes no call: the rows were read already, each

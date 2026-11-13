@@ -41,7 +41,7 @@ func startLeafLikeServerMapping(t *testing.T, refuseGet bool, extraMap string) (
 	t.Helper()
 	bin, err := exec.LookPath("nats-server")
 	if err != nil {
-		t.Skip("nats-server not on PATH")
+		t.Fatal("nats-server is not on PATH; these tests need it, and a skip would read as a pass")
 	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -231,9 +231,18 @@ func TestUnreadGlobalPartialNeedsAnOwnCluster(t *testing.T) {
 	seedPartialHub(t, ctx, adminURL)
 	t.Setenv("DIRECTOR_CLUSTER", "")
 
-	_, err := readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
-	if err == nil || !strings.Contains(err.Error(), "may not list streams") {
-		t.Fatalf("err = %v, want the list-verb wording", err)
+	// I-467: with no cluster named there is no stream to read by name, but the
+	// presence fallback needs no cluster: every cluster's seats come back
+	// self-reported, so the read is not the "may not list streams" error.
+	reports, err := readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
+	if err != nil {
+		t.Fatalf("err = %v, want the presence fallback to answer with no cluster named", err)
+	}
+	if len(reports) != 2 || !reports[0].SelfReported || !reports[1].SelfReported {
+		t.Fatalf("reports = %+v, want one self-reported report per cluster with a presence row", reports)
+	}
+	if reports[0].Stream != "GLOBAL_TO_mokuzai" || reports[1].Stream != "GLOBAL_TO_other" {
+		t.Fatalf("streams = %s, %s, want GLOBAL_TO_mokuzai then GLOBAL_TO_other", reports[0].Stream, reports[1].Stream)
 	}
 }
 

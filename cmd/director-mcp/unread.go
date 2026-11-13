@@ -1242,6 +1242,14 @@ func readUnreadGlobalJS(ctx context.Context, gjs jetstream.JetStream, domain str
 		if cluster := sessionCluster(); cluster != "" && missing {
 			return readUnreadGlobalPartial(ctx, gjs, cluster, durables, now)
 		}
+		if missing {
+			// no cluster named (a script's shell does not carry the session's
+			// DIRECTOR_CLUSTER): no stream can be read by name, but the presence
+			// fallback needs no cluster
+			if reports := readUnreadGlobalPresenceOnly(ctx, gjs, now); len(reports) > 0 {
+				return reports, nil
+			}
+		}
 		return nil, hubListError(domain, err, missing)
 	}
 	sort.Strings(names)

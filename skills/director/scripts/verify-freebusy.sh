@@ -101,6 +101,7 @@ if [[ "$*" == "unread --json" ]]; then
   cat "$FB_FIX/unread.plain.json"; exit 0
 fi
 if [[ "$*" == "unread --json --global" ]]; then
+  echo "DIRECTOR_CLUSTER=${DIRECTOR_CLUSTER-unset}" >>"$FB_FIX/mcp.env"
   if [[ -e "$FB_FIX/global.fail" ]]; then if [[ -s "$FB_FIX/global.fail" ]]; then cat "$FB_FIX/global.fail" >&2; else echo "director-mcp unread: hub unreachable" >&2; fi; exit 1; fi
   if [[ -e "$FB_FIX/global.json" ]]; then cat "$FB_FIX/global.json"; else echo '{"reports":[]}'; fi
   exit 0
@@ -810,6 +811,27 @@ case_i467() {
   echo '{"reports":[{"stream":"GLOBAL_TO_kinu","durables":[{"agent_id":"kinu-sup","over_bound":true,"oldest_unread_age_seconds":800}]},{"stream":"GLOBAL_TO_other","partial":true,"self_reported":true,"unreadable_rows":3}]}' >"$FIX/global.json"
   out="$(run "${base[@]}")"
   grep -qF 'global 1 over-bound, 3 rows unreadable' <<<"$out" && ok "S6 a full read keeps its count and the unreadable rows are named" || bad "S6 count" "$out"
+
+  # C: DIRECTOR_CLUSTER. freebusy passes it through when the caller set it, never invents one, and says in a GAP when the
+  # read came back self-reported only because it is unset.
+  nocl='"warnings":["DIRECTOR_CLUSTER is unset, so no stream was read by name; every cluster, this one included, is self-reported"]'
+  echo '{"reports":[{"stream":"GLOBAL_TO_other","partial":true,"self_reported":true,'"$nocl"',"self_reported_seats":[{"agent_id":"ops-supervisor-1","reported":true,"oldest_pending_s":30}]}]}' >"$FIX/global.json"
+  rm -f "$FIX/mcp.env"
+  out="$(run "${base[@]}" DIRECTOR_CLUSTER=kinu)"
+  grep -qx 'DIRECTOR_CLUSTER=kinu' "$FIX/mcp.env" && ok "C1 a DIRECTOR_CLUSTER the caller set reaches the global read" || bad "C1 pass-through" "$(cat "$FIX/mcp.env" 2>&1)"
+  ! grep -q 'GAP mail: DIRECTOR_CLUSTER' <<<"$out" && ok "C1 and no unset GAP is printed when it is set" || bad "C1 gap" "$out"
+  rm -f "$FIX/mcp.env"
+  # a seat that runs this verifier has DIRECTOR_CLUSTER set; run is env -i, so the script must still see it unset
+  export DIRECTOR_CLUSTER=inherited-from-the-verifier-seat
+  out="$(run "${base[@]}")"
+  unset DIRECTOR_CLUSTER
+  grep -qx 'DIRECTOR_CLUSTER=unset' "$FIX/mcp.env" && ok "C2 an unset DIRECTOR_CLUSTER stays unset (no default is invented)" || bad "C2 no default" "$(cat "$FIX/mcp.env" 2>&1)"
+  grep -q 'GAP mail: DIRECTOR_CLUSTER is unset' <<<"$out" && ok "C2 a read that came back self-reported for want of it prints a GAP that names the variable" || bad "C2 gap" "$out"
+  grep -q 'GAP mail: DIRECTOR_CLUSTER is unset.*set it' <<<"$out" && ok "C2 and says to set it to read this cluster's stream by name" || bad "C2 advice" "$out"
+  # C3: unset, but the read did not come back for that reason (a full read): no GAP
+  echo '{"reports":[{"stream":"GLOBAL_TO_kinu","durables":[{"agent_id":"kinu-sup","pending":1}]}]}' >"$FIX/global.json"
+  out="$(run "${base[@]}")"
+  ! grep -q 'GAP mail: DIRECTOR_CLUSTER' <<<"$out" && ok "C3 no unset GAP when the read does not carry the unset warning" || bad "C3 gap" "$out"
 }
 
 
