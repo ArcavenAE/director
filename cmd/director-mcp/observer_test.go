@@ -176,7 +176,9 @@ func hubState(t *testing.T, ctx context.Context, adminURL string) (map[string]in
 		t.Fatal(err)
 	}
 	defer nc.Close()
-	gjs, err := jetstream.NewWithDomain(nc, "global")
+	// The plain prefix: the account maps $JS.global.API.STREAM.NAMES to a subject
+	// nobody serves (as the leaf path does), and that mapping applies to admin too.
+	gjs, err := jetstream.New(nc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +199,17 @@ func hubState(t *testing.T, ctx context.Context, adminURL string) (map[string]in
 		for ci := range cl.Info() {
 			snaps[n+"/"+ci.Name] = durableSnapshot{ci.NumPending, ci.NumAckPending, ci.AckFloor.Stream, ci.Delivered.Stream}
 		}
+		if err := cl.Err(); err != nil {
+			t.Fatalf("listing %s's consumers as admin: %v", n, err)
+		}
+	}
+	if err := names.Err(); err != nil {
+		t.Fatalf("listing the hub's streams as admin: %v", err)
+	}
+	// A state read that found nothing would make every "unchanged" check below
+	// pass for no reason.
+	if len(counts) == 0 || len(snaps) == 0 {
+		t.Fatalf("the admin state read found %d streams and %d durables; the hub is seeded with both", len(counts), len(snaps))
 	}
 	return counts, snaps
 }
@@ -265,6 +278,7 @@ func TestObserverReadsEveryClusterStreamWithoutAConsumer(t *testing.T) {
 	}
 
 	after, _ := hubState(t, ctx, h.adminURL)
+	t.Logf("consumer counts compared on %d streams", len(before))
 	for stream, n := range before {
 		if after[stream] != n {
 			t.Errorf("%s consumer count went from %d to %d during the observer read", stream, n, after[stream])
@@ -312,6 +326,7 @@ func TestObserverReadLeavesEverySeatDurableFloorUnchanged(t *testing.T) {
 	(&globalTier{cfg: globalConfig{Domain: "global", Cluster: "mokuzai", Role: roleDirector}, js: ljs}).flagGlobalRows(ctx, rows)
 
 	_, after := hubState(t, ctx, h.adminURL)
+	t.Logf("floor check ran over %d durables after the observer read and the roster check", len(before))
 	if len(after) != len(before) {
 		t.Errorf("the durables on the hub went from %d to %d", len(before), len(after))
 	}
