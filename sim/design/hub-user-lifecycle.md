@@ -180,9 +180,28 @@ accepts the change on reload. `director hub settings check` lists every `$NAME` 
 references, whether settings.conf defines it, and any name settings.conf
 holds that the conf does not reference. The changing verbs refuse while any
 reference is undefined, naming each one. The
-operator supplies the values once; the command does not guess them from
-another process's environment. start.sh's own export of the store path becomes
-a settings entry the same way.
+operator supplies the values once. start.sh's own export of the store path
+becomes a settings entry the same way. The one exception is a name the hub's
+launcher supplies at each start (an address it works out from the network, for
+example), covered next.
+
+A name the launcher supplies stays with the launcher. A value in settings.conf
+beats the environment, for the server and for `-t` (measured on 2.14.6), so
+moving such a name into settings.conf pins it, and the hub keeps the old value
+after the launcher computes a new one. `settings check` and `settings init`
+therefore read the running hub's environment from the pid-file process, behind
+the same guard that reload uses (the pid must run `nats-server -c` with this
+conf), with `ps eww`. `check` prints `launcher NAME` for a referenced name the
+hub's environment supplies and settings.conf does not define, and warns
+`SHADOWED NAME` when settings.conf defines a name the environment also
+supplies. `init --env NAME` leaves such a name out of settings.conf; the value
+comes from the running hub, or from `--env NAME=VALUE` when no hub environment
+can be read, and is used for the `-t` runs only. It is passed byte for byte: an
+environment value may carry its own quotes, which nats-server reads as conf
+syntax. A given value that differs from the hub's is refused. Every changing
+verb runs its `-t` with the launcher's values added. A value with a space in
+it is not read correctly from `ps eww`, so such a name is given with
+`--env NAME=VALUE`.
 
 It runs on the hub host because it signals the server and edits its conf. It
 needs `nats-server` on PATH for `-t`, and that version is checked (section 6).
@@ -246,6 +265,11 @@ Gaps for a new user's first hub, in the order they stop someone:
   stayed put for that refusal and moved for a good reload. A refused reload
   restores the conf. The pid file is trusted only when `ps` shows
   `nats-server -c` with this conf.
+- A value that is all digits, with no leading zero and at most nine digits, is
+  written to settings.conf without quotes, because nats-server rejects a quoted
+  string where it expects a number (a port). Anything else stays quoted: a
+  leading zero changes the number when it is read bare, and longer values can
+  overflow an int.
 - nats-server 2.15.0 is unmeasured: the precedence and unknown-field
   findings and the reload behavior are measured on 2.14.6 only.
 

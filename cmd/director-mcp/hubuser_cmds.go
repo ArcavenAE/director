@@ -553,7 +553,8 @@ func hubUserAdd(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "hub: %v. Nothing was changed\n", err)
 		return 1
 	}
-	out, valid := serverTest(bin, candPath)
+	liveSt, _ := readSettingsState(cfg)
+	out, valid := serverTest(bin, candPath, launcherEnvList(liveSt))
 	cleanup()
 	if !valid {
 		fmt.Fprintf(stderr, "hub: the candidate conf fails nats-server -t: %s\nThe hub is unchanged; nothing was written.\n", out)
@@ -973,8 +974,17 @@ func hubSettingsCheck(cfg hubCfg, stdout, stderr io.Writer) int {
 	for _, n := range st.Defined {
 		fmt.Fprintf(stdout, "defined %s\n", n)
 	}
+	for _, n := range st.Launcher {
+		fmt.Fprintf(stdout, "launcher %s (supplied by the running hub's environment)\n", n)
+	}
 	for _, n := range st.Undefined {
 		fmt.Fprintf(stdout, "UNDEFINED %s\n", n)
+	}
+	for _, n := range st.Shadowed {
+		fmt.Fprintf(stdout, "WARN SHADOWED %s (settings.conf defines it and the running hub's environment also supplies it; settings.conf wins, so the launcher's value no longer reaches the hub)\n", n)
+	}
+	if st.EnvNote != "" {
+		fmt.Fprintf(stdout, "NOTE %s\n", st.EnvNote)
 	}
 	for _, n := range st.Unreferenced {
 		fmt.Fprintf(stdout, "UNREFERENCED %s\n", n)
@@ -982,7 +992,7 @@ func hubSettingsCheck(cfg hubCfg, stdout, stderr io.Writer) int {
 	if st.SettingsPresent && !st.Included {
 		fmt.Fprintln(stdout, "NOTE settings.conf exists and the conf does not include it")
 	}
-	if len(st.Defined)+len(st.Undefined)+len(st.Unreferenced) == 0 {
+	if len(st.Defined)+len(st.Launcher)+len(st.Undefined)+len(st.Unreferenced) == 0 {
 		fmt.Fprintln(stdout, "the conf references no variables")
 	}
 	if len(st.Undefined) > 0 || len(st.Unreferenced) > 0 {
@@ -996,9 +1006,32 @@ var settingNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 func hubSettingsInit(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 	sets := map[string]string{}
 	var order []string
+	envVals := map[string]string{} // --env NAME=VALUE: the value given, "" when read from the hub
+	envGiven := map[string]bool{}
+	var envOrder []string
 	for i := 0; i < len(args); i++ {
+		if args[i] == "--env" {
+			if i+1 >= len(args) {
+				return usageErr(stderr, "--env needs a NAME or NAME=VALUE")
+			}
+			i++
+			k, v, hasVal := strings.Cut(args[i], "=")
+			if !settingNameRe.MatchString(k) {
+				return usageErr(stderr, fmt.Sprintf("--env %q is not NAME or NAME=VALUE", args[i]))
+			}
+			if strings.ContainsAny(v, "\n\r\x00") {
+				return usageErr(stderr, fmt.Sprintf("--env %s: a value cannot hold a newline", k))
+			}
+			if _, dup := envVals[k]; dup {
+				return usageErr(stderr, fmt.Sprintf("--env %s is given twice", k))
+			}
+			envVals[k] = v
+			envGiven[k] = hasVal
+			envOrder = append(envOrder, k)
+			continue
+		}
 		if args[i] != "--set" || i+1 >= len(args) {
-			return usageErr(stderr, fmt.Sprintf("settings init: unexpected %q (use --set NAME=VALUE)", args[i]))
+			return usageErr(stderr, fmt.Sprintf("settings init: unexpected %q (use --set NAME=VALUE or --env NAME[=VALUE])", args[i]))
 		}
 		i++
 		k, v, ok := strings.Cut(args[i], "=")
@@ -1013,6 +1046,12 @@ func hubSettingsInit(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 		}
 		sets[k] = v
 		order = append(order, k)
+	}
+	for _, k := range envOrder {
+		if _, both := sets[k]; both {
+			fmt.Fprintf(stderr, "hub: %s is given both --set and --env; a name is either written to settings.conf or left to the launcher. Nothing was changed\n", k)
+			return 1
+		}
 	}
 	release, err := hubLock(cfg, "settings init")
 	if err != nil {
@@ -1046,14 +1085,53 @@ func hubSettingsInit(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
+	for _, k := range envOrder {
+		if !contains(refs, k) {
+			fmt.Fprintf(stderr, "hub: --env %s: the conf does not reference $%s. Nothing was changed\n", k, k)
+			return 1
+		}
+	}
+	// A name left to the launcher keeps its value out of settings.conf. The
+	// value is used for the -t run only: the one the flag gives, or the one the
+	// running hub has, byte for byte (an environment value may carry its own
+	// quotes, and nats-server reads them as part of the conf syntax).
+	var hubEnv map[string]string
+	var hubEnvErr error
+	if len(envOrder) > 0 {
+		hubEnv, hubEnvErr = hubLauncherEnv(cfg)
+	}
+	var testEnv []string
+	for _, k := range envOrder {
+		val := envVals[k]
+		if !envGiven[k] {
+			if hubEnvErr != nil {
+				fmt.Fprintf(stderr, "hub: cannot read the running hub's environment: %v. Give the value with --env %s=VALUE. Nothing was changed\n", hubEnvErr, k)
+				return 1
+			}
+			hv, ok := hubEnv[k]
+			if !ok {
+				fmt.Fprintf(stderr, "hub: the running hub's environment does not supply %s. Give the value with --env %s=VALUE, or --set it. Nothing was changed\n", k, k)
+				return 1
+			}
+			val = hv
+		} else if hubEnvErr == nil {
+			if hv, ok := hubEnv[k]; ok && hv != val {
+				fmt.Fprintf(stderr, "hub: --env %s=%s differs from the running hub's value %s; give the value exactly as the hub has it. Nothing was changed\n", k, val, hv)
+				return 1
+			}
+		}
+		testEnv = append(testEnv, k+"="+val)
+	}
 	var missing []string
 	for _, r := range refs {
-		if _, ok := sets[r]; !ok {
+		_, inSets := sets[r]
+		_, inEnv := envVals[r]
+		if !inSets && !inEnv {
 			missing = append(missing, r)
 		}
 	}
 	if len(missing) > 0 {
-		fmt.Fprintf(stderr, "hub: the conf references %s and init has no value for %s; give --set NAME=VALUE for each. Nothing was changed\n", strings.Join(missing, ", "), pluralIt(missing))
+		fmt.Fprintf(stderr, "hub: the conf references %s and init has no value for %s; give --set NAME=VALUE for each (or --env NAME for a name the launcher supplies). Nothing was changed\n", strings.Join(missing, ", "), pluralIt(missing))
 		return 1
 	}
 	// nats-server refuses a server_name change on reload ("config reload not
@@ -1095,14 +1173,14 @@ func hubSettingsInit(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 	candidate := strings.Join(newLines, "\n")
 	var sb strings.Builder
 	for _, k := range order {
-		fmt.Fprintf(&sb, "%s: \"%s\"\n", k, sets[k])
+		fmt.Fprintf(&sb, "%s: %s\n", k, hubSettingLiteral(sets[k]))
 	}
 	candPath, cleanup, err := stageCandidate(cfg, map[string][]byte{filepath.Base(cfg.conf): []byte(candidate), filepath.Base(cfg.settings): []byte(sb.String())})
 	if err != nil {
 		fmt.Fprintf(stderr, "hub: %v. Nothing was changed\n", err)
 		return 1
 	}
-	out, valid := serverTest(bin, candPath)
+	out, valid := serverTest(bin, candPath, testEnv)
 	cleanup()
 	if !valid {
 		fmt.Fprintf(stderr, "hub: the candidate conf fails nats-server -t: %s\nThe hub is unchanged; nothing was written.\n", out)
