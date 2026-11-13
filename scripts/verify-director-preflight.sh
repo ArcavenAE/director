@@ -20,8 +20,10 @@
 #     (jq and git carry no minimum, so their real version formats are exercised).
 #   - the check may call only: bash, awk, grep, head, uname, dirname, cat, tr, sort,
 #     sed, printf (and the shell's own command and read). The scratch PATH holds
-#     exactly those plus the verifier's own helpers; a check that needs another
-#     utility fails here on purpose.
+#     exactly those and the stub tools; a check that needs another utility fails
+#     here on purpose.
+#   - the check finds its manifest beside itself (the directory of its own path),
+#     unless DIRECTOR_PREFLIGHT_MANIFEST names one; case 9 relies on the first.
 #   - it writes nothing: not to the home, the cwd or the TMPDIR; no network.
 #
 # Not covered, on purpose: the check opens no network socket (nothing here traps a
@@ -204,6 +206,9 @@ p="$root/p7e"; new_path "$p"; rm -f "$p/jq" "$p/gh"; printf '#!/bin/sh\n' >"$p/j
 [[ -n "$(line MISSING gh)" ]] && ok "7  a directory named gh is MISSING" || bad "7  dir gh" "$(cat "$root/out")"
 
 # 9: the check reads the manifest: a copy of the check beside an edited manifest follows the edit
+# copy_with runs inside $(...) and uses only commands that succeed here; under
+# inherit_errexit a failing step would end the substitution, which the case then
+# reports as the check not being found.
 copy_with() { # copy_with AWK_PROGRAM: copy the check and the manifest into a fresh dir, edit the manifest with awk, echo the check's path
   local d="$root/copy"
   rm -rf "$d"; mkdir -p "$d"
@@ -225,7 +230,9 @@ PF="$real_pf"
 # the minimums the other cases rely on are the manifest's own
 for pair in python3:3.11 nats-server:2.11 go:1.26; do
   t="${pair%%:*}"; m="${pair##*:}"
-  awk -F'\t' -v t="$t" -v m="$m" '$1 == t && $3 == m { f = 1 } END { exit !f }' "$MANIFEST" 2>/dev/null && ok "9  the manifest sets $t minimum $m" || bad "9  $t minimum $m"
+  if [[ ! -r "$MANIFEST" ]]; then bad "9  $t minimum $m" "no manifest at $MANIFEST"
+  elif awk -F'\t' -v t="$t" -v m="$m" '$1 == t && $3 == m { f = 1 } END { exit !f }' "$MANIFEST"; then ok "9  the manifest sets $t minimum $m"
+  else bad "9  $t minimum $m" "the manifest row for $t does not carry minimum $m"; fi
 done
 
 # 8: the check writes nothing: not to the home, the cwd or the TMPDIR
