@@ -54,7 +54,8 @@ const hubUsage = `usage: director hub user add NAME --class CLASS [--param k=v].
        director hub user list [--json]
        director hub user adopt PUBLIC_KEY --name NAME --class CLASS [--param k=v]...
        director hub settings check
-       director hub settings init [--set NAME=VALUE]...`
+       director hub settings init [--set NAME=VALUE]... [--env NAME[=VALUE]]...
+         (--env names a variable the hub's launcher supplies; it stays out of settings.conf)`
 
 // hubCfg is where the command finds the hub.
 type hubCfg struct {

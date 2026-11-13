@@ -931,6 +931,27 @@ else
   bad "daily-sweep cast" "$(cat "$root/out/stderr")"
 fi
 
+# --- musthaq-pr-watch: a manifest role that is the worker role ------------
+# Same class as daily-sweep (director#512): without a row it falls through to
+# WROLE=$MARVEL_ROLE, there is no role named musthaq-pr-watch, and slice.sh exits
+# 1 with "no role 'musthaq-pr-watch'". The
+# real slice.sh refuses an unknown role; the stub here echoes the role it was
+# handed, so the case checks which role id reached it. It carries no scope, and
+# as a worker it holds no global address.
+if cast musthaq-pr-watch "${GLOBAL_ON[@]}"; then
+  grep -q "stub slice for worker" "$root/out/claude.args" \
+    && ok "musthaq-pr-watch: slices the worker role" \
+    || bad "musthaq-pr-watch: slices the worker role" "$(grep -o 'stub slice for [^ ]*' "$root/out/claude.args" | head -1)"
+  grep -q "recorded by the supervisor" "$root/out/claude.args" \
+    && bad "musthaq-pr-watch: carries a cast scope it should not" \
+    || ok "musthaq-pr-watch: no cast scope"
+  has_env DIRECTOR_GLOBAL_ROLE claude.env \
+    && bad "musthaq-pr-watch: leaked a global role" \
+    || ok "musthaq-pr-watch: the global levers are cleared like any worker"
+else
+  bad "musthaq-pr-watch cast" "$(cat "$root/out/stderr")"
+fi
+
 # --- the seat reaches slice.sh, so the spawn line leads with it (ruling 44) ---
 if cast builder; then
   args="$(tr '\n' ' ' < "$root/out/slice.args")"

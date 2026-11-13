@@ -208,13 +208,15 @@ anger, not a packaged install. Writing the installer is a separate job.
 Two pieces:
 
 - `director-mcp`, the MCP server, built from `cmd/director-mcp/`. Install it with
-  `director-install director-mcp --ref <commit>`, or build it and place it at
-  `~/.director/bin/director-mcp`, or point `DIRECTOR_MCP_BIN` at it. The
-  launcher refuses to start if it is missing. Each push to main that changes
-  the shim also publishes a prerelease, `director-mcp-alpha-<date>-<time>-<sha7>`,
+  `director-install director-mcp --release <tag>` (a published release, checked
+  against its checksum and attestation, no Go needed) or
+  `director-install director-mcp --ref <commit>` (built from source), or build it
+  and place it at `~/.director/bin/director-mcp`, or point `DIRECTOR_MCP_BIN` at
+  it. The launcher refuses to start if it is missing. Each push to main that
+  changes the shim publishes a prerelease, `director-mcp-alpha-<date>-<time>-<sha7>`,
   with binaries for macOS and Linux (arm64 and amd64), `checksums.txt` and an
-  attestation. Check a download with
-  `gh attestation verify <file> --repo ArcavenAE/director --bundle attestations.sigstore.json`.
+  attestation. The steps are in
+  [docs/getting-started.md](docs/getting-started.md#3-install-the-shim).
 - `director-mcp-seat`, the launcher that works out who the seat is, under
   `probe/nats-phase-0/`. The fleet runs it from
   `~/.director/bin/director-mcp-seat`, a symlink back to this repo.
