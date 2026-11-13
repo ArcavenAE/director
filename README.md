@@ -139,12 +139,12 @@ Three tools, each with its own scope:
 
 - **`install.sh`** (above): the skills, the command, the tools under "What
   install.sh links", and the state root.
-- **By hand** (next section): the bus seat and `director-mcp-seat`. No tool
-  installs `director-mcp-seat` yet.
+- **By hand** (next section): the bus seat. `director-mcp-seat` comes with a
+  `--release` install of the shim, or by hand.
 - **`director-install`**: `cast-launch`, the launcher marvel runs for
   seats cast from the role library, and `director-mcp`, the shim, built from a commit with
   `director-install director-mcp --ref <commit>` and undone with `--rollback`.
-  It does not install `director-mcp-seat`.
+  Only a `--release` install brings `director-mcp-seat`; a `--ref` build does not.
 
 A host that runs seats cast from the role library installs the launcher from a commit,
 with no checkout needed:
