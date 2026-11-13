@@ -121,7 +121,7 @@ func (l *launcherHub) settingsText() string {
 // installNatsServerWrapper puts a nats-server wrapper first on PATH. natsServer
 // finds the binary with LookPath, so every -t the commands run goes through it.
 // The wrapper appends the arguments and the HUB_LEAF_ADVERTISE it was started
-// with to a log in scratch, then execs the real binary. It writes nowhere else.
+// with to a log in scratch (its absolute path is in the script), then execs the real binary. It writes nowhere else.
 func installNatsServerWrapper(t *testing.T) (logPath string) {
 	t.Helper()
 	real, err := exec.LookPath("nats-server")
@@ -130,12 +130,13 @@ func installNatsServerWrapper(t *testing.T) (logPath string) {
 	}
 	dir := t.TempDir()
 	logPath = filepath.Join(dir, "wrap.log")
-	script := "#!/bin/sh\nprintf 'args=%s HUB_LEAF_ADVERTISE=[%s]\\n' \"$*\" \"$HUB_LEAF_ADVERTISE\" >> \"$WRAP_LOG\"\nexec " + real + " \"$@\"\n"
+	// The log path is written into the script, not passed in the environment, so
+	// a command that runs -t with a clean environment still logs to the same file.
+	script := "#!/bin/sh\nprintf 'args=%s HUB_LEAF_ADVERTISE=[%s]\\n' \"$*\" \"$HUB_LEAF_ADVERTISE\" >> '" + logPath + "'\nexec " + real + " \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "nats-server"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-	t.Setenv("WRAP_LOG", logPath)
 	return logPath
 }
 
