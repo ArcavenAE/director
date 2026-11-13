@@ -714,6 +714,41 @@ case_over_bound() {
   [[ "$(cat "$root/rc")" == 0 ]] && ok "B3 the exit status is unchanged" || bad "B3 rc" "$(cat "$root/rc")"
 }
 
+# I-467: the tap formula path may come from a one-line instance file, and the global
+# mail GAP names the hub's error as written, with no run-on text.
+case_i467() {
+  fixtures; new_state; conf3
+  local base=(FREEBUSY_DIRECTOR_MCP="$root/bin/director-mcp") e
+  # F1: no env, no instance file: a GAP that names the instance file
+  out="$(run "${base[@]}" FREEBUSY_TAP_FORMULA=)"
+  grep -q 'GAP version: tap formula' <<<"$out" && grep -q 'freebusy-tap-formula' <<<"$out" && ok "F1 no env and no instance file prints a GAP that names the file" || bad "F1 gap" "$out"
+  # F2: the instance file supplies the path
+  new_state; printf '%s\n' "$FIX/marvel.rb" >"$state/freebusy-tap-formula"
+  out="$(run "${base[@]}" FREEBUSY_TAP_FORMULA=)"
+  [[ "$(hval version '.host=="tap"' .version)" == 0.1.0-alpha.1 ]] && ok "F2 the instance file supplies the tap formula path" || bad "F2 tap row" "$(hrows version)"
+  ! grep -q 'GAP version: tap formula' <<<"$out" && ok "F2 and no tap GAP is printed" || bad "F2 gap" "$out"
+  # F3: the env wins over the instance file
+  new_state; printf '%s\n' "$FIX/nowhere.rb" >"$state/freebusy-tap-formula"
+  out="$(run "${base[@]}")"
+  [[ "$(hval version '.host=="tap"' .version)" == 0.1.0-alpha.1 ]] && ok "F3 the env path wins over the instance file" || bad "F3 env wins" "$(hrows version)"
+  # F4: the instance file names an unreadable path: a GAP, no tap row, no network or brew call
+  new_state; printf '%s\n' "$FIX/nowhere.rb" >"$state/freebusy-tap-formula"
+  out="$(run "${base[@]}" FREEBUSY_TAP_FORMULA=)"
+  grep -q 'GAP version: tap formula' <<<"$out" && [[ -z "$(hval version '.host=="tap"' .version)" ]] && ok "F4 an unreadable instance-file path is a GAP with no tap row" || bad "F4" "$out"
+  [[ ! -e "$FIX/forbidden.log" ]] && ok "F4 no brew, gh, ssh or bd call was made" || bad "F4 calls" "$(cat "$FIX/forbidden.log")"
+
+  # G1: the hub's error reads as written, then the stderr part is separated or absent
+  new_state; fixtures
+  e='global unread not read: hub in domain "global" answers named reads, but this credential may not list streams (the leaf allow-list omits the list verbs, finding-006), so unread --global needs an admin credential: nats: no responders available for request'
+  jq -n -c --arg e "$e" '{error: $e, reports: []}' >"$FIX/global.json"
+  out="$(run "${base[@]}")"
+  grep -q 'GAP mail: director-mcp unread --global' <<<"$out" && ok "G1 a hub error prints the global GAP" || bad "G1 gap" "$out"
+  ! grep -q 'omits the listno output' <<<"$out" && ok "G1 the error is not run into the stderr text" || bad "G1 garble" "$out"
+  grep -qF 'the leaf allow-list omits the list verbs, finding-006)' <<<"$out" && ok "G1 the error is not cut mid-clause" || bad "G1 cut" "$out"
+  grep -qF 'no responders available for request' <<<"$out" && ok "G1 the error's reason reaches the line" || bad "G1 reason" "$out"
+  ! grep -q 'no output' <<<"$out" && ok "G1 no placeholder is printed when stderr was empty" || bad "G1 placeholder" "$out"
+}
+
 
 # E1: no marvel on PATH. The seats come from director's roster (presence rows), their
 # states from presence age and pending unread, the lanes from the asks rollup, and the
@@ -760,7 +795,7 @@ for FB_BASH in $BASHES; do
   echo "== $FB_BASH =="
   if ! "$FB_BASH" -n "$FB"; then bad "0  bash -n ($FB_BASH)"; else ok "0  bash -n passes ($FB_BASH)"; fi
   case_all_read; case_parked; case_cluster_down; case_asks; case_modes
-  case_no_writes; case_health; case_concurrent; case_hung_read; case_flow_and_turn; case_conf; case_formats; case_lock_age; case_empty_list; case_discovery; case_lock_min; case_over_bound; case_no_marvel
+  case_no_writes; case_health; case_concurrent; case_hung_read; case_flow_and_turn; case_conf; case_formats; case_lock_age; case_empty_list; case_discovery; case_lock_min; case_over_bound; case_i467; case_no_marvel
 done
 
 echo "$pass passed, $fail failed"
