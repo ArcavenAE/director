@@ -48,6 +48,7 @@ type hubScratchOpts struct {
 	serverEnv    []string
 	jsVar        bool // with noSettings: the conf reads store_dir from $JS_DIR, which the server gets in its environment
 	badMonitor   bool // the command's monitor URL points at a closed port, so /varz cannot be read
+	leafListen   bool // the hub also accepts leafnode connections, on h.leafPort
 }
 
 type hubScratch struct {
@@ -65,6 +66,7 @@ type hubScratch struct {
 	adminPub    string
 	cmd         *exec.Cmd
 	badMonitor  bool
+	leafPort    int
 }
 
 // newSeedFile mints a user key into path (0600) and returns its public key.
@@ -136,6 +138,11 @@ func newHubScratch(t *testing.T, o hubScratchOpts) *hubScratch {
 	if o.noRegion {
 		region = ""
 	}
+	leafLine := ""
+	if o.leafListen {
+		h.leafPort = freePort(t)
+		leafLine = fmt.Sprintf("leafnodes { listen: 127.0.0.1:%d }\n", h.leafPort)
+	}
 	storeDir := fmt.Sprintf("%q", filepath.Join(h.home, "js"))
 	if o.jsVar {
 		storeDir = "$JS_DIR"
@@ -144,7 +151,7 @@ func newHubScratch(t *testing.T, o hubScratchOpts) *hubScratch {
 %slisten: 127.0.0.1:%d
 http: 127.0.0.1:%d
 jetstream { store_dir: %s, domain: global }
-accounts {
+%saccounts {
   FLEET {
     jetstream: enabled
     users: [
@@ -154,7 +161,7 @@ accounts {
     ]
   }
 }
-`, include, tag, h.port, h.monPort, storeDir, h.adminPub, o.extraUsers, region)
+`, include, tag, h.port, h.monPort, storeDir, leafLine, h.adminPub, o.extraUsers, region)
 	if err := os.WriteFile(h.conf, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

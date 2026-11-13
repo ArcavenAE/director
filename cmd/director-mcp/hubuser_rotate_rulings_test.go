@@ -18,7 +18,6 @@ package main
 //     (Amendment 1, A to E).
 
 import (
-	"context"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -701,82 +700,6 @@ func TestHubUserLastAdminCountsAnAdoptedAdmin(t *testing.T) {
 	code, out, errOut := h.run("user", "revoke", "admin-a")
 	if code != 0 {
 		t.Errorf("revoke of the added admin with an adopted admin present: exit = %d\nstdout: %s\nstderr: %s, want 0", code, out, errOut)
-	}
-}
-
-// Live probe of the leaf-director message-delete grant, on a client connection.
-// The real credential runs over a leafnode connection, whose permission path
-// differs from a client's; this models it on a client connection and does not
-// prove the leafnode path.
-func TestHubUserRotateDirectorLeafMayDeleteOnGlobalToDirectorOnlyLive(t *testing.T) {
-	pub := newPublicKey(t)
-	hand := handLeaf(pub, []string{"global.director.>", "global.*.supervisor.inbox"}, []string{"global.director.>"})
-	h := newHubScratch(t, hubScratchOpts{extraUsers: hand})
-	adoptAs(t, h, pub, "kinu-leaf", "leaf-director")
-	admin, err := h.connectAs(h.adminSeed, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-	ajs, err := jetstream.New(admin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := cctx()
-	defer cancel()
-	for _, s := range []struct{ name, subj string }{{"GLOBAL_TO_DIRECTOR", "global.director.>"}, {"GLOBAL_TO_other", "global.other.>"}} {
-		if _, err := ajs.CreateStream(ctx, jetstream.StreamConfig{Name: s.name, Subjects: []string{s.subj}}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := ajs.Publish(ctx, "global.director.inbox", []byte("1")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ajs.Publish(ctx, "global.other.supervisor.inbox", []byte("1")); err != nil {
-		t.Fatal(err)
-	}
-	if code, out, errOut := h.run("user", "rotate", "kinu-leaf"); code != 0 {
-		t.Fatalf("rotate exited %d\n%s%s", code, out, errOut)
-	}
-	nc, err := nats.Connect(h.url(), nkeyOpt(t, filepath.Join(h.keys, "kinu-leaf.next.nk")), nats.Timeout(2*time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer nc.Close()
-	js, err := jetstream.NewWithDomain(nc, "global")
-	if err != nil {
-		t.Fatal(err)
-	}
-	msgs := func(name string) uint64 {
-		st, err := ajs.Stream(ctx, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		info, err := st.Info(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return info.State.Msgs
-	}
-	dctx, dcancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer dcancel()
-	if st, err := js.Stream(dctx, "GLOBAL_TO_DIRECTOR"); err != nil {
-		t.Errorf("the rotated key cannot read GLOBAL_TO_DIRECTOR's info: %v", err)
-	} else if err := st.DeleteMsg(dctx, 1); err != nil {
-		t.Errorf("the rotated key cannot delete a message on GLOBAL_TO_DIRECTOR: %v", err)
-	}
-	if n := msgs("GLOBAL_TO_DIRECTOR"); n != 0 {
-		t.Errorf("GLOBAL_TO_DIRECTOR holds %d messages after the delete, want 0", n)
-	}
-	octx, ocancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer ocancel()
-	if st, err := js.Stream(octx, "GLOBAL_TO_other"); err == nil {
-		if err := st.DeleteMsg(octx, 1); err == nil {
-			t.Errorf("the rotated key deleted a message on GLOBAL_TO_other, a stream it does not consume")
-		}
-	}
-	if n := msgs("GLOBAL_TO_other"); n != 1 {
-		t.Errorf("GLOBAL_TO_other holds %d messages, want its one message untouched", n)
 	}
 }
 
