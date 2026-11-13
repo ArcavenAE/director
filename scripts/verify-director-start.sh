@@ -338,7 +338,8 @@ rc=0; run_start env --seat-file "$root/rel-seat.env" >"$root/env.out" 2>&1 || rc
 [[ "$rc" == 3 ]] && ok "director env refuses a relative observer path the way start does" || bad "director env relative path" "rc=$rc $(cat "$root/env.out")"
 
 # Installed as a link in a bin directory, the launcher still finds the repo's config.
-mkdir -p "$root/linkbin"; ln -s "$start" "$root/linkbin/director"
+# Two links in a chain, so only a loop over readlink finds the repo (a single readlink stops one short).
+mkdir -p "$root/linkbin" "$root/otherbin"; ln -s "$start" "$root/otherbin/director"; ln -s "$root/otherbin/director" "$root/linkbin/director"
 cat >"$home/.director/seat.env" <<SEAT
 DIRECTOR_AGENT_ID=fake-director
 DIRECTOR_TEAM=fake-team
@@ -346,7 +347,7 @@ DIRECTOR_WORKSPACE=fake-ws
 SEAT
 rm -f "$root/out"
 env -i HOME="$home" PATH="$PATH" LANG="${LANG:-C}" TMPDIR="$root" CLAUDE_BIN="$root/claude-stub" STUB_OUT="$root/out" "$root/linkbin/director" start >"$root/stdout" 2>&1 || true
-check "started through a link, the launcher hands claude the repo's config" grep -q -- "\[--mcp-config\] \[$cfg\]" "$root/out"
+check "started through a chain of two links, the launcher hands claude the repo's config" grep -q -- "\[--mcp-config\] \[$cfg\]" "$root/out"
 
 # ---- the operator script ------------------------------------------------
 
