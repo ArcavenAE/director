@@ -461,6 +461,25 @@ func TestHubUserRevokeRefusesTheAdminTheHubSettingNames(t *testing.T) {
 
 // --- Red Gate read, round 1 -------------------------------------------------------------------
 
+// keysListing lists the keys directory only. The hub home also holds the conf
+// backup the command writes before the conf, which is not a seed file.
+func keysListing(t *testing.T, h *hubScratch) string {
+	t.Helper()
+	var names []string
+	err := filepath.WalkDir(h.keys, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(h.keys, p)
+		names = append(names, rel)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(names, "\n")
+}
+
 // Ruling 1: the order is conf, reload, verify, then the registry, then the seed
 // files. At the moment the hub has reloaded, neither the registry nor the keys
 // directory has changed.
@@ -485,14 +504,14 @@ func TestHubUserRotateAndRevokeWriteTheRegistryAndSeedsAfterTheReload(t *testing
 		if st.pre != nil {
 			st.pre(h)
 		}
-		reg, keys := string(h.readRegistry()), h.homeListing()
+		reg, keys := string(h.readRegistry()), keysListing(t, h)
 		var called bool
 		hubAfterReload = func() {
 			called = true
 			if string(h.readRegistry()) != reg {
 				t.Errorf("%s: the registry changed before the reload was verified", st.name)
 			}
-			if h.homeListing() != keys {
+			if keysListing(t, h) != keys {
 				t.Errorf("%s: the keys directory changed before the reload was verified", st.name)
 			}
 		}
