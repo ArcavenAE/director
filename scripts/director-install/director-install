@@ -266,16 +266,21 @@ latest_alpha_tag() {
 }
 
 install_director_mcp_release() {
-  local tag="$1" os arch asset stage want got info rc rev version channel t7
+  local tag="$1" os arch asset stage want got info rc rev version channel t7 verify_help
   command -v curl >/dev/null 2>&1 || die "curl is not on PATH; a release is downloaded with curl. Nothing was switched."
   command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 \
     || die "neither shasum nor sha256sum is on PATH; a download is checked against checksums.txt. Nothing was switched."
-  # The origin check needs gh with its attestation command (gh 2.49 or later); say which
-  # is missing before anything is downloaded.
+  # The origin check needs gh with its attestation command and the --source-ref flag of
+  # `gh attestation verify`; say which is missing before anything is downloaded. The flag
+  # is probed, not a version: the gh release notes name 2.68.0 for it (cli/cli PR 10308),
+  # but a gh that lacks it fails the verify on an unknown flag and would read as a bad release.
   command -v gh >/dev/null 2>&1 \
     || die "gh is not on PATH, so the origin of a release cannot be verified. Install gh (https://cli.github.com), or build from source with --ref. Nothing was switched."
   gh attestation --help >/dev/null 2>&1 \
-    || die "this gh has no attestation command (gh 2.49 or later is needed to verify where a release came from). Update gh, or build from source with --ref. Nothing was switched."
+    || die "this gh has no attestation command, so where a release came from cannot be verified. Update gh, or build from source with --ref. Nothing was switched."
+  verify_help="$(gh attestation verify --help 2>&1)" || verify_help=""
+  [[ "$verify_help" == *"--source-ref"* ]] \
+    || die "this gh's attestation verify has no --source-ref flag (the gh 2.68.0 release notes list it), so the build ref cannot be pinned to main. Update gh, or build from source with --ref. Nothing was switched."
   if [[ "$tag" == latest-alpha ]]; then tag="$(latest_alpha_tag)"; fi
   [[ "$tag" =~ ^director-mcp-[A-Za-z0-9._-]+$ ]] \
     || die "release tag '$tag' is not a director-mcp tag name (director-mcp-<channel>-...); nothing was downloaded"
