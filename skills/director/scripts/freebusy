@@ -33,7 +33,11 @@
 #                  default, DIRECTOR_PENDING_AGE_BOUND to override), whatever --older-than says. Each is
 #                  printed before the summary line as "- OVER-BOUND <tier> <seat> <age>s"; the bound is
 #                  read only through that flag and never worked out here. A failed --global call is a
-#                  GAP line and the local lines stay. Diagnostic: the exit status is unchanged
+#                  GAP line and the local lines stay. When the global read fell back to the
+#                  presence ages other clusters' seats wrote for themselves, those seats print as
+#                  "- OVER-BOUND global-self-reported <seat> <age>s" and the count names them apart
+#                  ("self-reported N over-bound, M not reported"); a global read that is only the
+#                  caller's own partial read is "global not read". Diagnostic: the exit status is unchanged
 #     versions     marvel version (client line), marvel version --cluster NAME (the daemon line),
 #                  and the version line of the tap's Formula/marvel.rb as the local checkout
 #                  $FREEBUSY_TAP_FORMULA names it, else the one-line file $DIRECTOR_STATE/freebusy-tap-formula
@@ -738,6 +742,7 @@ jq -n -c --arg at "$at" --slurpfile prev "$tmp/prev.json" --argjson ok "$ok_json
 eps="$dir/health-episodes.jsonl"
 mail_ok=0
 global_ok=0
+gr_self_over=0; gr_self_unrep=0; gr_self_any=0; gr_full=0
 if [[ ! -x "$mcp" ]]; then
   gap "mail: director-mcp not found at $mcp, so no mail episode was opened or closed"
 elif [[ ! -f "$tmp/unread.rc" ]]; then
@@ -789,6 +794,14 @@ if [[ -x "$mcp" ]]; then
     global_ok=1
     jq -r '.reports[].durables[]? | select(.over_bound == true and (.agent_id | type) == "string")
       | "- OVER-BOUND global \(.agent_id) \((.oldest_unread_age_seconds // 0) | floor)s"' "$tmp/unread-global.out" >>"$overbound"
+    # the seats a read could not reach, as they reported themselves in their own presence rows (self-reported, not a stream read)
+    jq -r '.reports[] | select(.self_reported == true) | .self_reported_seats[]? | select(.over_bound == true and (.agent_id | type) == "string")
+      | "- OVER-BOUND global-self-reported \(.agent_id) \((.oldest_pending_s // 0) | floor)s"' "$tmp/unread-global.out" >>"$overbound"
+    gr_self_over="$(jq -r '[.reports[] | select(.self_reported == true) | .self_reported_seats[]? | select(.over_bound == true)] | length' "$tmp/unread-global.out")"
+    gr_self_unrep="$(jq -r '[.reports[] | select(.self_reported == true) | .self_reported_seats[]? | select(.reported != true)] | length' "$tmp/unread-global.out")"
+    gr_self_any="$(jq -r '[.reports[] | select(.self_reported == true)] | length' "$tmp/unread-global.out")"
+    # a stream read in full counts as read; so does an empty list. Only partial reads, with nothing self-reported, is not read.
+    gr_full="$(jq -r 'if (.reports | length) == 0 then 1 else ([.reports[] | select(.self_reported != true and .partial != true)] | length) end' "$tmp/unread-global.out")"
   fi
 fi
 if [[ -s "$eps" ]]; then
@@ -813,7 +826,15 @@ if vok "$v"; then vrow tap "$v" "tap formula" >>"$tmp/health.new"; else gap "ver
 mail_local="$(jq -s -r 'map(select(.kind == "mail")) | length' "$tmp/health.new")"
 # one labelled form always: local counts open mail episodes, global counts seats over the pending-age bound
 if [[ "$mail_ok" == 1 ]]; then ml="local $mail_local open"; else ml="local not read"; fi
-if [[ "$global_ok" == 1 ]]; then mg="global $(grep -c -- '- OVER-BOUND global ' "$overbound" || true) over-bound"; else mg="global not read"; fi
+if [[ "$global_ok" == 1 ]]; then
+  gr_over="$(grep -c -- '- OVER-BOUND global ' "$overbound" || true)"
+  gr_sr="self-reported $gr_self_over over-bound"
+  [[ "$gr_self_unrep" -gt 0 ]] && gr_sr="$gr_sr, $gr_self_unrep not reported"
+  if [[ "$gr_self_any" -gt 0 && "$gr_full" -gt 0 ]]; then mg="global $gr_over over-bound, $gr_sr"
+  elif [[ "$gr_self_any" -gt 0 ]]; then mg="global $gr_sr"
+  elif [[ "$gr_full" -gt 0 ]]; then mg="global $gr_over over-bound"
+  else mg="global not read"; fi
+else mg="global not read"; fi
 mail_part="mail: $ml, $mg"
 health_counts="$(jq -s -r --arg mail "$mail_part" '"\(map(select(.kind == "seat")) | length) blocked, \(map(select(.kind == "cluster" and .state == "not_reached")) | length) unreached, \($mail), drift \(if (map(select(.kind == "version") | .version) | unique | length) > 1 then "yes" else "no" end)"' "$tmp/health.new")"
 

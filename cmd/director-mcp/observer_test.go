@@ -402,8 +402,13 @@ func TestObserverConnectFailureFallsBackAndNamesTheGap(t *testing.T) {
 			if !strings.Contains(text, "mokuzai-supervisor") || !strings.Contains(text, "PARTIAL") {
 				t.Errorf("the output did not fall back to the leaf path's partial read of the own cluster: %q", text)
 			}
-			if strings.Contains(text, "other-supervisor") {
-				t.Errorf("another cluster's seat appears, but the leaf path cannot read it: %q", text)
+			// I-467 rec 2: the leaf path cannot read another cluster's stream, so a
+			// seat of that cluster may appear only as a self-reported presence line.
+			if strings.Contains(text, "GLOBAL_TO_other unread") {
+				t.Errorf("another cluster's stream is printed as a read, but the leaf path cannot read it: %q", text)
+			}
+			if !strings.Contains(text, "GLOBAL_TO_other SELF-REPORTED") {
+				t.Errorf("another cluster's seat is not covered by the self-reported fallback: %q", text)
 			}
 		})
 	}

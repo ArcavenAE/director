@@ -391,6 +391,24 @@ type unreadReport struct {
 	// holds only the rows the reader could name, and its Warnings say what it
 	// could not see. It is never a count of the stream's durables.
 	Partial bool `json:"partial,omitempty"`
+	// SelfReported marks a report that is not a read of the stream at all: it
+	// holds the oldest_pending_s each seat of another cluster wrote into its own
+	// presence row, which is the only cross-cluster signal a reader without the
+	// hub observer has (I-467 rec 2). Seats lists those rows.
+	SelfReported bool               `json:"self_reported,omitempty"`
+	Seats        []selfReportedSeat `json:"self_reported_seats,omitempty"`
+}
+
+// selfReportedSeat is one seat's own presence claim. A row with no
+// oldest_pending_s is Reported false and carries no age: it is not reported,
+// which is not the same as an age of 0.
+type selfReportedSeat struct {
+	AgentID        string `json:"agent_id"`
+	Instance       string `json:"instance"`
+	Reported       bool   `json:"reported"`
+	OldestPendingS *int64 `json:"oldest_pending_s,omitempty"`
+	OverBound      bool   `json:"over_bound,omitempty"`
+	PresenceTS     string `json:"presence_ts,omitempty"`
 }
 
 // The live states (M2).
@@ -982,6 +1000,10 @@ func printUnread(w io.Writer, r unreadReport, o unreadOpts) {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(r)
+		return
+	}
+	if r.SelfReported {
+		printSelfReportedUnread(w, r)
 		return
 	}
 	if r.Partial {

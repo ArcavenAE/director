@@ -166,8 +166,10 @@ func TestUnreadGlobalPartialReadsOwnClusterByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a cluster credential that can read by name got an error: %v", err)
 	}
-	if len(reports) != 1 || reports[0].Stream != "GLOBAL_TO_mokuzai" || !reports[0].Partial {
-		t.Fatalf("reports = %+v, want one partial report of GLOBAL_TO_mokuzai", reports)
+	// I-467 rec 2: the own cluster's partial report, then one self-reported
+	// fallback report per other cluster that has a presence row.
+	if len(reports) != 2 || reports[0].Stream != "GLOBAL_TO_mokuzai" || !reports[0].Partial {
+		t.Fatalf("reports = %+v, want the partial report of GLOBAL_TO_mokuzai and one fallback for GLOBAL_TO_other", reports)
 	}
 	r := reports[0]
 	if len(r.Durables) != 1 || r.Durables[0].AgentID != "mokuzai-supervisor" || r.Durables[0].Pending != 3 || !r.Durables[0].Live {
@@ -421,11 +423,18 @@ func TestUnreadGlobalPartialGetsEachPresenceKeyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reports) != 1 || len(reports[0].Durables) != 1 {
-		t.Fatalf("reports = %+v, want the one mokuzai seat read", reports)
+	if len(reports) != 2 || len(reports[0].Durables) != 1 {
+		t.Fatalf("reports = %+v, want the one mokuzai seat read and the other cluster's self-reported report", reports)
 	}
-	key := "presence.mokuzai.supervisor." + partialInstA
-	if counted.gets[key] != 1 || len(counted.gets) != 1 {
-		t.Errorf("gets = %v, want exactly one get of %s", counted.gets, key)
+	// Each presence key, the own cluster's and the other's for the fallback,
+	// is got once, from the one listing.
+	keys := []string{"presence.mokuzai.supervisor." + partialInstA, "presence.other.supervisor." + partialInstB}
+	for _, key := range keys {
+		if counted.gets[key] != 1 {
+			t.Errorf("gets = %v, want exactly one get of %s", counted.gets, key)
+		}
+	}
+	if len(counted.gets) != len(keys) {
+		t.Errorf("gets = %v, want only the keys %v", counted.gets, keys)
 	}
 }
