@@ -89,7 +89,7 @@ printf '[{"tag_name":"%s"},\n{"tag_name":"%s"},\n{"tag_name":"director-mcp-v0.1.
 printf '%s\n' \
   '#!/bin/sh' \
   'echo "$*" >> "$FAKE_GH_LOG"' \
-  'for a in "$@"; do case "$a" in */"${FAKE_GH_REJECT:-no-such-subject}") exit 1 ;; esac; done' \
+  'for a in "$@"; do case "$a" in "${FAKE_GH_REJECT:-no-such-subject}"|*/"${FAKE_GH_REJECT:-no-such-subject}") exit 1 ;; esac; done' \
   'bundle=""' \
   'while [ $# -gt 0 ]; do [ "$1" = "--bundle" ] && bundle="$2"; shift; done' \
   '[ -n "$bundle" ] && grep -q OTHER-WORKFLOW "$bundle" 2>/dev/null && exit 1' \
@@ -362,6 +362,8 @@ fi
 home="$home_keep"
 
 # --- 10d. a seat link this installer did not make is left alone -----------------
+# The output must name no --seat flag: --seat is deferred (supervisor, 2026-11-13); the architect's
+# ruling (2), g2-seat-link-rulings.md, recommends it and names it in this output once built.
 home_keep="$home"; home="$root/home2"
 mkdir -p "$home/bin"; printf '#!/bin/sh\necho hand-made\n' > "$root/foreign-seat"; chmod +x "$root/foreign-seat"
 ln -s "$root/foreign-seat" "$home/bin/director-mcp-seat"
