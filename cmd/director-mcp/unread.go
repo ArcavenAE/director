@@ -103,6 +103,7 @@ type cliArgs struct {
 	file        string        // ask-reader: the JSON file it rewrites after each pass; marry: the input file
 	help        bool          // asks: print the help text
 	askID       string        // asks: report one message id and exit
+	hubArgs     []string      // hub: the words after "hub" (hubuser.go)
 	role        string        // dossier: TEAM/ROLE
 	pred        string        // dossier: the predecessor's agent id
 	predState   string        // dossier: the predecessor's state directory
