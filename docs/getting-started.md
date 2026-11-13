@@ -30,11 +30,23 @@ consumer, and a presence heartbeat. The harness sees eight tools, plus `cancel_h
 
 ## Prerequisites
 
+Run `scripts/director-preflight` first. It names each tool below that it does not
+find, or finds too old, with an install hint for your system, and exits 1 only
+when a required one is missing. It reads `scripts/director-preflight.tsv`, which
+is the list of record: the tool, whether it is required, the minimum version,
+and which scripts need it.
+
+Required:
+
+- `python3` 3.11 or later (most of the scripts).
+- `jq`, and `git`.
 - `nats-server` 2.11 or later and the `nats` CLI (`brew install
   nats-server nats-io/nats-tools/nats`). The probe ran on 2.14.6.
-- Go 1.26 or later, to build the shim.
 - A harness that speaks MCP over stdio: Claude Code (interactive or `-p`),
   codex, or anything else with an MCP client.
+
+Optional, each needed by only some scripts: `gh`, `claude`, `marvel`, `tmux`,
+`lsof`, and Go 1.26 or later, which is needed only to build the shim from source.
 
 ## 1. Start the broker
 
