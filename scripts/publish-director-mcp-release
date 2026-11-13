@@ -5,7 +5,7 @@
 #   scripts/publish-director-mcp-release --tag TAG --sha SHA --dist DIR --repo OWNER/REPO
 #
 # The release is complete when it carries every expected asset, by exact name,
-# each non-empty and in the uploaded state: the four binaries, checksums.txt and
+# each non-empty and in the uploaded state: the four binaries, the seat wrapper, checksums.txt and
 # attestations.sigstore.json. Four cases:
 #   no release for TAG      create it on SHA with every asset
 #   release targets another commit than SHA     stop, naming both
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 die() { echo "publish-director-mcp-release: $*" >&2; exit 1; }
-EXPECTED=(director-mcp-darwin-arm64 director-mcp-darwin-amd64 director-mcp-linux-amd64 director-mcp-linux-arm64 checksums.txt attestations.sigstore.json)
+EXPECTED=(director-mcp-darwin-arm64 director-mcp-darwin-amd64 director-mcp-linux-amd64 director-mcp-linux-arm64 director-mcp-seat checksums.txt attestations.sigstore.json)
 
 tag="" sha="" dist="" repo=""
 while (($#)); do

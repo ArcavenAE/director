@@ -219,7 +219,10 @@ Two pieces:
   [docs/getting-started.md](docs/getting-started.md#3-install-the-shim).
 - `director-mcp-seat`, the launcher that works out who the seat is, under
   `probe/nats-phase-0/`. The fleet runs it from
-  `~/.director/bin/director-mcp-seat`, a symlink back to this repo.
+  `~/.director/bin/director-mcp-seat`, a symlink back to this repo. A
+  `director-install director-mcp --release` install also fetches the wrapper from the
+  release, checks it like the shim, and links it there, unless that path is a link
+  you made yourself, which it leaves alone.
 
 Register it once, with no identity of its own. The same registration is then
 correct both for a marvel-managed session and for a seat you start yourself:

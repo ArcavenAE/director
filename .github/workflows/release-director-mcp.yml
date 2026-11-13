@@ -1,6 +1,7 @@
 # Publish a director-mcp prerelease for each push to main that changes the shim
 # (sim/design/shim-release-and-pinned-install.md, R3). Four binaries built by
-# scripts/build-director-mcp from the pushed commit, a checksums.txt, and one
+# scripts/build-director-mcp from the pushed commit, the seat wrapper taken from
+# the same commit, a checksums.txt, and one
 # build-provenance attestation over all of them as attestations.sigstore.json.
 # No signing key is held here: the attestation is keyless, from the run's OIDC
 # identity. macOS signing and notarization are not part of this release.
@@ -14,6 +15,7 @@ on:
       - 'scripts/build-director-mcp'
       - 'scripts/package-director-mcp-release'
       - 'scripts/publish-director-mcp-release'
+      - 'probe/nats-phase-0/director-mcp-seat'
       - '.github/workflows/release-director-mcp.yml'
 
 permissions:
