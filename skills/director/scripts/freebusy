@@ -212,6 +212,14 @@ first_line() {
   echo "${l:-no output}"
 }
 
+# a stderr file as one line, control characters dropped; kept whole, and a text past 400 characters is cut at a word
+err_text() {
+  local t
+  t="$(tr '\n' ' ' <"$1" 2>/dev/null | LC_ALL=C tr -d '\000-\037' || true)"
+  if [[ "${#t}" -gt 400 ]]; then t="${t:0:400}"; t="${t% *}"; fi
+  echo "${t%"${t##*[![:space:]]}"}"
+}
+
 # Stop a job and everything it started. Each job is started under set -m, so it leads
 # its own process group and one signal to the group reaches ssh and whatever it spawned.
 kill_tree() {
@@ -735,7 +743,7 @@ if [[ ! -x "$mcp" ]]; then
 elif [[ ! -f "$tmp/unread.rc" ]]; then
   gap "mail: director-mcp unread gave no answer within ${capture_timeout}s, so no mail episode was changed"
 elif [[ "$(cat "$tmp/unread.rc")" != 0 ]]; then
-  gap "mail: director-mcp unread exited $(cat "$tmp/unread.rc") ($(head -c 120 "$tmp/unread.err" | tr '\n' ' ')), so no mail episode was changed"
+  gap "mail: director-mcp unread exited $(cat "$tmp/unread.rc") ($(err_text "$tmp/unread.err")), so no mail episode was changed"
 elif ! jq -e '(.durables | type) == "array"' "$tmp/unread.out" >/dev/null 2>&1; then
   # the reader exits 0 even when it could not connect, so an empty or unreadable answer is the signal
   gap "mail: director-mcp unread printed no report ($(first_line "$tmp/unread.err")), so no mail episode was changed"
@@ -769,7 +777,7 @@ if [[ -x "$mcp" ]]; then
   if [[ ! -f "$tmp/unread-global.rc" ]]; then
     gap "mail: director-mcp unread --global gave no answer within ${capture_timeout}s, so the global tier's over-bound seats are not listed"
   elif [[ "$(cat "$tmp/unread-global.rc")" != 0 ]]; then
-    gap "mail: director-mcp unread --global exited $(cat "$tmp/unread-global.rc") ($(head -c 120 "$tmp/unread-global.err" | tr '\n' ' ')), so the global tier's over-bound seats are not listed"
+    gap "mail: director-mcp unread --global exited $(cat "$tmp/unread-global.rc") ($(err_text "$tmp/unread-global.err")), so the global tier's over-bound seats are not listed"
   elif ! jq -e '(.reports | type) == "array" and ((.error // "") == "")' "$tmp/unread-global.out" >/dev/null 2>&1; then
     ge="$(jq -r '.error // empty' "$tmp/unread-global.out" 2>/dev/null | tr '\n' ' ' | LC_ALL=C tr -d '\000-\037' || true)"
     # keep the hub's words whole; a very long one is cut at a word, never inside it
@@ -803,11 +811,10 @@ if vok "$v"; then vrow tap "$v" "tap formula" >>"$tmp/health.new"; else gap "ver
 
 # the mail part names which tier was read; a tier that was not read is "not read", never 0
 mail_local="$(jq -s -r 'map(select(.kind == "mail")) | length' "$tmp/health.new")"
-if [[ "$mail_ok" == 1 && "$global_ok" == 1 ]]; then mail_part="$mail_local mail"; else
-  if [[ "$mail_ok" == 1 ]]; then ml="local $mail_local"; else ml="local not read"; fi
-  if [[ "$global_ok" == 1 ]]; then mg="global $(grep -c -- '- OVER-BOUND global ' "$overbound" || true)"; else mg="global not read"; fi
-  mail_part="mail: $ml, $mg"
-fi
+# one labelled form always: local counts open mail episodes, global counts seats over the pending-age bound
+if [[ "$mail_ok" == 1 ]]; then ml="local $mail_local open"; else ml="local not read"; fi
+if [[ "$global_ok" == 1 ]]; then mg="global $(grep -c -- '- OVER-BOUND global ' "$overbound" || true) over-bound"; else mg="global not read"; fi
+mail_part="mail: $ml, $mg"
 health_counts="$(jq -s -r --arg mail "$mail_part" '"\(map(select(.kind == "seat")) | length) blocked, \(map(select(.kind == "cluster" and .state == "not_reached")) | length) unreached, \($mail), drift \(if (map(select(.kind == "version") | .version) | unique | length) > 1 then "yes" else "no" end)"' "$tmp/health.new")"
 
 # --- write and report -------------------------------------------------------
