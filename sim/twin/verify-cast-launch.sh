@@ -1171,7 +1171,7 @@ done
 # exit status before it reads anything, exports that exact line and nothing else,
 # and refuses any other content. Empty means no export.
 AM=CLAUDE_CODE_DISABLE_AUTO_MEMORY
-envout_reset() { rm -f "$root/out/envout.content" "$root/out/slice.refuse"; }
+envout_reset() { rm -f "$root/out/envout.content" "$root/out/slice.refuse" "$root/out/slice.unreadable"; }
 envout_reset
 if cast builder; then
   grep -qx -- --env-out "$root/out/slice.args" \
@@ -1202,6 +1202,28 @@ for case_ in "extra line:$AM=1\nFOO=bar\n" "other line only:FOO=bar\n" "wrong va
     bad "env-out refusal ($label)" "claude ran"
   fi
 done
+envout_reset
+# An unreadable file is a refusal, never an empty read: a cat that fails must not
+# let the harness start with auto memory on.
+printf '%s=1\n' "$AM" > "$root/out/envout.content"; : > "$root/out/slice.unreadable"
+if cast builder; then
+  bad "env-out: an unreadable file launched the harness" "fails open"
+elif [[ ! -f "$root/out/claude.args" ]] && grep -q "cannot read the --env-out file" "$root/out/stderr"; then
+  ok "env-out: an unreadable file refuses the launch, naming the read"
+else
+  bad "env-out: unreadable file" "$(cat "$root/out/stderr")"
+fi
+envout_reset
+# Ordering: a refused slice.sh leaves stale bytes. Planted invalid, a launcher that
+# read first would refuse on the content; the refusal must be about slice.sh.
+printf 'FOO=bar\n' > "$root/out/envout.content"; : > "$root/out/slice.refuse"
+if cast builder; then
+  bad "env-out ordering: a refused slice.sh launched"
+elif grep -q "slice.sh refused the cast" "$root/out/stderr" && ! grep -q "something other than" "$root/out/stderr"; then
+  ok "env-out ordering: a refused slice.sh is refused as such, its stale file never judged"
+else
+  bad "env-out ordering: the stale file was read before the status" "$(cat "$root/out/stderr")"
+fi
 envout_reset
 printf '%s=1\n' "$AM" > "$root/out/envout.content"; : > "$root/out/slice.refuse"
 if cast builder; then

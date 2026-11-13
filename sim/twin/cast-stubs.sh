@@ -27,6 +27,8 @@ fi
 if [[ -n "$envout" ]]; then
   : > "$envout"
   [[ -f "$out/envout.content" ]] && cat "$out/envout.content" > "$envout"
+  # out/slice.unreadable: the file is there but cat cannot read it.
+  [[ -f "$out/slice.unreadable" ]] && chmod 000 "$envout"
 fi
 echo "stub slice for $2"
 STUB
