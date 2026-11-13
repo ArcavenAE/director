@@ -19,6 +19,9 @@ package main
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -453,5 +456,142 @@ func TestHubUserRevokeRefusesTheAdminTheHubSettingNames(t *testing.T) {
 	}
 	if string(h.readConf()) != confBefore || string(h.readRegistry()) != regBefore {
 		t.Errorf("a refused revoke changed the conf or the registry")
+	}
+}
+
+// --- Red Gate read, round 1 -------------------------------------------------------------------
+
+// Ruling 1: the order is conf, reload, verify, then the registry, then the seed
+// files. At the moment the hub has reloaded, neither the registry nor the keys
+// directory has changed.
+func TestHubUserRotateAndRevokeWriteTheRegistryAndSeedsAfterTheReload(t *testing.T) {
+	defer func() { hubAfterReload = nil }()
+	steps := []struct {
+		name string
+		args []string
+		pre  func(h *hubScratch)
+	}{
+		{"rotate", []string{"user", "rotate", "svc"}, nil},
+		{"finish", []string{"user", "rotate", "--finish", "svc"}, func(h *hubScratch) {
+			if code, out, errOut := h.run("user", "rotate", "svc"); code != 0 {
+				t.Fatalf("setup: rotate exited %d\n%s%s", code, out, errOut)
+			}
+		}},
+		{"revoke", []string{"user", "revoke", "svc"}, nil},
+	}
+	for _, st := range steps {
+		h := newHubScratch(t, hubScratchOpts{})
+		addUser(t, h, "svc", "director")
+		if st.pre != nil {
+			st.pre(h)
+		}
+		reg, keys := string(h.readRegistry()), h.homeListing()
+		var called bool
+		hubAfterReload = func() {
+			called = true
+			if string(h.readRegistry()) != reg {
+				t.Errorf("%s: the registry changed before the reload was verified", st.name)
+			}
+			if h.homeListing() != keys {
+				t.Errorf("%s: the keys directory changed before the reload was verified", st.name)
+			}
+		}
+		if code, out, errOut := h.run(st.args...); code != 0 {
+			t.Fatalf("%s exited %d\n%s%s", st.name, code, out, errOut)
+		}
+		hubAfterReload = nil
+		if !called {
+			t.Errorf("%s: the command did not reach the post-reload point", st.name)
+		}
+		if string(h.readRegistry()) == reg {
+			t.Errorf("%s: the registry was never written", st.name)
+		}
+	}
+}
+
+// Ruling 3: with no seed held here, revoke says so and moves nothing.
+func TestHubUserRevokeSaysSoWhenNoSeedIsHeldHere(t *testing.T) {
+	h := newHubScratch(t, hubScratchOpts{})
+	pub := newPublicKey(t)
+	if code, out, errOut := h.run("user", "add", "far-leaf", "--class", "leaf", "--param", "cluster=far", "--public-key", pub); code != 0 {
+		t.Fatalf("setup: add exited %d\n%s%s", code, out, errOut)
+	}
+	code, out, errOut := h.run("user", "revoke", "far-leaf")
+	if code != 0 || !strings.Contains(out, "no seed") {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q, want 0 and a line saying no seed is held here", code, out, errOut)
+	}
+	if got := h.revokedSeeds(); len(got) != 0 {
+		t.Errorf("keys/revoked holds %v for a key whose seed is not held here", got)
+	}
+}
+
+// Ruling 4: a rotating admin counts once. With one admin holding two keys,
+// revoking it leaves no admin, so it is refused; counting keys would allow it.
+func TestHubUserLastAdminCountsARotatingAdminOnce(t *testing.T) {
+	h := newHubScratch(t, hubScratchOpts{})
+	addUser(t, h, "admin-a", "admin")
+	if code, out, errOut := h.run("user", "rotate", "admin-a"); code != 0 {
+		t.Fatalf("setup: rotate exited %d\n%s%s", code, out, errOut)
+	}
+	confBefore, regBefore := string(h.readConf()), string(h.readRegistry())
+	code, _, errOut := h.run("user", "revoke", "admin-a")
+	if code != 1 || !strings.Contains(errOut, "last admin") {
+		t.Errorf("revoke of the one rotating admin: exit = %d, stderr = %q, want 1 and the last-admin message", code, errOut)
+	}
+	if string(h.readConf()) != confBefore || string(h.readRegistry()) != regBefore {
+		t.Errorf("a refused revoke changed the conf or the registry")
+	}
+	// With a second admin, revoking the rotating one is allowed, and the second is then the last.
+	addUser(t, h, "admin-b", "admin")
+	if code, out, errOut := h.run("user", "revoke", "admin-a"); code != 0 {
+		t.Fatalf("revoke of a rotating admin with a second admin: exit = %d\n%s%s", code, out, errOut)
+	}
+	if code, _, errOut := h.run("user", "revoke", "admin-b"); code != 1 || !strings.Contains(errOut, "last admin") {
+		t.Errorf("revoke of the remaining admin: exit = %d, stderr = %q, want 1 and the last-admin message", code, errOut)
+	}
+}
+
+// Ruling 4: the refusal for a hand-written admin suggests adopt.
+func TestHubUserLastAdminRefusalSuggestsAdoptForAHandWrittenAdmin(t *testing.T) {
+	h := newHubScratch(t, hubScratchOpts{})
+	addUser(t, h, "admin-a", "admin")
+	// The hub's own hand-written admin block is in the conf and not in the registry.
+	code, _, errOut := h.run("user", "revoke", "admin-a")
+	if code != 1 || !strings.Contains(errOut, "last admin") || !strings.Contains(errOut, "adopt") {
+		t.Errorf("exit = %d, stderr = %q, want 1, the last-admin message and a suggestion to adopt the hand-written admin", code, errOut)
+	}
+}
+
+// Ruling 5: hubAfterReload is nil in shipped code and nothing outside a test file
+// assigns it, by flag, environment or anything else.
+func TestHubAfterReloadIsNilAndNoShippedCodeSetsIt(t *testing.T) {
+	if hubAfterReload != nil {
+		t.Errorf("hubAfterReload is set at the start of a test run")
+	}
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pkg := range pkgs {
+		for name, f := range pkg.Files {
+			ast.Inspect(f, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.AssignStmt:
+					for _, l := range x.Lhs {
+						if id, ok := l.(*ast.Ident); ok && id.Name == "hubAfterReload" {
+							t.Errorf("%s assigns hubAfterReload at %s", name, fset.Position(x.Pos()))
+						}
+					}
+				case *ast.ValueSpec:
+					for i, id := range x.Names {
+						if id.Name == "hubAfterReload" && i < len(x.Values) {
+							t.Errorf("%s initialises hubAfterReload at %s", name, fset.Position(x.Pos()))
+						}
+					}
+				}
+				return true
+			})
+		}
 	}
 }

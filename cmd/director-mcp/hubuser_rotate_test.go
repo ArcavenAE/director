@@ -523,7 +523,7 @@ func TestHubUserRevokeRefusesAUserAlreadyRevokedAndRecordsOneAbsentFromTheConf(t
 		t.Fatal(err)
 	}
 	reloadByHand(t, h)
-	confBefore := string(h.readConf())
+	confBefore, reloads := string(h.readConf()), h.reloads()
 	code, out, errOut := h.run("user", "revoke", "gone")
 	if code != 0 || !strings.Contains(out, "absent from the conf; recorded only") {
 		t.Errorf("revoke of a user absent from the conf and refused by the hub: exit = %d, stdout = %q, stderr = %q, want 0 and \"absent from the conf; recorded only\"", code, out, errOut)
@@ -531,8 +531,23 @@ func TestHubUserRevokeRefusesAUserAlreadyRevokedAndRecordsOneAbsentFromTheConf(t
 	if string(h.readConf()) != confBefore {
 		t.Errorf("a recorded-only revoke wrote the conf")
 	}
+	if h.reloads() != reloads {
+		t.Errorf("a recorded-only revoke reloaded the hub")
+	}
 	if u := registryUser(h, "gone"); u == nil || u["state"] != "revoked" {
 		t.Errorf("registry = %v, want gone recorded as revoked", u)
+	}
+	moved := false
+	for _, r := range h.revokedSeeds() {
+		if strings.HasPrefix(filepath.Base(r), "gone-") {
+			moved = true
+		}
+	}
+	if !moved {
+		t.Errorf("gone's seed was not moved to keys/revoked: %v", h.revokedSeeds())
+	}
+	if _, err := os.Stat(filepath.Join(h.keys, "gone.nk")); !os.IsNotExist(err) {
+		t.Errorf("keys/gone.nk is still there")
 	}
 }
 
