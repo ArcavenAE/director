@@ -55,7 +55,7 @@ func advanceGlobalDurable(ctx context.Context, g *globalTier, agentID string, to
 		return res, fmt.Errorf("read global durable %s: %w", name, err)
 	}
 	if before.NumAckPending > 0 || before.NumWaiting > 0 {
-		return res, fmt.Errorf("global durable %s has %d unacked deliveries and %d pulls waiting, so nothing was changed. Either a live seat is reading it (run this while the seat is idle, not inside a wait), or an earlier global-advance --to returned messages it had pulled past its stopping point, which clear when the seat reads them or after the ack wait", name, before.NumAckPending, before.NumWaiting)
+		return res, fmt.Errorf("global durable %s has %d unacked deliveries and %d pulls waiting, so nothing was changed. Either a live seat is reading it (run this while the seat is idle, not inside a wait), or an earlier global-advance --to returned messages it had pulled past its stopping point, which clear when the seat next reads them", name, before.NumAckPending, before.NumWaiting)
 	}
 	res.BeforeFloor, res.BeforePending = before.AckFloor.Stream, before.NumPending
 	// The point the advance stops at, read once: a message after it is the

@@ -245,7 +245,7 @@ func TestBrokerClassAwareCueOnAFreshSeatSeesNoOldBacklog(t *testing.T) {
 		t.Fatalf("after one send the seat peeks %d (%v), want 1", len(items), err)
 	}
 	if floors["global"] != 2 {
-		t.Errorf("cue floor for global = %d, want at least the 2 old messages", floors["global"])
+		t.Errorf("cue floor for global = %d, want 2 (the two old messages)", floors["global"])
 	}
 }
 
