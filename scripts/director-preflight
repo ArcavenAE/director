@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Name each tool a director install needs and does not find, in one run, so a new
+# user learns what is missing here and not from a script that stops halfway.
+#
+# It reads the declared manifest beside it (director-preflight.tsv: tool, class,
+# minimum version, version command, needed by, macOS hint, Linux hint) and prints
+# one line per tool:
+#   OK         <tool> <version>
+#   MISSING    <tool> (required|optional) needed by: ...; install: <hint>
+#   OLD        <tool> (required|optional) found X, wanted >= Y; install: <hint>
+#   UNREADABLE <tool> (required|optional) version not read, wanted >= Y; install: <hint>
+# The hint is the one for the running OS (uname -s: Darwin or Linux; any other
+# system gets both). A tool with no declared minimum is OK whenever it is on PATH,
+# whatever its version command prints. It runs each tool's version command and
+# nothing else: no network, no install, no write. It calls only bash, awk, grep,
+# head, uname and dirname.
+#
+# Exit 1 when a required tool is missing, too old, or cannot show it meets its
+# minimum; 0 otherwise, so an optional tool that is absent is a note and never a
+# failure. This is a precondition of an install, not a health metric, so it may
+# gate (diagnostic-not-gate.md).
+#
+# Environment: DIRECTOR_PREFLIGHT_MANIFEST (a manifest path; default is the file beside this script).
+# Usage: scripts/director-preflight
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+manifest="${DIRECTOR_PREFLIGHT_MANIFEST:-$here/director-preflight.tsv}"
+[[ -r "$manifest" ]] || { echo "director-preflight: cannot read the manifest $manifest" >&2; exit 2; }
+
+# older_than A B: true when version A is lower than version B (numeric, dot separated)
+older_than() {
+  awk -v a="$1" -v b="$2" 'BEGIN {
+    na = split(a, x, "."); nb = split(b, y, ".");
+    n = (na > nb) ? na : nb;
+    for (i = 1; i <= n; i++) {
+      xi = (i <= na) ? x[i] + 0 : 0; yi = (i <= nb) ? y[i] + 0 : 0;
+      if (xi < yi) exit 0; if (xi > yi) exit 1;
+    }
+    exit 1
+  }'
+}
+
+# the first dotted version number in a command's first line of output
+found_version() {
+  local out
+  out="$("$@" 2>&1 | head -n 1 || true)"
+  printf '%s\n' "$out" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1 || true
+}
+
+case "$(uname -s 2>/dev/null || true)" in
+  Darwin) os=mac ;;
+  Linux) os=linux ;;
+  *) os=both ;;
+esac
+hint() { # hint MAC LINUX
+  case "$os" in
+    mac) printf '%s' "$1" ;;
+    linux) printf '%s' "$2" ;;
+    *) printf 'macOS: %s; Linux: %s' "$1" "$2" ;;
+  esac
+}
+
+rc=0
+while IFS=$'\t' read -r tool class min vcmd needed mac linux; do
+  [[ -z "$tool" || "$tool" == \#* ]] && continue
+  h="$(hint "$mac" "$linux")"
+  # command -v also reports a file that is not executable, and a directory is not a tool
+  found="$(command -v "$tool" 2>/dev/null || true)"
+  if [[ -z "$found" || ! -x "$found" || -d "$found" ]]; then
+    echo "MISSING $tool ($class) needed by: $needed; install: $h"
+    [[ "$class" == required ]] && rc=1
+    continue
+  fi
+  if [[ "$min" == "-" ]]; then
+    # shellcheck disable=SC2086
+    ver="$(found_version $vcmd)"
+    echo "OK $tool${ver:+ $ver}"
+    continue
+  fi
+  # shellcheck disable=SC2086
+  ver="$(found_version $vcmd)"
+  if [[ -z "$ver" ]]; then
+    echo "UNREADABLE $tool ($class) version not read, wanted >= $min; install: $h"
+    [[ "$class" == required ]] && rc=1
+  elif older_than "$ver" "$min"; then
+    echo "OLD $tool ($class) found $ver, wanted >= $min; install: $h"
+    [[ "$class" == required ]] && rc=1
+  else
+    echo "OK $tool $ver"
+  fi
+done <"$manifest"
+exit "$rc"
