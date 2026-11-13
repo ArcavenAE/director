@@ -18,6 +18,8 @@
 #                         in a director checkout). Default: the copy two directories up
 #                         from this script. A script carried to ~/operator-steps has no
 #                         such copy beside it, so set this to the checkout's file.
+#                         A set path that is not a non-empty file stops the script; it never
+#                         falls back to the default.
 set -euo pipefail
 
 H="${DIRECTOR_GLOBAL_HOME:-$HOME/.director/nats-global}"
@@ -33,17 +35,27 @@ admin=(nats -s "$url" "${tls[@]}" --nkey "$keys/admin.nk")
 obs=(nats -s "$url" "${tls[@]}" --nkey "$seed" --inbox-prefix _INBOX_observer_director)
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 template=""
-for c in "${OBSERVER_TEMPLATE:-}" "$here/../../probe/nats-global-tier/hub/nats-server.conf"; do
-  if [[ -n "$c" && -s "$c" ]]; then template="$c"; break; fi
-done
-stage=start      # start, edited (the conf changed), reloaded
+if [[ -n "${OBSERVER_TEMPLATE:-}" ]]; then
+  # A template the caller named is the only one used: a missing file is an error, never a
+  # quiet switch to another copy of the grant.
+  [[ -s "$OBSERVER_TEMPLATE" ]] || { echo "OBSERVER_TEMPLATE=$OBSERVER_TEMPLATE is not a non-empty file; nothing was changed" >&2; exit 1; }
+  template="$OBSERVER_TEMPLATE"
+elif [[ -s "$here/../../probe/nats-global-tier/hub/nats-server.conf" ]]; then
+  template="$here/../../probe/nats-global-tier/hub/nats-server.conf"
+fi
+stage=start      # start, edited (the conf is being or has been changed), reloaded
 bak=""
+before=""; after=""; block=""; new=""
 rollback() {
   local rc=$?
+  local f
   if [[ $rc -ne 0 && ( "$stage" == edited || "$stage" == reloaded ) && -n "$bak" ]]; then
     echo "FAILED after the hub conf was changed (stage: $stage)." >&2
     echo "ROLLBACK: cp -p '$bak' '$conf' && nats-server --signal reload=$pid && rm -f '$seed'" >&2
   fi
+  for f in "$before" "$after" "$block" "$new"; do
+    if [[ -n "$f" ]]; then rm -f "$f"; fi
+  done
 }
 trap rollback EXIT
 
@@ -87,8 +99,8 @@ block="$(mktemp "${TMPDIR:-/tmp}/hub-observer.XXXXXX")"
 } >"$block"
 new="$(mktemp "${TMPDIR:-/tmp}/hub-observer.XXXXXX")"
 awk -v f="$block" '{ print } /^[[:space:]]*users:[[:space:]]*\[/ { while ((getline l < f) > 0) print l }' "$conf" >"$new"
+stage=edited     # set before the write: a cp that fails part way leaves a changed conf
 cp "$new" "$conf"
-stage=edited
 if ! nats-server --config "$conf" -t; then
   cp -p "$bak" "$conf"; rm -f "$seed"; stage=start
   echo "config test failed; restored $bak and removed the seed" >&2; exit 1
