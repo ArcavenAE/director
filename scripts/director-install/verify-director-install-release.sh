@@ -168,8 +168,8 @@ seat_line="$(grep -E "(^| |/)director-mcp-seat( |\$)" "$ghlog" | head -1 || true
 # What follows the subject must be the same pinned repo, workflow and bundle on both lines.
 tailof() { printf '%s\n' "$1" | sed -E 's#^attestation verify [^ ]+ ##'; }
 [[ -n "$seat_line" && "$(tailof "$seat_line")" == "$(tailof "$shim_line")" \
-   && "$(tailof "$seat_line")" == "--repo ArcavenAE/director --signer-workflow ArcavenAE/director/.github/workflows/release-director-mcp.yml --bundle "* ]] \
-  && ok "the seat wrapper is verified against the same repository, workflow and bundle as the shim" \
+   && "$(tailof "$seat_line")" == "--repo ArcavenAE/director --signer-workflow ArcavenAE/director/.github/workflows/release-director-mcp.yml --source-ref refs/heads/main --bundle "* ]] \
+  && ok "the seat wrapper is verified against the same repository, workflow, source ref and bundle as the shim" \
   || bad "the seat wrapper's origin check" "seat: $seat_line | shim: $shim_line"
 
 # --- 2. a download that does not match checksums.txt changes nothing ----------
