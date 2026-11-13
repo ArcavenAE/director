@@ -18,6 +18,10 @@ package main
 //     (Amendment 1, A to E).
 
 import (
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -346,15 +350,34 @@ func TestHubUserRevokeNamesTheMovedSeedByNameAndTime(t *testing.T) {
 	}
 }
 
-func TestHubUserRevokeSaysUnknownWhenTheMonitorCannotBeRead(t *testing.T) {
-	h := newHubScratch(t, hubScratchOpts{badMonitor: true})
+func TestHubUserRevokeSaysUnknownWhenTheConnectionCountCannotBeRead(t *testing.T) {
+	h := newHubScratch(t, hubScratchOpts{})
 	addUser(t, h, "svc", "director")
+	// The reload is proven through /varz, so the monitor must answer there; only the
+	// connection listing is made unreadable.
+	real := fmt.Sprintf("http://127.0.0.1:%d", h.monPort)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/connz") {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		resp, err := http.Get(real + r.URL.RequestURI())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}))
+	defer proxy.Close()
+	h.envOverride = map[string]string{"DIRECTOR_HUB_MONITOR_URL": proxy.URL}
 	code, out, errOut := h.run("user", "revoke", "svc")
 	if code != 0 {
 		t.Fatalf("exit = %d\n%s%s", code, out, errOut)
 	}
 	if !strings.Contains(out, "open connections: unknown") || strings.Contains(out, "still open") || strings.Contains(out, "closed by the reload") {
-		t.Errorf("with the monitor unreadable the output must say \"open connections: unknown\" and make no claim about closing:\n%s", out)
+		t.Errorf("with the connection listing unreadable the output must say \"open connections: unknown\" and make no claim about closing:\n%s", out)
 	}
 }
 
