@@ -277,7 +277,7 @@ func (h *hubScratch) env() func(string) string {
 		"DIRECTOR_HUB_MONITOR_URL": fmt.Sprintf("http://127.0.0.1:%d", h.monPort),
 	}
 	if h.badMonitor {
-		m["DIRECTOR_HUB_MONITOR_URL"] = fmt.Sprintf("http://127.0.0.1:%d", freePort(h.t))
+		m["DIRECTOR_HUB_MONITOR_URL"] = "http://127.0.0.1:1" // port 1: nothing listens there
 	}
 	if filepath.Dir(h.adminSeed) != h.keys {
 		m["DIRECTOR_HUB_ADMIN_NKEY"] = h.adminSeed
