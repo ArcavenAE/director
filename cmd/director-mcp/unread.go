@@ -253,6 +253,8 @@ func parseArgs(args []string) (cliArgs, error) {
 			}
 		}
 		return out, nil
+	case args[0] == "hub":
+		return cliArgs{mode: "hub", hubArgs: args[1:]}, nil
 	case args[0] == "unread":
 		out := cliArgs{mode: "unread"}
 		rest := args[1:]
