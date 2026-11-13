@@ -22,7 +22,7 @@ run_install() { # $1 = scratch home
 
 targets() { # every target install.sh places, relative to the scratch home
   printf '%s\n' claude/skills/director claude/skills/stansfield claude/commands/director.md \
-    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install director/bin/draft-sweep director/bin/card-ingest director/bin/dbi director/bin/introspect director/bin/dash-writer director/bin/shelf-row director/bin/nav-sync director/bin/freebusy director/bin/idle-shadow director/bin/sweep-firings director/bin/lane-ledger director/bin/composer-check director/bin/standing-hook director/bin/director-session director/bin/director-profile director/bin/director-init director/bin/unattached
+    director/bin/board-html director/bin/dws director/bin/dsi director/bin/dsx director/bin/merge-guard director/bin/relay-log director/bin/desk-snapshot director/bin/director-install director/bin/draft-sweep director/bin/card-ingest director/bin/dbi director/bin/introspect director/bin/dash-writer director/bin/shelf-row director/bin/nav-sync director/bin/freebusy director/bin/idle-shadow director/bin/sweep-firings director/bin/lane-ledger director/bin/composer-check director/bin/standing-hook director/bin/director-session director/bin/director-profile director/bin/director-init director/bin/unattached director/bin/director
 }
 
 # Positive control: a clean home installs everything and exits 0.
@@ -31,6 +31,10 @@ if run_install "$clean"; then ok "clean home exits 0"; else bad "clean home exit
 while read -r t; do
   [[ -L "$clean/$t" ]] && ok "clean home installs $t" || bad "clean home installs $t"
 done < <(targets)
+
+# A fresh install writes no seat.env values: the file is absent or holds no setting (I-476).
+if [[ ! -e "$clean/director/seat.env" ]] || ! grep -qE '^[[:space:]]*[A-Z_]+=' "$clean/director/seat.env"; then
+  ok "a clean install writes no seat.env values"; else bad "a clean install writes no seat.env values" "$(cat "$clean/director/seat.env")"; fi
 
 # One plain file in the way: the renderer path holds an old regular file.
 stale="$root/stale"; mkdir -p "$stale/director/bin"

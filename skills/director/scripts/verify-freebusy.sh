@@ -101,7 +101,12 @@ if [[ "$*" == "unread --json" ]]; then
   cat "$FB_FIX/unread.plain.json"; exit 0
 fi
 if [[ "$*" == "unread --json --global" ]]; then
-  echo "DIRECTOR_CLUSTER=${DIRECTOR_CLUSTER-unset}" >>"$FB_FIX/mcp.env"
+  { echo "DIRECTOR_CLUSTER=${DIRECTOR_CLUSTER-unset}"
+    echo "DIRECTOR_HUB_OBSERVER_URL=${DIRECTOR_HUB_OBSERVER_URL-unset}"
+    echo "DIRECTOR_HUB_OBSERVER_NKEY=${DIRECTOR_HUB_OBSERVER_NKEY-unset}"
+    echo "DIRECTOR_HUB_OBSERVER_CA=${DIRECTOR_HUB_OBSERVER_CA-unset}"
+    echo "NATS_URL=${NATS_URL-unset}"
+    echo "DIRECTOR_AGENT_ID=${DIRECTOR_AGENT_ID-unset}"; } >>"$FB_FIX/mcp.env"
   if [[ -e "$FB_FIX/global.fail" ]]; then if [[ -s "$FB_FIX/global.fail" ]]; then cat "$FB_FIX/global.fail" >&2; else echo "director-mcp unread: hub unreachable" >&2; fi; exit 1; fi
   if [[ -e "$FB_FIX/global.json" ]]; then cat "$FB_FIX/global.json"; else echo '{"reports":[]}'; fi
   exit 0
@@ -832,6 +837,47 @@ case_i467() {
   echo '{"reports":[{"stream":"GLOBAL_TO_kinu","durables":[{"agent_id":"kinu-sup","pending":1}]}]}' >"$FIX/global.json"
   out="$(run "${base[@]}")"
   ! grep -q 'GAP mail: DIRECTOR_CLUSTER' <<<"$out" && ok "C3 no unset GAP when the read does not carry the unset warning" || bad "C3 gap" "$out"
+
+  # D (I-476): the operator's seat.env is a home for DIRECTOR_CLUSTER and the three observer settings, read through
+  # `director env` and only for keys the caller's own environment lacks. Nothing is derived, and nothing else in the file
+  # (the broker url, the agent id) reaches the mail read.
+  dh="$root/home/.director"; mkdir -p "$dh/bin"
+  cp "$here/../../../scripts/director" "$dh/bin/director"; chmod +x "$dh/bin/director"
+  echo '{"reports":[{"stream":"GLOBAL_TO_other","partial":true,"self_reported":true,'"$nocl"',"self_reported_seats":[{"agent_id":"ops-supervisor-1","reported":true,"oldest_pending_s":30}]}]}' >"$FIX/global.json"
+  printf '%s\n' 'DIRECTOR_AGENT_ID=seat-file-director' 'DIRECTOR_CLUSTER=kinu' 'NATS_URL=nats://127.0.0.1:4999' \
+    'DIRECTOR_HUB_OBSERVER_URL=tls://hub.example.invalid:4222' "DIRECTOR_HUB_OBSERVER_NKEY=$root/observer.nk" "DIRECTOR_HUB_OBSERVER_CA=$root/hub-ca.pem" >"$dh/seat.env"
+  rm -f "$FIX/mcp.env"
+  out="$(run "${base[@]}")"
+  grep -qx 'DIRECTOR_CLUSTER=kinu' "$FIX/mcp.env" && grep -qx 'DIRECTOR_HUB_OBSERVER_URL=tls://hub.example.invalid:4222' "$FIX/mcp.env" \
+    && grep -qx "DIRECTOR_HUB_OBSERVER_NKEY=$root/observer.nk" "$FIX/mcp.env" && grep -qx "DIRECTOR_HUB_OBSERVER_CA=$root/hub-ca.pem" "$FIX/mcp.env" \
+    && ok "D1 the cluster and the three observer settings in seat.env reach the global read" || bad "D1 seat.env values" "$(cat "$FIX/mcp.env" 2>&1)"
+  ! grep -q 'GAP mail: DIRECTOR_CLUSTER' <<<"$out" && ok "D1 and the unset GAP is not printed once the file supplies the cluster" || bad "D1 gap" "$out"
+  grep -qx 'NATS_URL=unset' "$FIX/mcp.env" && grep -qx 'DIRECTOR_AGENT_ID=unset' "$FIX/mcp.env" \
+    && ok "D1 nothing else in seat.env (the broker url, the agent id) reaches the read" || bad "D1 only four keys" "$(cat "$FIX/mcp.env" 2>&1)"
+  rm -f "$FIX/mcp.env"
+  out="$(run "${base[@]}" DIRECTOR_CLUSTER=other DIRECTOR_HUB_OBSERVER_URL=tls://caller.example.invalid:4222)"
+  grep -qx 'DIRECTOR_CLUSTER=other' "$FIX/mcp.env" && grep -qx 'DIRECTOR_HUB_OBSERVER_URL=tls://caller.example.invalid:4222' "$FIX/mcp.env" \
+    && grep -qx "DIRECTOR_HUB_OBSERVER_NKEY=$root/observer.nk" "$FIX/mcp.env" \
+    && ok "D2 the caller's environment beats the file, key by key, and the file fills the rest" || bad "D2 precedence" "$(cat "$FIX/mcp.env" 2>&1)"
+  # D3: no seat.env at all: nothing is invented, and the unset GAP is the one C2 prints
+  rm -f "$dh/seat.env" "$FIX/mcp.env"
+  out="$(run "${base[@]}")"
+  grep -qx 'DIRECTOR_CLUSTER=unset' "$FIX/mcp.env" && grep -qx 'DIRECTOR_HUB_OBSERVER_URL=unset' "$FIX/mcp.env" \
+    && grep -q 'GAP mail: DIRECTOR_CLUSTER is unset' <<<"$out" && ! grep -q 'seat.env' <<<"$out" \
+    && ok "D3 with no seat.env nothing is set, the unset GAP stands, and no seat.env GAP is printed" || bad "D3 no file" "$(cat "$FIX/mcp.env" 2>&1) | $out"
+  # D4: a bad line is a GAP naming the file, nothing from the file is used, and the mail line still prints
+  printf '%s\n' 'DIRECTOR_CLUSTER=kinu' 'LD_PRELOAD=/nowhere' >"$dh/seat.env"
+  rm -f "$FIX/mcp.env"
+  out="$(run "${base[@]}")"
+  grep -q "GAP mail: director env could not read $dh/seat.env" <<<"$out" && grep -qx 'DIRECTOR_CLUSTER=unset' "$FIX/mcp.env" \
+    && grep -qF 'mail: local' <<<"$out" \
+    && ok "D4 a bad seat.env line is a GAP naming the file, uses nothing from it, and the run still prints its mail line" || bad "D4 bad file" "$(cat "$FIX/mcp.env" 2>&1) | $out"
+  # D5: no installed director: nothing to read, no GAP (a host that never installed it is not a failed read)
+  printf '%s\n' 'DIRECTOR_CLUSTER=kinu' >"$dh/seat.env"; rm -f "$dh/bin/director" "$FIX/mcp.env"
+  out="$(run "${base[@]}")"
+  grep -qx 'DIRECTOR_CLUSTER=unset' "$FIX/mcp.env" && ! grep -q 'seat.env' <<<"$out" \
+    && ok "D5 with no installed director there is nothing to read and no seat.env GAP" || bad "D5 no director" "$(cat "$FIX/mcp.env" 2>&1) | $out"
+  rm -f "$dh/seat.env"
 }
 
 
