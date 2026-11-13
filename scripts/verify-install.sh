@@ -134,6 +134,19 @@ mkdir -p "$cp_home/home"; HOME="$cp_home/home" DIRECTOR_STATE="$cp_home/state" "
 [[ $rc -eq 0 ]] && ok "installed dsi runs from the bin home" || bad "installed dsi runs from the bin home" "rc=$rc"
 set -e
 
+# (I-476) A --copy install puts a copy of the launcher in bin with no repo beside it. `director env` must
+# work from it, since it reads no config; `director start` must stop with exit 3 and name the config path.
+cdir="$cp_home/director/bin/director"
+printf '%s\n' 'DIRECTOR_AGENT_ID=copy-director' 'DIRECTOR_TEAM=copy-team' 'DIRECTOR_WORKSPACE=copy-ws' 'DIRECTOR_CLUSTER=copy-cluster' >"$cp_home/director/seat.env"
+set +e
+env -i HOME="$cp_home/home" PATH="$PATH" LANG="${LANG:-C}" DIRECTOR_HOME="$cp_home/director" "$cdir" env >"$cp_home/cenv.out" 2>"$cp_home/cenv.err"; rc=$?
+[[ $rc -eq 0 && "$(LC_ALL=C sort "$cp_home/cenv.out")" == "$(printf '%s\n' DIRECTOR_AGENT_ID=copy-director DIRECTOR_CLUSTER=copy-cluster DIRECTOR_TEAM=copy-team DIRECTOR_WORKSPACE=copy-ws)" ]] \
+  && ok "a copied bin/director prints the seat.env lines with no repo beside it" || bad "a copied bin/director env" "rc=$rc $(cat "$cp_home/cenv.out" "$cp_home/cenv.err" 2>&1)"
+env -i HOME="$cp_home/home" PATH="$PATH" LANG="${LANG:-C}" DIRECTOR_HOME="$cp_home/director" CLAUDE_BIN=/nonexistent "$cdir" start >"$cp_home/cstart.out" 2>"$cp_home/cstart.err"; rc=$?
+[[ $rc -eq 3 ]] && grep -q 'config/director-mcp.json' "$cp_home/cstart.err" \
+  && ok "a copied bin/director start stops with exit 3 and names the config path it looked for" || bad "a copied bin/director start" "rc=$rc $(cat "$cp_home/cstart.err" 2>&1)"
+set -e
+
 # The default idea roots (ld16k): written when absent, never over an operator's file.
 cf="$clean/director/state/idea-roots.conf"
 [[ -s "$cf" ]] && grep -q '_kos/ideas' "$cf" && ok "a clean install writes the default idea-roots.conf" || bad "a clean install writes the default idea-roots.conf"
