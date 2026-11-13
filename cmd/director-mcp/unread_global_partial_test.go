@@ -208,8 +208,10 @@ func TestUnreadGlobalPartialNamesWhatItCouldNotSee(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reports) != 1 || !reports[0].Partial {
-		t.Fatalf("reports = %+v", reports)
+	// the other cluster's row is refused too: it is counted as an unreadable row
+	// in its own self-reported report, not dropped
+	if len(reports) != 2 || !reports[0].Partial || reports[1].Stream != "GLOBAL_TO_other" || !reports[1].SelfReported || reports[1].UnreadableRows != 1 {
+		t.Fatalf("reports = %+v, want the own partial report and GLOBAL_TO_other self-reported with 1 unreadable row", reports)
 	}
 	r := reports[0]
 	if len(r.Durables) != 0 {

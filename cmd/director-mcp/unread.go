@@ -397,6 +397,10 @@ type unreadReport struct {
 	// hub observer has (I-467 rec 2). Seats lists those rows.
 	SelfReported bool               `json:"self_reported,omitempty"`
 	Seats        []selfReportedSeat `json:"self_reported_seats,omitempty"`
+	// UnreadableRows counts this cluster's presence rows the fallback could not
+	// use: the get failed, the value is not JSON, or it names no agent and
+	// instance. They are not seats and not an age of 0.
+	UnreadableRows int `json:"unreadable_rows,omitempty"`
 }
 
 // selfReportedSeat is one seat's own presence claim. A row with no

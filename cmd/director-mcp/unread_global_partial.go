@@ -121,21 +121,29 @@ func readUnreadGlobalPartial(ctx context.Context, gjs jetstream.JetStream, clust
 // report would read as a quiet cluster; the own cluster's warning says so.
 func selfReportedReports(reads []keyRead, now time.Time) []unreadReport {
 	byCluster := map[string][]selfReportedSeat{}
+	unreadable := map[string]int{}
 	for _, kr := range reads {
-		if kr.err != nil {
-			continue
-		}
 		parts := strings.SplitN(kr.key, ".", 4) // presence.<cluster>.<role>.<instance>
 		if len(parts) < 4 {
 			continue
 		}
+		cluster := parts[1]
+		if errors.Is(kr.err, jetstream.ErrKeyNotFound) {
+			continue // deleted since the listing: the row is gone, not unreadable
+		}
+		if kr.err != nil {
+			unreadable[cluster]++
+			continue
+		}
 		var rec map[string]any
 		if json.Unmarshal(kr.entry.Value(), &rec) != nil {
+			unreadable[cluster]++
 			continue
 		}
 		agent, _ := rec["agent_id"].(string)
 		inst, _ := rec["instance"].(string)
 		if agent == "" || inst == "" {
+			unreadable[cluster]++
 			continue
 		}
 		seat := selfReportedSeat{AgentID: agent, Instance: inst}
@@ -148,11 +156,17 @@ func selfReportedReports(reads []keyRead, now time.Time) []unreadReport {
 				seat.OverBound = age > pendingAgeBound.Seconds()
 			}
 		}
-		byCluster[parts[1]] = append(byCluster[parts[1]], seat)
+		byCluster[cluster] = append(byCluster[cluster], seat)
 	}
-	clusters := make([]string, 0, len(byCluster))
-	for c := range byCluster {
-		clusters = append(clusters, c)
+	seen := map[string]bool{}
+	var clusters []string
+	for _, m := range []map[string]bool{boolKeys(byCluster), boolKeysInt(unreadable)} {
+		for c := range m {
+			if !seen[c] {
+				seen[c] = true
+				clusters = append(clusters, c)
+			}
+		}
 	}
 	sort.Strings(clusters)
 	var out []unreadReport
@@ -160,10 +174,34 @@ func selfReportedReports(reads []keyRead, now time.Time) []unreadReport {
 		seats := byCluster[c]
 		sort.Slice(seats, func(i, j int) bool { return seats[i].AgentID < seats[j].AgentID })
 		name := globalStreamPrefix + c
-		out = append(out, unreadReport{
-			Stream: name, ReadAt: now.UTC().Format(time.RFC3339), Partial: true, SelfReported: true, Seats: seats,
+		r := unreadReport{
+			Stream: name, ReadAt: now.UTC().Format(time.RFC3339), Partial: true, SelfReported: true, Seats: seats, UnreadableRows: unreadable[c],
 			Warnings: []string{fmt.Sprintf("self-reported: %s was not read; each seat's own presence row was. oldest_pending_s covers both tiers (the oldest message waiting on either), it is an age, not a count, and it is what the seat wrote about itself. A seat with no row, or a row with no age, is not reported, never 0", name)},
-		})
+		}
+		if n := unreadable[c]; n > 0 {
+			noun := "rows"
+			if n == 1 {
+				noun = "row"
+			}
+			r.Warnings = append(r.Warnings, fmt.Sprintf("%d presence %s unreadable for %s (the get failed, the value is not JSON, or it names no agent and instance), so %s not counted as a seat and not read as 0", n, noun, name, map[bool]string{true: "it is", false: "they are"}[n == 1]))
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+func boolKeys(m map[string][]selfReportedSeat) map[string]bool {
+	out := map[string]bool{}
+	for k := range m {
+		out[k] = true
+	}
+	return out
+}
+
+func boolKeysInt(m map[string]int) map[string]bool {
+	out := map[string]bool{}
+	for k := range m {
+		out[k] = true
 	}
 	return out
 }
