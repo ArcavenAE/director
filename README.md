@@ -139,12 +139,12 @@ Three tools, each with its own scope:
 
 - **`install.sh`** (above): the skills, the command, the tools under "What
   install.sh links", and the state root.
-- **By hand** (next section): the bus seat and `director-mcp-seat`. No tool
-  installs `director-mcp-seat` yet.
+- **By hand** (next section): the bus seat. `director-mcp-seat` comes with a
+  `--release` install of the shim, or by hand.
 - **`director-install`**: `cast-launch`, the launcher marvel runs for
   seats cast from the role library, and `director-mcp`, the shim, built from a commit with
   `director-install director-mcp --ref <commit>` and undone with `--rollback`.
-  It does not install `director-mcp-seat`.
+  Only a `--release` install brings `director-mcp-seat`; a `--ref` build does not.
 
 A host that runs seats cast from the role library installs the launcher from a commit,
 with no checkout needed:
@@ -219,7 +219,10 @@ Two pieces:
   [docs/getting-started.md](docs/getting-started.md#3-install-the-shim).
 - `director-mcp-seat`, the launcher that works out who the seat is, under
   `probe/nats-phase-0/`. The fleet runs it from
-  `~/.director/bin/director-mcp-seat`, a symlink back to this repo.
+  `~/.director/bin/director-mcp-seat`, a symlink back to this repo. A
+  `director-install director-mcp --release` install also fetches the wrapper from the
+  release, checks it like the shim, and links it there, unless that path is a link
+  you made yourself, which it leaves alone.
 
 Register it once, with no identity of its own. The same registration is then
 correct both for a marvel-managed session and for a seat you start yourself:

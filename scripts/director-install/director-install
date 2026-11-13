@@ -51,6 +51,22 @@
 # --status shows them. `latest-alpha` resolves once, to the newest alpha tag in
 # the releases listing, and the STAMP keeps that tag. Nothing upgrades by itself.
 #
+# The release also carries the seat wrapper, director-mcp-seat, covered by the same
+# checksum and attestation checks (a failure of either, for either file, refuses the
+# whole install). It is installed beside the shim, under lib/director-mcp/<sha>/, and
+# $DIRECTOR_HOME/bin/director-mcp-seat is a link into it that moves with the shim,
+# --rollback included. Three rules for that link:
+#   - A release from before the wrapper installs the shim, records seat=absent, and
+#     keeps the seat link where it is, saying which release the live wrapper is
+#     from; with no seat link, none is made and the output says none is installed.
+#   - A seat link this installer did not make (a symlink into a checkout, say) is
+#     left alone, though the shim's own foreign link is kept and replaced. The two
+#     differ on purpose: the shim is what this installer exists to install, while a
+#     seat wrapper that a person pointed somewhere is theirs until they ask for it
+#     (an opt-in --seat is deferred, not built, so no output names it).
+#   - A later prune of old lib/director-mcp/<sha>/ directories must never remove one
+#     that a live seat link points into, even when the shim link has moved on.
+#
 # --status is a diagnostic, not a gate (diagnostic-not-gate.md): it always exits
 # 0. The one pass/fail step is the verify before the switch, which is a
 # structural check on the artifact being installed.
@@ -192,6 +208,29 @@ keep_legacy_mcp() {
   printf '%s\n' "$name"
 }
 
+SLINK="$BIN/director-mcp-seat"
+
+# The sha directory the seat link points into, when this installer made it.
+current_seat() {
+  local t
+  t="$(readlink "$SLINK" 2>/dev/null)" || return 0
+  [[ "$t" == "$MLIB"/*/director-mcp-seat ]] || return 0
+  basename "$(dirname "$t")"
+}
+
+# Move the seat link to this version's wrapper, unless a person made the link.
+switch_seat() {
+  local sha="$1" tmp
+  [[ -e "$MLIB/$sha/director-mcp-seat" ]] || return 0
+  if [[ -e "$SLINK" || -L "$SLINK" ]] && [[ -z "$(current_seat)" ]]; then
+    echo "director-install: $SLINK was not installed by director-install; left in place"
+    return 0
+  fi
+  tmp="$BIN/.director-mcp-seat.new.$$"
+  ln -sfn "$MLIB/$sha/director-mcp-seat" "$tmp"
+  mv -f "$tmp" "$SLINK"
+}
+
 switch_mcp() {
   local sha="$1" prev tmp
   mkdir -p "$BIN" "$MLIB"
@@ -204,6 +243,7 @@ switch_mcp() {
     printf '%s\n' "$prev" > "$MLIB/.previous.new.$$"
     mv -f "$MLIB/.previous.new.$$" "$MLIB/.previous"
   fi
+  switch_seat "$sha"
 }
 
 install_director_mcp() {
@@ -267,7 +307,7 @@ latest_alpha_tag() {
 }
 
 install_director_mcp_release() {
-  local tag="$1" os arch asset stage want got info rc rev version channel t7 verify_help ghv_out gh_major gh_minor gh_version
+  local tag="$1" os arch asset stage want got info rc rev version channel t7 seat_state=absent code subj live verify_help ghv_out gh_major gh_minor gh_version
   command -v curl >/dev/null 2>&1 || die "curl is not on PATH; a release is downloaded with curl. Nothing was switched."
   command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 \
     || die "neither shasum nor sha256sum is on PATH; a download is checked against checksums.txt. Nothing was switched."
@@ -307,15 +347,32 @@ install_director_mcp_release() {
     curl -fsSL --max-time 300 -o "$stage/$t7" "$RELEASE_BASE/$tag/$t7" \
       || die "download of $t7 from $RELEASE_BASE/$tag failed; nothing was switched"
   done
+  # The seat wrapper is part of a release from the wrapper's own release on; an older
+  # release answers 404 and installs without it.
+  code="$(curl -sSL --max-time 300 -o "$stage/director-mcp-seat" -w '%{http_code}' "$RELEASE_BASE/$tag/director-mcp-seat")" || code=000
+  case "$code" in
+    200) seat_state=included ;;
+    404) rm -f "$stage/director-mcp-seat" ;;
+    *) die "download of director-mcp-seat from $RELEASE_BASE/$tag failed (HTTP $code); nothing was switched" ;;
+  esac
   # 1. the bytes arrived whole.
   want="$(awk -v n="$asset" '$2 == n {print $1}' "$stage/checksums.txt")"
   [[ -n "$want" ]] || die "checksums.txt of $tag has no line for $asset; nothing was switched"
   got="$(sha256_of "$stage/$asset")"
   [[ "$got" == "$want" ]] || die "checksum mismatch for $asset of $tag (checksums.txt says $want, the download is $got); nothing was switched"
+  if [[ "$seat_state" == included ]]; then
+    want="$(awk '$2 == "director-mcp-seat" {print $1}' "$stage/checksums.txt")"
+    [[ -n "$want" ]] || die "checksums.txt of $tag has no line for director-mcp-seat; nothing was switched"
+    got="$(sha256_of "$stage/director-mcp-seat")"
+    [[ "$got" == "$want" ]] || die "checksum mismatch for director-mcp-seat of $tag (checksums.txt says $want, the download is $got); nothing was switched"
+  fi
   # 2. the bytes came from this repository's release workflow.
-  gh attestation verify "$stage/$asset" --repo "$REPO" --signer-workflow "$REPO/$RELEASE_WORKFLOW" \
-      --source-ref refs/heads/main --bundle "$stage/attestations.sigstore.json" >"$stage/verify.log" 2>&1 \
-    || { echo "director-install: the origin check (gh attestation verify) rejected $asset of $tag; nothing was switched. Last lines:" >&2; tail -5 "$stage/verify.log" >&2; exit 1; }
+  for subj in "$asset" director-mcp-seat; do
+    [[ "$subj" == director-mcp-seat && "$seat_state" != included ]] && continue
+    gh attestation verify "$stage/$subj" --repo "$REPO" --signer-workflow "$REPO/$RELEASE_WORKFLOW" \
+        --source-ref refs/heads/main --bundle "$stage/attestations.sigstore.json" >"$stage/verify.log" 2>&1 \
+      || { echo "director-install: the origin check (gh attestation verify) rejected $subj of $tag; nothing was switched. Last lines:" >&2; tail -5 "$stage/verify.log" >&2; exit 1; }
+  done
   # 3. the first run, guarded as --ref's is, only after the origin is shown.
   chmod +x "$stage/$asset"
   rc=0
@@ -330,8 +387,18 @@ install_director_mcp_release() {
   fi
   if [[ -d "$MLIB/$rev" ]]; then
     echo "director-install: $rev is already installed and checked"
+    # The directory may be from a --ref build, which has no wrapper. The wrapper just checked
+    # and verified belongs in it, so the seat link has something to point at.
+    if [[ "$seat_state" == included && ! -e "$MLIB/$rev/director-mcp-seat" ]]; then
+      chmod +x "$stage/director-mcp-seat"
+      mv "$stage/director-mcp-seat" "$MLIB/$rev/director-mcp-seat"
+      { grep -v '^seat=' "$MLIB/$rev/STAMP" || true; echo "seat=included"; } > "$MLIB/$rev/STAMP.new" \
+        && mv "$MLIB/$rev/STAMP.new" "$MLIB/$rev/STAMP"
+      echo "director-install: added the verified director-mcp-seat of $tag to $rev"
+    fi
   else
     mv "$stage/$asset" "$stage/director-mcp"
+    [[ "$seat_state" == included ]] && chmod +x "$stage/director-mcp-seat"
     rm -f "$stage/checksums.txt" "$stage/attestations.sigstore.json" "$stage/verify.log"
     {
       echo "sha=$rev"
@@ -341,6 +408,7 @@ install_director_mcp_release() {
       echo "release=$tag"
       echo "origin=verified"
       echo "gh_version=$gh_version"
+      echo "seat=$seat_state"
       echo "origin_check=gh attestation verify, repo $REPO, workflow $RELEASE_WORKFLOW, ref refs/heads/main"
       echo "source=$RELEASE_BASE/$tag"
       echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -352,6 +420,16 @@ install_director_mcp_release() {
   rm -rf "$stage" 2>/dev/null || true
   switch_mcp "$rev"
   echo "director-install: director-mcp -> $rev ($tag)"
+  if [[ ! -e "$MLIB/$rev/director-mcp-seat" ]]; then
+    live="$(current_seat)"
+    if [[ -n "$live" ]]; then
+      echo "director-install: $tag has no director-mcp-seat; the live director-mcp-seat is from $(sed -n 's/^release=//p' "$MLIB/$live/STAMP" 2>/dev/null) (${live:0:12})"
+    elif [[ -e "$SLINK" || -L "$SLINK" ]]; then
+      echo "director-install: $tag has no director-mcp-seat; the one at $SLINK was not installed by director-install and is left in place"
+    else
+      echo "director-install: $tag has no director-mcp-seat and none is installed"
+    fi
+  fi
 }
 
 rollback_director_mcp() {
@@ -395,6 +473,11 @@ status() {
     echo "WARN: $MLINK was not installed by director-install; install: director-install director-mcp --ref origin/main"
   else
     echo "director-mcp: not installed (install: director-install director-mcp --ref origin/main)"
+  fi
+  local ssha
+  ssha="$(current_seat)"
+  if [[ -n "$ssha" ]]; then
+    echo "director-mcp-seat: ${ssha:0:12} (release $(sed -n 's/^release=//p' "$MLIB/$ssha/STAMP" 2>/dev/null))${msha:+$([[ "$ssha" == "$msha" ]] || echo "; from a different release than the shim")}"
   fi
   # Wrappers that still exec a checkout are how staleness hides.
   if [[ -d "$MANIFESTS" ]]; then
