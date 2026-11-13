@@ -474,13 +474,25 @@ func TestParseProcEnvReadsTheWordsAfterTheCommandLine(t *testing.T) {
 // run under sandbox-exec (ps is setuid), so a sandboxed run skips it with
 // -skip TestHubProcEnvReadsTheRealPs and it runs unsandboxed in CI.
 func TestHubProcEnvReadsTheRealPs(t *testing.T) {
-	cmd := exec.Command("sleep", "30")
+	// The real server, as the hub is: macOS shows no environment for a system
+	// binary such as sleep (a platform binary under SIP), and nats-server is not one.
+	bin, err := exec.LookPath("nats-server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "-a", "127.0.0.1", "-p", "-1", "-l", filepath.Join(t.TempDir(), "probe.log"))
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), `LAUNCH_PROBE="a:b"`, "LAUNCH_PLAIN=xyz"}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() }()
-	got, err := realHubProcEnv(cmd.Process.Pid)
+	var got map[string]string
+	for i := 0; i < 30; i++ { // the process is read once it has exec'd
+		if got, err = realHubProcEnv(cmd.Process.Pid); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatalf("realHubProcEnv: %v", err)
 	}
