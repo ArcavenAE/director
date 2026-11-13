@@ -36,7 +36,7 @@
 #                  GAP line and the local lines stay. When the global read fell back to the
 #                  presence ages other clusters' seats wrote for themselves, those seats print as
 #                  "- OVER-BOUND global-self-reported <seat> <age>s" and the count names them apart
-#                  ("self-reported N over-bound, M not reported"); a global read that is only the
+#                  ("self-reported N over-bound, M not reported", plus ", N rows unreadable" for presence rows the read could not use); a global read that is only the
 #                  caller's own partial read is "global not read". Diagnostic: the exit status is unchanged
 #     versions     marvel version (client line), marvel version --cluster NAME (the daemon line),
 #                  and the version line of the tap's Formula/marvel.rb as the local checkout
@@ -742,7 +742,7 @@ jq -n -c --arg at "$at" --slurpfile prev "$tmp/prev.json" --argjson ok "$ok_json
 eps="$dir/health-episodes.jsonl"
 mail_ok=0
 global_ok=0
-gr_self_over=0; gr_self_unrep=0; gr_self_any=0; gr_full=0
+gr_self_over=0; gr_self_unrep=0; gr_self_any=0; gr_self_rows=0; gr_full=0
 if [[ ! -x "$mcp" ]]; then
   gap "mail: director-mcp not found at $mcp, so no mail episode was opened or closed"
 elif [[ ! -f "$tmp/unread.rc" ]]; then
@@ -799,7 +799,9 @@ if [[ -x "$mcp" ]]; then
       | "- OVER-BOUND global-self-reported \(.agent_id) \((.oldest_pending_s // 0) | floor)s"' "$tmp/unread-global.out" >>"$overbound"
     gr_self_over="$(jq -r '[.reports[] | select(.self_reported == true) | .self_reported_seats[]? | select(.over_bound == true)] | length' "$tmp/unread-global.out")"
     gr_self_unrep="$(jq -r '[.reports[] | select(.self_reported == true) | .self_reported_seats[]? | select(.reported != true)] | length' "$tmp/unread-global.out")"
-    gr_self_any="$(jq -r '[.reports[] | select(.self_reported == true)] | length' "$tmp/unread-global.out")"
+    # a self-reported report with no seat reads nothing: it counts only through its unreadable rows
+    gr_self_any="$(jq -r '[.reports[] | select(.self_reported == true and ((.self_reported_seats // []) | length) > 0)] | length' "$tmp/unread-global.out")"
+    gr_self_rows="$(jq -r '[.reports[] | select(.self_reported == true) | (.unreadable_rows // 0)] | add // 0' "$tmp/unread-global.out")"
     # a stream read in full counts as read; so does an empty list. Only partial reads, with nothing self-reported, is not read.
     gr_full="$(jq -r 'if (.reports | length) == 0 then 1 else ([.reports[] | select(.self_reported != true and .partial != true)] | length) end' "$tmp/unread-global.out")"
   fi
@@ -834,6 +836,9 @@ if [[ "$global_ok" == 1 ]]; then
   elif [[ "$gr_self_any" -gt 0 ]]; then mg="global $gr_sr"
   elif [[ "$gr_full" -gt 0 ]]; then mg="global $gr_over over-bound"
   else mg="global not read"; fi
+  if [[ "$gr_self_rows" -gt 0 ]]; then
+    if [[ "$gr_self_rows" == 1 ]]; then mg="$mg, 1 row unreadable"; else mg="$mg, $gr_self_rows rows unreadable"; fi
+  fi
 else mg="global not read"; fi
 mail_part="mail: $ml, $mg"
 health_counts="$(jq -s -r --arg mail "$mail_part" '"\(map(select(.kind == "seat")) | length) blocked, \(map(select(.kind == "cluster" and .state == "not_reached")) | length) unreached, \($mail), drift \(if (map(select(.kind == "version") | .version) | unique | length) > 1 then "yes" else "no" end)"' "$tmp/health.new")"
