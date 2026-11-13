@@ -14,10 +14,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -226,22 +228,103 @@ func stageCandidate(cfg hubCfg, files map[string][]byte) (confPath string, clean
 	return filepath.Join(dir, filepath.Base(cfg.conf)), cleanup, nil
 }
 
-func reloadHub(cfg hubCfg) error {
+// hubPid reads the pid file and returns the pid only when that process is
+// nats-server running this conf. A stale pid file can name any process, and a
+// signal sent to the wrong one is not undone by a restore.
+func hubPid(cfg hubCfg) (int, error) {
 	b, err := os.ReadFile(cfg.pidfile)
 	if err != nil {
-		return fmt.Errorf("cannot read the hub's pid file %s: %v", cfg.pidfile, err)
+		return 0, fmt.Errorf("cannot read the hub's pid file %s: %v", cfg.pidfile, err)
 	}
 	var pid int
 	if _, err := fmt.Sscanf(strings.TrimSpace(string(b)), "%d", &pid); err != nil || pid <= 1 {
-		return fmt.Errorf("the pid file %s does not hold a pid", cfg.pidfile)
+		return 0, fmt.Errorf("the pid file %s does not hold a pid", cfg.pidfile)
 	}
 	if err := syscall.Kill(pid, 0); err != nil {
-		return fmt.Errorf("the hub's pid %d is not running: %v", pid, err)
+		return 0, fmt.Errorf("the hub's pid %d is not running: %v", pid, err)
+	}
+	out, err := exec.Command("ps", "-o", "args=", "-p", fmt.Sprint(pid)).Output()
+	if err != nil {
+		return 0, fmt.Errorf("cannot read the command line of pid %d (ps: %v)", pid, err)
+	}
+	if !argsRunNatsServerWithConf(string(out), cfg.conf) {
+		return 0, fmt.Errorf("pid %d from %s is not this hub's nats-server (its command line is %q; want nats-server -c %s)", pid, cfg.pidfile, strings.TrimSpace(string(out)), cfg.conf)
+	}
+	return pid, nil
+}
+
+// argsRunNatsServerWithConf reports whether a ps args line is nats-server run
+// with the conf at path, compared after symlinks are resolved.
+func argsRunNatsServerWithConf(args, conf string) bool {
+	f := strings.Fields(args)
+	if len(f) == 0 || filepath.Base(f[0]) != "nats-server" {
+		return false
+	}
+	real := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return filepath.Clean(p)
+	}
+	for i := 1; i+1 < len(f); i++ {
+		if f[i] != "-c" && f[i] != "--config" && f[i] != "-config" {
+			continue
+		}
+		c := f[i+1]
+		if filepath.IsAbs(c) {
+			return real(c) == real(conf)
+		}
+		return strings.HasSuffix(real(conf), "/"+filepath.Clean(c))
+	}
+	return false
+}
+
+// varzConfigLoadTime reads config_load_time from the hub's monitor. nats-server
+// moves it when a reload takes effect and leaves it when a reload is refused.
+func varzConfigLoadTime(monitorURL string) (string, error) {
+	c := http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get(strings.TrimRight(monitorURL, "/") + "/varz")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("/varz answered %s", resp.Status)
+	}
+	var v struct {
+		T string `json:"config_load_time"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return "", err
+	}
+	if v.T == "" {
+		return "", fmt.Errorf("/varz has no config_load_time")
+	}
+	return v.T, nil
+}
+
+// reloadHub signals the hub and waits for proof that the new conf took: the
+// monitor's config_load_time must move. A refused reload (an option nats-server
+// cannot change while running, such as the jetstream store_dir) keeps the old
+// config and the hub keeps answering, so "it answers" proves nothing.
+func reloadHub(cfg hubCfg) error {
+	pid, err := hubPid(cfg)
+	if err != nil {
+		return err
+	}
+	before, err := varzConfigLoadTime(cfg.monitorURL)
+	if err != nil {
+		return fmt.Errorf("cannot read config_load_time from %s/varz to prove the reload (set DIRECTOR_HUB_MONITOR_URL): %v", strings.TrimRight(cfg.monitorURL, "/"), err)
 	}
 	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
 		return fmt.Errorf("cannot signal pid %d: %v", pid, err)
 	}
-	return nil
+	for end := time.Now().Add(6 * time.Second); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
+		if t, err := varzConfigLoadTime(cfg.monitorURL); err == nil && t != before {
+			return nil
+		}
+	}
+	return fmt.Errorf("the server did not take the new conf: config_load_time stayed %s for 6s after the signal, so the reload was refused (the hub log has the reason, a line with \"Failed to reload\")", before)
 }
 
 func dialHub(cfg hubCfg, seedPath, inboxPrefix string, onErr nats.ErrHandler) (*nats.Conn, error) {
@@ -367,6 +450,10 @@ func hubPreflight(cfg hubCfg, stderr io.Writer) (bin string, code int) {
 	}
 	if err := unchangedConfControl(cfg, bin); err != nil {
 		fmt.Fprintf(stderr, "hub: %v\n", err)
+		return "", 1
+	}
+	if _, err := hubPid(cfg); err != nil {
+		fmt.Fprintf(stderr, "hub: %v. Nothing was changed\n", err)
 		return "", 1
 	}
 	return bin, 0
@@ -610,9 +697,12 @@ func verifyUser(cfg hubCfg, a hubUserArgs, seedPath string, admin *nats.Conn, co
 		return nil
 	}
 	holder := nonWord.ReplaceAllString(a.params["holder"], "_")
+	var vmu sync.Mutex
 	var violations []string
 	nc, err := awaitConnect(cfg, seedPath, "_INBOX_observer_"+holder, 5*time.Second, func(_ *nats.Conn, _ *nats.Subscription, err error) {
+		vmu.Lock()
 		violations = append(violations, err.Error())
+		vmu.Unlock()
 	})
 	if err != nil {
 		return fmt.Errorf("the new observer key does not connect: %v", err)
@@ -687,12 +777,14 @@ func verifyUser(cfg hubCfg, a hubUserArgs, seedPath string, admin *nats.Conn, co
 	}
 	var bad []string
 	for _, subj := range negatives {
+		vmu.Lock()
 		violations = nil
+		vmu.Unlock()
 		m, err := nc.Request(subj, nil, 1500*time.Millisecond)
 		switch {
 		case err == nil && m != nil:
 			bad = append(bad, fmt.Sprintf("%s was answered (it should be denied)", subj))
-		case violatesOn(violations, subj):
+		case violatesOn(&vmu, &violations, subj):
 			fmt.Fprintf(stdout, "ok, refused with a permission violation: %s\n", subj)
 		default:
 			bad = append(bad, fmt.Sprintf("%s was not answered, but the hub logged no permission violation naming it", subj))
@@ -712,8 +804,10 @@ func verifyUser(cfg hubCfg, a hubUserArgs, seedPath string, admin *nats.Conn, co
 	return nil
 }
 
-func violatesOn(violations []string, subj string) bool {
-	for _, v := range violations {
+func violatesOn(mu *sync.Mutex, violations *[]string, subj string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	for _, v := range *violations {
 		l := strings.ToLower(v)
 		if strings.Contains(l, "permissions violation") && strings.Contains(v, `"`+subj+`"`) {
 			return true
@@ -1003,6 +1097,10 @@ func hubSettingsInit(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 	cleanup()
 	if !valid {
 		fmt.Fprintf(stderr, "hub: the candidate conf fails nats-server -t: %s\nThe hub is unchanged; nothing was written.\n", out)
+		return 1
+	}
+	if _, err := hubPid(cfg); err != nil {
+		fmt.Fprintf(stderr, "hub: %v. Nothing was changed\n", err)
 		return 1
 	}
 	admin, err := dialHub(cfg, cfg.adminKey, "", nil)

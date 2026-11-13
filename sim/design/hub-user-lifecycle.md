@@ -239,6 +239,13 @@ Gaps for a new user's first hub, in the order they stop someone:
   include: `/varz` kept the old name and the log read `[ERR] Failed to reload
   server configuration: config reload not supported for ServerName: old=one,
   new=two`. Init therefore refuses such a value before any write.
+- A reload is proved by the monitor's `config_load_time` moving after the
+  signal, not by the hub answering: nats-server keeps the old config when it
+  refuses a reload (a changed jetstream `store_dir` logs `config reload not
+  supported for jetstream storage directory`), and on 2.14.6 `config_load_time`
+  stayed put for that refusal and moved for a good reload. A refused reload
+  restores the conf. The pid file is trusted only when `ps` shows
+  `nats-server -c` with this conf.
 - nats-server 2.15.0 is unmeasured: the precedence and unknown-field
   findings and the reload behavior are measured on 2.14.6 only.
 
