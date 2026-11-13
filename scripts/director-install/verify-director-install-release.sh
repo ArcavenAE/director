@@ -19,7 +19,7 @@ pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 
-root="$(mktemp -d)"
+root="$(mktemp -d "${TMPDIR:-/tmp}/g1rel.XXXXXX")"
 srvpid=""
 cleanup() { [[ -n "$srvpid" ]] && kill "$srvpid" 2>/dev/null || true; rm -rf "$root"; }
 trap cleanup EXIT
@@ -30,16 +30,15 @@ fake="$root/fake"
 mkdir -p "$out" "$srv/dl" "$srv/api" "$fake"
 
 # --- the fake release server --------------------------------------------------
-cat > "$root/serve.py" <<'PY'
-import http.server, socketserver, sys, os
-os.chdir(sys.argv[1])
-class H(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, fmt, *a):
-        with open(sys.argv[3], "a") as f: f.write(self.path + "\n")
-with socketserver.TCPServer(("127.0.0.1", 0), H) as s:
-    open(sys.argv[2], "w").write(str(s.server_address[1]))
-    s.serve_forever()
-PY
+printf '%s\n' \
+  'import http.server, socketserver, sys, os' \
+  'os.chdir(sys.argv[1])' \
+  'class H(http.server.SimpleHTTPRequestHandler):' \
+  '    def log_message(self, fmt, *a):' \
+  '        with open(sys.argv[3], "a") as f: f.write(self.path + "\n")' \
+  'with socketserver.TCPServer(("127.0.0.1", 0), H) as s:' \
+  '    open(sys.argv[2], "w").write(str(s.server_address[1]))' \
+  '    s.serve_forever()' > "$root/serve.py"
 reqlog="$root/req.log"; : > "$reqlog"
 python3 "$root/serve.py" "$srv" "$root/port" "$reqlog" >/dev/null 2>&1 &
 srvpid=$!
@@ -84,14 +83,13 @@ printf '[{"tag_name":"%s"},\n{"tag_name":"%s"},\n{"tag_name":"director-mcp-v0.1.
 
 # A fake gh: record the arguments, then answer by FAKE_GH_RC, and reject any
 # bundle that names another workflow (the way a real verify would).
-cat > "$fake/gh" <<'GH'
-#!/bin/sh
-echo "$*" >> "$FAKE_GH_LOG"
-bundle=""
-while [ $# -gt 0 ]; do [ "$1" = "--bundle" ] && bundle="$2"; shift; done
-[ -n "$bundle" ] && grep -q OTHER-WORKFLOW "$bundle" 2>/dev/null && exit 1
-exit "${FAKE_GH_RC:-0}"
-GH
+printf '%s\n' \
+  '#!/bin/sh' \
+  'echo "$*" >> "$FAKE_GH_LOG"' \
+  'bundle=""' \
+  'while [ $# -gt 0 ]; do [ "$1" = "--bundle" ] && bundle="$2"; shift; done' \
+  '[ -n "$bundle" ] && grep -q OTHER-WORKFLOW "$bundle" 2>/dev/null && exit 1' \
+  'exit "${FAKE_GH_RC:-0}"' > "$fake/gh"
 chmod +x "$fake/gh"
 
 BASEPATH="/usr/bin:/bin"
@@ -141,7 +139,7 @@ if di "$fake" director-mcp --release "$A_TAG"; then
   [[ "$line" == "attestation verify "* && "$line" == *"--repo ArcavenAE/director"* \
      && "$line" == *"--signer-workflow ArcavenAE/director/.github/workflows/release-director-mcp.yml"* \
      && "$line" == *"--bundle "* ]] \
-    && grep -qE "(^| |/)director-mcp-$hos-$harch( |\$)" <<<"$line" \
+    && printf '%s\n' "$line" | grep -qE "(^| |/)director-mcp-$hos-$harch( |\$)" \
     && ok "the verify names this repository, this release workflow, the bundle and the host's binary as the subject" \
     || bad "gh arguments" "$line"
   r="$(cat "$ranlog")"

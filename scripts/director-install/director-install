@@ -258,7 +258,7 @@ latest_alpha_tag() {
   local listing tag
   listing="$(curl -fsSL --max-time 30 "$RELEASES_API")" \
     || die "could not read the releases listing at $RELEASES_API; nothing was switched"
-  tag="$(grep -o '"tag_name": *"director-mcp-alpha-[0-9]\{8\}-[0-9]\{6\}-[0-9a-f]\{7\}"' <<<"$listing" \
+  tag="$(printf '%s\n' "$listing" | grep -o '"tag_name": *"director-mcp-alpha-[0-9]\{8\}-[0-9]\{6\}-[0-9a-f]\{7\}"' \
     | sed 's/.*"\(director-mcp-alpha-[^"]*\)"/\1/' | LC_ALL=C sort | tail -n 1 || true)"
   [[ -n "$tag" ]] || die "no director-mcp alpha release in the listing at $RELEASES_API; nothing was switched"
   printf '%s\n' "$tag"
