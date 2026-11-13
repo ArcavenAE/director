@@ -123,8 +123,28 @@ done
 "${ADMIN[@]}" pub global.mokuzai.supervisor.inbox m --count 3 >/dev/null
 "${ADMIN[@]}" pub global.kinu.supervisor.inbox m --count 2 >/dev/null
 "${ADMIN[@]}" pub global.director.inbox m --count 4 >/dev/null
-# One message pulled and acked on the mokuzai durable, so its floor is not zero.
+# One message pulled and acked on the mokuzai durable, so its floor is not zero. This is
+# also the admin control for MSG.NEXT: the same call the observer is refused below succeeds
+# for a user that is granted it.
 "${ADMIN[@]}" consumer next GLOBAL_TO_mokuzai mcp_global_mok-sup_01AAA --ack >/dev/null
+# Scratch targets for the other four refusals, each with its admin control run once here and
+# succeeding, so a refusal below cannot be a malformed command: CONSUMER.CREATE (admin adds a
+# durable), CONSUMER.DELETE (admin removes a throwaway one), STREAM.MSG.DELETE (admin deletes
+# a message) and STREAM.PURGE (admin purges a second scratch stream). The observer is then
+# refused the same four on the first stream, against targets that still exist.
+"${ADMIN[@]}" stream add GLOBAL_TO_probe --subjects 'global.probe.>' --storage file --retention limits --defaults >/dev/null
+"${ADMIN[@]}" stream add GLOBAL_TO_probe2 --subjects 'global.probe2.>' --storage file --retention limits --defaults >/dev/null
+"${ADMIN[@]}" pub global.probe.inbox m --count 4 >/dev/null
+"${ADMIN[@]}" pub global.probe2.inbox m --count 2 >/dev/null
+"${ADMIN[@]}" consumer add GLOBAL_TO_probe admin-created --pull --defaults >/dev/null \
+  && ok "admin control: CONSUMER.CREATE succeeds for a user that is granted it" || bad "admin control: CONSUMER.CREATE"
+"${ADMIN[@]}" consumer add GLOBAL_TO_probe admin-doomed --pull --defaults >/dev/null
+"${ADMIN[@]}" consumer rm GLOBAL_TO_probe admin-doomed -f >/dev/null \
+  && ok "admin control: CONSUMER.DELETE succeeds for a user that is granted it" || bad "admin control: CONSUMER.DELETE"
+"${ADMIN[@]}" stream rmm GLOBAL_TO_probe 4 -f >/dev/null \
+  && ok "admin control: STREAM.MSG.DELETE succeeds for a user that is granted it" || bad "admin control: STREAM.MSG.DELETE"
+"${ADMIN[@]}" stream purge GLOBAL_TO_probe2 -f >/dev/null \
+  && ok "admin control: STREAM.PURGE succeeds for a user that is granted it" || bad "admin control: STREAM.PURGE"
 
 # state: every stream's consumer count and message count, every durable's counts and floors.
 state() {
@@ -151,15 +171,25 @@ pend="$("${OBS[@]}" consumer info GLOBAL_TO_mokuzai mcp_global_mok-sup_01AAA -j 
   && ok "positive: MSG.GET returns a stored message" || bad "positive: stream get"
 
 # --- negative: what it may not do --------------------------------------------------
-refused() { # label, command...
-  local label="$1"; shift
-  if "$@" >/dev/null 2>"$work/neg.err"; then bad "negative: $label was answered (it must be refused)"; else ok "negative: $label is refused"; fi
+# A refusal counts only when the command fails AND the hub logs a permission violation that
+# names this attempt's own subject (the hub runs with -D, so the log carries it). A failure for
+# any other reason, or a violation logged for another attempt, does not pass.
+refused() { # label, subject ERE, command...
+  local label="$1" subj="$2"; shift 2
+  local n0; n0="$(wc -l <"$work/hub.log")"
+  if "$@" >/dev/null 2>"$work/neg.err"; then bad "negative: $label was answered (it must be refused)"; return; fi
+  sleep 0.5
+  if tail -n +"$((n0+1))" "$work/hub.log" | grep -i 'violation' | grep -Eq "$subj"; then
+    ok "negative: $label is refused, and the hub logged a permission violation on its own subject"
+  else
+    bad "negative: $label failed without a permission violation naming its subject" "stderr: $(head -c 160 "$work/neg.err" | tr '\n' ' ')"
+  fi
 }
-refused "CONSUMER.CREATE (new durable)" "${OBS[@]}" consumer add GLOBAL_TO_mokuzai observer-check --pull --defaults
-refused "MSG.NEXT (pull from a seat's durable)" "${OBS[@]}" consumer next GLOBAL_TO_mokuzai mcp_global_mok-sup_01AAA --ack
-refused "CONSUMER.DELETE" "${OBS[@]}" consumer rm GLOBAL_TO_mokuzai mcp_global_mok-sup_01AAA -f
-refused "STREAM.MSG.DELETE" "${OBS[@]}" stream rmm GLOBAL_TO_mokuzai 1 -f
-refused "STREAM.PURGE" "${OBS[@]}" stream purge GLOBAL_TO_mokuzai -f
+refused "CONSUMER.CREATE (new durable)" '\$JS\.API\.CONSUMER\.(DURABLE\.)?CREATE\.GLOBAL_TO_probe' "${OBS[@]}" consumer add GLOBAL_TO_probe observer-check --pull --defaults
+refused "MSG.NEXT (pull from a seat's durable)" '\$JS\.API\.CONSUMER\.MSG\.NEXT\.GLOBAL_TO_mokuzai\.mcp_global_mok-sup_01AAA' "${OBS[@]}" consumer next GLOBAL_TO_mokuzai mcp_global_mok-sup_01AAA --ack
+refused "CONSUMER.DELETE" '\$JS\.API\.CONSUMER\.DELETE\.GLOBAL_TO_probe\.admin-created' "${OBS[@]}" consumer rm GLOBAL_TO_probe admin-created -f
+refused "STREAM.MSG.DELETE" '\$JS\.API\.STREAM\.MSG\.DELETE\.GLOBAL_TO_probe' "${OBS[@]}" stream rmm GLOBAL_TO_probe 1 -f
+refused "STREAM.PURGE" '\$JS\.API\.STREAM\.PURGE\.GLOBAL_TO_probe' "${OBS[@]}" stream purge GLOBAL_TO_probe -f
 # A publish returns no error to the client; the hub's state shows whether it landed.
 "${OBS[@]}" pub global.director.inbox observer-check >/dev/null 2>&1 || true
 sleep 1
@@ -169,7 +199,6 @@ if cmp -s "$work/state.before" "$work/state.after"; then
 else
   bad "state changed" "$(diff "$work/state.before" "$work/state.after" | head -8 | tr '\n' ';')"
 fi
-grep -qi 'violation' "$work/hub.log" && ok "the hub logged permission violations for the refused attempts" || bad "no permission violation in the hub log"
 
 # --- leaves: no leaf was widened ---------------------------------------------------
 mkdir -p "$work/l1" "$work/l2"
@@ -206,7 +235,7 @@ shim_unread() { # extra env...
 }
 out="$(shim_unread "DIRECTOR_HUB_OBSERVER_URL=$HUB" "DIRECTOR_HUB_OBSERVER_NKEY=$work/observer.nk" || true)"
 streams="$(jq -r '[.reports[].stream] | sort | join(",")' <<<"$out" 2>/dev/null || true)"
-[[ "$streams" == "GLOBAL_TO_DIRECTOR,GLOBAL_TO_kinu,GLOBAL_TO_mokuzai" ]] \
+[[ "$streams" == "GLOBAL_TO_DIRECTOR,GLOBAL_TO_kinu,GLOBAL_TO_mokuzai,GLOBAL_TO_probe,GLOBAL_TO_probe2" ]] \
   && ok "shim: with the observer, unread --global reads every cluster's stream" || bad "shim: observer read" "streams=[$streams] $(head -c 300 "$work/shim.err")"
 [[ "$(jq -r '[.reports[].partial // false] | any' <<<"$out" 2>/dev/null || echo true)" == false ]] \
   && ok "shim: no report is marked partial" || bad "shim: a report is partial"
