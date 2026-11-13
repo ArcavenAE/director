@@ -21,7 +21,7 @@ command -v jq > /dev/null || { echo "verify-publish-director-mcp-release: jq is 
 root="$(mktemp -d "${TMPDIR:-/tmp}/pub.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/bin" "$root/dist"
-EXPECTED="director-mcp-darwin-arm64 director-mcp-darwin-amd64 director-mcp-linux-amd64 director-mcp-linux-arm64 checksums.txt attestations.sigstore.json"
+EXPECTED="director-mcp-darwin-arm64 director-mcp-darwin-amd64 director-mcp-linux-amd64 director-mcp-linux-arm64 director-mcp-seat checksums.txt attestations.sigstore.json"
 for a in $EXPECTED; do echo "$a" > "$root/dist/$a"; done
 
 tag="director-mcp-alpha-20261101-123456-abc1234"
@@ -69,7 +69,7 @@ verdict() {
   rm -f "$root/state"; publish "$1"
   if [[ "$rc" -ne 0 || "$(calls create)" != 1 || "$(calls upload)" != 0 ]] || ! grep -q -- "--target $sha" "$root/log"; then echo "  a new tag was not created once on the commit (rc=$rc)"; v=1; fi
   n="$(grep '^release create' "$root/log" | tr ' ' '\n' | grep -c '/director-mcp-\|/checksums.txt\|/attestations' || true)"
-  [[ "$n" == 6 ]] || { echo "  create did not carry six assets ($n)"; v=1; }
+  [[ "$n" == 7 ]] || { echo "  create did not carry seven assets ($n)"; v=1; }
   # complete
   state "$sha" $(full); publish "$1"
   if [[ "$rc" -ne 0 || "$(calls create)" != 0 || "$(calls upload)" != 0 ]]; then echo "  a complete release was touched (rc=$rc)"; v=1; fi
@@ -80,6 +80,12 @@ verdict() {
         || "$(grep '^release upload' "$root/log" | tr ' ' '\n' | grep -c "^$root/dist/")" != 2 ]] \
      || grep -q -- '--clobber' "$root/log"; then
     echo "  a short release was not finished by one upload of exactly the two missing files, no --clobber (rc=$rc)"; v=1
+  fi
+  # a release from before the wrapper: only the wrapper is uploaded
+  state "$sha" $(full | grep -v '^director-mcp-seat:'); publish "$1"
+  if [[ "$rc" -ne 0 || "$(calls create)" != 0 || "$(calls upload)" != 1 || "$(uploaded director-mcp-seat)" != 1 \
+        || "$(grep '^release upload' "$root/log" | tr ' ' '\n' | grep -c "^$root/dist/")" != 1 ]]; then
+    echo "  a release with no seat wrapper was not finished by one upload of the wrapper alone (rc=$rc)"; v=1
   fi
   # lookalike name
   state "$sha" $(full | grep -v '^checksums.txt:') checksums.txt.bak:10:uploaded; publish "$1"
