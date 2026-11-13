@@ -13,6 +13,13 @@
 #   rollback       a failure after the reload prints a ROLLBACK line, and running
 #                  that line puts the scratch conf back and the hub still reloads.
 #
+#   template       a set OBSERVER_TEMPLATE that names no file fails the script with a message
+#                  and changes nothing, rather than falling back to another copy;
+#   stage          a failure of the write into the conf itself (a read-only conf) still
+#                  prints the ROLLBACK line, since the seed is minted by then;
+#   temp files     the script's own temp files are gone when it ends, on success and on
+#                  a failure.
+#
 # Each case has its own hub, home directory and ports. The script under test is run
 # as the operator would run it, with DIRECTOR_GLOBAL_HOME, HUB_URL and
 # OBSERVER_TEMPLATE set. `nk`, which kinu has and a scratch host may not, is a shim
@@ -101,7 +108,7 @@ CONF
 # run_script TEMPLATE: the script as the operator runs it. Output in $work/out, status in $RC.
 run_script() {
   RC=0
-  DIRECTOR_GLOBAL_HOME="$H" HUB_URL="$URL" OBSERVER_TEMPLATE="$1" bash ${HOB_TRACE:+-x} "$SCRIPT" >"$work/out" 2>&1 || RC=$?
+  DIRECTOR_GLOBAL_HOME="$H" HUB_URL="$URL" OBSERVER_TEMPLATE="$1" TMPDIR="${RUN_TMP:-$TMPDIR}" bash ${HOB_TRACE:+-x} "$SCRIPT" >"$work/out" 2>&1 || RC=$?
 }
 
 # --- case A: the happy path, and the grant equals the template --------------------------
@@ -201,6 +208,53 @@ if [[ -n "$cmd" ]] && bash -c "$cmd" >/dev/null 2>&1; then
 else
   bad "C: the ROLLBACK line failed to run" "$cmd"
 fi
+
+# --- case D1: a set OBSERVER_TEMPLATE that does not exist fails, and changes nothing ---------
+new_hub d1
+cp -p "$H/nats-server.conf" "$work/d1.conf.original"
+run_script "$work/no-such-template.conf"
+if [[ "$RC" != 0 ]] && grep -q 'OBSERVER_TEMPLATE' "$work/out" && grep -q 'no-such-template.conf' "$work/out"; then
+  ok "D1: a set OBSERVER_TEMPLATE naming no file fails and says which file"
+else
+  bad "D1: a missing OBSERVER_TEMPLATE did not fail with a message" "rc=$RC $(tail -4 "$work/out" | tr '\n' ';')"
+fi
+if cmp -s "$H/nats-server.conf" "$work/d1.conf.original" && [[ ! -e "$H/keys/observer-director.nk" ]] && ! grep -q 'observer.director' "$H/nats-server.conf"; then
+  ok "D1: the conf is unchanged and no seed was minted"
+else
+  bad "D1: the script went on with another template and changed the hub"
+fi
+
+# --- case D2: a failed write into the conf still prints the ROLLBACK line ---------------------
+new_hub d2
+chmod 444 "$H/nats-server.conf"   # cp of the new conf onto it fails, after the backup and the seed
+run_script "$TEMPLATE"
+chmod 644 "$H/nats-server.conf"
+if [[ "$RC" != 0 ]] && grep -q '^ROLLBACK: cp -p ' "$work/out"; then
+  ok "D2: a failure writing the conf exits nonzero and prints a ROLLBACK line"
+else
+  bad "D2: no ROLLBACK line after a failed write into the conf" "rc=$RC $(tail -4 "$work/out" | tr '\n' ';')"
+fi
+
+# --- case D3: the script's temp files are gone when it ends -----------------------------------
+new_hub d3
+RUN_TMP="$work/tmp-ok"; mkdir -p "$RUN_TMP"
+run_script "$TEMPLATE"
+left="$(ls -A "$RUN_TMP" | tr '\n' ' ')"
+if [[ "$RC" == 0 && -z "$left" ]]; then
+  ok "D3: after a successful run no temp file is left"
+else
+  bad "D3: temp files left after a successful run" "rc=$RC left=[$left]"
+fi
+new_hub d3f
+RUN_TMP="$work/tmp-fail"; mkdir -p "$RUN_TMP"
+run_script "$work/t-nonames.conf"
+left="$(ls -A "$RUN_TMP" | tr '\n' ' ')"
+if [[ "$RC" != 0 && -z "$left" ]]; then
+  ok "D3: after a failed run no temp file is left"
+else
+  bad "D3: temp files left after a failed run" "rc=$RC left=[$left]"
+fi
+unset RUN_TMP
 
 echo "---"
 echo "$pass passed, $fail failed"
