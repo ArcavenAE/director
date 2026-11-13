@@ -110,7 +110,11 @@ if ! slice="$("$slice_sh" "${slice_args[@]}")"; then
   rm -f "$envout"; echo "cast-launch: slice.sh refused the cast; not starting the harness" >&2; exit 1
 fi
 # The script ends in exec, so no EXIT trap would run: the file goes as soon as it is read.
-envout_text="$(cat "$envout"; printf x)"; envout_text="${envout_text%x}"; rm -f "$envout"
+# A cat that fails is a refusal: the substitution would otherwise take printf's status
+# and read an unreadable file as empty, starting the harness with auto memory on.
+envout_text="$(cat "$envout" && printf x)" \
+  || { rm -f "$envout"; echo "cast-launch: cannot read the --env-out file; not starting the harness" >&2; exit 1; }
+envout_text="${envout_text%x}"; rm -f "$envout"
 case "$envout_text" in
   "") ;;
   "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"$'\n') export CLAUDE_CODE_DISABLE_AUTO_MEMORY=1;;
