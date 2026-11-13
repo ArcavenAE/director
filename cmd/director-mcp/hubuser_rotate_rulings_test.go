@@ -621,3 +621,84 @@ func TestHubAfterReloadIsNilAndNoShippedCodeSetsIt(t *testing.T) {
 		}
 	}
 }
+
+// --- Amendment 2 ------------------------------------------------------------------------------
+
+// A revoke recorded without a seed to try says the refusal was not verified and
+// why, and the registry row carries it so list shows it.
+func TestHubUserRevokeRecordsUnverifiedWhenNoSeedIsHeld(t *testing.T) {
+	pub := newPublicKey(t)
+	hand := handLeaf(pub, nil, nil)
+	h := newHubScratch(t, hubScratchOpts{extraUsers: hand})
+	adoptAs(t, h, pub, "probe-leaf", "leaf")
+	removed := strings.Replace(string(h.readConf()), hand, "", 1)
+	if removed == string(h.readConf()) {
+		t.Fatalf("setup: the hand block was not found")
+	}
+	if err := os.WriteFile(h.conf, []byte(removed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reloadByHand(t, h)
+	code, out, errOut := h.run("user", "revoke", "probe-leaf")
+	if code != 0 {
+		t.Fatalf("exit = %d\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	if !strings.Contains(out, "not verified") || !strings.Contains(out, "no seed is held on this host") {
+		t.Errorf("the note must say the refusal was not verified because no seed is held on this host:\n%s", out)
+	}
+	if u := registryUser(h, "probe-leaf"); u == nil || u["verified"] != false {
+		t.Errorf("registry = %v, want verified: false on the revoked row", u)
+	}
+	_, list, _ := h.run("user", "list")
+	var row string
+	for _, l := range strings.Split(list, "\n") {
+		if strings.HasPrefix(l, "probe-leaf ") {
+			row = l
+		}
+	}
+	if !strings.Contains(row, "revoked") || !strings.Contains(row, "unverified") {
+		t.Errorf("list does not show the unverified revoke: %q", row)
+	}
+}
+
+// The same holds when the key is still in the conf and removed by revoke: a seed
+// held and refused records verified: true, no seed records verified: false.
+func TestHubUserRevokeRowCarriesWhetherTheRefusalWasVerified(t *testing.T) {
+	h := newHubScratch(t, hubScratchOpts{})
+	addUser(t, h, "held", "director")
+	if code, out, errOut := h.run("user", "add", "far-leaf", "--class", "leaf", "--param", "cluster=far", "--public-key", newPublicKey(t)); code != 0 {
+		t.Fatalf("setup: add exited %d\n%s%s", code, out, errOut)
+	}
+	code, out, errOut := h.run("user", "revoke", "held")
+	if code != 0 {
+		t.Fatalf("revoke held exited %d\n%s%s", code, out, errOut)
+	}
+	if u := registryUser(h, "held"); u == nil || u["verified"] != true {
+		t.Errorf("registry = %v, want verified: true after the hub refused the held seed", u)
+	}
+	code, out, errOut = h.run("user", "revoke", "far-leaf")
+	if code != 0 {
+		t.Fatalf("revoke far-leaf exited %d\n%s%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "not verified") {
+		t.Errorf("the revoke with no seed held does not say the refusal was not verified:\n%s", out)
+	}
+	if u := registryUser(h, "far-leaf"); u == nil || u["verified"] != false {
+		t.Errorf("registry = %v, want verified: false", u)
+	}
+}
+
+// An adopted admin counts for the last-admin rule; a revoked one does not.
+func TestHubUserLastAdminCountsAnAdoptedAdmin(t *testing.T) {
+	pub := newPublicKey(t)
+	hand := `      { nkey: ` + pub + ` }`
+	h := newHubScratch(t, hubScratchOpts{extraUsers: hand})
+	addUser(t, h, "admin-a", "admin")
+	if code, out, errOut := h.run("user", "adopt", pub, "--name", "admin-old", "--class", "admin"); code != 0 {
+		t.Fatalf("setup: adopt exited %d\n%s%s", code, out, errOut)
+	}
+	code, out, errOut := h.run("user", "revoke", "admin-a")
+	if code != 0 {
+		t.Errorf("revoke of the added admin with an adopted admin present: exit = %d\nstdout: %s\nstderr: %s, want 0", code, out, errOut)
+	}
+}
