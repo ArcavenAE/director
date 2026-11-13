@@ -315,6 +315,21 @@ SEAT
   else bad "a relative path for $k stops the launcher" "rc=$rc $(cat "$root/stdout")"; fi
 done
 
+# A value with a space is refused by both readers (freebusy splits `director env` output on whitespace and
+# depends on this), so a path such as "Application Support" cannot be configured.
+for k in DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA; do
+  printf '%s\n' 'DIRECTOR_AGENT_ID=fake-director' 'DIRECTOR_TEAM=fake-team' 'DIRECTOR_WORKSPACE=fake-ws' "$k=/with space/x" >"$home/.director/seat.env"
+  rm -f "$root/out"
+  rc=0; run_start start >"$root/stdout" 2>&1 || rc=$?
+  if [[ "$rc" == 3 ]] && grep -q 'line 4' "$root/stdout" && [[ ! -e "$root/out" ]]; then
+    ok "a value with a space for $k stops start with exit 3 naming the line"
+  else bad "a space in $k stops start" "rc=$rc $(cat "$root/stdout")"; fi
+  rc=0; "$here/scripts/director" env --seat-file "$home/.director/seat.env" >"$root/stdout" 2>&1 || rc=$?
+  if [[ "$rc" == 3 ]] && grep -q 'line 4' "$root/stdout"; then
+    ok "and director env refuses it with exit 3 naming the line"
+  else bad "director env refuses a space in $k" "rc=$rc $(cat "$root/stdout")"; fi
+done
+
 # `director env` prints the validated lines that are set, with the same parser.
 cat >"$home/.director/seat.env" <<SEAT
 # a comment
