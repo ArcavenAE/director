@@ -398,3 +398,41 @@ func handFor(class, pub string) string {
 	}
 	return handLeaf(pub, []string{"global.*.supervisor.inbox"}, nil)
 }
+
+// The refusal applies wherever leaf grants are rendered: a rotate of a leaf and an
+// add that mints a seed also write nothing, and no seed is made or left behind.
+func TestLeafRotateAndMintedAddRefuseWithNothingWrittenWhenThereIsNoDomainOrVarzIsUnreadable(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		opts hubScratchOpts
+	}{
+		{"no domain", hubScratchOpts{jsDomain: "-"}},
+		{"unreadable varz", hubScratchOpts{badMonitor: true}},
+	} {
+		pub := newPublicKey(t)
+		c.opts.extraUsers = handLeaf(pub, nil, nil)
+		h := newHubScratch(t, c.opts)
+		// A registered leaf, written by hand because adopt of a leaf is itself refused here.
+		reg := fmt.Sprintf(`{"version":1,"users":[{"name":"far","class":"leaf","params":{"cluster":"probe"},"public_key":%q,"state":"adopted","location":"outside the region","created":"2026-11-13T00:00:00Z"}]}`, pub)
+		if err := os.WriteFile(filepath.Join(h.home, "users.json"), []byte(reg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		snap := func() (string, string, string, string, int) {
+			return string(h.readConf()), string(h.readRegistry()), h.homeListing(), keysListing(t, h), h.reloads()
+		}
+		c0, r0, l0, k0, n0 := snap()
+		for _, args := range [][]string{
+			{"user", "rotate", "far"},
+			{"user", "add", "minted", "--class", "leaf", "--param", "cluster=far"},
+		} {
+			code, _, errOut := h.run(args...)
+			if code != 1 || !strings.Contains(errOut, "JetStream domain") || !strings.Contains(errOut, "Nothing was changed") {
+				t.Errorf("%s: %v: exit = %d, stderr = %q, want 1, the JetStream domain named and nothing changed", c.name, args, code, errOut)
+			}
+			c1, r1, l1, k1, n1 := snap()
+			if c1 != c0 || r1 != r0 || l1 != l0 || k1 != k0 || n1 != n0 {
+				t.Errorf("%s: %v wrote the conf, the registry, a backup or a seed, or reloaded the hub", c.name, args)
+			}
+		}
+	}
+}
