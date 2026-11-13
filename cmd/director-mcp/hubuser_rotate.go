@@ -117,12 +117,18 @@ func removeEntry(conf, key string) (string, bool) {
 	} else {
 		end = len(conf)
 	}
-	// The comment line above the entry.
-	if start > 0 {
-		ps := strings.LastIndexByte(conf[:start-1], '\n') + 1
-		if strings.HasPrefix(strings.TrimSpace(conf[ps:start]), "# director user:") {
-			start = ps
+	// The comment lines above the entry, up to and including the one that heads it.
+	for ps := start; ps > 0; {
+		prev := strings.LastIndexByte(conf[:ps-1], '\n') + 1
+		line := strings.TrimSpace(conf[prev:ps])
+		if !strings.HasPrefix(line, "#") {
+			break
 		}
+		if strings.HasPrefix(line, "# director user:") {
+			start = prev
+			break
+		}
+		ps = prev
 	}
 	return conf[:start] + conf[end:], true
 }
@@ -272,7 +278,14 @@ func hubUserRotateStart(cfg hubCfg, bin string, a rotateArgs, reg hubRegistry, u
 		fmt.Fprintf(stderr, "hub: that public key is already in use. Nothing was changed\n")
 		return 1
 	}
-	block, err := renderClass(u.Class, pub, u.Params)
+	domain := ""
+	if classUsesDomain(u.Class) {
+		if domain, err = hubDomain(cfg); err != nil {
+			fmt.Fprintf(stderr, "hub: %v. Nothing was changed\n", err)
+			return 1
+		}
+	}
+	block, err := renderClass(u.Class, pub, u.Params, domain)
 	if err != nil {
 		fmt.Fprintf(stderr, "hub: %v. Nothing was changed\n", err)
 		return 1
@@ -406,6 +419,9 @@ func hubUserRotateStart(cfg hubCfg, bin string, a rotateArgs, reg hubRegistry, u
 		fmt.Fprintf(stdout, "ok, the old key still connects\n")
 	}
 	u.PendingKey = pub
+	if domain != "" {
+		u.Domain = domain
+	}
 	if err := saveRegistry(cfg, reg); err != nil {
 		fmt.Fprintf(stderr, "hub: the new key is live but the registry write failed: %v\n", err)
 		return 1
@@ -632,7 +648,7 @@ func hubUserRevoke(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 	if u.Class == "admin" {
 		others := 0
 		for i := range reg.Users {
-			if o := &reg.Users[i]; o.Class == "admin" && o.State == "active" && o.Name != name {
+			if o := &reg.Users[i]; o.Class == "admin" && o.State != "revoked" && o.Name != name {
 				others++
 			}
 		}
@@ -692,10 +708,11 @@ func hubUserRevoke(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 		}
-		if len(held) == 0 {
-			fmt.Fprintf(stdout, "note: no seed is held here, so the live hub was not asked to refuse the key\n")
+		verified := len(held) > 0
+		if !verified {
+			fmt.Fprintf(stdout, "note: the refusal was not verified, because no seed is held on this host to try against the live hub\n")
 		}
-		u.State, u.Revoked = "revoked", revokedAt
+		u.State, u.Revoked, u.Verified = "revoked", revokedAt, &verified
 		if err := saveRegistry(cfg, reg); err != nil {
 			fmt.Fprintf(stderr, "hub: cannot write the registry: %v\n", err)
 			return 1
@@ -756,10 +773,11 @@ func hubUserRevoke(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 			return fail(fmt.Sprintf("the key in %s is still accepted after the reload", filepath.Base(s.path)))
 		}
 	}
-	if len(held) == 0 {
-		fmt.Fprintf(stdout, "no seed is held here, so the live hub was not asked to refuse the key; the conf no longer holds it\n")
+	verified := len(held) > 0
+	if !verified {
+		fmt.Fprintf(stdout, "note: the refusal was not verified, because no seed is held on this host to try against the live hub; the conf no longer holds the key\n")
 	}
-	u.State, u.Revoked = "revoked", revokedAt
+	u.State, u.Revoked, u.Verified = "revoked", revokedAt, &verified
 	if err := saveRegistry(cfg, reg); err != nil {
 		fmt.Fprintf(stderr, "hub: the key is removed but the registry write failed: %v\n", err)
 		return 1

@@ -98,6 +98,35 @@ rename. It holds name, class, parameters, public key, state and timestamps,
 and never a seed. The conf region is always rendered from it, so the two
 cannot drift except by a hand edit, which `list` reports.
 
+### Connection type and the JetStream prefix
+
+Each template's header names the connection type its credential is for, and its
+JetStream grants are spelled to match.
+
+- `leaf` and `leaf-director` are leafnode credentials, held by the broker process.
+  A subject arrives over the leafnode link as the leaf sent it, so their JetStream
+  grants are spelled `$JS.<domain>.API` and never `$JS.API`. A leaf seed used as a
+  plain client then gets no JetStream.
+- `director`, `observer` and `admin` are client credentials. Their grants are spelled
+  `$JS.API`.
+- The domain is the running hub's, read from `/varz` at `jetstream.config.domain` and
+  rendered into `{{domain}}`. It is not a parameter: a wrong domain renders grants that
+  silently allow nothing, so a hub with no domain, or a monitor that cannot be read,
+  refuses the command and writes nothing. The registry row records the domain it was
+  rendered for, and `list` reports a row whose domain is not the hub's.
+
+Measured on 2026-11-13 with nats-server v2.14.6, a hub with `jetstream { domain: global }`
+and a client connection: the server maps `$JS.global.API.*` to `$JS.API.*` before it
+checks the grant. A user granted only `$JS.global.API.STREAM.INFO.X` and
+`$JS.global.API.STREAM.MSG.DELETE.X` could not read the stream through
+`jetstream.NewWithDomain(nc, "global")` (the call timed out). The same user granted
+only `$JS.API.STREAM.INFO.X` and `$JS.API.STREAM.MSG.DELETE.X` read the stream and
+deleted a message. `TestLeafClassGrantsAllowNoJetStreamOnAClientConnection` and
+`TestDirectorClassGrantsTheSameCallsOnAClientConnection` pin this. The leaf grants
+are proved over a leafnode link in `hubuser_leafnode_test.go`, on two scratch servers.
+Because a command cannot open a leafnode, verify for a leaf class is that the key
+authenticates on a client connection and is in the reloaded conf, with no JetStream reads.
+
 ## 3. Keys
 
 Director makes keys with `nkeys.CreateUser()` (nkeys v0.4.16, already in

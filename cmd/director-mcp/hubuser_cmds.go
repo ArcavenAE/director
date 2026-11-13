@@ -41,6 +41,8 @@ type hubUser struct {
 	Created    string            `json:"created"`
 	Rotated    string            `json:"rotated,omitempty"`
 	Revoked    string            `json:"revoked,omitempty"`
+	Domain     string            `json:"domain,omitempty"`   // the JetStream domain its grants were rendered for
+	Verified   *bool             `json:"verified,omitempty"` // revoked rows: whether the hub was shown to refuse the key
 }
 
 // hubRegistry is users.json. It holds names, classes, parameters and public
@@ -484,7 +486,7 @@ func hubUserAdd(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 	}
 	_ = tmplText
 	_ = want
-	if _, err := renderClass(a.class, "PLACEHOLDER", a.params); err != nil {
+	if _, err := renderClass(a.class, "PLACEHOLDER", a.params, "placeholder"); err != nil {
 		return usageErr(stderr, err.Error())
 	}
 	if a.publicKey != "" && !nkeys.IsValidPublicUserKey(a.publicKey) {
@@ -500,6 +502,13 @@ func hubUserAdd(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 	bin, code := hubPreflight(cfg, stderr)
 	if code != 0 {
 		return code
+	}
+	domain := ""
+	if classUsesDomain(a.class) {
+		if domain, err = hubDomain(cfg); err != nil {
+			fmt.Fprintf(stderr, "hub: %v. Nothing was changed\n", err)
+			return 1
+		}
 	}
 	conf, err := os.ReadFile(cfg.conf)
 	if err != nil {
@@ -545,7 +554,7 @@ func hubUserAdd(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "hub: that public key is already registered as %s. Nothing was changed\n", reg.findKey(pub).Name)
 		return 1
 	}
-	block, err := renderClass(a.class, pub, a.params)
+	block, err := renderClass(a.class, pub, a.params, domain)
 	if err != nil {
 		return usageErr(stderr, err.Error())
 	}
@@ -646,7 +655,7 @@ func hubUserAdd(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 	} else if err := verifyUser(cfg, a, seedPath, admin, countsBefore, stdout); err != nil {
 		return fail("verify failed: " + err.Error())
 	}
-	reg.Users = append(reg.Users, hubUser{Name: a.name, Class: a.class, Params: a.params, PublicKey: pub, State: "active", Location: "managed region", Created: time.Now().UTC().Format(time.RFC3339)})
+	reg.Users = append(reg.Users, hubUser{Name: a.name, Class: a.class, Params: a.params, Domain: domain, PublicKey: pub, State: "active", Location: "managed region", Created: time.Now().UTC().Format(time.RFC3339)})
 	if err := saveRegistry(cfg, reg); err != nil {
 		fmt.Fprintf(stderr, "hub: the user is live but the registry write failed: %v\n", err)
 		return 1
@@ -701,6 +710,17 @@ var nonWord = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 // reads and its harmless negatives and checks the consumer counts did not move.
 func verifyUser(cfg hubCfg, a hubUserArgs, seedPath string, admin *nats.Conn, countsBefore string, stdout io.Writer) error {
 	if a.class != "observer" {
+		// A leaf credential is made for a leafnode link, which a command cannot open, and
+		// its JetStream grants are not usable on a client connection. Verify is that the
+		// key authenticates on a client connection and is in the reloaded conf, with no
+		// JetStream reads (they would always fail and read as a broken grant).
+		if strings.HasPrefix(a.class, "leaf") {
+			if pub := seedPublic(seedPath); pub != "" {
+				if live, _ := os.ReadFile(cfg.conf); !strings.Contains(string(live), pub) {
+					return fmt.Errorf("the new key is not in the reloaded conf")
+				}
+			}
+		}
 		nc, err := awaitConnect(cfg, seedPath, "", 5*time.Second, nil)
 		if err != nil {
 			return fmt.Errorf("the new key does not connect: %v", err)
@@ -842,8 +862,7 @@ func hubUserAdopt(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 	if _, _, err := classTemplate(a.class); err != nil {
 		return usageErr(stderr, err.Error())
 	}
-	tmpl, err := renderClass(a.class, a.positKey, a.params)
-	if err != nil {
+	if _, err := renderClass(a.class, a.positKey, a.params, "placeholder"); err != nil {
 		return usageErr(stderr, err.Error())
 	}
 	release, err := hubLock(cfg, "adopt")
@@ -852,6 +871,17 @@ func hubUserAdopt(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer release()
+	domain := ""
+	if classUsesDomain(a.class) {
+		if domain, err = hubDomain(cfg); err != nil {
+			fmt.Fprintf(stderr, "hub: %v. Nothing was changed\n", err)
+			return 1
+		}
+	}
+	tmpl, err := renderClass(a.class, a.positKey, a.params, domain)
+	if err != nil {
+		return usageErr(stderr, err.Error())
+	}
 	conf, err := os.ReadFile(cfg.conf)
 	if err != nil {
 		fmt.Fprintf(stderr, "hub: cannot read the hub conf: %v\n", err)
@@ -888,7 +918,7 @@ func hubUserAdopt(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 		for _, d := range diffs {
 			fmt.Fprintln(stdout, d)
 		}
-		u.Class, u.Params = a.class, a.params
+		u.Class, u.Params, u.Domain = a.class, a.params, domain
 		if err := saveRegistry(cfg, reg); err != nil {
 			fmt.Fprintf(stderr, "hub: cannot write the registry: %v\n", err)
 			return 1
@@ -917,7 +947,7 @@ func hubUserAdopt(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 	for _, d := range diffs {
 		fmt.Fprintln(stdout, d)
 	}
-	reg.Users = append(reg.Users, hubUser{Name: a.name, Class: a.class, Params: a.params, PublicKey: a.positKey, State: "adopted", Location: location, Created: time.Now().UTC().Format(time.RFC3339)})
+	reg.Users = append(reg.Users, hubUser{Name: a.name, Class: a.class, Params: a.params, Domain: domain, PublicKey: a.positKey, State: "adopted", Location: location, Created: time.Now().UTC().Format(time.RFC3339)})
 	if err := saveRegistry(cfg, reg); err != nil {
 		fmt.Fprintf(stderr, "hub: cannot write the registry: %v\n", err)
 		return 1
@@ -985,6 +1015,13 @@ func hubUserList(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 			drift = append(drift, fmt.Sprintf("%s: in the conf's managed region and not in the registry", k))
 		}
 	}
+	if cur, err := hubDomain(cfg); err == nil {
+		for _, u := range reg.Users {
+			if u.State != "revoked" && u.Domain != "" && u.Domain != cur {
+				drift = append(drift, fmt.Sprintf("%s: its grants were rendered for the JetStream domain %s and the hub's domain is %s", u.Name, u.Domain, cur))
+			}
+		}
+	}
 	sortStrings(drift)
 	orphans := []string{}
 	if m, _ := filepath.Glob(filepath.Join(cfg.keys, "*.next.nk")); m != nil {
@@ -1007,6 +1044,9 @@ func hubUserList(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 	}
 	for _, r := range rows {
 		state, keys := r.State, r.PublicKey
+		if r.State == "revoked" && r.Verified != nil && !*r.Verified {
+			state = "revoked (unverified)"
+		}
 		if r.PendingKey != "" {
 			state, keys = "rotating", r.PublicKey+" -> "+r.PendingKey
 		}
