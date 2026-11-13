@@ -216,6 +216,18 @@ accounts {
 		return "sleep 60", nil
 	}
 	t.Cleanup(func() { hubProcArgs = oldArgs })
+	// A scratch hub's environment is not read unless a test opts in. The server
+	// is started with a controlled environment, and a conf that references a name
+	// the server has but settings.conf does not is the case the add and check
+	// tests above build on: the name is undefined for the command. With the real
+	// ps the command would find it in the server's environment and treat it as
+	// supplied by a launcher (hubuser_launcher_test.go tests that case), so these
+	// tests state that the environment cannot be read.
+	oldEnv := hubProcEnv
+	hubProcEnv = func(pid int) (map[string]string, error) {
+		return nil, fmt.Errorf("the scratch hub's environment is not read in this test")
+	}
+	t.Cleanup(func() { hubProcEnv = oldEnv })
 	if o.lateSettings != "" {
 		b, _ := os.ReadFile(h.settings)
 		if err := os.WriteFile(h.settings, append(b, []byte(o.lateSettings)...), 0o600); err != nil {

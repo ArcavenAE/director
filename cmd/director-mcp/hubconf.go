@@ -106,8 +106,16 @@ func contains(list []string, s string) bool {
 // whether settings.conf defines it, and each defined name nothing references.
 type settingsState struct {
 	Defined, Undefined, Unreferenced []string
-	Included                         bool
-	SettingsPresent                  bool
+	// Launcher lists referenced names settings.conf does not define and the
+	// running hub's environment supplies; LauncherEnv holds their values.
+	// Shadowed lists names settings.conf defines that the hub's environment
+	// also supplies (settings.conf wins). EnvNote says why the environment was
+	// not read, when a name is undefined and it could not be.
+	Launcher, Shadowed []string
+	LauncherEnv        map[string]string
+	EnvNote            string
+	Included           bool
+	SettingsPresent    bool
 }
 
 func readSettingsState(cfg hubCfg) (settingsState, error) {
@@ -123,12 +131,31 @@ func readSettingsState(cfg hubCfg) (settingsState, error) {
 		defs = settingsDefinitions(string(b))
 	}
 	refs := confReferences(string(conf))
+	var hubEnv map[string]string
+	var envErr error
+	if len(refs) > 0 {
+		hubEnv, envErr = hubLauncherEnv(cfg)
+	}
 	for _, r := range refs {
-		if st.Included && contains(defs, r) {
+		_, supplied := hubEnv[r]
+		switch {
+		case st.Included && contains(defs, r):
 			st.Defined = append(st.Defined, r)
-		} else {
+			if supplied {
+				st.Shadowed = append(st.Shadowed, r)
+			}
+		case supplied:
+			st.Launcher = append(st.Launcher, r)
+			if st.LauncherEnv == nil {
+				st.LauncherEnv = map[string]string{}
+			}
+			st.LauncherEnv[r] = hubEnv[r]
+		default:
 			st.Undefined = append(st.Undefined, r)
 		}
+	}
+	if len(st.Undefined) > 0 && envErr != nil {
+		st.EnvNote = fmt.Sprintf("could not read the running hub's environment: %v", envErr)
 	}
 	for _, d := range defs {
 		if !contains(refs, d) {
@@ -174,9 +201,26 @@ func versionLess(a, b string) bool {
 // serverTest runs `nats-server -t -c conf` and returns its output and whether
 // the conf is valid. Relative includes resolve against the conf's own directory,
 // so a candidate is tested beside the live conf.
-func serverTest(bin, conf string) (string, bool) {
-	out, err := exec.Command(bin, "-t", "-c", conf).CombinedOutput()
+func serverTest(bin, conf string, extraEnv []string) (string, bool) {
+	cmd := exec.Command(bin, "-t", "-c", conf)
+	if len(extraEnv) > 0 {
+		// The launcher's values come last, so they win over a same-named
+		// variable in this shell, as they do in the server.
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
+	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err == nil
+}
+
+// launcherEnvList is the running hub's values for the names the conf
+// references and settings.conf does not define, as NAME=VALUE words, each
+// byte for byte as the hub has it.
+func launcherEnvList(st settingsState) []string {
+	var l []string
+	for _, n := range st.Launcher {
+		l = append(l, n+"="+st.LauncherEnv[n])
+	}
+	return l
 }
 
 // unchangedConfControl runs the server test on the live conf exactly as it
@@ -188,9 +232,13 @@ func unchangedConfControl(cfg hubCfg, bin string) error {
 		return err
 	}
 	if len(st.Undefined) > 0 || len(st.Unreferenced) > 0 {
-		return fmt.Errorf("the check cannot see the hub's own configuration: %s. Run `director hub settings check`, fix settings.conf, then run again. Nothing was changed", settingsProblems(st))
+		note := ""
+		if st.EnvNote != "" {
+			note = " (" + st.EnvNote + ")"
+		}
+		return fmt.Errorf("the check cannot see the hub's own configuration: %s%s. Run `director hub settings check`, fix settings.conf, then run again. Nothing was changed", settingsProblems(st), note)
 	}
-	if out, ok := serverTest(bin, cfg.conf); !ok {
+	if out, ok := serverTest(bin, cfg.conf, launcherEnvList(st)); !ok {
 		why := out
 		if m := hubVarRefMsg.FindStringSubmatch(out); m != nil {
 			why = fmt.Sprintf("it references %s, which this shell does not define (%s)", m[1], out)
