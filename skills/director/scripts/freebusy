@@ -36,7 +36,8 @@
 #                  GAP line and the local lines stay. Diagnostic: the exit status is unchanged
 #     versions     marvel version (client line), marvel version --cluster NAME (the daemon line),
 #                  and the version line of the tap's Formula/marvel.rb as the local checkout
-#                  $FREEBUSY_TAP_FORMULA names it (no default; no network, no gh)
+#                  $FREEBUSY_TAP_FORMULA names it, else the one-line file $DIRECTOR_STATE/freebusy-tap-formula
+#                  (no default; no network, no gh, no brew)
 #
 # Writes, under $DIRECTOR_STATE/freebusy/ (directory mode 700, files mode 600, and
 # the state directory must be outside any checkout):
@@ -83,7 +84,7 @@
 # FREEBUSY_LOCK_STALE_MIN (a positive integer: minutes before a lock with no usable pid is taken over, default 2),
 # FREEBUSY_CAPTURE_MAX (most seats captured per run, default 100, split evenly across the clusters read with an unused share passed on; the rest print GAP health: capture cap naming the cluster),
 # FREEBUSY_CAPTURE_TIMEOUT (seconds for the capture and version reads together, default 60),
-# FREEBUSY_TAP_FORMULA (the local file named above),
+# FREEBUSY_TAP_FORMULA (the local file named above; it wins over the instance file),
 # FREEBUSY_DIRECTOR_MCP (default director-mcp on PATH, else
 # ${DIRECTOR_HOME:-$HOME/.director}/bin/director-mcp). FREEBUSY_TEST_CLOCK=1 with
 # FREEBUSY_NOW (epoch seconds) fixes the clock for tests.
@@ -101,6 +102,9 @@ max_age="${FREEBUSY_ASKS_MAX_AGE:-900}"
 capture_max="${FREEBUSY_CAPTURE_MAX:-100}"
 capture_timeout="${FREEBUSY_CAPTURE_TIMEOUT:-60}"
 tap_formula="${FREEBUSY_TAP_FORMULA:-}"
+tap_file="$state/freebusy-tap-formula"
+# no env: one line naming the local Formula/marvel.rb, from this instance's state directory (no brew, no network)
+if [[ -z "$tap_formula" && -r "$tap_file" ]]; then tap_formula="$(head -n 1 "$tap_file" 2>/dev/null | LC_ALL=C tr -d '\000-\037' || true)"; fi
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mail_window=300
 
@@ -725,6 +729,7 @@ jq -n -c --arg at "$at" --slurpfile prev "$tmp/prev.json" --argjson ok "$ok_json
 # mail episodes: opened on a live seat's first over_threshold row, closed on the first sweep without it
 eps="$dir/health-episodes.jsonl"
 mail_ok=0
+global_ok=0
 if [[ ! -x "$mcp" ]]; then
   gap "mail: director-mcp not found at $mcp, so no mail episode was opened or closed"
 elif [[ ! -f "$tmp/unread.rc" ]]; then
@@ -766,8 +771,14 @@ if [[ -x "$mcp" ]]; then
   elif [[ "$(cat "$tmp/unread-global.rc")" != 0 ]]; then
     gap "mail: director-mcp unread --global exited $(cat "$tmp/unread-global.rc") ($(head -c 120 "$tmp/unread-global.err" | tr '\n' ' ')), so the global tier's over-bound seats are not listed"
   elif ! jq -e '(.reports | type) == "array" and ((.error // "") == "")' "$tmp/unread-global.out" >/dev/null 2>&1; then
-    gap "mail: director-mcp unread --global did not read the hub ($(jq -r '.error // empty' "$tmp/unread-global.out" 2>/dev/null | head -c 120 | tr '\n' ' ')$(first_line "$tmp/unread-global.err")), so the global tier's over-bound seats are not listed"
+    ge="$(jq -r '.error // empty' "$tmp/unread-global.out" 2>/dev/null | tr '\n' ' ' | LC_ALL=C tr -d '\000-\037' || true)"
+    # keep the hub's words whole; a very long one is cut at a word, never inside it
+    if [[ "${#ge}" -gt 400 ]]; then ge="${ge:0:400}"; ge="${ge% *}"; fi
+    gs="$(head -n 1 "$tmp/unread-global.err" 2>/dev/null | LC_ALL=C tr -d '\000-\037' || true)"
+    gw="${ge}${ge:+${gs:+; }}${gs}"
+    gap "mail: director-mcp unread --global did not read the hub (${gw:-no error text given}), so the global tier's over-bound seats are not listed"
   else
+    global_ok=1
     jq -r '.reports[].durables[]? | select(.over_bound == true and (.agent_id | type) == "string")
       | "- OVER-BOUND global \(.agent_id) \((.oldest_unread_age_seconds // 0) | floor)s"' "$tmp/unread-global.out" >>"$overbound"
   fi
@@ -788,9 +799,16 @@ while IFS= read -r n; do
 done <"$tmp/reached"
 v=""
 if [[ -n "$tap_formula" && -r "$tap_formula" ]]; then v="$(sed -n 's/^[[:space:]]*version "\(.*\)"[[:space:]]*$/\1/p' "$tap_formula" | head -n 1)"; fi
-if vok "$v"; then vrow tap "$v" "tap formula" >>"$tmp/health.new"; else gap "version: tap formula has no readable version line (set FREEBUSY_TAP_FORMULA to the Formula/marvel.rb of a local tap checkout; no network is used)"; fi
+if vok "$v"; then vrow tap "$v" "tap formula" >>"$tmp/health.new"; else gap "version: tap formula has no readable version line (set FREEBUSY_TAP_FORMULA, or write the path of the Formula/marvel.rb of a local tap checkout to $tap_file; no network is used)"; fi
 
-health_counts="$(jq -s -r '"\(map(select(.kind == "seat")) | length) blocked, \(map(select(.kind == "cluster" and .state == "not_reached")) | length) unreached, \(map(select(.kind == "mail")) | length) mail, drift \(if (map(select(.kind == "version") | .version) | unique | length) > 1 then "yes" else "no" end)"' "$tmp/health.new")"
+# the mail part names which tier was read; a tier that was not read is "not read", never 0
+mail_local="$(jq -s -r 'map(select(.kind == "mail")) | length' "$tmp/health.new")"
+if [[ "$mail_ok" == 1 && "$global_ok" == 1 ]]; then mail_part="$mail_local mail"; else
+  if [[ "$mail_ok" == 1 ]]; then ml="local $mail_local"; else ml="local not read"; fi
+  if [[ "$global_ok" == 1 ]]; then mg="global $(grep -c -- '- OVER-BOUND global ' "$overbound" || true)"; else mg="global not read"; fi
+  mail_part="mail: $ml, $mg"
+fi
+health_counts="$(jq -s -r --arg mail "$mail_part" '"\(map(select(.kind == "seat")) | length) blocked, \(map(select(.kind == "cluster" and .state == "not_reached")) | length) unreached, \($mail), drift \(if (map(select(.kind == "version") | .version) | unique | length) > 1 then "yes" else "no" end)"' "$tmp/health.new")"
 
 # --- write and report -------------------------------------------------------
 seat_counts="$(jq -s -r '[.[].state] | "\(map(select(. == "free")) | length) free, \(map(select(. == "busy")) | length) busy, \(map(select(. == "waiting")) | length) waiting, \(map(select(. == "unknown")) | length) unknown"' "$seats_new")"

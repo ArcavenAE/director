@@ -743,7 +743,7 @@ case_i467() {
   jq -n -c --arg e "$e" '{error: $e, reports: []}' >"$FIX/global.json"
   out="$(run "${base[@]}")"
   grep -q 'GAP mail: director-mcp unread --global' <<<"$out" && ok "G1 a hub error prints the global GAP" || bad "G1 gap" "$out"
-  ! grep -q 'omits the listno output' <<<"$out" && ok "G1 the error is not run into the stderr text" || bad "G1 garble" "$out"
+  ! grep -qE '[A-Za-z]no output|[a-z]\) *no output' <<<"$out" && ! grep -qE 'leaf ano output|omits the listno' <<<"$out" && ok "G1 the error is not run into the stderr text" || bad "G1 garble" "$out"
   grep -qF 'the leaf allow-list omits the list verbs, finding-006)' <<<"$out" && ok "G1 the error is not cut mid-clause" || bad "G1 cut" "$out"
   grep -qF 'no responders available for request' <<<"$out" && ok "G1 the error's reason reaches the line" || bad "G1 reason" "$out"
   ! grep -q 'no output' <<<"$out" && ok "G1 no placeholder is printed when stderr was empty" || bad "G1 placeholder" "$out"
@@ -764,8 +764,11 @@ case_i467() {
   # M4: the local read fails: neither tier is counted as 0
   rm -f "$FIX/global.json"; touch "$FIX/unread.fail"
   out="$(run "${base[@]}")"
-  grep -qF 'mail: local not read, global not read' <<<"$out" && ok "M4 a failed local read prints local not read, global not read" || bad "M4 count" "$out"
+  grep -qF 'mail: local not read, global 0' <<<"$out" && ok "M4 a failed local read prints local not read beside the global count it did read" || bad "M4 count" "$out"
   ! grep -q ' 0 mail' <<<"$out" && ok "M4 and no bare 0 mail stands beside the GAP" || bad "M4 bare" "$out"
+  touch "$FIX/global.fail"
+  out="$(run "${base[@]}")"
+  grep -qF 'mail: local not read, global not read' <<<"$out" && ok "M4 with both reads failed neither tier is counted" || bad "M4 both" "$out"
 }
 
 
