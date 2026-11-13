@@ -55,8 +55,11 @@ else
   grep -q 'probe/nats-phase-0/director-mcp-seat' "$root/n.out" && ok "a commit with no seat wrapper stops the packager and names the path" || bad "no-wrapper refusal text" "$(cat "$root/n.out")"
 fi
 # The workflow publishes when the wrapper changes.
-grep -q "probe/nats-phase-0/director-mcp-seat" "$here/.github/workflows/release-director-mcp.yml" \
+sed -n '/^    paths:/,/^permissions:/p' "$here/.github/workflows/release-director-mcp.yml" | grep -qF -- "- 'probe/nats-phase-0/director-mcp-seat'" \
   && ok "the release workflow runs when the seat wrapper changes" || bad "the release workflow does not watch the seat wrapper"
+# The one attestation covers everything in dist, the wrapper included.
+grep -qF "subject-path: 'dist/*'" "$here/.github/workflows/release-director-mcp.yml" \
+  && ok "the attestation subject is all of dist, which now holds the wrapper" || bad "the attestation subject is narrower than dist"
 
 pkg "$root/b" > /dev/null
 cmp -s "$root/a/checksums.txt" "$root/b/checksums.txt" && ok "a second run gives the same bytes" || bad "a second run gives the same bytes"

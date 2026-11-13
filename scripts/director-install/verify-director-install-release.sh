@@ -89,6 +89,7 @@ printf '[{"tag_name":"%s"},\n{"tag_name":"%s"},\n{"tag_name":"director-mcp-v0.1.
 printf '%s\n' \
   '#!/bin/sh' \
   'echo "$*" >> "$FAKE_GH_LOG"' \
+  'for a in "$@"; do case "$a" in */"${FAKE_GH_REJECT:-no-such-subject}") exit 1 ;; esac; done' \
   'bundle=""' \
   'while [ $# -gt 0 ]; do [ "$1" = "--bundle" ] && bundle="$2"; shift; done' \
   '[ -n "$bundle" ] && grep -q OTHER-WORKFLOW "$bundle" 2>/dev/null && exit 1' \
@@ -103,7 +104,7 @@ di() {
   local pre="$1"; shift
   env -i HOME="$root/h" DIRECTOR_HOME="$home" PATH="${pre:+$pre:}$BASEPATH" LANG=en_US.UTF-8 \
       DIRECTOR_RELEASE_BASE="$BASE" DIRECTOR_RELEASES_API="$API" \
-      DIRECTOR_MANIFESTS_DIR="$root/manifests" FAKE_GH_LOG="$ghlog" ${FAKE_GH_RC:+FAKE_GH_RC="$FAKE_GH_RC"} \
+      DIRECTOR_MANIFESTS_DIR="$root/manifests" FAKE_GH_LOG="$ghlog" ${FAKE_GH_RC:+FAKE_GH_RC="$FAKE_GH_RC"} ${FAKE_GH_REJECT:+FAKE_GH_REJECT="$FAKE_GH_REJECT"} \
       "$INSTALLER" "$@" >"$out/stdout" 2>"$out/stderr"
 }
 mlink() { readlink "$home/bin/director-mcp" 2>/dev/null || echo none; }
@@ -162,8 +163,14 @@ swant() { echo "$home/lib/director-mcp/$1/director-mcp-seat"; }
   || bad "seat install" "$(slink)"
 grep -qx "seat=included" "$home/lib/director-mcp/$A_REV/STAMP" 2>/dev/null \
   && ok "the STAMP records that the seat wrapper came with the release" || bad "seat STAMP" "$(cat "$home/lib/director-mcp/$A_REV/STAMP" 2>/dev/null)"
-printf '%s\n' "$(cat "$ghlog")" | grep -qE "(^| |/)director-mcp-seat( |\$)" \
-  && ok "the origin check also names the seat wrapper as a subject" || bad "the seat wrapper was not verified" "$(cat "$ghlog")"
+shim_line="$(grep -E "(^| |/)director-mcp-$hos-$harch( |\$)" "$ghlog" | head -1 || true)"
+seat_line="$(grep -E "(^| |/)director-mcp-seat( |\$)" "$ghlog" | head -1 || true)"
+# What follows the subject must be the same pinned repo, workflow and bundle on both lines.
+tailof() { printf '%s\n' "$1" | sed -E 's#^attestation verify [^ ]+ ##'; }
+[[ -n "$seat_line" && "$(tailof "$seat_line")" == "$(tailof "$shim_line")" \
+   && "$(tailof "$seat_line")" == "--repo ArcavenAE/director --signer-workflow ArcavenAE/director/.github/workflows/release-director-mcp.yml --bundle "* ]] \
+  && ok "the seat wrapper is verified against the same repository, workflow and bundle as the shim" \
+  || bad "the seat wrapper's origin check" "seat: $seat_line | shim: $shim_line"
 
 # --- 2. a download that does not match checksums.txt changes nothing ----------
 TAMP="director-mcp-alpha-20261113-120000-ccccccc"; T_REV="ccccccc0000000000000000000000000000000cc"
@@ -300,7 +307,7 @@ grep -q "director-mcp: ${A_REV:0:12}" "$out/stdout" && grep -q "$A_TAG" "$out/st
 S_TAG="director-mcp-alpha-20261113-180000-3333333"; S_REV="3333333000000000000000000000000000000033"
 mkrelease "$S_TAG" "$S_REV"
 echo "tampered" >> "$srv/dl/$S_TAG/director-mcp-seat"
-before="$(mlink)"; sbefore="$(slink)"; : > "$ranlog"
+before="$(mlink)"; sbefore="$(slink)"; : > "$ranlog"; : > "$ghlog"
 if di "$fake" director-mcp --release "$S_TAG"; then
   bad "a release whose seat wrapper fails its checksum was installed"
 else
@@ -308,6 +315,21 @@ else
     && refuses_for 'checksum.*seat|seat.*checksum' \
     && ok "a seat wrapper that fails its checksum refuses the install and moves neither link" \
     || bad "tampered seat" "$(cat "$out/stderr")"
+  [[ ! -s "$ghlog" && ! -s "$ranlog" ]] && ok "a failed seat checksum stops before the origin check and before any binary runs" \
+    || bad "work done after a failed seat checksum" "$(cat "$ghlog" "$ranlog")"
+fi
+
+# --- 10b2. the verifier rejects only the seat wrapper ---------------------------
+R_TAG="director-mcp-alpha-20261113-181500-5555555"; R_REV="5555555000000000000000000000000000000055"
+mkrelease "$R_TAG" "$R_REV"
+before="$(mlink)"; sbefore="$(slink)"; : > "$ranlog"
+if FAKE_GH_REJECT=director-mcp-seat di "$fake" director-mcp --release "$R_TAG"; then
+  bad "a release whose seat wrapper the verifier rejected was installed"
+else
+  [[ "$(mlink)" == "$before" && "$(slink)" == "$sbefore" && ! -e "$home/lib/director-mcp/$R_REV" && ! -s "$ranlog" ]] \
+    && refuses_for 'attestation|origin' \
+    && ok "a verifier that rejects only the seat wrapper refuses the install, moves neither link and runs nothing" \
+    || bad "seat-only verifier rejection" "$(cat "$out/stderr")"
 fi
 
 # --- 10c. a release from before the wrapper installs the shim and says so -----
@@ -316,13 +338,28 @@ mkrelease "$N_TAG" "$N_REV" noseat
 sbefore="$(slink)"
 if di "$fake" director-mcp --release "$N_TAG"; then
   [[ "$(mlink)" == "$(want "$N_REV")" && "$(slink)" == "$sbefore" ]] \
-    && grep -q 'director-mcp-seat' "$out/stdout" \
-    && ! grep -qx 'seat=included' "$home/lib/director-mcp/$N_REV/STAMP" \
-    && ok "a release with no seat wrapper installs the shim, leaves the seat link and says so" \
+    && grep -qE 'has no director-mcp-seat' "$out/stdout" \
+    && grep -qx 'seat=absent' "$home/lib/director-mcp/$N_REV/STAMP" \
+    && grep -qE "the live director-mcp-seat is from $A_TAG" "$out/stdout" \
+    && ok "a release with no seat wrapper installs the shim, keeps the old seat link, records seat=absent and names the release the live wrapper is from" \
     || bad "no-seat release" "$(mlink) $(slink) $(cat "$out/stdout")"
+  di "$fake" --status || true
+  grep -E '^director-mcp-seat:' "$out/stdout" | grep -q "$A_TAG" \
+    && ok "--status names the release the live seat wrapper is from when it differs from the shim's" \
+    || bad "--status seat line" "$(cat "$out/stdout")"
 else
   bad "a release with no seat wrapper was refused" "$(cat "$out/stderr")"
 fi
+# With no seat link beforehand, none is made, and the output says so.
+home_keep="$home"; home="$root/home3"
+if di "$fake" director-mcp --release "$N_TAG"; then
+  [[ "$(slink)" == none && "$(mlink)" == "$(want "$N_REV")" ]] && grep -qE 'has no director-mcp-seat and none is installed' "$out/stdout" \
+    && ok "a release with no seat wrapper, on a host with none, makes no seat link and says none is installed" \
+    || bad "no-seat release on a fresh home" "$(slink) $(cat "$out/stdout")"
+else
+  bad "a release with no seat wrapper on a fresh home was refused" "$(cat "$out/stderr")"
+fi
+home="$home_keep"
 
 # --- 10d. a seat link this installer did not make is left alone -----------------
 home_keep="$home"; home="$root/home2"
@@ -330,8 +367,9 @@ mkdir -p "$home/bin"; printf '#!/bin/sh\necho hand-made\n' > "$root/foreign-seat
 ln -s "$root/foreign-seat" "$home/bin/director-mcp-seat"
 if di "$fake" director-mcp --release "$A_TAG"; then
   [[ "$(slink)" == "$root/foreign-seat" && "$(mlink)" == "$(want "$A_REV")" ]] \
-    && grep -qi 'left\|not installed by' "$out/stdout" \
-    && ok "a seat link that was not made by the installer is left alone, and the output says so" \
+    && grep -qiE 'left|not installed by' "$out/stdout" \
+    && ! grep -q -- '--seat' "$out/stdout" \
+    && ok "a seat link that was not made by the installer is left alone, and the output names no flag" \
     || bad "foreign seat link" "$(slink) $(cat "$out/stdout")"
 else
   bad "install over a foreign seat link" "$(cat "$out/stderr")"
