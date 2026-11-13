@@ -321,23 +321,73 @@ func TestClassTemplatesNameTheirConnectionTypeAndTakeTheDomain(t *testing.T) {
 	}
 }
 
-func TestLeafRendersTheDomainFromAParameterWithGlobalAsTheDefault(t *testing.T) {
+// --- the domain comes from the running hub ----------------------------------------------------
+
+func TestLeafDomainComesFromTheRunningHubsVarz(t *testing.T) {
+	h := newHubScratch(t, hubScratchOpts{jsDomain: "ops"})
+	pub := newPublicKey(t)
+	if code, out, errOut := h.run("user", "add", "far", "--class", "leaf", "--param", "cluster=far", "--public-key", pub); code != 0 {
+		t.Fatalf("add exited %d\n%s%s", code, out, errOut)
+	}
+	block, _ := entryBlock(string(h.readConf()), pub)
+	if !strings.Contains(block, "$JS.ops.API.STREAM.INFO.GLOBAL_TO_far") || strings.Contains(block, "$JS.global.API") {
+		t.Errorf("the hub's JetStream domain is ops, so the block must carry $JS.ops.API:\n%s", block)
+	}
+	if u := registryUser(h, "far"); u == nil || u["domain"] != "ops" {
+		t.Errorf("registry = %v, want domain ops recorded on the row", u)
+	}
+}
+
+func TestLeafRefusesWithNothingWrittenWhenTheHubHasNoDomainOrVarzIsUnreadable(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		opts hubScratchOpts
+	}{
+		{"no domain", hubScratchOpts{jsDomain: "-"}},
+		{"unreadable varz", hubScratchOpts{badMonitor: true}},
+	} {
+		h := newHubScratch(t, c.opts)
+		confBefore, regBefore := string(h.readConf()), string(h.readRegistry())
+		listing := h.homeListing()
+		reloads := h.reloads()
+		code, _, errOut := h.run("user", "add", "far", "--class", "leaf", "--param", "cluster=far", "--public-key", newPublicKey(t))
+		if code != 1 || !strings.Contains(errOut, "JetStream domain") || !strings.Contains(errOut, "Nothing was changed") {
+			t.Errorf("%s: exit = %d, stderr = %q, want 1, the JetStream domain named and nothing changed", c.name, code, errOut)
+		}
+		if string(h.readConf()) != confBefore || string(h.readRegistry()) != regBefore || h.homeListing() != listing || h.reloads() != reloads {
+			t.Errorf("%s: a refused add wrote the conf, the registry or a backup, or reloaded the hub", c.name)
+		}
+	}
+}
+
+func TestLeafTakesNoDomainParameter(t *testing.T) {
 	h := newHubScratch(t, hubScratchOpts{})
-	pubA, pubB := newPublicKey(t), newPublicKey(t)
-	if code, out, errOut := h.run("user", "add", "far-a", "--class", "leaf", "--param", "cluster=fara", "--public-key", pubA); code != 0 {
-		t.Fatalf("add without a domain exited %d\n%s%s", code, out, errOut)
+	listing := h.homeListing()
+	code, _, errOut := h.run("user", "add", "far", "--class", "leaf", "--param", "cluster=far", "--param", "domain=ops", "--public-key", newPublicKey(t))
+	if code != 2 || !strings.Contains(errOut, "domain") {
+		t.Errorf("exit = %d, stderr = %q, want 2: a wrong domain renders grants that allow nothing, so there is no override", code, errOut)
 	}
-	if code, out, errOut := h.run("user", "add", "far-b", "--class", "leaf", "--param", "cluster=farb", "--param", "domain=ops", "--public-key", pubB); code != 0 {
-		t.Fatalf("add with --param domain=ops exited %d\n%s%s", code, out, errOut)
+	if h.homeListing() != listing {
+		t.Errorf("a refused add left something behind")
 	}
-	conf := string(h.readConf())
-	blockA, _ := entryBlock(conf, pubA)
-	blockB, _ := entryBlock(conf, pubB)
-	if !strings.Contains(blockA, "$JS.global.API.STREAM.INFO.GLOBAL_TO_fara") {
-		t.Errorf("the default domain is global; block:\n%s", blockA)
+}
+
+func TestListReportsARowWhoseDomainIsNotTheHubs(t *testing.T) {
+	h := newHubScratch(t, hubScratchOpts{})
+	pub := newPublicKey(t)
+	if code, out, errOut := h.run("user", "add", "far", "--class", "leaf", "--param", "cluster=far", "--public-key", pub); code != 0 {
+		t.Fatalf("add exited %d\n%s%s", code, out, errOut)
 	}
-	if !strings.Contains(blockB, "$JS.ops.API.STREAM.INFO.GLOBAL_TO_farb") || strings.Contains(blockB, "$JS.global.API") {
-		t.Errorf("--param domain=ops must render $JS.ops.API; block:\n%s", blockB)
+	reg := string(h.readRegistry())
+	if !strings.Contains(reg, `"domain": "global"`) {
+		t.Fatalf("setup: the row does not record the domain:\n%s", reg)
+	}
+	if err := os.WriteFile(filepath.Join(h.home, "users.json"), []byte(strings.Replace(reg, `"domain": "global"`, `"domain": "old"`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ := h.run("user", "list")
+	if !strings.Contains(out, "DRIFT") || !strings.Contains(out, "far") || !strings.Contains(out, "old") || !strings.Contains(out, "global") {
+		t.Errorf("list does not report the row rendered for domain old on a hub whose domain is global:\n%s", out)
 	}
 }
 
