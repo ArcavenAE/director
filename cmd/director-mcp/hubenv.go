@@ -12,7 +12,9 @@ func realHubProcEnv(pid int) (map[string]string, error) {
 	return nil, errors.New("not implemented")
 }
 
-// parseProcEnv reads the NAME=VALUE words that `ps eww` prints after the command line.
+// parseProcEnv reads the NAME=VALUE words that `ps eww` prints after the command
+// line. A value that contains a space parses wrong: ps prints the environment as
+// one space-separated line, so the value ends at its first space.
 func parseProcEnv(s string) map[string]string { return nil }
 
 // hubSettingLiteral is how init writes a value into settings.conf.

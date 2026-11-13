@@ -19,6 +19,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,13 @@ type launcherHub struct {
 // scratch hub answers hubProcEnv for its own pid with that environment.
 func newLauncherHub(t *testing.T, adv string, extraEnv ...string) *launcherHub {
 	t.Helper()
-	h := newHubScratch(t, hubScratchOpts{noSettings: true, noRegion: true, serverEnv: []string{"HUB_NAME=hub"}})
+	return newLauncherHubWith(t, "", adv, extraEnv...)
+}
+
+// newLauncherHubWith also places hand-written user blocks outside the managed region.
+func newLauncherHubWith(t *testing.T, handUsers, adv string, extraEnv ...string) *launcherHub {
+	t.Helper()
+	h := newHubScratch(t, hubScratchOpts{noSettings: true, noRegion: true, extraUsers: handUsers, serverEnv: []string{"HUB_NAME=hub"}})
 	bin, err := exec.LookPath("nats-server")
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +116,42 @@ func (l *launcherHub) settingsText() string {
 		return "unreadable: " + err.Error()
 	}
 	return string(b)
+}
+
+// installNatsServerWrapper puts a nats-server wrapper first on PATH. natsServer
+// finds the binary with LookPath, so every -t the commands run goes through it.
+// The wrapper appends the arguments and the HUB_LEAF_ADVERTISE it was started
+// with to a log in scratch, then execs the real binary. It writes nowhere else.
+func installNatsServerWrapper(t *testing.T) (logPath string) {
+	t.Helper()
+	real, err := exec.LookPath("nats-server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath = filepath.Join(dir, "wrap.log")
+	script := "#!/bin/sh\nprintf 'args=%s HUB_LEAF_ADVERTISE=[%s]\\n' \"$*\" \"$HUB_LEAF_ADVERTISE\" >> \"$WRAP_LOG\"\nexec " + real + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "nats-server"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("WRAP_LOG", logPath)
+	return logPath
+}
+
+// testRuns returns the HUB_LEAF_ADVERTISE value of each `nats-server -t` run the wrapper logged.
+func testRuns(t *testing.T, logPath string) []string {
+	t.Helper()
+	b, _ := os.ReadFile(logPath)
+	var vals []string
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if !strings.HasPrefix(l, "args=-t ") && !strings.Contains(l, " -t ") {
+			continue
+		}
+		i := strings.Index(l, "HUB_LEAF_ADVERTISE=[")
+		vals = append(vals, strings.TrimSuffix(l[i+len("HUB_LEAF_ADVERTISE=["):], "]"))
+	}
+	return vals
 }
 
 // --- check --------------------------------------------------------------------------------------
@@ -200,6 +243,7 @@ func TestHubSettingsInitEnvPassesAQuotedValueThroughUnchanged(t *testing.T) {
 	if got := l.advertised(t); !strings.Contains(got, `"127.0.0.1:7501"`) || strings.Contains(got, `\"`) {
 		t.Fatalf("setup: the hub with a quoted environment value advertises %s", got)
 	}
+	wrapLog := installNatsServerWrapper(t)
 	confBefore, regBefore := string(l.readConf()), string(l.readRegistry())
 	listing := l.homeListing()
 	// The unquoted spelling is a different string. It is refused, with both values shown.
@@ -220,6 +264,21 @@ func TestHubSettingsInitEnvPassesAQuotedValueThroughUnchanged(t *testing.T) {
 	}
 	if got := l.advertised(t); !strings.Contains(got, `"127.0.0.1:7501"`) {
 		t.Errorf("after init the hub advertises %s", got)
+	}
+	// A later add runs -t on the unchanged conf and on its candidate.
+	if code, out, errOut := l.run("user", "add", "obs", "--class", "observer", "--param", "holder=director"); code != 0 {
+		t.Errorf("add after init: exit = %d\n%s%s", code, out, errOut)
+	}
+	// Every -t run carries the launcher's value byte for byte, quotes included:
+	// the init candidate, and the add's control and candidate.
+	runs := testRuns(t, wrapLog)
+	if len(runs) < 3 {
+		t.Errorf("the wrapper logged %d -t runs, want at least 3 (init candidate, add control, add candidate): %v", len(runs), runs)
+	}
+	for i, v := range runs {
+		if v != quoted {
+			t.Errorf("-t run %d saw HUB_LEAF_ADVERTISE=[%s], want [%s] exactly", i, v, quoted)
+		}
 	}
 }
 
@@ -256,14 +315,19 @@ func TestHubSettingsInitEnvRefusesWhatItCannotUse(t *testing.T) {
 		{[]string{"--set", "HUB_NAME=hub", "--env", "NOT_IN_THE_CONF=1"}, 1, "does not reference $NOT_IN_THE_CONF"},
 		{[]string{"--set", "HUB_NAME=hub", "--set", "HUB_LEAF_ADVERTISE=127.0.0.1:7501", "--env", "HUB_LEAF_ADVERTISE"}, 1, "both --set and --env"},
 		{[]string{"--env", "HUB_LEAF_ADVERTISE"}, 1, "HUB_NAME"},
-		{[]string{"--set", "HUB_NAME=hub", "--env", "1bad"}, 2, "usage"},
-		{[]string{"--set", "HUB_NAME=hub", "--env"}, 2, "usage"},
+		{[]string{"--set", "HUB_NAME=hub", "--env", "1bad"}, 2, "1bad"},
+		{[]string{"--set", "HUB_NAME=hub", "--env"}, 2, "--env needs"},
 	}
 	for _, c := range cases {
 		code, _, errOut := l.run(append([]string{"settings", "init"}, c.args...)...)
 		if code != c.code || !strings.Contains(errOut, c.want) {
 			t.Errorf("%v: exit = %d, stderr = %q, want %d and %q", c.args, code, errOut, c.code, c.want)
 		}
+	}
+	// The usage text names --env and says where its names come from.
+	_, _, usageText := l.run("settings", "init", "--env")
+	if !strings.Contains(usageText, "--env NAME[=VALUE]") || !strings.Contains(usageText, "launcher") {
+		t.Errorf("the usage text does not show --env NAME[=VALUE] and that its names come from the launcher: %q", usageText)
 	}
 	// A name the running hub does not supply, and no value given.
 	hubProcEnv = func(pid int) (map[string]string, error) { return map[string]string{"HUB_NAME": "hub"}, nil }
@@ -373,5 +437,114 @@ func TestHubProcEnvReadsTheRealPs(t *testing.T) {
 	}
 	if got["LAUNCH_PROBE"] != `"a:b"` || got["LAUNCH_PLAIN"] != "xyz" {
 		t.Errorf("realHubProcEnv = %v, want LAUNCH_PROBE=\"a:b\" (quotes kept) and LAUNCH_PLAIN=xyz", got)
+	}
+}
+
+// --- the pid guard and a hub that is not there --------------------------------------------------
+
+func TestHubLauncherEnvironmentIsNeverReadFromAProcessThatIsNotThisHub(t *testing.T) {
+	l := newLauncherHub(t, "127.0.0.1:7501")
+	hubProcArgs = func(pid int) (string, error) { return "/usr/bin/other-daemon -c /elsewhere/other.conf", nil }
+	calls := 0
+	hubProcEnv = func(pid int) (map[string]string, error) {
+		calls++
+		return map[string]string{"HUB_NAME": "hub", "HUB_LEAF_ADVERTISE": "127.0.0.1:7501"}, nil
+	}
+	confBefore, regBefore := string(l.readConf()), string(l.readRegistry())
+	listing := l.homeListing()
+	code, out, errOut := l.run("settings", "check")
+	if code != 1 || !strings.Contains(out, "UNDEFINED HUB_LEAF_ADVERTISE") || !strings.Contains(out+errOut, "is not this hub's nats-server") {
+		t.Errorf("check: exit = %d, stdout = %q, stderr = %q, want 1, UNDEFINED and the guard's reason", code, out, errOut)
+	}
+	code, _, errOut = l.run("settings", "init", "--set", "HUB_NAME=hub", "--env", "HUB_LEAF_ADVERTISE")
+	if code != 1 || !strings.Contains(errOut, "is not this hub's nats-server") {
+		t.Errorf("init --env NAME: exit = %d, stderr = %q, want 1 and the guard's reason", code, errOut)
+	}
+	if calls != 0 {
+		t.Errorf("hubProcEnv was called %d time(s) for a process that is not this hub's nats-server -c <conf>", calls)
+	}
+	if string(l.readConf()) != confBefore || string(l.readRegistry()) != regBefore || l.homeListing() != listing {
+		t.Errorf("a refused init left something behind")
+	}
+}
+
+func TestHubLauncherEnvironmentWithNoHubRunning(t *testing.T) {
+	for _, how := range []string{"no pid file", "a dead pid"} {
+		l := newLauncherHub(t, "127.0.0.1:7501")
+		calls := 0
+		old := hubProcEnv
+		hubProcEnv = func(pid int) (map[string]string, error) { calls++; return old(pid) }
+		if how == "no pid file" {
+			if err := os.Remove(l.pidfile); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			dead := exec.Command("true")
+			if err := dead.Run(); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(l.pidfile, []byte(fmt.Sprint(dead.Process.Pid)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		confBefore, regBefore := string(l.readConf()), string(l.readRegistry())
+		listing := l.homeListing()
+		code, out, _ := l.run("settings", "check")
+		if code != 1 || !strings.Contains(out, "UNDEFINED HUB_LEAF_ADVERTISE") || !strings.Contains(out, "running hub's environment") {
+			t.Errorf("%s: check exit = %d, stdout = %q, want 1, UNDEFINED and a note about the environment", how, code, out)
+		}
+		code, _, errOut := l.run("settings", "init", "--set", "HUB_NAME=hub", "--env", "HUB_LEAF_ADVERTISE")
+		if code != 1 || !strings.Contains(errOut, "cannot read the running hub's environment") || !strings.Contains(errOut, "--env HUB_LEAF_ADVERTISE=VALUE") {
+			t.Errorf("%s: init --env NAME: exit = %d, stderr = %q, want 1, the reason and the --env NAME=VALUE form", how, code, errOut)
+		}
+		// init needs a hub to reload and to answer as admin, so with none it
+		// still writes nothing; --env NAME=VALUE gets past the environment read
+		// and stops at the pid check, with the same message init always gave.
+		code, _, errOut = l.run("settings", "init", "--set", "HUB_NAME=hub", "--env", "HUB_LEAF_ADVERTISE=127.0.0.1:7501")
+		if code != 1 || !strings.Contains(errOut, "Nothing was changed") || strings.Contains(errOut, "environment") {
+			t.Errorf("%s: init --env NAME=VALUE: exit = %d, stderr = %q, want 1, Nothing was changed, and no complaint about the environment", how, code, errOut)
+		}
+		if calls != 0 {
+			t.Errorf("%s: hubProcEnv was called %d time(s) with no hub running", how, calls)
+		}
+		if string(l.readConf()) != confBefore || string(l.readRegistry()) != regBefore || l.homeListing() != listing {
+			t.Errorf("%s: a refused init left something behind", how)
+		}
+	}
+}
+
+// --- adopt --------------------------------------------------------------------------------------
+
+func TestHubUserAdoptWorksOnAHubWhoseLauncherSuppliesANameAndNeedsNoEnvironment(t *testing.T) {
+	pubA, pubB := newPublicKey(t), newPublicKey(t)
+	hand := func(pub, extra string) string {
+		return `      { nkey: ` + pub + `
+        permissions {
+          publish   { allow: [ "global.probe.>"` + extra + ` ] }
+          subscribe { allow: [ "global.probe.>", "_INBOX.>" ] }
+        } }`
+	}
+	l := newLauncherHubWith(t, hand(pubA, "")+"\n"+hand(pubB, ""), "127.0.0.1:7501")
+	// Adopt writes no conf and runs no -t, so it works on this hub as it is.
+	// This case passes before the change and pins that it keeps passing.
+	if code, out, errOut := l.run("user", "adopt", pubA, "--name", "probe-a", "--class", "leaf", "--param", "cluster=probe"); code != 0 {
+		t.Fatalf("adopt before init: exit = %d\n%s%s", code, out, errOut)
+	}
+	if code, out, errOut := l.run("settings", "init", "--set", "HUB_NAME=hub", "--env", "HUB_LEAF_ADVERTISE"); code != 0 {
+		t.Fatalf("setup: init exited %d\n%s%s", code, out, errOut)
+	}
+	// With the hub's environment unreadable, adopt still works: it reads none.
+	hubProcEnv = func(pid int) (map[string]string, error) { return nil, fmt.Errorf("boom: ps refused") }
+	confBefore := string(l.readConf())
+	code, out, errOut := l.run("user", "adopt", pubB, "--name", "probe-b", "--class", "leaf", "--param", "cluster=probe")
+	if code != 0 {
+		t.Fatalf("adopt after init with no readable environment: exit = %d\n%s%s", code, out, errOut)
+	}
+	if string(l.readConf()) != confBefore {
+		t.Errorf("adopt wrote the conf")
+	}
+	code, out, _ = l.run("user", "list")
+	if code != 0 || strings.Contains(out, "DRIFT") || !strings.Contains(out, "probe-a") || !strings.Contains(out, "probe-b") {
+		t.Errorf("list after two adopts: exit = %d\n%s", code, out)
 	}
 }
