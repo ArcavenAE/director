@@ -50,7 +50,7 @@ Optional, each needed by only some scripts: `gh`, `claude`, `marvel`, `tmux`,
 and `lsof`.
 
 To install the shim from a published release you also need `curl`, `shasum` or
-`sha256sum`, and `gh` (it checks where the download came from). Go 1.26 or later
+`sha256sum`, and `gh` 2.102.0 or later (it checks where the download came from). Go 1.26 or later
 is needed only to build the shim from source.
 
 ## 1. Start the broker
@@ -186,7 +186,7 @@ bundle with `curl`, then checks in order: the binary's sha256 against
 `checksums.txt`; the attestation with `gh attestation verify`, pinned to this
 repository, its release workflow and a build from main; and a guarded `--version` run that must name
 the commit. It stops at the first failure and leaves the installed shim alone. With
-no `gh`, or a `gh` whose `attestation verify` lacks `--source-ref` (it was added in gh 2.68.0), it stops and says so; build from source instead. `--status` shows the tag
+no `gh`, or a `gh` older than 2.102.0 (before it, the ref and workflow pins match more loosely than they read), it stops and says so; build from source instead. `--status` shows the tag
 and `origin verified`. Nothing upgrades on its own: install a newer tag to move.
 
 From source, which needs Go:

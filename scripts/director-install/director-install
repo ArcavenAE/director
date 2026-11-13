@@ -42,11 +42,12 @@
 #      whole; both files come from one place, so this proves nothing about origin);
 #   2. `gh attestation verify` must accept the binary against this repository, the
 #      release workflow run from refs/heads/main (the workflow runs only on a push to
-#      main, so another ref is refused) and the bundle (the origin). With no gh the install stops
-#      and says so; nothing weaker is offered;
+#      main, so another ref is refused) and the bundle (the origin). With no gh, or a gh older
+#      than 2.102.0 (whose ref and workflow matching is weaker than the pins read), the
+#      install stops and says so before any download; nothing weaker is offered;
 #   3. the guarded --version run as above, which must report a full rev, and for
 #      an alpha tag the commit the tag names.
-# The STAMP records the tag, the commit, the channel and origin=verified, and
+# The STAMP records the tag, the commit, the channel, origin=verified and the gh version that verified, and
 # --status shows them. `latest-alpha` resolves once, to the newest alpha tag in
 # the releases listing, and the STAMP keeps that tag. Nothing upgrades by itself.
 #
@@ -266,7 +267,7 @@ latest_alpha_tag() {
 }
 
 install_director_mcp_release() {
-  local tag="$1" os arch asset stage want got info rc rev version channel t7 verify_help
+  local tag="$1" os arch asset stage want got info rc rev version channel t7 verify_help ghv_out gh_major gh_minor gh_version
   command -v curl >/dev/null 2>&1 || die "curl is not on PATH; a release is downloaded with curl. Nothing was switched."
   command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 \
     || die "neither shasum nor sha256sum is on PATH; a download is checked against checksums.txt. Nothing was switched."
@@ -276,6 +277,18 @@ install_director_mcp_release() {
   # but a gh that lacks it fails the verify on an unknown flag and would read as a bad release.
   command -v gh >/dev/null 2>&1 \
     || die "gh is not on PATH, so the origin of a release cannot be verified. Install gh (https://cli.github.com), or build from source with --ref. Nothing was switched."
+  # The floor is a version, because the flags exist on older gh and only the version tells the
+  # fixed matching apart: before gh 2.102.0, --source-ref matched case-insensitively and
+  # --signer-workflow matched only the start of the certificate's identity (gh release notes,
+  # v2.102.0), so both pins are weaker than they read. No override.
+  ghv_out="$(gh --version 2>&1)" || ghv_out=""
+  [[ "$ghv_out" =~ ^gh\ version\ ([0-9]+)\.([0-9]+)\.([0-9]+) ]] \
+    || die "could not read a gh version from 'gh --version' (it said: ${ghv_out%%$'\n'*}); gh 2.102.0 or later is required to verify where a release came from. Update gh, or build from source with --ref. Nothing was switched."
+  gh_major=$((10#${BASH_REMATCH[1]})) gh_minor=$((10#${BASH_REMATCH[2]}))
+  gh_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+  if (( gh_major < 2 || (gh_major == 2 && gh_minor < 102) )); then
+    die "gh $gh_version is older than 2.102.0, the first gh that matches --source-ref case-sensitively and --signer-workflow against the whole certificate identity. An older gh would accept a branch named MAIN, or a workflow whose path only starts with the pinned one, as this release's origin. Update gh, or build from source with --ref. Nothing was switched."
+  fi
   gh attestation --help >/dev/null 2>&1 \
     || die "this gh has no attestation command, so where a release came from cannot be verified. Update gh, or build from source with --ref. Nothing was switched."
   verify_help="$(gh attestation verify --help 2>&1)" || verify_help=""
@@ -327,6 +340,7 @@ install_director_mcp_release() {
       echo "ref=$tag"
       echo "release=$tag"
       echo "origin=verified"
+      echo "gh_version=$gh_version"
       echo "origin_check=gh attestation verify, repo $REPO, workflow $RELEASE_WORKFLOW, ref refs/heads/main"
       echo "source=$RELEASE_BASE/$tag"
       echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -372,10 +386,11 @@ status() {
   local msha
   msha="$(current_mcp)"
   if [[ -n "$msha" ]]; then
-    local rel org
+    local rel org ghv
     rel="$(sed -n 's/^release=//p' "$MLIB/$msha/STAMP" 2>/dev/null)"
+    ghv="$(sed -n 's/^gh_version=//p' "$MLIB/$msha/STAMP" 2>/dev/null)"
     org="$(sed -n 's/^origin=//p' "$MLIB/$msha/STAMP" 2>/dev/null)"
-    echo "director-mcp: ${msha:0:12} ($(sed -n 's/^version=//p' "$MLIB/$msha/STAMP" 2>/dev/null)) installed $(sed -n 's/^installed_at=//p' "$MLIB/$msha/STAMP" 2>/dev/null)${rel:+, release $rel, origin ${org:-not recorded}}"
+    echo "director-mcp: ${msha:0:12} ($(sed -n 's/^version=//p' "$MLIB/$msha/STAMP" 2>/dev/null)) installed $(sed -n 's/^installed_at=//p' "$MLIB/$msha/STAMP" 2>/dev/null)${rel:+, release $rel, origin ${org:-not recorded}${ghv:+ (verified by gh $ghv)}}"
   elif [[ -e "$MLINK" || -L "$MLINK" ]]; then
     echo "WARN: $MLINK was not installed by director-install; install: director-install director-mcp --ref origin/main"
   else
