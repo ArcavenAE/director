@@ -98,7 +98,28 @@ slice_args+=(--seat "$MARVEL_SESSION")
 # exactly the path the cast line names to the seat.
 spawn_log="${WARDROBE_SPAWN_LOG:-$HOME/.local/state/wardrobe/spawn.log}"
 export WARDROBE_SPAWN_LOG="$spawn_log"
-slice="$("$slice_sh" "${slice_args[@]}")"
+# The operator's memory-off declaration comes back through a file (wardrobe
+# slice.sh --env-out): one line, CLAUDE_CODE_DISABLE_AUTO_MEMORY=1, or nothing.
+# slice.sh's exit status is read first and ends the launch on a refusal, because a
+# refused cast leaves an older file untouched. Only then is the file read, and only
+# that exact line is exported; any other content is a refusal, never ignored.
+envout="$(mktemp "${TMPDIR:-/tmp}/cast-env-out.XXXXXX")" \
+  || { echo "cast-launch: cannot create the --env-out file; not starting the harness" >&2; exit 1; }
+slice_args+=(--env-out "$envout")
+if ! slice="$("$slice_sh" "${slice_args[@]}")"; then
+  rm -f "$envout"; echo "cast-launch: slice.sh refused the cast; not starting the harness" >&2; exit 1
+fi
+# The script ends in exec, so no EXIT trap would run: the file goes as soon as it is read.
+# A cat that fails is a refusal: the substitution would otherwise take printf's status
+# and read an unreadable file as empty, starting the harness with auto memory on.
+envout_text="$(cat "$envout" && printf x)" \
+  || { rm -f "$envout"; echo "cast-launch: cannot read the --env-out file; not starting the harness" >&2; exit 1; }
+envout_text="${envout_text%x}"; rm -f "$envout"
+case "$envout_text" in
+  "") ;;
+  "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"$'\n') export CLAUDE_CODE_DISABLE_AUTO_MEMORY=1;;
+  *) echo "cast-launch: slice.sh wrote something other than CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 to the --env-out file; refusing, not starting the harness" >&2; exit 1;;
+esac
 
 # One source for the bus id (R-73). marvel's computed per-replica name until
 # the declared identity block exists; marvel wins if it already set it.

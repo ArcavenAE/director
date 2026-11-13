@@ -13,6 +13,23 @@ cat > "$root/wardrobe/scripts/slice.sh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "${WARDROBE_SPAWN_LOG:-unset}" > "$(dirname "$0")/../../out/slice.spawnlog"
 printf '%s\n' "$@" > "$(dirname "$0")/../../out/slice.args"
+# --env-out <file> (wardrobe slice.sh): a refusal leaves the file as it was (the real
+# script truncates only after its refusals), which a test models by planting
+# out/envout.content in it first; otherwise the file is truncated and takes the
+# bytes of out/envout.content when that exists.
+out="$(dirname "$0")/../../out"
+envout=""; prev=""
+for a in "$@"; do [[ "$prev" == --env-out ]] && envout="$a"; prev="$a"; done
+if [[ -f "$out/slice.refuse" ]]; then
+  [[ -n "$envout" && -f "$out/envout.content" ]] && cat "$out/envout.content" > "$envout"
+  echo "refusing: stub" >&2; exit 1
+fi
+if [[ -n "$envout" ]]; then
+  : > "$envout"
+  [[ -f "$out/envout.content" ]] && cat "$out/envout.content" > "$envout"
+  # out/slice.unreadable: the file is there but cat cannot read it.
+  [[ -f "$out/slice.unreadable" ]] && chmod 000 "$envout"
+fi
 echo "stub slice for $2"
 STUB
 # The shim stub records the environment the pre-flight really runs with.

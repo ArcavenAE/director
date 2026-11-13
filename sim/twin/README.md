@@ -22,6 +22,11 @@ validation against criteria 3.1 to 3.6.
   slice.sh owns the wardrobe refusals; the launcher owns the ones about the
   session it is about to start (the id class, `TWIN_CWD`, the global-tier
   levers, the bus pre-flight).
+  It passes `--env-out <file>` to slice.sh for the operator's memory-off
+  declaration (wardrobe reads `auto_memory = "off"` from the host's
+  preferences file). It checks slice.sh's exit status first, then exports
+  only the exact line `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`; an empty file
+  exports nothing and any other content refuses the launch.
   On Bedrock (`CLAUDE_CODE_USE_BEDROCK=1`) it reads the key from the keychain
   item `CLAUDE_BEDROCK_KEY_ITEM` names and exports `AWS_BEARER_TOKEN_BEDROCK`
   to claude, which its children inherit (every Bash tool call, every MCP
