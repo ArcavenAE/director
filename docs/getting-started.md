@@ -47,7 +47,11 @@ Required:
   codex, or anything else with an MCP client.
 
 Optional, each needed by only some scripts: `gh`, `claude`, `marvel`, `tmux`,
-`lsof`, and Go 1.26 or later, which is needed only to build the shim from source.
+and `lsof`.
+
+To install the shim from a published release you also need `curl`, `shasum` or
+`sha256sum`, and `gh` (it checks where the download came from). Go 1.26 or later
+is needed only to build the shim from source.
 
 ## 1. Start the broker
 
@@ -159,7 +163,39 @@ before and after. Run it by hand with `probe/nats-phase-0/provision.sh`; for the
 authorized config set `DIRECTOR_PHASE0_ADMIN_USER` and
 `DIRECTOR_PHASE0_ADMIN_PASS`.
 
-## 3. Build the shim
+## 3. Install the shim
+
+Two ways, and neither starts a shim. Both put `director-mcp` at
+`~/.director/bin/director-mcp` and keep the previous install, so
+`director-install director-mcp --rollback` undoes either. Run `./install.sh --copy`
+first if `~/.director/bin/director-install` is not there yet.
+
+From a published release, with no Go toolchain:
+
+```sh
+~/.director/bin/director-install director-mcp --release <tag>
+~/.director/bin/director-install --status
+```
+
+`<tag>` is a `director-mcp-alpha-<date>-<time>-<sha7>` tag from the repository's
+releases page, or `latest-alpha`, which resolves once to the newest alpha tag and
+records it. Each push to main that changes the shim publishes an alpha, so there
+is no stable release yet and what an alpha contains is whatever merged last. The
+installer downloads the binary for your host, `checksums.txt` and the attestation
+bundle with `curl`, then checks in order: the binary's sha256 against
+`checksums.txt`; the attestation with `gh attestation verify`, pinned to this
+repository and its release workflow; and a guarded `--version` run that must name
+the commit. It stops at the first failure and leaves the installed shim alone. With
+no `gh` it stops and says so; build from source instead. `--status` shows the tag
+and `origin verified`. Nothing upgrades on its own: install a newer tag to move.
+
+From source, which needs Go:
+
+```sh
+~/.director/bin/director-install director-mcp --ref origin/main
+```
+
+or build it by hand:
 
 ```sh
 cd cmd/director-mcp
