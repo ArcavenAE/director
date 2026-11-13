@@ -672,6 +672,7 @@ Each line is an operator ruling that had lived only in seat memory. The date and
 - Only ready, reviewed PRs reach the operator; never link a draft (2026-10-02, a correction).
 - Director merges any ready ArcavenAE PR that a non-author approved at its head and that passes the merge guard (2026-10-02); the guard's own steps are in the section Merging: the guard runs before every merge. Report merges after the fact; bring only exceptions (guard STOP, conflicts, stacked bases, design rulings riding on a PR).
 - The stalled-ideas threshold is 4 days, with no cap on rows (2026-10-24).
+- Fewer rules, a bias to work, and no new gates (operator 2026-10-20).
 
 ## Vocabulary
 
