@@ -31,10 +31,11 @@ consumer, and a presence heartbeat. The harness sees eight tools, plus `cancel_h
 ## Prerequisites
 
 Run `scripts/director-preflight` first. It names each tool below that it does not
-find, or finds too old, with an install hint for your system, and exits 1 only
-when a required one is missing. It reads `scripts/director-preflight.tsv`, which
-is the list of record: the tool, whether it is required, the minimum version,
-and which scripts need it.
+find, finds too old, or cannot get a version from, with an install hint for your
+system. It exits 1 when a required tool is missing, too old or unreadable, 2 when
+it cannot read its manifest, and 0 otherwise (an absent optional tool is only a
+note). It reads `scripts/director-preflight.tsv`, which is the list of record: the
+tool, whether it is required, the minimum version, and which scripts need it.
 
 Required:
 

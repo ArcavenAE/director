@@ -10,14 +10,15 @@
 #   OLD        <tool> (required|optional) found X, wanted >= Y; install: <hint>
 #   UNREADABLE <tool> (required|optional) version not read, wanted >= Y; install: <hint>
 # The hint is the one for the running OS (uname -s: Darwin or Linux; any other
-# system gets both). A tool with no declared minimum is OK whenever it is on PATH,
-# whatever its version command prints. It runs each tool's version command and
+# system gets both). It runs each tool's version command and
 # nothing else: no network, no install, no write. It calls only bash, awk, grep,
 # head, uname and dirname.
 #
-# Exit 1 when a required tool is missing, too old, or cannot show it meets its
-# minimum; 0 otherwise, so an optional tool that is absent is a note and never a
-# failure. This is a precondition of an install, not a health metric, so it may
+# Exit 1 when a required tool is missing, too old, or unreadable (its version
+# command fails, or prints no version where a minimum is declared); 2 when the
+# manifest cannot be read; 0 otherwise, so an optional tool that is absent is a
+# note and never a failure. A tool whose version command exits nonzero is
+# UNREADABLE even with no declared minimum. Version commands are not time-bounded. This is a precondition of an install, not a health metric, so it may
 # gate (diagnostic-not-gate.md).
 #
 # Environment: DIRECTOR_PREFLIGHT_MANIFEST (a manifest path; default is the file beside this script).
@@ -41,11 +42,15 @@ older_than() {
   }'
 }
 
-# the first dotted version number in a command's first line of output
-found_version() {
-  local out
-  out="$("$@" 2>&1 | head -n 1 || true)"
-  printf '%s\n' "$out" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1 || true
+# run a tool's version command: ver_rc is its exit status, ver the first dotted
+# version number in its first line of output (stdout and stderr). Not time-bounded.
+ver=""; ver_rc=0
+run_version() {
+  local out first
+  ver_rc=0
+  out="$("$@" 2>&1)" || ver_rc=$?
+  first="${out%%$'\n'*}"
+  ver="$(printf '%s\n' "$first" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1 || true)"
 }
 
 case "$(uname -s 2>/dev/null || true)" in
@@ -62,8 +67,18 @@ hint() { # hint MAC LINUX
 }
 
 rc=0
-while IFS=$'\t' read -r tool class min vcmd needed mac linux; do
-  [[ -z "$tool" || "$tool" == \#* ]] && continue
+while IFS= read -r line || [[ -n "$line" ]]; do
+  [[ -z "$line" || "$line" == \#* ]] && continue
+  # split on tabs, keeping empty fields in their columns
+  fields=(); rest="$line"
+  while :; do
+    fields+=("${rest%%$'\t'*}")
+    [[ "$rest" == *$'\t'* ]] || break
+    rest="${rest#*$'\t'}"
+  done
+  tool="${fields[0]:-}"; class="${fields[1]:-}"; min="${fields[2]:--}"; vcmd="${fields[3]:-}"
+  needed="${fields[4]:-}"; mac="${fields[5]:-}"; linux="${fields[6]:-}"
+  [[ -n "$tool" ]] || continue
   h="$(hint "$mac" "$linux")"
   # command -v also reports a file that is not executable, and a directory is not a tool
   found="$(command -v "$tool" 2>/dev/null || true)"
@@ -72,15 +87,15 @@ while IFS=$'\t' read -r tool class min vcmd needed mac linux; do
     [[ "$class" == required ]] && rc=1
     continue
   fi
-  if [[ "$min" == "-" ]]; then
-    # shellcheck disable=SC2086
-    ver="$(found_version $vcmd)"
-    echo "OK $tool${ver:+ $ver}"
-    continue
-  fi
   # shellcheck disable=SC2086
-  ver="$(found_version $vcmd)"
-  if [[ -z "$ver" ]]; then
+  run_version $vcmd
+  if [[ "$ver_rc" != 0 ]]; then
+    # a file that answers its version command with a failure (the Command Line Tools stub for git, for one) is not a working tool
+    echo "UNREADABLE $tool ($class) version command failed (exit $ver_rc); install: $h"
+    [[ "$class" == required ]] && rc=1
+  elif [[ "$min" == "-" ]]; then
+    echo "OK $tool${ver:+ $ver}"
+  elif [[ -z "$ver" ]]; then
     echo "UNREADABLE $tool ($class) version not read, wanted >= $min; install: $h"
     [[ "$class" == required ]] && rc=1
   elif older_than "$ver" "$min"; then
