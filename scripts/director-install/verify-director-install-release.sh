@@ -459,6 +459,26 @@ else
 fi
 home="$home_keep"
 
+# --- 10e. a commit already installed with --ref, then installed from its release -----
+# The version directory exists and holds only the shim and a STAMP (the shape a --ref build
+# leaves). The verified wrapper must still land in it, and the seat link must follow.
+home_keep="$home"; home="$root/home5"
+mkdir -p "$home/lib/director-mcp/$A_REV" "$home/bin"
+cp "$srv/dl/$A_TAG/director-mcp-$hos-$harch" "$home/lib/director-mcp/$A_REV/director-mcp"; chmod +x "$home/lib/director-mcp/$A_REV/director-mcp"
+printf 'sha=%s\nversion=0.1.0-alpha.test\nref=%s\ninstalled_at=2026-11-13T00:00:00Z\n' "$A_REV" "$A_REV" > "$home/lib/director-mcp/$A_REV/STAMP"
+ln -s "$home/lib/director-mcp/$A_REV/director-mcp" "$home/bin/director-mcp"
+if di "$fake" director-mcp --release "$A_TAG"; then
+  [[ "$(slink)" == "$(swant "$A_REV")" && -x "$home/lib/director-mcp/$A_REV/director-mcp-seat" ]] \
+    && cmp -s "$srv/dl/$A_TAG/director-mcp-seat" "$home/lib/director-mcp/$A_REV/director-mcp-seat" \
+    && grep -qx 'seat=included' "$home/lib/director-mcp/$A_REV/STAMP" \
+    && ! grep -q 'has no director-mcp-seat' "$out/stdout" \
+    && ok "a release install of a commit already installed with --ref still brings the verified seat wrapper in and links it" \
+    || bad "--ref then --release" "$(slink) | $(ls "$home/lib/director-mcp/$A_REV") | $(cat "$out/stdout")"
+else
+  bad "--release over an existing --ref install" "$(cat "$out/stderr")"
+fi
+home="$home_keep"
+
 # --- 11. argument checks ---------------------------------------------------------
 if di "$fake" director-mcp --release "$A_TAG" --ref origin/main; then
   bad "--release with --ref was accepted"
