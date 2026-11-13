@@ -196,7 +196,7 @@ hub's environment supplies and settings.conf does not define, and warns
 `SHADOWED NAME` when settings.conf defines a name the environment also
 supplies. `init --env NAME` leaves such a name out of settings.conf; the value
 comes from the running hub, or from `--env NAME=VALUE` when no hub environment
-can be read, and is used for the `-t` runs only. It is passed byte for byte: an
+can be read, and is used for the `-t` runs only. When the hub's environment can be read and does not hold the name, the name is not one the launcher supplies, and `--env NAME=VALUE` is refused with a pointer to `--set`. It is passed byte for byte: an
 environment value may carry its own quotes, which nats-server reads as conf
 syntax. A given value that differs from the hub's is refused. Every changing
 verb runs its `-t` with the launcher's values added. A value with a space in
@@ -265,11 +265,11 @@ Gaps for a new user's first hub, in the order they stop someone:
   stayed put for that refusal and moved for a good reload. A refused reload
   restores the conf. The pid file is trusted only when `ps` shows
   `nats-server -c` with this conf.
-- A value that is all digits, with no leading zero and at most nine digits, is
+- A value that is all digits, with no leading zero and at most 18 digits, is
   written to settings.conf without quotes, because nats-server rejects a quoted
-  string where it expects a number (a port). Anything else stays quoted: a
-  leading zero changes the number when it is read bare, and longer values can
-  overflow an int.
+  string where it expects a number (a port, or a size limit above the int32
+  range such as 1073741824). Anything else stays quoted: a leading zero changes
+  the number when it is read bare, and 19 or more digits can overflow an int64.
 - nats-server 2.15.0 is unmeasured: the precedence and unknown-field
   findings and the reload behavior are measured on 2.14.6 only.
 

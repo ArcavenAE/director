@@ -1115,7 +1115,12 @@ func hubSettingsInit(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 			}
 			val = hv
 		} else if hubEnvErr == nil {
-			if hv, ok := hubEnv[k]; ok && hv != val {
+			hv, ok := hubEnv[k]
+			if !ok {
+				fmt.Fprintf(stderr, "hub: the running hub's environment does not supply %s, so it is not a name the launcher supplies; --env %s=VALUE cannot make it one. Give it with --set %s=VALUE. Nothing was changed\n", k, k, k)
+				return 1
+			}
+			if hv != val {
 				fmt.Fprintf(stderr, "hub: --env %s=%s differs from the running hub's value %s; give the value exactly as the hub has it. Nothing was changed\n", k, val, hv)
 				return 1
 			}

@@ -58,12 +58,16 @@ func hubLauncherEnv(cfg hubCfg) (map[string]string, error) {
 	return hubProcEnv(pid)
 }
 
-var plainNumberRe = regexp.MustCompile(`^(0|[1-9][0-9]{0,8})$`)
+// plainNumberRe matches a number nats-server reads as an int64 when it is bare:
+// no leading zero (a leading zero would change the value), and at most 18
+// digits, which always fit an int64 (director's ruling, 2026-11-13).
+var plainNumberRe = regexp.MustCompile(`^(0|[1-9][0-9]{0,17})$`)
 
 // hubSettingLiteral is how init writes a value into settings.conf. A plain
 // number is written bare, because nats-server rejects a quoted string where it
-// wants a number (a port). A leading zero would change the number when read
-// bare, and ten digits can overflow an int, so those stay quoted.
+// wants a number (a port, a size limit above the int32 range). Anything else is
+// quoted: a leading zero changes the number when read bare, and 19 or more
+// digits can overflow an int64.
 func hubSettingLiteral(v string) string {
 	if plainNumberRe.MatchString(v) {
 		return v
