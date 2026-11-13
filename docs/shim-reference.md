@@ -902,7 +902,7 @@ touches no other consumer and no message, and refuses while the durable has
 unacked deliveries or waiting pulls, so run it while the seat is idle. It
 prints the stream, the floor and the pending count before and after, and the
 sequence range skipped; a head it cannot read prints UNKNOWN. A run that fails
-partway leaves the messages it had pulled and not acked to return to the seat. With `--to SEQ`, messages it pulled past `SEQ` are returned the same way and counted in the printout; until the seat reads them or the ack wait passes, they show as unacked deliveries, and a second run is refused with a message that names this case. `--help` prints the usage and exits 0 without connecting.
+partway leaves the messages it had pulled and not acked to return to the seat. With `--to SEQ`, messages it pulled past `SEQ` are returned the same way and counted in the printout; until the seat next reads them, they show as unacked deliveries, and a second run is refused with a message that names this case. `--help` prints the usage and exits 0 without connecting.
 
 The first `wait_for_message` result after a start (or after the global tier
 attaches) carries `resumed`: one line per tier saying where the durable

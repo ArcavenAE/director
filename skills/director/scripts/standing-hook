@@ -22,7 +22,7 @@ one line, an RFC 3339 UTC stamp, in $DIRECTOR_STATE/last-drain (default
 $HOME/.director/state/last-drain). It is written to a temp file and renamed
 into place, and the stamp is the clock's: there is no argument to set it. With
 no heartbeat the hook says so rather than inventing an age. The first line is
-the drain age and nothing else: inbox depth is not shown, because a number
+the local-time clock (`now HH:MM CST|CDT`) and nothing else; the drain age is on the line after it. Inbox depth is not shown, because a number
 nobody has checked teaches the reader to trust it.
 
 The line before it says when the operations dashboard was last applied: `dash last applied: T`, the
