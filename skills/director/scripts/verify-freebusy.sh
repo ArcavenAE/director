@@ -777,6 +777,26 @@ case_i467() {
   rm -f "$FIX/global.fail"; touch "$FIX/unread.fail"; touch "$FIX/global.fail"
   out="$(run "${base[@]}")"
   grep -qF 'mail: local not read, global not read' <<<"$out" && ok "M4 with both reads failed neither tier is counted" || bad "M4 both" "$out"
+
+  # S: the global read fell back to presence ages other clusters' seats wrote for themselves
+  rm -f "$FIX/global.fail" "$FIX/unread.fail"
+  echo '{"reports":[{"stream":"GLOBAL_TO_mokuzai","partial":true,"durables":[{"agent_id":"mok-sup","pending":3}]},{"stream":"GLOBAL_TO_other","partial":true,"self_reported":true,"self_reported_seats":[{"agent_id":"ops-supervisor-1","reported":true,"oldest_pending_s":900,"over_bound":true},{"agent_id":"ops-supervisor-2","reported":true,"oldest_pending_s":20},{"agent_id":"ops-supervisor-3","reported":false}]}]}' >"$FIX/global.json"
+  out="$(run "${base[@]}")"
+  grep -qF -- '- OVER-BOUND global-self-reported ops-supervisor-1 900s' <<<"$out" && ok "S1 a self-reported seat over the bound is named as self-reported, with its age" || bad "S1 line" "$out"
+  ! grep -q -- '- OVER-BOUND global ops-supervisor' <<<"$out" && ok "S1 and is not named as a stream read" || bad "S1 plain line" "$out"
+  ! grep -qF 'ops-supervisor-2 ' <<<"$(grep OVER-BOUND <<<"$out")" && ok "S1 a self-reported seat under the bound is not named" || bad "S1 under" "$out"
+  grep -qF 'global self-reported 1 over-bound, 1 not reported' <<<"$out" && ok "S1 the count says self-reported, with the unreported seat counted apart" || bad "S1 count" "$out"
+  ! grep -qF 'global 0 over-bound' <<<"$out" && ok "S1 and no stream-read zero stands for the cluster that was not read" || bad "S1 zero" "$out"
+  [[ "$(cat "$root/rc")" == 0 ]] && ok "S1 the exit status is unchanged" || bad "S1 rc" "$(cat "$root/rc")"
+  # S2: nothing but the caller's own partial read: global is not read
+  echo '{"reports":[{"stream":"GLOBAL_TO_mokuzai","partial":true,"durables":[{"agent_id":"mok-sup","pending":3}]}]}' >"$FIX/global.json"
+  out="$(run "${base[@]}")"
+  grep -qF 'global not read' <<<"$out" && ok "S2 a partial own-cluster read alone prints global not read" || bad "S2 count" "$out"
+  # S3: a full read of one stream beside a self-reported one: both are counted, apart
+  echo '{"reports":[{"stream":"GLOBAL_TO_kinu","durables":[{"agent_id":"kinu-sup","over_bound":true,"oldest_unread_age_seconds":800}]},{"stream":"GLOBAL_TO_other","partial":true,"self_reported":true,"self_reported_seats":[{"agent_id":"ops-supervisor-1","reported":true,"oldest_pending_s":900,"over_bound":true}]}]}' >"$FIX/global.json"
+  out="$(run "${base[@]}")"
+  grep -qF 'global 1 over-bound, self-reported 1 over-bound' <<<"$out" && ok "S3 a full read and a self-reported one are counted apart" || bad "S3 count" "$out"
+  grep -qF -- '- OVER-BOUND global kinu-sup 800s' <<<"$out" && ok "S3 the full read's seat keeps its plain line" || bad "S3 plain line" "$out"
 }
 
 
