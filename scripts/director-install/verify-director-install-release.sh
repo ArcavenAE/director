@@ -65,7 +65,8 @@ mkrelease() {
       echo '#!/bin/sh'
       echo 'if [ -t 0 ]; then tty=yes; else tty=no; fi'
       echo 'n=$(cat | wc -c | tr -d " ")'
-      echo 'echo "ran stdin_tty=$tty stdin_bytes=$n NATS_URL=${NATS_URL:-unset}" >> "$FAKE_RAN_LOG"'
+      # The installer runs the binary under env -i, so the log path is written into it.
+      printf 'echo "ran stdin_tty=$tty stdin_bytes=$n NATS_URL=${NATS_URL:-unset}" >> "%s"\n' "$root/ran.log"
       [[ "$mode" == hang ]] && echo 'exec sleep 60'
       printf 'echo "director-mcp 0.1.0-alpha.test.%s rev %s channel alpha"\n' "${rev:0:7}" "$rev"
     } > "$d/director-mcp-$t"
@@ -101,7 +102,7 @@ di() {
   local pre="$1"; shift
   env -i HOME="$root/h" DIRECTOR_HOME="$home" PATH="${pre:+$pre:}$BASEPATH" LANG=en_US.UTF-8 \
       DIRECTOR_RELEASE_BASE="$BASE" DIRECTOR_RELEASES_API="$API" \
-      DIRECTOR_MANIFESTS_DIR="$root/manifests" FAKE_GH_LOG="$ghlog" FAKE_RAN_LOG="$ranlog" ${FAKE_GH_RC:+FAKE_GH_RC="$FAKE_GH_RC"} \
+      DIRECTOR_MANIFESTS_DIR="$root/manifests" FAKE_GH_LOG="$ghlog" ${FAKE_GH_RC:+FAKE_GH_RC="$FAKE_GH_RC"} \
       "$INSTALLER" "$@" >"$out/stdout" 2>"$out/stderr"
 }
 mlink() { readlink "$home/bin/director-mcp" 2>/dev/null || echo none; }
