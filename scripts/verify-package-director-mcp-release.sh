@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Prove scripts/package-director-mcp-release: four binaries and a checksums.txt
-# that verifies, the same bytes on a second run, a version that names the
+# Prove scripts/package-director-mcp-release: four binaries, the seat wrapper
+# and a checksums.txt that lists and verifies all five, the same bytes on a second run, a version that names the
 # commit, and a tag from the commit's own time. Then a mutant that corrupts the
 # checksums must make the same checks fail.
 #
@@ -20,7 +20,7 @@ trap 'rm -rf "$root"' EXIT
 # A repo whose only content is the shim's source, committed at a fixed time, so
 # the version and tag are known. Signed with a key made for this run.
 repo="$root/repo"; mkdir -p "$repo"
-git -C "$here" archive HEAD cmd/director-mcp | tar -x -C "$repo"
+git -C "$here" archive HEAD cmd/director-mcp probe/nats-phase-0/director-mcp-seat | tar -x -C "$repo"
 ssh-keygen -q -t ed25519 -N '' -C verify -f "$root/key" > /dev/null
 printf '%s\n' '[user]' '	name = verify' '	email = verify@example.invalid' "	signingkey = $root/key" \
   '[gpg]' '	format = ssh' '[commit]' '	gpgsign = true' > "$root/gitconfig"
@@ -38,7 +38,25 @@ tag="$(pkg "$root/a")"
 n=0; for f in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do [[ -s "$root/a/director-mcp-$f" ]] && n=$((n+1)); done
 [[ "$n" == 4 ]] && ok "four binaries" || bad "four binaries" "$n"
 (cd "$root/a" && shasum -a 256 -c checksums.txt > /dev/null 2>&1) && ok "checksums.txt verifies" || bad "checksums.txt verifies"
-[[ "$(wc -l < "$root/a/checksums.txt" | tr -d ' ')" == 4 ]] && ok "checksums.txt lists the four binaries and nothing else" || bad "checksums.txt lists four"
+[[ "$(wc -l < "$root/a/checksums.txt" | tr -d ' ')" == 5 ]] && grep -q '  director-mcp-seat$' "$root/a/checksums.txt" \
+  && ok "checksums.txt lists the four binaries and the seat wrapper and nothing else" || bad "checksums.txt lists five"
+git -C "$here" show "HEAD:probe/nats-phase-0/director-mcp-seat" | cmp -s - "$root/a/director-mcp-seat" \
+  && ok "the seat wrapper is the commit's own bytes" || bad "the seat wrapper is the commit's own bytes"
+[[ -x "$root/a/director-mcp-seat" ]] && ok "the seat wrapper is executable" || bad "the seat wrapper is executable"
+# A commit with no wrapper stops the packager and names the path.
+nowrap="$root/nowrap"; mkdir -p "$nowrap"; git -C "$here" archive HEAD cmd/director-mcp | tar -x -C "$nowrap"
+env -u SSH_AUTH_SOCK GIT_CONFIG_GLOBAL="$root/gitconfig" GIT_CONFIG_SYSTEM=/dev/null git -C "$nowrap" init -q -b main
+env -u SSH_AUTH_SOCK GIT_CONFIG_GLOBAL="$root/gitconfig" GIT_CONFIG_SYSTEM=/dev/null git -C "$nowrap" add -A
+GIT_AUTHOR_DATE="2026-11-01T12:34:56Z" GIT_COMMITTER_DATE="2026-11-01T12:34:56Z" env -u SSH_AUTH_SOCK GIT_CONFIG_GLOBAL="$root/gitconfig" GIT_CONFIG_SYSTEM=/dev/null git -C "$nowrap" commit -qm nowrap
+nsha="$(git -C "$nowrap" rev-parse HEAD)"
+if "$here/scripts/package-director-mcp-release" --git-dir "$nowrap/.git" --sha "$nsha" --out "$root/n" > "$root/n.out" 2>&1; then
+  bad "a commit with no seat wrapper was packaged"
+else
+  grep -q 'probe/nats-phase-0/director-mcp-seat' "$root/n.out" && ok "a commit with no seat wrapper stops the packager and names the path" || bad "no-wrapper refusal text" "$(cat "$root/n.out")"
+fi
+# The workflow publishes when the wrapper changes.
+grep -q "probe/nats-phase-0/director-mcp-seat" "$here/.github/workflows/release-director-mcp.yml" \
+  && ok "the release workflow runs when the seat wrapper changes" || bad "the release workflow does not watch the seat wrapper"
 
 pkg "$root/b" > /dev/null
 cmp -s "$root/a/checksums.txt" "$root/b/checksums.txt" && ok "a second run gives the same bytes" || bad "a second run gives the same bytes"

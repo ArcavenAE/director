@@ -59,6 +59,9 @@ case "$(uname -m)" in arm64|aarch64) harch=arm64 ;; x86_64|amd64) harch=amd64 ;;
 mkrelease() {
   local tag="$1" rev="$2" mode="${3:-ok}" d="$srv/dl/$1" t
   mkdir -p "$d"
+  if [[ "$mode" != noseat ]]; then
+    printf '#!/bin/sh\necho seat %s\n' "${rev:0:7}" > "$d/director-mcp-seat"
+  fi
   for t in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
     {
       echo '#!/bin/sh'
@@ -149,6 +152,18 @@ if di "$fake" director-mcp --release "$A_TAG"; then
 else
   bad "--release $A_TAG with a verifier and no go" "$(cat "$out/stderr")"
 fi
+
+# --- 1b. the seat wrapper is installed beside the shim, and verified too -------
+slink() { readlink "$home/bin/director-mcp-seat" 2>/dev/null || echo none; }
+swant() { echo "$home/lib/director-mcp/$1/director-mcp-seat"; }
+[[ "$(slink)" == "$(swant "$A_REV")" ]] && cmp -s "$srv/dl/$A_TAG/director-mcp-seat" "$home/lib/director-mcp/$A_REV/director-mcp-seat" \
+  && [[ -x "$home/lib/director-mcp/$A_REV/director-mcp-seat" ]] \
+  && ok "the seat wrapper is installed beside the shim, executable, byte-identical, behind a link" \
+  || bad "seat install" "$(slink)"
+grep -qx "seat=included" "$home/lib/director-mcp/$A_REV/STAMP" 2>/dev/null \
+  && ok "the STAMP records that the seat wrapper came with the release" || bad "seat STAMP" "$(cat "$home/lib/director-mcp/$A_REV/STAMP" 2>/dev/null)"
+printf '%s\n' "$(cat "$ghlog")" | grep -qE "(^| |/)director-mcp-seat( |\$)" \
+  && ok "the origin check also names the seat wrapper as a subject" || bad "the seat wrapper was not verified" "$(cat "$ghlog")"
 
 # --- 2. a download that does not match checksums.txt changes nothing ----------
 TAMP="director-mcp-alpha-20261113-120000-ccccccc"; T_REV="ccccccc0000000000000000000000000000000cc"
@@ -264,6 +279,8 @@ else
   bad "--release latest-alpha" "$(cat "$out/stderr")"
 fi
 
+[[ "$(slink)" == "$(swant "$B_REV")" ]] && ok "latest-alpha switches the seat link with the shim" || bad "seat link after latest-alpha" "$(slink)"
+
 # --- 9. --rollback returns to the first release ---------------------------------
 if di "$fake" director-mcp --rollback; then
   [[ "$(mlink)" == "$(want "$A_REV")" ]] && ok "--rollback returns to the previous release" || bad "--rollback link" "$(mlink)"
@@ -271,11 +288,55 @@ else
   bad "--rollback" "$(cat "$out/stderr")"
 fi
 
+[[ "$(slink)" == "$(swant "$A_REV")" ]] && ok "--rollback switches the seat link back with the shim" || bad "seat link after rollback" "$(slink)"
+
 # --- 10. --status names the release and the origin result -----------------------
 di "$fake" --status || true
 grep -q "director-mcp: ${A_REV:0:12}" "$out/stdout" && grep -q "$A_TAG" "$out/stdout" && grep -q 'origin verified' "$out/stdout" \
   && ok "--status shows the release tag and that its origin was verified" \
   || bad "--status" "$(cat "$out/stdout")"
+
+# --- 10b. a tampered seat wrapper refuses the whole install --------------------
+S_TAG="director-mcp-alpha-20261113-180000-3333333"; S_REV="3333333000000000000000000000000000000033"
+mkrelease "$S_TAG" "$S_REV"
+echo "tampered" >> "$srv/dl/$S_TAG/director-mcp-seat"
+before="$(mlink)"; sbefore="$(slink)"; : > "$ranlog"
+if di "$fake" director-mcp --release "$S_TAG"; then
+  bad "a release whose seat wrapper fails its checksum was installed"
+else
+  [[ "$(mlink)" == "$before" && "$(slink)" == "$sbefore" && ! -e "$home/lib/director-mcp/$S_REV" ]] \
+    && refuses_for 'checksum.*seat|seat.*checksum' \
+    && ok "a seat wrapper that fails its checksum refuses the install and moves neither link" \
+    || bad "tampered seat" "$(cat "$out/stderr")"
+fi
+
+# --- 10c. a release from before the wrapper installs the shim and says so -----
+N_TAG="director-mcp-alpha-20261113-190000-4444444"; N_REV="4444444000000000000000000000000000000044"
+mkrelease "$N_TAG" "$N_REV" noseat
+sbefore="$(slink)"
+if di "$fake" director-mcp --release "$N_TAG"; then
+  [[ "$(mlink)" == "$(want "$N_REV")" && "$(slink)" == "$sbefore" ]] \
+    && grep -q 'director-mcp-seat' "$out/stdout" \
+    && ! grep -qx 'seat=included' "$home/lib/director-mcp/$N_REV/STAMP" \
+    && ok "a release with no seat wrapper installs the shim, leaves the seat link and says so" \
+    || bad "no-seat release" "$(mlink) $(slink) $(cat "$out/stdout")"
+else
+  bad "a release with no seat wrapper was refused" "$(cat "$out/stderr")"
+fi
+
+# --- 10d. a seat link this installer did not make is left alone -----------------
+home_keep="$home"; home="$root/home2"
+mkdir -p "$home/bin"; printf '#!/bin/sh\necho hand-made\n' > "$root/foreign-seat"; chmod +x "$root/foreign-seat"
+ln -s "$root/foreign-seat" "$home/bin/director-mcp-seat"
+if di "$fake" director-mcp --release "$A_TAG"; then
+  [[ "$(slink)" == "$root/foreign-seat" && "$(mlink)" == "$(want "$A_REV")" ]] \
+    && grep -qi 'left\|not installed by' "$out/stdout" \
+    && ok "a seat link that was not made by the installer is left alone, and the output says so" \
+    || bad "foreign seat link" "$(slink) $(cat "$out/stdout")"
+else
+  bad "install over a foreign seat link" "$(cat "$out/stderr")"
+fi
+home="$home_keep"
 
 # --- 11. argument checks ---------------------------------------------------------
 if di "$fake" director-mcp --release "$A_TAG" --ref origin/main; then
