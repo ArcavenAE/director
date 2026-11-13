@@ -797,6 +797,19 @@ case_i467() {
   out="$(run "${base[@]}")"
   grep -qF 'global 1 over-bound, self-reported 1 over-bound' <<<"$out" && ok "S3 a full read and a self-reported one are counted apart" || bad "S3 count" "$out"
   grep -qF -- '- OVER-BOUND global kinu-sup 800s' <<<"$out" && ok "S3 the full read's seat keeps its plain line" || bad "S3 plain line" "$out"
+  # S4: a cluster whose presence rows all failed to read: a seatless self-reported report is not read, and the rows are counted
+  echo '{"reports":[{"stream":"GLOBAL_TO_mokuzai","partial":true,"durables":[{"agent_id":"mok-sup","pending":3}]},{"stream":"GLOBAL_TO_other","partial":true,"self_reported":true,"unreadable_rows":2}]}' >"$FIX/global.json"
+  out="$(run "${base[@]}")"
+  grep -qF 'global not read, 2 rows unreadable' <<<"$out" && ok "S4 a seatless self-reported report reads as not read, with its unreadable rows counted" || bad "S4 count" "$out"
+  ! grep -qF 'self-reported 0 over-bound' <<<"$out" && ok "S4 and is not a quiet zero" || bad "S4 zero" "$out"
+  # S5: some seats read and some rows did not: the unreadable rows ride on the self-reported part
+  echo '{"reports":[{"stream":"GLOBAL_TO_other","partial":true,"self_reported":true,"self_reported_seats":[{"agent_id":"ops-supervisor-1","reported":true,"oldest_pending_s":900,"over_bound":true}],"unreadable_rows":1}]}' >"$FIX/global.json"
+  out="$(run "${base[@]}")"
+  grep -qF 'global self-reported 1 over-bound, 1 row unreadable' <<<"$out" && ok "S5 seats and unreadable rows are both named" || bad "S5 count" "$out"
+  # S6: a full read beside a seatless unreadable cluster keeps its count and names the rows
+  echo '{"reports":[{"stream":"GLOBAL_TO_kinu","durables":[{"agent_id":"kinu-sup","over_bound":true,"oldest_unread_age_seconds":800}]},{"stream":"GLOBAL_TO_other","partial":true,"self_reported":true,"unreadable_rows":3}]}' >"$FIX/global.json"
+  out="$(run "${base[@]}")"
+  grep -qF 'global 1 over-bound, 3 rows unreadable' <<<"$out" && ok "S6 a full read keeps its count and the unreadable rows are named" || bad "S6 count" "$out"
 }
 
 

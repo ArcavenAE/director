@@ -171,6 +171,10 @@ func TestUnreadGlobalPartialReadsOwnClusterByName(t *testing.T) {
 	if len(reports) != 2 || reports[0].Stream != "GLOBAL_TO_mokuzai" || !reports[0].Partial {
 		t.Fatalf("reports = %+v, want the partial report of GLOBAL_TO_mokuzai and one fallback for GLOBAL_TO_other", reports)
 	}
+	// the second report is the other cluster's self-reported fallback, not just any second report
+	if reports[1].Stream != "GLOBAL_TO_other" || !reports[1].SelfReported {
+		t.Fatalf("second report = %s (self_reported %v), want GLOBAL_TO_other self-reported", reports[1].Stream, reports[1].SelfReported)
+	}
 	r := reports[0]
 	if len(r.Durables) != 1 || r.Durables[0].AgentID != "mokuzai-supervisor" || r.Durables[0].Pending != 3 || !r.Durables[0].Live {
 		t.Fatalf("durables = %+v, want the mokuzai supervisor, live, pending 3", r.Durables)
@@ -204,8 +208,10 @@ func TestUnreadGlobalPartialNamesWhatItCouldNotSee(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reports) != 1 || !reports[0].Partial {
-		t.Fatalf("reports = %+v", reports)
+	// the other cluster's row is refused too: it is counted as an unreadable row
+	// in its own self-reported report, not dropped
+	if len(reports) != 2 || !reports[0].Partial || reports[1].Stream != "GLOBAL_TO_other" || !reports[1].SelfReported || reports[1].UnreadableRows != 1 {
+		t.Fatalf("reports = %+v, want the own partial report and GLOBAL_TO_other self-reported with 1 unreadable row", reports)
 	}
 	r := reports[0]
 	if len(r.Durables) != 0 {
