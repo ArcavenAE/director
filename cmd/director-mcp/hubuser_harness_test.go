@@ -8,6 +8,8 @@ package main
 // bare environment (PATH only), as a service manager starts one, so a reference
 // that settings.conf does not define cannot resolve. Nothing here touches a live
 // hub: the ports are random on 127.0.0.1 and the homes are t.TempDir().
+//
+// A host without nats-server fails these tests; it does not skip them.
 
 import (
 	"bytes"
@@ -18,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,10 +39,12 @@ const (
 type hubScratchOpts struct {
 	noSettings   bool   // no include and no settings.conf; the conf still references $HUB_NAME
 	noRegion     bool   // an old-style conf: no managed region
-	lateSettings string // appended to settings.conf after the server is up (a server will not start with it)
-	refTag       bool   // the conf also references $HUB_TAG, which the default settings.conf does not define
 	extraUsers   string // hand-written user blocks placed outside the managed region
 	settingsTxt  string // replaces the default settings.conf body
+	lateSettings string // appended to settings.conf after the server is up (a server will not start with it)
+	refTag       bool   // the conf also references $HUB_TAG, which the default settings.conf does not define
+	brokenConf   bool   // the live conf has a syntax error; the server runs from a valid sibling conf
+	adminOutside bool   // the admin seed lives outside keys/, and keys/ does not exist
 	serverEnv    []string
 }
 
@@ -87,7 +92,9 @@ func newHubScratch(t *testing.T, o hubScratchOpts) *hubScratch {
 	t.Helper()
 	bin, err := exec.LookPath("nats-server")
 	if err != nil {
-		t.Skip("nats-server not on PATH")
+		// These tests are the proof the hub commands work, so a host without the
+		// server fails them instead of passing by skipping. CI installs nats-server.
+		t.Fatalf("nats-server is not on PATH; the hub user tests need it (CI installs one)")
 	}
 	h := &hubScratch{t: t}
 	h.home = t.TempDir()
@@ -97,12 +104,20 @@ func newHubScratch(t *testing.T, o hubScratchOpts) *hubScratch {
 	h.pidfile = filepath.Join(h.home, "nats-server.pid")
 	h.logfile = filepath.Join(h.home, "log", "nats-server.log")
 	h.port, h.monPort = freePort(t), freePort(t)
-	for _, d := range []string{h.keys, filepath.Dir(h.logfile), filepath.Join(h.home, "js")} {
+	dirs := []string{filepath.Dir(h.logfile), filepath.Join(h.home, "js")}
+	if !o.adminOutside {
+		dirs = append(dirs, h.keys)
+	}
+	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	h.adminSeed = filepath.Join(h.keys, "admin.nk")
+	if o.adminOutside {
+		h.adminSeed = filepath.Join(t.TempDir(), "admin-elsewhere.nk")
+	} else {
+		h.adminSeed = filepath.Join(h.keys, "admin.nk")
+	}
 	h.adminPub = newSeedFile(t, h.adminSeed)
 
 	include := `include "./settings.conf"` + "\n"
@@ -144,18 +159,24 @@ accounts {
 			t.Fatal(err)
 		}
 	}
-	if o.noSettings {
-		// With no settings.conf the server cannot start either, so the scratch hub
-		// is started from a sibling conf that defines the variable inline. The
-		// conf under test stays the one the command reads.
+	if o.noSettings || o.brokenConf {
+		// The server cannot read a conf the test made unreadable on purpose, so the
+		// scratch hub is started from a sibling conf that is valid. The conf under
+		// test stays the one the command reads.
 		alt := filepath.Join(h.home, "serve.conf")
 		altBody := strings.Replace(body, "server_name: $HUB_NAME", "server_name: hub", 1)
+		altBody = strings.Replace(altBody, "include \"./settings.conf\"\n", "", 1)
 		if err := os.WriteFile(alt, []byte(altBody), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		h.startServer(bin, alt, o.serverEnv)
 	} else {
 		h.startServer(bin, h.conf, o.serverEnv)
+	}
+	if o.brokenConf {
+		if err := os.WriteFile(h.conf, []byte(body+"\n]\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	h.provision()
 	if o.lateSettings != "" {
@@ -230,13 +251,16 @@ func (h *hubScratch) provision() {
 	}
 }
 
-// env is the command's settings for this hub; the admin key is the default
-// keys/admin.nk and is left unset on purpose.
+// env is the command's settings for this hub. The admin key is the default
+// keys/admin.nk unless the hub keeps it elsewhere.
 func (h *hubScratch) env() func(string) string {
 	m := map[string]string{
 		"DIRECTOR_GLOBAL_HOME":     h.home,
 		"DIRECTOR_HUB_ADMIN_URL":   h.url(),
 		"DIRECTOR_HUB_MONITOR_URL": fmt.Sprintf("http://127.0.0.1:%d", h.monPort),
+	}
+	if filepath.Dir(h.adminSeed) != h.keys {
+		m["DIRECTOR_HUB_ADMIN_NKEY"] = h.adminSeed
 	}
 	return func(k string) string { return m[k] }
 }
@@ -283,7 +307,7 @@ func (h *hubScratch) registryUsers() []map[string]any {
 	return f.Users
 }
 
-// region returns the text between the managed region's markers.
+// regionOf returns the text between the managed region's markers.
 func regionOf(conf []byte) string {
 	s := string(conf)
 	i := strings.Index(s, hubRegionBegin)
@@ -311,8 +335,14 @@ func (h *hubScratch) backups() []string {
 	return m
 }
 
+// seedFiles lists the *.nk files directly in keys/.
 func (h *hubScratch) seedFiles() []string {
 	m, _ := filepath.Glob(filepath.Join(h.keys, "*.nk"))
+	return m
+}
+
+func (h *hubScratch) revokedSeeds() []string {
+	m, _ := filepath.Glob(filepath.Join(h.keys, "revoked", "*.nk"))
 	return m
 }
 
@@ -368,27 +398,106 @@ func (h *hubScratch) canConnect(seedPath string) bool {
 	return true
 }
 
-func pidOf(t *testing.T, pidfile string) int {
-	t.Helper()
-	b, err := os.ReadFile(pidfile)
+// waitConnect polls canConnect for up to d, for a key the hub should accept
+// once a reload has taken effect.
+func (h *hubScratch) waitConnect(seedPath string, d time.Duration) bool {
+	end := time.Now().Add(d)
+	for {
+		if h.canConnect(seedPath) {
+			return true
+		}
+		if time.Now().After(end) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (h *hubScratch) pid() int {
+	b, err := os.ReadFile(h.pidfile)
 	if err != nil {
-		t.Fatal(err)
+		h.t.Fatal(err)
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
 	if err != nil {
-		t.Fatal(err)
+		h.t.Fatal(err)
 	}
 	return n
 }
 
-// awaitLog waits for text to appear in the hub's log.
-func (h *hubScratch) awaitLog(text string) bool {
-	for i := 0; i < 40; i++ {
-		b, _ := os.ReadFile(h.logfile)
-		if strings.Contains(string(b), text) {
+// reloads counts the server's own "Reloaded server configuration" log lines.
+// A reload by SIGHUP writes one; a restart writes none.
+func (h *hubScratch) reloads() int {
+	b, _ := os.ReadFile(h.logfile)
+	return strings.Count(string(b), "Reloaded server configuration")
+}
+
+// waitReloads waits until the log shows at least n reloads.
+func (h *hubScratch) waitReloads(n int) bool {
+	for i := 0; i < 50; i++ {
+		if h.reloads() >= n {
 			return true
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	return false
+}
+
+var seedShape = regexp.MustCompile(`S[UAOCNX][A-Z2-7]{56}`)
+
+// assertNoSeedAnywhere fails the test if any seed this hub's keys hold, or
+// anything shaped like a seed, appears in the command's output, the registry,
+// the conf, settings.conf, any backup or the hub's log.
+func (h *hubScratch) assertNoSeedAnywhere(out, errOut string) {
+	t := h.t
+	t.Helper()
+	haystacks := map[string]string{"stdout": out, "stderr": errOut, "registry": string(h.readRegistry()), "conf": string(h.readConf())}
+	if b, err := os.ReadFile(h.settings); err == nil {
+		haystacks["settings.conf"] = string(b)
+	}
+	for _, p := range h.backups() {
+		b, _ := os.ReadFile(p)
+		haystacks[filepath.Base(p)] = string(b)
+	}
+	if b, err := os.ReadFile(h.logfile); err == nil {
+		haystacks["hub log"] = string(b)
+	}
+	for _, p := range append(append([]string{}, h.seedFiles()...), h.revokedSeeds()...) {
+		b, _ := os.ReadFile(p)
+		seed := strings.TrimSpace(string(b))
+		if seed == "" {
+			continue
+		}
+		for name, s := range haystacks {
+			if strings.Contains(s, seed) {
+				t.Errorf("the seed in %s appears in %s", filepath.Base(p), name)
+			}
+		}
+	}
+	for name, s := range haystacks {
+		if seedShape.MatchString(s) {
+			t.Errorf("something shaped like a seed appears in %s", name)
+		}
+	}
+}
+
+// homeListing names every entry a command could have left in the hub home or
+// its keys directory: top-level files and directories (not the server's own js
+// and log, and not the lock file) and the key files. Two listings that match
+// show a refused command left nothing behind, staging files included.
+func (h *hubScratch) homeListing() string {
+	var names []string
+	ents, _ := os.ReadDir(h.home)
+	for _, e := range ents {
+		switch e.Name() {
+		case "js", "log", ".hub-user.lock":
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	kents, _ := os.ReadDir(h.keys)
+	for _, e := range kents {
+		names = append(names, "keys/"+e.Name())
+	}
+	return strings.Join(names, "\n")
 }
