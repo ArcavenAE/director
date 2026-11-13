@@ -821,7 +821,10 @@ case_i467() {
   grep -qx 'DIRECTOR_CLUSTER=kinu' "$FIX/mcp.env" && ok "C1 a DIRECTOR_CLUSTER the caller set reaches the global read" || bad "C1 pass-through" "$(cat "$FIX/mcp.env" 2>&1)"
   ! grep -q 'GAP mail: DIRECTOR_CLUSTER' <<<"$out" && ok "C1 and no unset GAP is printed when it is set" || bad "C1 gap" "$out"
   rm -f "$FIX/mcp.env"
+  # a seat that runs this verifier has DIRECTOR_CLUSTER set; run is env -i, so the script must still see it unset
+  export DIRECTOR_CLUSTER=inherited-from-the-verifier-seat
   out="$(run "${base[@]}")"
+  unset DIRECTOR_CLUSTER
   grep -qx 'DIRECTOR_CLUSTER=unset' "$FIX/mcp.env" && ok "C2 an unset DIRECTOR_CLUSTER stays unset (no default is invented)" || bad "C2 no default" "$(cat "$FIX/mcp.env" 2>&1)"
   grep -q 'GAP mail: DIRECTOR_CLUSTER is unset' <<<"$out" && ok "C2 a read that came back self-reported for want of it prints a GAP that names the variable" || bad "C2 gap" "$out"
   grep -q 'GAP mail: DIRECTOR_CLUSTER is unset.*set it' <<<"$out" && ok "C2 and says to set it to read this cluster's stream by name" || bad "C2 advice" "$out"

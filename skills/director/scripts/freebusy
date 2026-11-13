@@ -37,7 +37,10 @@
 #                  presence ages other clusters' seats wrote for themselves, those seats print as
 #                  "- OVER-BOUND global-self-reported <seat> <age>s" and the count names them apart
 #                  ("self-reported N over-bound, M not reported", plus ", N rows unreadable" for presence rows the read could not use); a global read that is only the
-#                  caller's own partial read is "global not read". Diagnostic: the exit status is unchanged
+#                  caller's own partial read is "global not read". A read that came back
+#                  self-reported because DIRECTOR_CLUSTER is unset in the caller's shell prints a
+#                  GAP that says so; freebusy passes the variable through when it is set and never
+#                  sets one. Diagnostic: the exit status is unchanged
 #     versions     marvel version (client line), marvel version --cluster NAME (the daemon line),
 #                  and the version line of the tap's Formula/marvel.rb as the local checkout
 #                  $FREEBUSY_TAP_FORMULA names it, else the one-line file $DIRECTOR_STATE/freebusy-tap-formula
@@ -804,6 +807,10 @@ if [[ -x "$mcp" ]]; then
     gr_self_rows="$(jq -r '[.reports[] | select(.self_reported == true) | (.unreadable_rows // 0)] | add // 0' "$tmp/unread-global.out")"
     # a stream read in full counts as read; so does an empty list. Only partial reads, with nothing self-reported, is not read.
     gr_full="$(jq -r 'if (.reports | length) == 0 then 1 else ([.reports[] | select(.self_reported != true and .partial != true)] | length) end' "$tmp/unread-global.out")"
+    # the read could not name this cluster's stream because the caller's shell has no DIRECTOR_CLUSTER; freebusy never picks one
+    if [[ -z "${DIRECTOR_CLUSTER:-}" ]] && jq -e 'any(.reports[]?; (.warnings // [])[]? | contains("DIRECTOR_CLUSTER is unset"))' "$tmp/unread-global.out" >/dev/null 2>&1; then
+      gap "mail: DIRECTOR_CLUSTER is unset in this shell, so unread --global read no stream by name and every cluster is self-reported presence; set it to this cluster's name to read its own stream by name"
+    fi
   fi
 fi
 if [[ -s "$eps" ]]; then
