@@ -79,7 +79,7 @@ mkrelease "$A_TAG" "$A_REV"
 mkrelease "$B_TAG" "$B_REV"
 # The listing is not newest-first and carries entries that are not alphas: the
 # newest alpha is chosen by its stamp, never by position or by sort order alone.
-printf '[{"tag_name":"%s"},\n{"tag_name":"director-mcp-v0.1.0"},\n{"tag_name":"director-mcp-alpha-zzz"},\n{"tag_name":"other-20261113-999999-zzzzzzz"},\n{"tag_name":"%s"}]\n' "$A_TAG" "$B_TAG" > "$srv/api/releases"
+printf '[{"tag_name":"%s"},\n{"tag_name":"%s"},\n{"tag_name":"director-mcp-v0.1.0"},\n{"tag_name":"director-mcp-alpha-zzz"},\n{"tag_name":"other-20261113-999999-zzzzzzz"}]\n' "$A_TAG" "$B_TAG" > "$srv/api/releases"
 
 # A fake gh: record the arguments, then answer by FAKE_GH_RC, and reject any
 # bundle that names another workflow (the way a real verify would).
@@ -144,7 +144,7 @@ if di "$fake" director-mcp --release "$A_TAG"; then
     && ok "the verify names this repository, this release workflow, the bundle and the host's binary as the subject" \
     || bad "gh arguments" "$line"
   r="$(cat "$ranlog")"
-  [[ "$(wc -l < "$ranlog" | tr -d ' ')" -ge 1 && "$r" == *"stdin_tty=no stdin_bytes=0 NATS_URL=nats://"* && "$r" != *"NATS_URL=unset"* ]] \
+  [[ -n "$r" ]] && ! grep -qvx 'ran stdin_tty=no stdin_bytes=0 NATS_URL=nats://127.0.0.1:1' "$ranlog" \
     && ok "the first run of the binary has stdin closed and an unreachable NATS_URL set" \
     || bad "first-run guard" "$r"
 else
@@ -178,7 +178,7 @@ else
   [[ "$(mlink)" == "$before" && ! -e "$home/lib/director-mcp/$D_REV" ]] \
     && ok "with no gh the install refuses and leaves the link and the lib alone" \
     || bad "no verifier: state changed" "$(mlink)"
-  refuses_for "$GHWORD" && refuses_for -- '--ref' \
+  refuses_for "$GHWORD" && refuses_for '--ref' \
     && ok "the refusal names gh, and building from source with --ref, as the ways on" \
     || bad "no-verifier refusal text" "$(cat "$out/stderr")"
   [[ ! -s "$ranlog" ]] && ok "the binary does not run when no verifier is present" || bad "a binary ran with no verifier to check its origin" "$(cat "$ranlog")"
@@ -248,7 +248,7 @@ before="$(mlink)"; : > "$ranlog"; t0=$SECONDS
 if di "$fake" director-mcp --release "$H_TAG"; then
   bad "a binary that hangs on --version was installed"
 else
-  refuses_for 'version|timed out|timeout' && (( SECONDS - t0 < 20 )) && [[ "$(mlink)" == "$before" && ! -e "$home/lib/director-mcp/$H_REV" ]] \
+  refuses_for 'timed out|timeout' && (( SECONDS - t0 < 20 )) && [[ "$(mlink)" == "$before" && ! -e "$home/lib/director-mcp/$H_REV" ]] \
     && ok "a binary that hangs on --version is stopped within the guard and nothing switches" \
     || bad "hang: not stopped in time or state changed" "$((SECONDS - t0))s $(mlink)"
 fi
