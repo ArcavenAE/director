@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -468,8 +469,15 @@ func TestSelfReportedAllRowsReadableCountsNoneUnreadable(t *testing.T) {
 
 func clearGlobalEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"DIRECTOR_CLUSTER", "DIRECTOR_GLOBAL_DOMAIN", "DIRECTOR_GLOBAL_ROLE", "DIRECTOR_HUB_OBSERVER_URL", "DIRECTOR_HUB_OBSERVER_NKEY", "DIRECTOR_HUB_OBSERVER_CA"} {
-		t.Setenv(k, "")
+	// freebusy's shell carries none of a seat's variables, so a test run from a seat
+	// must not see them either: every DIRECTOR_* and MARVEL_* variable and NATS_URL
+	// is unset (restored when the test ends).
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(k, "DIRECTOR_") || strings.HasPrefix(k, "MARVEL_") || k == "NATS_URL" {
+			t.Setenv(k, "") // registers the restore
+			_ = os.Unsetenv(k)
+		}
 	}
 }
 
@@ -508,12 +516,30 @@ func TestUnreadGlobalAsAScriptRunsItFallsBackToPresence(t *testing.T) {
 			t.Errorf("%s is not marked self-reported though nothing was read from its stream: %v", c, r)
 		}
 	}
-	if seats, _ := byStream["GLOBAL_TO_other"]["self_reported_seats"].([]any); len(seats) != 1 {
-		t.Errorf("GLOBAL_TO_other seats = %v, want other-supervisor with its 900 s age", seats)
+	for _, c := range []string{"GLOBAL_TO_other", "GLOBAL_TO_mokuzai"} {
+		if w := strings.Join(strSlice(byStream[c]["warnings"]), "\n"); !strings.Contains(w, "DIRECTOR_CLUSTER is unset, so no stream was read by name") || !strings.Contains(w, "every cluster, this one included, is self-reported") {
+			t.Errorf("%s does not say in plain words that no stream was read by name because DIRECTOR_CLUSTER is unset: %q", c, w)
+		}
 	}
-	if w := strings.Join(strSlice(byStream["GLOBAL_TO_other"]["warnings"]), "\n"); !strings.Contains(w, "DIRECTOR_CLUSTER") {
-		t.Errorf("the report does not say why no stream was read by name (DIRECTOR_CLUSTER unset): %q", w)
+	seats, _ := byStream["GLOBAL_TO_other"]["self_reported_seats"].([]any)
+	if len(seats) != 1 {
+		t.Fatalf("GLOBAL_TO_other seats = %v, want other-supervisor with its 900 s age", seats)
 	}
+	if seat, _ := seats[0].(map[string]any); seat["oldest_pending_s"] != float64(900) || seat["over_bound"] != true {
+		t.Errorf("the other cluster's seat = %v, want oldest_pending_s 900 and over_bound", seat)
+	}
+	mseats, _ := byStream["GLOBAL_TO_mokuzai"]["self_reported_seats"].([]any)
+	if seat := firstSeat(mseats); seat["oldest_pending_s"] != float64(12) {
+		t.Errorf("the own cluster's seat = %v, want oldest_pending_s 12 (self-reported like any other)", seat)
+	}
+}
+
+func firstSeat(seats []any) map[string]any {
+	if len(seats) == 0 {
+		return map[string]any{}
+	}
+	m, _ := seats[0].(map[string]any)
+	return m
 }
 
 func strSlice(v any) []string {
@@ -539,8 +565,13 @@ func TestUnreadGlobalAsAScriptRunsItPrintsTheFallbackNotAnError(t *testing.T) {
 	if strings.Contains(out.String(), "global unread not read") {
 		t.Errorf("the text read printed the error where the fallback can answer: %q", out.String())
 	}
-	if !strings.Contains(out.String(), "SELF-REPORTED") {
-		t.Errorf("the text read did not print the self-reported fallback: %q", out.String())
+	for _, c := range []string{"GLOBAL_TO_other SELF-REPORTED", "GLOBAL_TO_mokuzai SELF-REPORTED"} {
+		if !strings.Contains(out.String(), c) {
+			t.Errorf("the text read did not print %q: %q", c, out.String())
+		}
+	}
+	if !strings.Contains(out.String(), "DIRECTOR_CLUSTER is unset, so no stream was read by name") {
+		t.Errorf("the text read does not say no stream was read by name because DIRECTOR_CLUSTER is unset: %q", out.String())
 	}
 }
 
