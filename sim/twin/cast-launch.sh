@@ -64,6 +64,7 @@ case "$MARVEL_ROLE" in
   scoped-builder)    WROLE=builder; SCOPE="";;
   claude-reviewer)   WROLE=reviewer; SCOPE="";;
   daily-sweep)       WROLE=worker; SCOPE="";;
+  musthaq-pr-watch)  WROLE=worker; SCOPE="";;
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
 esac
 [[ -n "${CAST_SCOPE:-}" ]] && SCOPE="$CAST_SCOPE"
