@@ -232,6 +232,11 @@ func TestLeafClassGrantsAllowNoJetStreamOnAClientConnection(t *testing.T) {
 		if _, err := ajs.Publish(ctx, "global.director.inbox", []byte("1")); err != nil {
 			t.Fatal(err)
 		}
+		// Positive control: the same JetStream answers admin on this hub, so a refusal
+		// below is the grant and not an outage.
+		if _, err := ajs.Stream(ctx, "GLOBAL_TO_DIRECTOR"); err != nil {
+			t.Fatalf("%s: control: admin stream info on GLOBAL_TO_DIRECTOR failed: %v", class, err)
+		}
 		cancel()
 		if code, out, errOut := h.run("user", "rotate", "kinu-leaf"); code != 0 {
 			t.Fatalf("%s: rotate exited %d\n%s%s", class, code, out, errOut)
