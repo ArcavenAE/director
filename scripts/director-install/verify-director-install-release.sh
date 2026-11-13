@@ -89,6 +89,7 @@ printf '[{"tag_name":"%s"},\n{"tag_name":"%s"},\n{"tag_name":"director-mcp-v0.1.
 printf '%s\n' \
   '#!/bin/sh' \
   '[ "$1" = attestation ] && [ "$2" = --help ] && exit "${FAKE_GH_HELP_RC:-0}"' \
+  '[ "$1" = attestation ] && [ "$2" = verify ] && [ "$3" = --help ] && { echo "      --repo string        Repository"; [ -n "$FAKE_GH_NO_SOURCE_REF" ] || echo "      --source-ref string  Enforce the git ref"; exit 0; }' \
   'echo "$*" >> "$FAKE_GH_LOG"' \
   'for a in "$@"; do case "$a" in "${FAKE_GH_REJECT:-no-such-subject}"|*/"${FAKE_GH_REJECT:-no-such-subject}") exit 1 ;; esac; done' \
   'pinned=""; case " $* " in *" --source-ref refs/heads/main "*) pinned=1 ;; esac' \
@@ -107,7 +108,7 @@ di() {
   local pre="$1"; shift
   env -i HOME="$root/h" DIRECTOR_HOME="$home" PATH="${pre:+$pre:}$BASEPATH" LANG=en_US.UTF-8 \
       DIRECTOR_RELEASE_BASE="$BASE" DIRECTOR_RELEASES_API="$API" \
-      DIRECTOR_MANIFESTS_DIR="$root/manifests" FAKE_GH_LOG="$ghlog" ${FAKE_GH_RC:+FAKE_GH_RC="$FAKE_GH_RC"} ${FAKE_GH_HELP_RC:+FAKE_GH_HELP_RC="$FAKE_GH_HELP_RC"} ${FAKE_GH_REJECT:+FAKE_GH_REJECT="$FAKE_GH_REJECT"} \
+      DIRECTOR_MANIFESTS_DIR="$root/manifests" FAKE_GH_LOG="$ghlog" ${FAKE_GH_RC:+FAKE_GH_RC="$FAKE_GH_RC"} ${FAKE_GH_HELP_RC:+FAKE_GH_HELP_RC="$FAKE_GH_HELP_RC"} ${FAKE_GH_REJECT:+FAKE_GH_REJECT="$FAKE_GH_REJECT"} ${FAKE_GH_NO_SOURCE_REF:+FAKE_GH_NO_SOURCE_REF="$FAKE_GH_NO_SOURCE_REF"} \
       "$INSTALLER" "$@" >"$out/stdout" 2>"$out/stderr"
 }
 mlink() { readlink "$home/bin/director-mcp" 2>/dev/null || echo none; }
@@ -260,9 +261,23 @@ if FAKE_GH_HELP_RC=1 di "$fake" director-mcp --release "$A_TAG"; then
   bad "an install with a gh that has no attestation command succeeded"
 else
   [[ "$(mlink)" == "$before" && ! -s "$reqlog" ]] \
-    && refuses_for 'no attestation command' && refuses_for '2\.49' && ! grep -qi 'rejected' "$out/stderr" \
-    && ok "a gh with no attestation command is named as that, with the version it needs, before any download" \
+    && refuses_for 'no attestation command' && ! grep -qi 'rejected' "$out/stderr" \
+    && ok "a gh with no attestation command is named as that, before any download" \
     || bad "no-attestation gh" "$(cat "$out/stderr") | requests: $(cat "$reqlog")"
+fi
+
+# --- 5d. a gh whose attestation verify has no --source-ref flag is named as that ---
+# Probed by the flag, not by a version: a gh between the two would pass a version floor, fail
+# the verify on an unknown flag and read as a bad release.
+before="$(mlink)"; : > "$reqlog"; : > "$ghlog"
+if FAKE_GH_NO_SOURCE_REF=1 di "$fake" director-mcp --release "$A_TAG"; then
+  bad "an install with a gh that has no --source-ref flag succeeded"
+else
+  [[ "$(mlink)" == "$before" && ! -s "$reqlog" ]] \
+    && refuses_for '--source-ref' && refuses_for 'no --source-ref|lacks --source-ref|missing --source-ref' && ! grep -qi 'rejected' "$out/stderr" \
+    && ! grep -q '^attestation verify ' "$ghlog" \
+    && ok "a gh whose verify has no --source-ref flag is named as that, before any download and before any verify" \
+    || bad "no --source-ref flag" "$(cat "$out/stderr") | requests: $(cat "$reqlog")"
 fi
 
 # --- 6. the binary must report the commit its tag names ------------------------
