@@ -244,6 +244,9 @@ func TestHubUserRotateRollsBackWhenTheNewKeyFailsVerify(t *testing.T) {
 	if !strings.Contains(out+errOut, "Rolled back") {
 		t.Errorf("the message does not say it rolled back: %s%s", out, errOut)
 	}
+	if !strings.Contains(out+errOut, "still accepted") {
+		t.Errorf("the message does not say the key is still accepted: %s%s", out, errOut)
+	}
 	if got := h.consumerCounts(); got != countsBefore {
 		t.Errorf("consumer counts changed: before\n%safter\n%s", countsBefore, got)
 	}
@@ -254,7 +257,7 @@ func TestHubUserRotateAdoptedUserReRendersIntoTheRegion(t *testing.T) {
 	pub := newPublicKey(t)
 	hand := `      { nkey: ` + pub + `
         permissions {
-          publish   { allow: [ "global.probe.>", "global.extra.>" ] }
+          publish   { allow: [ "global.probe.>" ] }
           subscribe { allow: [ "global.probe.>", "_INBOX.>" ] }
         } }`
 	h := newHubScratch(t, hubScratchOpts{extraUsers: hand})
@@ -270,8 +273,11 @@ func TestHubUserRotateAdoptedUserReRendersIntoTheRegion(t *testing.T) {
 	newSeed := filepath.Join(h.keys, "probe-leaf.next.nk")
 	newPub := seedPub(t, newSeed)
 	region := regionOf(h.readConf())
-	if !strings.Contains(region, newPub) || !strings.Contains(region, "global.probe.>") || strings.Contains(region, "global.extra.>") {
-		t.Errorf("the region does not hold the new key with the class grant (and without the hand block's extra grant):\n%s", region)
+	if !strings.Contains(region, newPub) || !strings.Contains(region, "global.probe.>") || !strings.Contains(region, "global.*.supervisor.inbox") {
+		t.Errorf("the region does not hold the new key with the class grant:\n%s", region)
+	}
+	if !strings.Contains(out, "grant difference") || !strings.Contains(out, "STREAM.MSG.DELETE.GLOBAL_TO_probe") {
+		t.Errorf("rotate of an adopted user does not print the grant difference with the class grant:\n%s", out)
 	}
 	if outsideRegion([]byte(confBefore)) != outsideRegion(h.readConf()) {
 		t.Errorf("rotate changed the hand-written block or other bytes outside the region")
@@ -434,6 +440,9 @@ func TestHubUserRevokeRollsBackWhenTheOldKeyIsStillAccepted(t *testing.T) {
 	if !strings.Contains(out+errOut, "Rolled back") {
 		t.Errorf("the message does not say it rolled back: %s%s", out, errOut)
 	}
+	if !strings.Contains(out+errOut, "still accepted") {
+		t.Errorf("the message does not say the key is still accepted: %s%s", out, errOut)
+	}
 	if string(h.readConf()) != confBefore || string(h.readRegistry()) != regBefore {
 		t.Errorf("the conf or the registry is not as before")
 	}
@@ -493,7 +502,7 @@ func TestHubUserRevokeRefusesAUserOutsideTheRegionAndUnknownNames(t *testing.T) 
 	}
 }
 
-func TestHubUserRevokeRefusesAUserAlreadyRevokedAndOneThatDriftedOutOfTheConf(t *testing.T) {
+func TestHubUserRevokeRefusesAUserAlreadyRevokedAndRecordsOneAbsentFromTheConf(t *testing.T) {
 	h := newHubScratch(t, hubScratchOpts{})
 	addUser(t, h, "svc", "director")
 	addUser(t, h, "gone", "director")
@@ -513,13 +522,17 @@ func TestHubUserRevokeRefusesAUserAlreadyRevokedAndOneThatDriftedOutOfTheConf(t 
 	if err := os.WriteFile(h.conf, []byte(empty), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	confBefore, regBefore := string(h.readConf()), string(h.readRegistry())
-	code, _, errOut := h.run("user", "revoke", "gone")
-	if code != 1 || !strings.Contains(errOut, "not in the conf") {
-		t.Errorf("revoke of a user missing from the conf: exit = %d, stderr = %q, want 1 and not in the conf", code, errOut)
+	reloadByHand(t, h)
+	confBefore := string(h.readConf())
+	code, out, errOut := h.run("user", "revoke", "gone")
+	if code != 0 || !strings.Contains(out, "absent from the conf; recorded only") {
+		t.Errorf("revoke of a user absent from the conf and refused by the hub: exit = %d, stdout = %q, stderr = %q, want 0 and \"absent from the conf; recorded only\"", code, out, errOut)
 	}
-	if string(h.readConf()) != confBefore || string(h.readRegistry()) != regBefore {
-		t.Errorf("a refused revoke changed the conf or the registry")
+	if string(h.readConf()) != confBefore {
+		t.Errorf("a recorded-only revoke wrote the conf")
+	}
+	if u := registryUser(h, "gone"); u == nil || u["state"] != "revoked" {
+		t.Errorf("registry = %v, want gone recorded as revoked", u)
 	}
 }
 

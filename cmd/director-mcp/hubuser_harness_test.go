@@ -51,19 +51,20 @@ type hubScratchOpts struct {
 }
 
 type hubScratch struct {
-	t          *testing.T
-	home       string
-	conf       string
-	settings   string
-	keys       string
-	pidfile    string
-	logfile    string
-	port       int
-	monPort    int
-	adminSeed  string
-	adminPub   string
-	cmd        *exec.Cmd
-	badMonitor bool
+	envOverride map[string]string // settings the command reads, replacing the defaults
+	t           *testing.T
+	home        string
+	conf        string
+	settings    string
+	keys        string
+	pidfile     string
+	logfile     string
+	port        int
+	monPort     int
+	adminSeed   string
+	adminPub    string
+	cmd         *exec.Cmd
+	badMonitor  bool
 }
 
 // newSeedFile mints a user key into path (0600) and returns its public key.
@@ -313,6 +314,9 @@ func (h *hubScratch) env() func(string) string {
 	}
 	if filepath.Dir(h.adminSeed) != h.keys {
 		m["DIRECTOR_HUB_ADMIN_NKEY"] = h.adminSeed
+	}
+	for k, v := range h.envOverride {
+		m[k] = v
 	}
 	return func(k string) string { return m[k] }
 }
