@@ -458,3 +458,105 @@ func TestSelfReportedAllRowsReadableCountsNoneUnreadable(t *testing.T) {
 		t.Errorf("a cluster whose rows all read is reported with unreadable rows: %v %v", m, r.Warnings)
 	}
 }
+
+// I-467 live fallback: the way a script runs the command. freebusy calls
+// `director-mcp unread --json --global` from the caller's shell, where the
+// session's DIRECTOR_CLUSTER (and the other DIRECTOR_GLOBAL_* variables) are not
+// set: director-session hands them to the MCP server's env, not to the shell. The
+// leaf has no list verbs. These tests go through runUnreadCmd, which main calls,
+// with those variables empty, and set nothing else for the read.
+
+func clearGlobalEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"DIRECTOR_CLUSTER", "DIRECTOR_GLOBAL_DOMAIN", "DIRECTOR_GLOBAL_ROLE", "DIRECTOR_HUB_OBSERVER_URL", "DIRECTOR_HUB_OBSERVER_NKEY", "DIRECTOR_HUB_OBSERVER_CA"} {
+		t.Setenv(k, "")
+	}
+}
+
+func TestUnreadGlobalAsAScriptRunsItFallsBackToPresence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	putHubPresence(t, ctx, adminURL, "other", "other-supervisor", partialInstB, map[string]any{"oldest_pending_s": 900})
+	putHubPresence(t, ctx, adminURL, "mokuzai", "mokuzai-supervisor", partialInstA, map[string]any{"oldest_pending_s": 12})
+	clearGlobalEnv(t)
+
+	var out, errw strings.Builder
+	runUnreadCmd(ctx, leafURL, cliArgs{global: true, json: true}, "global", &out, &errw)
+	var g struct {
+		Error   string           `json:"error"`
+		Reports []map[string]any `json:"reports"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &g); err != nil {
+		t.Fatalf("the output is not JSON: %v: %q", err, out.String())
+	}
+	if g.Error != "" {
+		t.Fatalf("unread --json --global reported an error where the presence fallback can answer: %s", g.Error)
+	}
+	byStream := map[string]map[string]any{}
+	for _, r := range g.Reports {
+		byStream[r["stream"].(string)] = r
+	}
+	for _, c := range []string{"GLOBAL_TO_other", "GLOBAL_TO_mokuzai"} {
+		r, ok := byStream[c]
+		if !ok {
+			t.Errorf("no report for %s (reports: %v)", c, g.Reports)
+			continue
+		}
+		if r["self_reported"] != true {
+			t.Errorf("%s is not marked self-reported though nothing was read from its stream: %v", c, r)
+		}
+	}
+	if seats, _ := byStream["GLOBAL_TO_other"]["self_reported_seats"].([]any); len(seats) != 1 {
+		t.Errorf("GLOBAL_TO_other seats = %v, want other-supervisor with its 900 s age", seats)
+	}
+	if w := strings.Join(strSlice(byStream["GLOBAL_TO_other"]["warnings"]), "\n"); !strings.Contains(w, "DIRECTOR_CLUSTER") {
+		t.Errorf("the report does not say why no stream was read by name (DIRECTOR_CLUSTER unset): %q", w)
+	}
+}
+
+func strSlice(v any) []string {
+	var out []string
+	raw, _ := v.([]any)
+	for _, x := range raw {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func TestUnreadGlobalAsAScriptRunsItPrintsTheFallbackNotAnError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	seedPartialHub(t, ctx, adminURL)
+	clearGlobalEnv(t)
+
+	var out, errw strings.Builder
+	runUnreadCmd(ctx, leafURL, cliArgs{global: true}, "global", &out, &errw)
+	if strings.Contains(out.String(), "global unread not read") {
+		t.Errorf("the text read printed the error where the fallback can answer: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "SELF-REPORTED") {
+		t.Errorf("the text read did not print the self-reported fallback: %q", out.String())
+	}
+}
+
+// With no cluster named and no presence row readable at all, the read still says
+// the credential may not list streams: the fallback does not hide that.
+func TestUnreadGlobalAsAScriptRunsItKeepsTheErrorWhenPresenceIsEmpty(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminURL, leafURL := startLeafLikeServer(t, false)
+	nc, _ := provision(t, ctx, adminURL) // the hub and its buckets, with no seat and no presence row
+	_ = nc
+	clearGlobalEnv(t)
+
+	var out, errw strings.Builder
+	runUnreadCmd(ctx, leafURL, cliArgs{global: true}, "global", &out, &errw)
+	if !strings.Contains(out.String(), "may not list streams") {
+		t.Errorf("with no presence row the read should keep the list-verb error, got %q", out.String())
+	}
+}

@@ -231,9 +231,15 @@ func TestUnreadGlobalPartialNeedsAnOwnCluster(t *testing.T) {
 	seedPartialHub(t, ctx, adminURL)
 	t.Setenv("DIRECTOR_CLUSTER", "")
 
-	_, err := readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
-	if err == nil || !strings.Contains(err.Error(), "may not list streams") {
-		t.Fatalf("err = %v, want the list-verb wording", err)
+	// I-467: with no cluster named there is no stream to read by name, but the
+	// presence fallback needs no cluster: every cluster's seats come back
+	// self-reported, so the read is not the "may not list streams" error.
+	reports, err := readUnreadGlobal(ctx, dialLeaf(t, leafURL), "global", time.Now())
+	if err != nil {
+		t.Fatalf("err = %v, want the presence fallback to answer with no cluster named", err)
+	}
+	if len(reports) != 2 {
+		t.Fatalf("reports = %+v, want one self-reported report per cluster with a presence row", reports)
 	}
 }
 
