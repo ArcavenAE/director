@@ -14,10 +14,19 @@
 #     read while the manifest sets a minimum for it.
 #   - the install hint is the one for the running OS (uname -s: Darwin gives the
 #     macOS hint, Linux the Linux hint).
-#   - exit 1 when a required tool is missing, too old or unreadable against its
-#     minimum; exit 0 otherwise. An optional tool never changes the exit status.
-#   - a present tool with no declared minimum is OK whatever its --version prints
-#     (jq and git carry no minimum, so their real version formats are exercised).
+#   - exit 1 when a required tool is missing, too old, or unreadable (its version
+#     command fails or prints no version); exit 2 when the manifest cannot be read;
+#     exit 0 otherwise. An optional tool never changes the exit status.
+#   - a tool with no declared minimum (jq, git, nats) is OK only when its version
+#     command exits 0; one that exits nonzero is UNREADABLE, whatever it prints. A
+#     file on PATH that answers like a stub (for example git, on a Mac without the
+#     Command Line Tools, prints a notice and exits 1) is not a working tool. This
+#     reverses the earlier contract that read such a tool OK.
+#   - a tool's version command is not time-bounded: the check may call only the
+#     utilities below, none of which can bound a command, so a tool that hangs on
+#     its version command hangs the check.
+#   - an empty field in the manifest keeps its column (a tab is a delimiter, not
+#     whitespace to collapse).
 #   - the check may call only: bash, awk, grep, head, uname, dirname, cat, tr, sort,
 #     sed, printf (and the shell's own command and read). The scratch PATH holds
 #     exactly those and the stub tools; a check that needs another utility fails
@@ -194,7 +203,23 @@ grep -qE "wanted >= 3\.11" <<<"$l" && ok "7  python3 with an unparseable version
 p="$root/p7b"; new_path "$p"; stub "$p" go "no version here"; run "$p"
 grep -qE "^UNREADABLE +go " "$root/out" && [[ "$(rc)" == 0 ]] && ok "7  an optional go with an unparseable version is named and does not fail the run" || bad "7  go unreadable" "rc $(rc): $(cat "$root/out")"
 p="$root/p7c"; new_path "$p"; stub_broken "$p" jq; run "$p"
-grep -qE "^OK +jq" "$root/out" && [[ "$(rc)" == 0 ]] && ok "7  jq, which has no minimum, is OK even when its --version fails" || bad "7  jq broken" "rc $(rc): $(cat "$root/out")"
+l="$(line UNREADABLE jq)"
+[[ -n "$l" ]] && grep -q "(required)" <<<"$l" && grep -q "install: .*brew" <<<"$l" && ok "7  jq, which has no minimum, is UNREADABLE when its version command fails, with its hint" || bad "7  jq broken" "$(cat "$root/out")"
+[[ "$(rc)" == 1 ]] && ok "7  and a required tool with a failing version command exits 1" || bad "7  jq broken exit" "rc $(rc)"
+! grep -qE '^OK +jq' "$root/out" && ok "7  and is not reported OK" || bad "7  jq reported OK" "$(cat "$root/out")"
+
+# 7f: the xcode-select stub: a notice on stderr, exit 1, no version (a Mac without the Command Line Tools)
+p="$root/p7f"; new_path "$p"
+printf '#!/bin/sh
+echo "xcode-select: note: No developer tools were found, requesting install." >&2
+exit 1
+' >"$p/git"; chmod +x "$p/git"; run "$p"
+grep -qE '^UNREADABLE +git ' "$root/out" && ! grep -qE '^OK +git' "$root/out" && ok "7  a git that is the xcode-select stub is UNREADABLE, not OK" || bad "7  xcode stub" "$(cat "$root/out")"
+[[ "$(rc)" == 1 ]] && ok "7  and the run exits 1 because git is required" || bad "7  xcode stub exit" "rc $(rc)"
+
+# 7g: an optional tool with no minimum whose version command fails: named, exit 0
+p="$root/p7g"; new_path "$p"; stub_broken "$p" tmux; run "$p"
+grep -qE '^UNREADABLE +tmux \(optional\)' "$root/out" && [[ "$(rc)" == 0 ]] && ok "7  an optional tool whose version command fails is named UNREADABLE and does not fail the run" || bad "7  tmux broken" "rc $(rc): $(cat "$root/out")"
 
 # 7d: a tool that prints its version on stderr, as some do
 p="$root/p7d"; new_path "$p"; printf '#!/bin/sh\necho "Python 3.12.1" >&2\n' >"$p/python3"; chmod +x "$p/python3"; run "$p"
@@ -226,6 +251,12 @@ grep -qE "^OLD +python3 .*3\.12\.1.*3\.13" "$root/out" && [[ "$(rc)" == 1 ]] && 
 p="$root/p9c"; new_path "$p"; rm -f "$p/jq"
 PF="$(copy_with '$1 != "jq" { print }')"; run "$p"
 [[ -z "$(line MISSING jq)" && "$(rc)" == 0 ]] && grep -q '^OK ' "$root/out" && ok "9  a tool removed from the manifest is no longer checked" || bad "9  jq removed" "rc $(rc): $(cat "$root/out")"
+PF="$real_pf"
+# 9d: an empty field keeps its column: tmux with an empty "needed by" still shows its macOS hint
+p="$root/p9d"; new_path "$p"; rm -f "$p/tmux"
+PF="$(copy_with '$1 == "tmux" { $5 = "" } { print }')"; run "$p"
+l="$(line MISSING tmux)"
+grep -q "install: brew install tmux" <<<"$l" && ok "9  an empty needed-by field does not shift the hint columns" || bad "9  empty field" "$l"
 PF="$real_pf"
 # the minimums the other cases rely on are the manifest's own
 for pair in python3:3.11 nats-server:2.11 go:1.26; do
