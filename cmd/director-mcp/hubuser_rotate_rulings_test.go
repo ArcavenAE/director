@@ -193,11 +193,18 @@ func TestHubUserRotateDirectorLeafKeepsDirectorSubscribe(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Errorf("the rotated leaf-director key did not receive a global.director.inbox publish")
 	}
-	if w.violationFor(t, "$JS.global.API.STREAM.MSG.DELETE.GLOBAL_TO_DIRECTOR") {
-		t.Errorf("the rotated key may not delete from GLOBAL_TO_DIRECTOR")
+	// The scratch hub maps the JetStream domain prefix before it checks a publish, so a
+	// permission on $JS.global.API.* cannot be probed by publishing to it here. The
+	// grant is read from the block the command rendered for the new key instead.
+	conf := string(h.readConf())
+	block, found := entryBlock(conf, seedPub(t, seed))
+	if !found {
+		t.Fatalf("the new key has no block in the conf")
 	}
-	if !w.violationFor(t, "$JS.global.API.STREAM.MSG.DELETE.GLOBAL_TO_other") {
-		t.Errorf("the rotated key may delete from GLOBAL_TO_other, a stream it does not consume")
+	if n := strings.Count(block, "STREAM.MSG.DELETE."); n != 2 ||
+		!strings.Contains(block, `"$JS.global.API.STREAM.MSG.DELETE.GLOBAL_TO_DIRECTOR"`) ||
+		!strings.Contains(block, `"$JS.global.API.STREAM.MSG.DELETE.GLOBAL_TO_probe"`) {
+		t.Errorf("the new key's block must allow message delete on GLOBAL_TO_DIRECTOR and GLOBAL_TO_probe only (found %d MSG.DELETE grants):\n%s", n, block)
 	}
 }
 

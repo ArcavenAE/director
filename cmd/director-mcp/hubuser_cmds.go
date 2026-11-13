@@ -31,13 +31,16 @@ import (
 // --- registry -----------------------------------------------------------------------------------
 
 type hubUser struct {
-	Name      string            `json:"name"`
-	Class     string            `json:"class"`
-	Params    map[string]string `json:"params,omitempty"`
-	PublicKey string            `json:"public_key"`
-	State     string            `json:"state"`    // active or adopted
-	Location  string            `json:"location"` // managed region or outside the region
-	Created   string            `json:"created"`
+	Name       string            `json:"name"`
+	Class      string            `json:"class"`
+	Params     map[string]string `json:"params,omitempty"`
+	PublicKey  string            `json:"public_key"`
+	PendingKey string            `json:"pending_key,omitempty"` // the new key while a rotation is pending
+	State      string            `json:"state"`                 // active, adopted or revoked
+	Location   string            `json:"location"`              // managed region or outside the region
+	Created    string            `json:"created"`
+	Rotated    string            `json:"rotated,omitempty"`
+	Revoked    string            `json:"revoked,omitempty"`
 }
 
 // hubRegistry is users.json. It holds names, classes, parameters and public
@@ -864,6 +867,35 @@ func hubUserAdopt(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "hub: %v\n", err)
 		return 1
 	}
+	// A row adopted and never rotated may be adopted again to change its class or
+	// parameters; that is a record only, as adopt is.
+	if u := reg.findKey(a.positKey); u != nil && u.Name == a.name {
+		switch {
+		case u.PendingKey != "":
+			fmt.Fprintf(stderr, "hub: %s is being rotated, so its class can no longer be changed. Nothing was changed\n", a.name)
+			return 1
+		case u.Rotated != "":
+			fmt.Fprintf(stderr, "hub: %s was rotated, so its class can no longer be changed. Nothing was changed\n", a.name)
+			return 1
+		case u.State != "adopted":
+			fmt.Fprintf(stderr, "hub: %s is not an adopted row (state %s). Nothing was changed\n", a.name, u.State)
+			return 1
+		}
+		diffs := grantDifferences(block, tmpl)
+		if len(diffs) == 0 {
+			fmt.Fprintf(stdout, "no grant difference between the conf block and class %s\n", a.class)
+		}
+		for _, d := range diffs {
+			fmt.Fprintln(stdout, d)
+		}
+		u.Class, u.Params = a.class, a.params
+		if err := saveRegistry(cfg, reg); err != nil {
+			fmt.Fprintf(stderr, "hub: cannot write the registry: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "re-adopted %s as class %s; no conf bytes were changed\n", a.name, a.class)
+		return 0
+	}
 	if reg.find(a.name) != nil {
 		fmt.Fprintf(stderr, "hub: the name %s already exists in the registry. Nothing was changed\n", a.name)
 		return 1
@@ -930,10 +962,18 @@ func hubUserList(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 	}
 	rows := []row{}
 	for _, u := range reg.Users {
-		registered[u.PublicKey] = true
+		if u.State != "revoked" {
+			registered[u.PublicKey] = true
+			if u.PendingKey != "" {
+				registered[u.PendingKey] = true
+			}
+		}
 		r := row{hubUser: u, Connected: "unknown"}
 		rows = append(rows, r)
 		switch {
+		case u.State == "revoked":
+		case u.PendingKey != "" && u.Location == "managed region" && !inRegion[u.PendingKey]:
+			drift = append(drift, fmt.Sprintf("%s: the pending key is in the registry and not in the conf's managed region (not in the conf)", u.Name))
 		case u.Location == "managed region" && !inRegion[u.PublicKey]:
 			drift = append(drift, fmt.Sprintf("%s: in the registry and not in the conf's managed region (not in the conf)", u.Name))
 		case u.Location == "outside the region" && !strings.Contains(string(conf), u.PublicKey):
@@ -946,16 +986,34 @@ func hubUserList(cfg hubCfg, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	sortStrings(drift)
+	orphans := []string{}
+	if m, _ := filepath.Glob(filepath.Join(cfg.keys, "*.next.nk")); m != nil {
+		for _, p := range m {
+			n := strings.TrimSuffix(filepath.Base(p), ".next.nk")
+			if u := reg.find(n); u == nil || u.PendingKey == "" {
+				orphans = append(orphans, filepath.Join("keys", filepath.Base(p)))
+			}
+		}
+		sortStrings(orphans)
+	}
 	if a.asJSON {
 		b, _ := json.Marshal(struct {
-			Users []row    `json:"users"`
-			Drift []string `json:"drift"`
-		}{rows, drift})
+			Users   []row    `json:"users"`
+			Drift   []string `json:"drift"`
+			Orphans []string `json:"orphans"`
+		}{rows, drift, orphans})
 		fmt.Fprintln(stdout, string(b))
 		return 0
 	}
 	for _, r := range rows {
-		fmt.Fprintf(stdout, "%-24s %-10s %-8s %-20s %s\n", r.Name, r.Class, r.State, r.Location, r.PublicKey)
+		state, keys := r.State, r.PublicKey
+		if r.PendingKey != "" {
+			state, keys = "rotating", r.PublicKey+" -> "+r.PendingKey
+		}
+		fmt.Fprintf(stdout, "%-24s %-10s %-8s %-20s %s\n", r.Name, r.Class, state, r.Location, keys)
+	}
+	for _, o := range orphans {
+		fmt.Fprintf(stdout, "NOTE orphan seed %s: no rotation is pending for that user\n", o)
 	}
 	for _, d := range drift {
 		fmt.Fprintf(stdout, "DRIFT %s\n", d)

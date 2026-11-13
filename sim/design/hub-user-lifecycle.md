@@ -81,7 +81,8 @@ command renders them with named parameters only:
 
 | class | parameters | grant source today |
 |---|---|---|
-| `leaf` | `cluster` | the per-cluster leaf blocks in the hub conf template |
+| `leaf` | `cluster` | the per-cluster leaf blocks in the hub conf template, plus `global.*.supervisor.inbox` in publish: supervisors publish to each other's inbox across clusters without the director (global-bus-tier.md 4.1, ruled 2026-09-27) |
+| `leaf-director` | `cluster` | the leaf whose broker also carries the director seat (one per deployment): the `leaf` grants plus `global.director.>` in publish and subscribe and the JetStream API for `GLOBAL_TO_DIRECTOR`, with message delete on that stream only |
 | `director` | none | the "director seat connecting directly" block |
 | `observer` | `holder` (director, majordomo, or a later reader), giving the inbox prefix `_INBOX_observer_<holder>` | the `observer.director` BEGIN/END block |
 | `admin` | none | the provisioning and break-glass user |
