@@ -46,6 +46,7 @@ type hubScratchOpts struct {
 	brokenConf   bool   // the live conf has a syntax error; the server runs from a valid sibling conf
 	adminOutside bool   // the admin seed lives outside keys/, and keys/ does not exist
 	serverEnv    []string
+	jsVar        bool // with noSettings: the conf reads store_dir from $JS_DIR, which the server gets in its environment
 	badMonitor   bool // the command's monitor URL points at a closed port, so /varz cannot be read
 }
 
@@ -134,10 +135,14 @@ func newHubScratch(t *testing.T, o hubScratchOpts) *hubScratch {
 	if o.noRegion {
 		region = ""
 	}
+	storeDir := fmt.Sprintf("%q", filepath.Join(h.home, "js"))
+	if o.jsVar {
+		storeDir = "$JS_DIR"
+	}
 	body := fmt.Sprintf(`%sserver_name: $HUB_NAME
 %slisten: 127.0.0.1:%d
 http: 127.0.0.1:%d
-jetstream { store_dir: %q, domain: global }
+jetstream { store_dir: %s, domain: global }
 accounts {
   FLEET {
     jetstream: enabled
@@ -148,7 +153,7 @@ accounts {
     ]
   }
 }
-`, include, tag, h.port, h.monPort, filepath.Join(h.home, "js"), h.adminPub, o.extraUsers, region)
+`, include, tag, h.port, h.monPort, storeDir, h.adminPub, o.extraUsers, region)
 	if err := os.WriteFile(h.conf, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +179,9 @@ accounts {
 		}
 		if !hasName {
 			env = append(append([]string{}, env...), "HUB_NAME=hub")
+		}
+		if o.jsVar {
+			env = append(append([]string{}, env...), "JS_DIR="+filepath.Join(h.home, "js"))
 		}
 		h.startServer(bin, h.conf, env)
 	} else if o.brokenConf {

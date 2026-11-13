@@ -16,7 +16,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -288,6 +290,68 @@ func TestHubSettingsInitRefusesAServerNameThatDiffersFromTheRunningOne(t *testin
 	}
 	if got := h.serverName(); got != "hub" {
 		t.Errorf("the running server_name = %q, want hub", got)
+	}
+}
+
+func TestHubSettingsInitRollsBackWhenTheServerRefusesTheReload(t *testing.T) {
+	// A refused reload keeps the old config, so "the hub answers and nothing
+	// dropped" is true of it. nats-server refuses a changed jetstream store_dir
+	// ("config reload not supported for jetstream storage directory"), and init
+	// must see that the new conf did not take, restore, and say so.
+	h := newHubScratch(t, hubScratchOpts{noSettings: true, noRegion: true, jsVar: true})
+	confBefore, listing := string(h.readConf()), h.homeListing()
+	code, out, errOut := h.run("settings", "init", "--set", "HUB_NAME=hub", "--set", "JS_DIR="+filepath.Join(h.home, "js2"))
+	msg := out + errOut
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1 (the server refused the reload)\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	if strings.Contains(msg, "ok, the hub was reloaded") {
+		t.Errorf("init reports a reload that the server refused: %q", msg)
+	}
+	if !strings.Contains(msg, "reload") || !strings.Contains(msg, "restored") {
+		t.Errorf("the message does not say the reload did not take and the conf was restored: %q", msg)
+	}
+	if string(h.readConf()) != confBefore {
+		t.Errorf("the conf was not restored byte for byte")
+	}
+	if _, err := os.Stat(h.settings); err == nil {
+		t.Errorf("settings.conf is still there; the next restart would open an empty store")
+	}
+	if got := h.backups(); len(got) != 1 || !strings.Contains(msg, filepath.Base(got[0])) {
+		t.Errorf("the message does not name the one backup: %v\n%s", got, msg)
+	}
+	_ = listing
+}
+
+func TestHubUserAddRefusesAPidFileThatIsNotThisHub(t *testing.T) {
+	// A stale pid file can name any process. The command signals a pid only when
+	// its command line shows nats-server running this conf.
+	h := newHubScratch(t, hubScratchOpts{})
+	other := exec.Command("sleep", "60")
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() { _ = other.Wait(); close(exited) }()
+	t.Cleanup(func() { _ = other.Process.Kill() })
+	if err := os.WriteFile(h.pidfile, []byte(fmt.Sprintf("%d\n", other.Process.Pid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	confBefore, listing := string(h.readConf()), h.homeListing()
+	code, out, errOut := h.run("user", "add", "obs", "--class", "observer", "--param", "holder=director")
+	if code != 1 {
+		t.Errorf("exit = %d, want 1\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	select {
+	case <-exited:
+		t.Errorf("the command signalled an unrelated process named by the pid file")
+	case <-time.After(time.Second):
+	}
+	if !strings.Contains(out+errOut, "nats-server") || !strings.Contains(out+errOut, "pid") {
+		t.Errorf("the message does not say the pid is not this hub's nats-server: %q", out+errOut)
+	}
+	if string(h.readConf()) != confBefore || h.homeListing() != listing || h.readRegistry() != nil {
+		t.Errorf("something changed: the refusal comes before any write")
 	}
 }
 
