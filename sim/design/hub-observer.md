@@ -150,15 +150,21 @@ The script is `2026-11-13-hub-observer-user.sh` beside this file, written for
 - refuses if the user already exists;
 - backs up the conf;
 - mints the seed;
-- inserts the user block;
+- inserts the user block, generated from the template's observer.director block
+  (`probe/nats-global-tier/hub/nats-server.conf`, the one copy of the grant);
 - validates with `nats-server -t`, restoring the backup on failure;
 - reloads by the hub's pid file;
 - checks the log line;
 - runs the positive reads;
 - runs harmless negatives that cannot take mail even if wrongly allowed
-  (MSG.NEXT on a durable that does not exist, an empty CONSUMER.CREATE);
+  (MSG.NEXT on a durable that does not exist, an empty CONSUMER.CREATE), each
+  passing only when the hub logs a permission violation naming that subject;
 - compares each stream's consumer count before and after with the admin key;
-- prints the rollback.
+- prints the rollback, and on any failure after the conf changed ends with a
+  `ROLLBACK:` line carrying the one command that restores the backup and reloads.
+
+`verify-hub-observer-script.sh` runs the script against scratch hubs: the happy path, a
+wrongly allowed negative, and a failure after the reload.
 
 Then the director seat needs the three variables at its next launch. That is a
 launcher change for director's install, also the operator's.

@@ -6,9 +6,18 @@
 # Adds one FLEET user and reloads; no existing user's grant changes, so live
 # leaves stay connected (finding-019 item 4). Issues one NKey seed on this host.
 #
+# The grant is not written here. It is read from the observer.director block of the
+# hub conf template, so the template is the one copy; the script fills in the public
+# key and inserts the block. After the conf is touched, any failure ends with a
+# ROLLBACK line: the one command that restores the backup and reloads.
+#
 # Env: DIRECTOR_GLOBAL_HOME (default ~/.director/nats-global)
 #      HUB_URL (default nats://127.0.0.1:4242; use tls://... if the client port has TLS)
 #      HUB_CA  (CA file, only when the client port has TLS)
+#      OBSERVER_TEMPLATE  the hub conf template (probe/nats-global-tier/hub/nats-server.conf
+#                         in a director checkout). Default: the copy two directories up
+#                         from this script. A script carried to ~/operator-steps has no
+#                         such copy beside it, so set this to the checkout's file.
 set -euo pipefail
 
 H="${DIRECTOR_GLOBAL_HOME:-$HOME/.director/nats-global}"
@@ -22,10 +31,29 @@ tls=()
 if [[ -n "${HUB_CA:-}" ]]; then tls=(--tlsca "$HUB_CA"); fi
 admin=(nats -s "$url" "${tls[@]}" --nkey "$keys/admin.nk")
 obs=(nats -s "$url" "${tls[@]}" --nkey "$seed" --inbox-prefix _INBOX_observer_director)
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+template=""
+for c in "${OBSERVER_TEMPLATE:-}" "$here/../../probe/nats-global-tier/hub/nats-server.conf"; do
+  if [[ -n "$c" && -s "$c" ]]; then template="$c"; break; fi
+done
+stage=start      # start, edited (the conf changed), reloaded
+bak=""
+rollback() {
+  local rc=$?
+  if [[ $rc -ne 0 && ( "$stage" == edited || "$stage" == reloaded ) && -n "$bak" ]]; then
+    echo "FAILED after the hub conf was changed (stage: $stage)." >&2
+    echo "ROLLBACK: cp -p '$bak' '$conf' && nats-server --signal reload=$pid && rm -f '$seed'" >&2
+  fi
+}
+trap rollback EXIT
 
 echo "== 1. preflight"
 for c in nats-server nats nk jq; do command -v "$c" >/dev/null || { echo "missing $c" >&2; exit 1; }; done
 [[ -s "$conf" ]] || { echo "missing $conf" >&2; exit 1; }
+[[ -n "$template" ]] || { echo "no hub conf template found; set OBSERVER_TEMPLATE to probe/nats-global-tier/hub/nats-server.conf in a director checkout" >&2; exit 1; }
+grant="$(awk '/# BEGIN observer.director/{f=1;next} /# END observer.director/{f=0} f{ sub(/^[[:space:]]*# ?/,""); print }' "$template")"
+grep -q 'OBSERVER_DIRECTOR_PUBLIC_KEY' <<<"$grant" || { echo "$template has no observer.director block with its key placeholder" >&2; exit 1; }
+echo "grant read from $template"
 [[ -s "$keys/admin.nk" ]] || { echo "missing admin key" >&2; exit 1; }
 pid="$(cat "$pidf")"
 kill -0 "$pid" || { echo "hub pid $pid not running" >&2; exit 1; }
@@ -36,7 +64,7 @@ n_users="$(grep -c -E '^[[:space:]]*users:[[:space:]]*\[' "$conf" || true)"
 "${admin[@]}" stream ls -n >/dev/null || { echo "admin cannot list streams at $url" >&2; exit 1; }
 
 echo "== 2. consumer counts before"
-before="$(mktemp)"; after="$(mktemp)"
+before="$(mktemp "${TMPDIR:-/tmp}/hub-observer.XXXXXX")"; after="$(mktemp "${TMPDIR:-/tmp}/hub-observer.XXXXXX")"
 for s in $("${admin[@]}" stream ls -n); do
   printf '%s %s\n' "$s" "$("${admin[@]}" stream info "$s" -j | jq -r '.state.consumer_count')"
 done | LC_ALL=C sort >"$before"
@@ -51,38 +79,24 @@ pub="$(nk -inkey "$seed" -pubout)"
 echo "public key: $pub"
 
 echo "== 4. insert the user block"
-block="$(mktemp)"
-cat >"$block" <<BLOCK
-      # observer.director (I-469): read-only observer, director seat only.
-      # Reads every hub stream; takes, sends, acks and deletes nothing.
-      { nkey: $pub
-        permissions {
-          publish {
-            allow: [ "\$JS.API.INFO", "\$JS.API.STREAM.NAMES", "\$JS.API.STREAM.LIST",
-                     "\$JS.API.STREAM.INFO.*", "\$JS.API.CONSUMER.NAMES.*",
-                     "\$JS.API.CONSUMER.LIST.*", "\$JS.API.CONSUMER.INFO.*.*",
-                     "\$JS.API.STREAM.MSG.GET.*", "\$JS.API.DIRECT.GET.*",
-                     "\$JS.API.DIRECT.GET.*.>" ]
-            deny:  [ "\$JS.API.CONSUMER.CREATE.>", "\$JS.API.CONSUMER.DURABLE.CREATE.>",
-                     "\$JS.API.CONSUMER.DELETE.>", "\$JS.API.CONSUMER.MSG.NEXT.>",
-                     "\$JS.API.CONSUMER.PAUSE.>", "\$JS.API.STREAM.MSG.DELETE.>",
-                     "\$JS.API.STREAM.PURGE.>", "\$JS.ACK.>", "global.>", "\$KV.>" ]
-          }
-          subscribe { allow: [ "_INBOX_observer_director.>" ] }
-        } }
-      # observer.majordomo: reserved, not issued (needs an operator ruling).
-      # observer.reserved-2 (a third reader; unnamed here): reserved, not issued (needs an operator ruling).
-BLOCK
-new="$(mktemp)"
+block="$(mktemp "${TMPDIR:-/tmp}/hub-observer.XXXXXX")"
+{
+  echo "      # observer.director (I-469): read-only observer, director seat only."
+  echo "      # Generated from the hub conf template by 2026-11-13-hub-observer-user.sh."
+  sed "s/OBSERVER_DIRECTOR_PUBLIC_KEY/$pub/" <<<"$grant" | sed 's/^/      /'
+} >"$block"
+new="$(mktemp "${TMPDIR:-/tmp}/hub-observer.XXXXXX")"
 awk -v f="$block" '{ print } /^[[:space:]]*users:[[:space:]]*\[/ { while ((getline l < f) > 0) print l }' "$conf" >"$new"
 cp "$new" "$conf"
+stage=edited
 if ! nats-server --config "$conf" -t; then
-  cp -p "$bak" "$conf"; rm -f "$seed"
+  cp -p "$bak" "$conf"; rm -f "$seed"; stage=start
   echo "config test failed; restored $bak and removed the seed" >&2; exit 1
 fi
 
 echo "== 5. reload"
 nats-server --signal "reload=$pid"
+stage=reloaded
 sleep 2
 tail -n 50 "$log" | grep -q 'Reloaded: authorization' || echo "WARN: no 'Reloaded: authorization' line in the last 50 log lines; read the log"
 
@@ -93,7 +107,22 @@ first="$("${obs[@]}" stream ls -n | grep '^GLOBAL_TO_' | head -n 1)"
 "${obs[@]}" stream get "$first" "$("${obs[@]}" stream info "$first" -j | jq -r '.state.first_seq')" >/dev/null && echo "MSG.GET ok on $first"
 
 echo "== 7. negatives (each harmless even if wrongly allowed; each must be refused)"
-neg() { if "${obs[@]}" req --timeout 3s "$1" '' >/dev/null 2>&1; then echo "FAIL: $1 answered (should be denied)"; bad=1; else echo "ok, refused: $1"; fi; }
+# A negative passes only when the hub logs a Publish Violation naming that subject. An answer
+# fails it; silence with no violation (no responders, a timeout, any other error) fails it too,
+# because that is what an allowed request to a missing durable looks like.
+neg() {
+  local subj="$1" n0 out viol
+  n0="$(wc -l <"$log")"
+  out="$("${obs[@]}" req --timeout 3s "$subj" '' 2>&1 || true)"
+  sleep 1
+  if grep -q 'Received with rtt' <<<"$out"; then
+    echo "FAIL: $subj answered (should be denied)"; bad=1
+  elif viol="$(tail -n +"$((n0+1))" "$log" | grep -F 'Publish Violation' || true)"; grep -Fq "Subject \"$subj\"" <<<"$viol"; then
+    echo "ok, refused with a permission violation: $subj"
+  else
+    echo "FAIL: $subj was not answered, but the hub logged no permission violation naming it"; bad=1
+  fi
+}
 bad=0
 neg "\$JS.API.CONSUMER.MSG.NEXT.$first.no-such-durable-observer-check"
 neg "\$JS.API.CONSUMER.CREATE.KV_GLOBAL_PRESENCE"
