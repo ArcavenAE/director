@@ -275,6 +275,95 @@ bad=[k for k,v in env.items() if not re.fullmatch(r'\\$\\{[A-Z_]+\\}', v)]
 assert not bad, bad
 "
 
+# ---- the observer settings in seat.env, and `director env` ---------------
+# (I-476) Three optional keys give the hub observer a home: a URL, a path to the seed
+# (never the seed) and a path to a CA file. Paths must be absolute. Unset keys are
+# not exported, so a seat file without them changes nothing.
+cat >"$home/.director/seat.env" <<SEAT
+DIRECTOR_AGENT_ID=fake-director
+DIRECTOR_CLUSTER=fake-cluster
+DIRECTOR_TEAM=fake-team
+DIRECTOR_WORKSPACE=fake-ws
+DIRECTOR_HUB_OBSERVER_URL=tls://hub.example.invalid:4222
+DIRECTOR_HUB_OBSERVER_NKEY=/scratch/observer.nk
+DIRECTOR_HUB_OBSERVER_CA=/scratch/hub-ca.pem
+SEAT
+rm -f "$root/out"
+if run_start start >"$root/stdout" 2>&1; then ok "a seat file with the three observer keys starts"; else bad "a seat file with the three observer keys starts" "$(cat "$root/stdout")"; fi
+check "the observer URL reaches claude" grep -qx 'DIRECTOR_HUB_OBSERVER_URL=tls://hub.example.invalid:4222' "$root/out"
+check "the observer key path reaches claude" grep -qx 'DIRECTOR_HUB_OBSERVER_NKEY=/scratch/observer.nk' "$root/out"
+check "the observer CA path reaches claude" grep -qx 'DIRECTOR_HUB_OBSERVER_CA=/scratch/hub-ca.pem' "$root/out"
+cat >"$home/.director/seat.env" <<SEAT
+DIRECTOR_AGENT_ID=fake-director
+DIRECTOR_TEAM=fake-team
+DIRECTOR_WORKSPACE=fake-ws
+SEAT
+rm -f "$root/out"
+run_start start >"$root/stdout" 2>&1 || true
+check "unset observer keys are not exported" bash -c "! grep -q 'DIRECTOR_HUB_OBSERVER' '$root/out'"
+for k in DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA; do
+  cat >"$home/.director/seat.env" <<SEAT
+DIRECTOR_AGENT_ID=fake-director
+DIRECTOR_TEAM=fake-team
+DIRECTOR_WORKSPACE=fake-ws
+$k=relative/path.nk
+SEAT
+  rm -f "$root/out"
+  rc=0; run_start start >"$root/stdout" 2>&1 || rc=$?
+  if [[ "$rc" == 3 ]] && grep -q "$k" "$root/stdout" && grep -qi 'absolute' "$root/stdout" && [[ ! -e "$root/out" ]]; then
+    ok "a relative path for $k stops the launcher with exit 3 and says absolute"
+  else bad "a relative path for $k stops the launcher" "rc=$rc $(cat "$root/stdout")"; fi
+done
+
+# A value with a space is refused by both readers (freebusy splits `director env` output on whitespace and
+# depends on this), so a path such as "Application Support" cannot be configured.
+for k in DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA; do
+  printf '%s\n' 'DIRECTOR_AGENT_ID=fake-director' 'DIRECTOR_TEAM=fake-team' 'DIRECTOR_WORKSPACE=fake-ws' "$k=/with space/x" >"$home/.director/seat.env"
+  rm -f "$root/out"
+  rc=0; run_start start >"$root/stdout" 2>&1 || rc=$?
+  if [[ "$rc" == 3 ]] && grep -q 'line 4' "$root/stdout" && [[ ! -e "$root/out" ]]; then
+    ok "a value with a space for $k stops start with exit 3 naming the line"
+  else bad "a space in $k stops start" "rc=$rc $(cat "$root/stdout")"; fi
+  rc=0; "$here/scripts/director" env --seat-file "$home/.director/seat.env" >"$root/stdout" 2>&1 || rc=$?
+  if [[ "$rc" == 3 ]] && grep -q 'line 4' "$root/stdout"; then
+    ok "and director env refuses it with exit 3 naming the line"
+  else bad "director env refuses a space in $k" "rc=$rc $(cat "$root/stdout")"; fi
+done
+
+# `director env` prints the validated lines that are set, with the same parser.
+cat >"$home/.director/seat.env" <<SEAT
+# a comment
+DIRECTOR_AGENT_ID=fake-director
+DIRECTOR_CLUSTER=fake-cluster
+
+DIRECTOR_HUB_OBSERVER_URL=tls://hub.example.invalid:4222
+DIRECTOR_HUB_OBSERVER_NKEY=/scratch/observer.nk
+SEAT
+rm -f "$root/out"
+rc=0; run_start env >"$root/env.out" 2>"$root/env.err" || rc=$?
+want="$(printf '%s\n' DIRECTOR_AGENT_ID=fake-director DIRECTOR_CLUSTER=fake-cluster DIRECTOR_HUB_OBSERVER_URL=tls://hub.example.invalid:4222 DIRECTOR_HUB_OBSERVER_NKEY=/scratch/observer.nk | LC_ALL=C sort)"
+if [[ "$rc" == 0 && "$(LC_ALL=C sort "$root/env.out")" == "$want" && ! -e "$root/out" ]]; then ok "director env prints exactly the set lines, and starts no claude"; else bad "director env prints the set lines" "rc=$rc $(cat "$root/env.out" "$root/env.err")"; fi
+rc=0; run_start env --seat-file "$root/no-such-seat.env" >"$root/env.out" 2>&1 || rc=$?
+if [[ "$rc" == 0 && ! -s "$root/env.out" ]]; then ok "director env with no seat file prints nothing and exits 0"; else bad "director env with no seat file" "rc=$rc $(cat "$root/env.out")"; fi
+printf '%s\n' 'DIRECTOR_AGENT_ID=fake-director' 'LD_PRELOAD=/nowhere' >"$root/bad-seat.env"
+rc=0; run_start env --seat-file "$root/bad-seat.env" >"$root/env.out" 2>"$root/env.err" || rc=$?
+if [[ "$rc" == 3 && ! -s "$root/env.out" ]] && grep -q "bad-seat.env line 2" "$root/env.err"; then ok "director env with a bad line exits 3, prints nothing and names the file and line"; else bad "director env with a bad line" "rc=$rc out=$(cat "$root/env.out") err=$(cat "$root/env.err")"; fi
+printf '%s\n' 'DIRECTOR_HUB_OBSERVER_NKEY=relative.nk' >"$root/rel-seat.env"
+rc=0; run_start env --seat-file "$root/rel-seat.env" >"$root/env.out" 2>&1 || rc=$?
+[[ "$rc" == 3 ]] && ok "director env refuses a relative observer path the way start does" || bad "director env relative path" "rc=$rc $(cat "$root/env.out")"
+
+# Installed as a link in a bin directory, the launcher still finds the repo's config.
+# Two links in a chain, so only a loop over readlink finds the repo (a single readlink stops one short).
+mkdir -p "$root/linkbin" "$root/otherbin"; ln -s "$start" "$root/otherbin/director"; ln -s "$root/otherbin/director" "$root/linkbin/director"
+cat >"$home/.director/seat.env" <<SEAT
+DIRECTOR_AGENT_ID=fake-director
+DIRECTOR_TEAM=fake-team
+DIRECTOR_WORKSPACE=fake-ws
+SEAT
+rm -f "$root/out"
+env -i HOME="$home" PATH="$PATH" LANG="${LANG:-C}" TMPDIR="$root" CLAUDE_BIN="$root/claude-stub" STUB_OUT="$root/out" "$root/linkbin/director" start >"$root/stdout" 2>&1 || true
+check "started through a chain of two links, the launcher hands claude the repo's config" grep -q -- "\[--mcp-config\] \[$cfg\]" "$root/out"
+
 # ---- the operator script ------------------------------------------------
 
 scratch="$root/claude.json"

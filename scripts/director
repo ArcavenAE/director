@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]
+# director env [--seat-file <path>]
 #
 # Starts a Claude Code session as the director, on purpose. The director MCP
 # server comes from config/director-mcp.json in this repo, handed to claude with
@@ -16,20 +17,40 @@
 #   restart       director start --resume director
 #   other cluster director start --cluster <name>
 #
+# The same file also carries three optional settings for the hub observer, which lets a
+# plain shell read hub mail with no `director start` session: DIRECTOR_HUB_OBSERVER_URL,
+# DIRECTOR_HUB_OBSERVER_NKEY (the absolute path of the seed file, never the seed) and
+# DIRECTOR_HUB_OBSERVER_CA (an absolute path). With the URL unset the observer is off.
+# `director env` prints the validated KEY=value lines that are set, from the same reader
+# as `start`, and starts nothing; it reads no config, so it works from a copy of this
+# file with no repo beside it. Exit 3 on a line that is not allowed, naming file and line.
+#
 # director prove, run inside a session this launcher started, checks that the
 # director MCP server is up under that session with the launch id, and writes the
 # proof the operator step needs before it removes the old project-local entry.
 #
 # Exit: 0 claude ran and exited 0 (the exit status of claude is passed through),
-# 2 usage, 3 STOP (a required value is missing, or the seat file is not valid).
+# 2 usage, 3 STOP (a required value is missing, the seat file is not valid, or the repo's
+# config is not beside this file).
 set -euo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Where this file really is: installed as a link in $DIRECTOR_HOME/bin, the repo is
+# beside the link's target. A readlink loop, since the macOS system bash has no
+# readlink -f. A copy has no repo beside it, which `start` reports and `env` does not need.
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  d="$(cd "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ "$src" == /* ]] || src="$d/$src"
+done
+here="$(cd "$(dirname "$src")/.." && pwd)"
 config="$here/config/director-mcp.json"
-keys=(DIRECTOR_AGENT_ID DIRECTOR_CLUSTER DIRECTOR_GLOBAL_DOMAIN DIRECTOR_GLOBAL_ROLE DIRECTOR_TEAM DIRECTOR_WORKSPACE NATS_URL)
+keys=(DIRECTOR_AGENT_ID DIRECTOR_CLUSTER DIRECTOR_GLOBAL_DOMAIN DIRECTOR_GLOBAL_ROLE DIRECTOR_TEAM DIRECTOR_WORKSPACE NATS_URL DIRECTOR_HUB_OBSERVER_URL DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA)
 required=(DIRECTOR_AGENT_ID DIRECTOR_TEAM DIRECTOR_WORKSPACE)
+absolute_paths=(DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA)
+observer_keys=(DIRECTOR_HUB_OBSERVER_URL DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA)
 
-usage() { printf 'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director prove\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)\n' >&2; exit 2; }
+usage() { printf 'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director env [--seat-file <path>]\n       director prove\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)\n' >&2; exit 2; }
 stop() { printf 'STOP: %s\n' "$*" >&2; exit 3; }
 
 dhome="${DIRECTOR_HOME:-$HOME/.director}"
@@ -75,8 +96,47 @@ prove() {
   printf 'PASS the director MCP server (pid %s) is up under this launcher-started session; proof written\n' "$ok"
 }
 
+allowed() { local k; for k in "${keys[@]}"; do [[ "$k" == "$1" ]] && return 0; done; return 1; }
+is_absolute_path_key() { local k; for k in "${absolute_paths[@]}"; do [[ "$k" == "$1" ]] && return 0; done; return 1; }
+
+# values live in V_<KEY> variables, since the macOS system bash has no associative arrays
+get() { local n="V_$1"; printf %s "${!n:-}"; }
+put() { printf -v "V_$1" %s "$2"; }
+# The one reader of the seat file, shared by `start` and `env`: only allowed KEY=value lines,
+# nothing executed, and an observer path must be absolute.
+read_seat_file() { # $1 = path
+  local seat_file="$1" k n line
+  for k in "${keys[@]}"; do unset "V_$k"; done  # nothing the caller exported is identity
+  [[ -f "$seat_file" ]] || return 0
+  n=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n+1))
+    [[ -z "${line//[[:space:]]/}" || "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" =~ ^([A-Z_]+)=([A-Za-z0-9._:/@+-]*)$ ]] && allowed "${BASH_REMATCH[1]}"; then
+      if is_absolute_path_key "${BASH_REMATCH[1]}" && [[ -n "${BASH_REMATCH[2]}" && "${BASH_REMATCH[2]}" != /* ]]; then
+        stop "$seat_file line $n: ${BASH_REMATCH[1]} must be an absolute path; nothing was run"
+      fi
+      put "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    else
+      stop "$seat_file line $n is not an allowed KEY=value line (keys: ${keys[*]}); nothing was run"
+    fi
+  done <"$seat_file"
+}
+
 case "${1:-}" in
   prove) prove; exit 0 ;;
+  env)
+    shift
+    seat_file="${DIRECTOR_HOME:-$HOME/.director}/seat.env"
+    while (($#)); do
+      case "$1" in
+        --seat-file) [[ $# -ge 2 ]] || usage; seat_file="$2"; shift 2 ;;
+        *) usage ;;
+      esac
+    done
+    read_seat_file "$seat_file"
+    for k in "${keys[@]}"; do [[ -z "$(get "$k")" ]] || printf '%s=%s\n' "$k" "$(get "$k")"; done
+    exit 0 ;;
   hub)
     shift
     [[ -x "$dhome/bin/director-mcp" ]] || stop "no installed director-mcp at $dhome/bin/director-mcp; run director-install first"
@@ -95,24 +155,10 @@ while (($#)); do
   esac
 done
 
-allowed() { local k; for k in "${keys[@]}"; do [[ "$k" == "$1" ]] && return 0; done; return 1; }
+# A copy of this file with no repo beside it can read a seat file but cannot start a session.
+[[ -f "$config" ]] || stop "no director MCP config at $config: this copy has no repo beside it; run director start from the repo's scripts/director or a link to it"
 
-for k in "${keys[@]}"; do unset "V_$k"; done  # nothing the caller exported is identity
-# values live in V_<KEY> variables, since the macOS system bash has no associative arrays
-get() { local n="V_$1"; printf %s "${!n:-}"; }
-put() { printf -v "V_$1" %s "$2"; }
-if [[ -f "$seat_file" ]]; then
-  n=0
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    n=$((n+1))
-    [[ -z "${line//[[:space:]]/}" || "$line" =~ ^[[:space:]]*# ]] && continue
-    if [[ "$line" =~ ^([A-Z_]+)=([A-Za-z0-9._:/@+-]*)$ ]] && allowed "${BASH_REMATCH[1]}"; then
-      put "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
-    else
-      stop "$seat_file line $n is not an allowed KEY=value line (keys: ${keys[*]}); nothing was run"
-    fi
-  done <"$seat_file"
-fi
+read_seat_file "$seat_file"
 
 if [[ -n "$cluster_flag" ]]; then put DIRECTOR_CLUSTER "$cluster_flag"; fi
 if [[ -z "$(get NATS_URL)" ]]; then put NATS_URL nats://127.0.0.1:4222; fi
@@ -123,7 +169,11 @@ if ((${#missing[@]})); then
   stop "missing ${missing[*]}; put them in $seat_file as KEY=value lines or pass them by flag (--cluster covers DIRECTOR_CLUSTER only)"
 fi
 
-for k in "${keys[@]}"; do export "$k=$(get "$k")"; done
+for k in "${keys[@]}"; do
+  # the observer settings are optional: an unset one is not exported at all
+  if [[ " ${observer_keys[*]} " == *" $k "* && -z "$(get "$k")" ]]; then continue; fi
+  export "$k=$(get "$k")"
+done
 
 export DIRECTOR_MCP_SEAT="$dhome/bin/director-mcp-seat"
 id="$(date +%s)-$$"

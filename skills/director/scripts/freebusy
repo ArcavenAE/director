@@ -433,6 +433,28 @@ if [[ -z "$mcp" ]]; then
   else mcp="${DIRECTOR_HOME:-$HOME/.director}/bin/director-mcp"
   fi
 fi
+# The operator's seat.env is the home for the cluster name and the hub observer settings (I-476), so a run from a
+# plain shell or a scheduler reads the same mail a director session does. Only these four keys, only where the
+# caller's own environment lacks them (the caller wins), and only from the installed `director env`, which
+# validates the file. Nothing is derived: with no value in either place the unset GAP below stands unchanged. No
+# installed director is not a failed read; one that cannot read the file is a GAP, and the run continues.
+dirbin="${DIRECTOR_HOME:-$HOME/.director}/bin/director"
+if [[ -x "$dirbin" ]]; then
+  seatenv_file="${DIRECTOR_HOME:-$HOME/.director}/seat.env"
+  if seatenv_out="$("$dirbin" env </dev/null 2>"$tmp/seatenv.err")"; then
+    # director env prints KEY=value lines whose values hold no space, so plain word splitting reads them
+    # (no here-string, which the macOS system bash writes to a temp file)
+    for kv in $seatenv_out; do
+      k="${kv%%=*}"; v="${kv#*=}"
+      case "$k" in
+        DIRECTOR_CLUSTER|DIRECTOR_HUB_OBSERVER_URL|DIRECTOR_HUB_OBSERVER_NKEY|DIRECTOR_HUB_OBSERVER_CA)
+          if [[ -z "${!k:-}" ]]; then export "$k=$v"; fi ;;
+      esac
+    done
+  else
+    gap "mail: director env could not read $seatenv_file ($(head -n 1 "$tmp/seatenv.err" 2>/dev/null | LC_ALL=C tr -d '\000-\037')), so none of its values were used"
+  fi
+fi
 if [[ ! -x "$mcp" ]]; then
   gap "asks: director-mcp not found at $mcp"
 else

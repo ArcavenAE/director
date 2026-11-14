@@ -80,6 +80,10 @@ run -- --check
 run --
 [[ $rc -eq 1 && "$out" == *"already exists"* ]] || miss "I1 no flags over an existing profile needs --yes: rc=$rc out=$out"
 
+# (I-476) A fresh-home init writes no seat.env value: the file is absent or holds no KEY= line.
+seatenv="$home/.director/seat.env"
+if [[ -e "$seatenv" ]] && grep -qE '^[[:space:]]*[A-Z_]+=' "$seatenv"; then miss "I1b init wrote a seat.env value: $(cat "$seatenv")"; fi
+
 # ---- I2: detection through the stubs; sideshow is printed, never written ----
 fresh; stub_marvel; stub_sideshow
 run -- --entry-role supervisor

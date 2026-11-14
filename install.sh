@@ -117,6 +117,9 @@ install_one "$SRC/skills/director/scripts/director-init" "$DIRECTOR_HOME/bin/dir
 install_one "$SRC/skills/director/scripts/route-ledger" "$DIRECTOR_HOME/bin/route-ledger"
 # schedule-ack: the sweep line for a scheduled firing with no acked result (H-6); the skill names it by its bin-home path.
 install_one "$SRC/skills/director/scripts/schedule-ack" "$DIRECTOR_HOME/bin/schedule-ack"
+# director: the seat launcher's reader of seat.env. `director env` prints the validated lines and works from a
+# --copy install; `director start` and `director prove` need the repo beside it (a link finds it).
+install_one "$SRC/scripts/director" "$DIRECTOR_HOME/bin/director"
 # The component installer. After this, a host upgrades the launcher from a
 # commit with no checkout: director-install cast-launch --ref origin/main
 install_one "$SRC/scripts/director-install/director-install" "$DIRECTOR_HOME/bin/director-install"

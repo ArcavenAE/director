@@ -285,6 +285,16 @@ other allowed keys are `DIRECTOR_CLUSTER` (`--cluster <name>` overrides it),
 `DIRECTOR_GLOBAL_DOMAIN` (empty keeps the global tier off), `DIRECTOR_GLOBAL_ROLE`,
 and `NATS_URL` (default `nats://127.0.0.1:4222`). Any other key is refused.
 
+Three optional keys give the hub observer a home, so a plain shell or a scheduler
+can read hub mail without a `director start` session: `DIRECTOR_HUB_OBSERVER_URL`,
+`DIRECTOR_HUB_OBSERVER_NKEY` (the absolute path of the seed file, never the seed) and
+`DIRECTOR_HUB_OBSERVER_CA` (an absolute path). The observer is off while the URL is
+unset, and install and `director init` write no value for any key. `director env`
+prints the validated lines that are set, from the same reader as `start`, and
+`freebusy` uses it to fill `DIRECTOR_CLUSTER` and these three keys when its own
+environment lacks them. It never derives a cluster name. `director-mcp` does not
+read the file.
+
 The launcher also sets `DIRECTOR_ROLE_MARK` to its own pid before it execs
 claude. Do not put it in the seat file: the shim holds the director identity
 only when the mark equals its parent pid, so a plain `claude` in a folder whose
