@@ -156,7 +156,7 @@ but the director routes through the director or does not exist.
 | tier | principal | publish allow | subscribe allow |
 |---|---|---|---|
 | global (hub) | director (`director` user, or `leaf-kinu` while the seat rides the kinu leaf) | `global.*.supervisor.inbox`, `global.director.>`; JetStream API for `GLOBAL_TO_DIRECTOR` and `KV_GLOBAL_PRESENCE` only, message delete by sequence on `GLOBAL_TO_DIRECTOR`; `$JS.ACK.>` | `global.director.>`, `_INBOX.>` |
-| global (hub) | `leaf-<cluster>` (one per cluster, held by the broker process) | `global.director.inbox`, `global.<cluster>.>`; JetStream API for `GLOBAL_TO_<cluster>` and `KV_GLOBAL_PRESENCE` only, message delete by sequence on `GLOBAL_TO_<cluster>`; `$JS.ACK.>` | `global.<cluster>.>`, `_INBOX.>` |
+| global (hub) | `leaf-<cluster>` (one per cluster, held by the broker process) | `global.director.inbox`, `global.*.supervisor.inbox`, `global.<cluster>.>`; JetStream API for `GLOBAL_TO_<cluster>` and `KV_GLOBAL_PRESENCE` only, message delete by sequence on `GLOBAL_TO_<cluster>`; `$JS.ACK.>` | `global.<cluster>.>`, `_INBOX.>` |
 | global (hub) | any worker | nothing; workers hold no global address | nothing |
 | local (director#4 block) | team credential (`ops`, per session once R-85 mints) | `agent.<workspace>.<team>.>`, `agent.audit`, JetStream and KV plumbing (unchanged) | `agent.<workspace>.<team>.>`, `agent.<workspace>.broadcast`, KV, `_INBOX.>` (unchanged) |
 | local | supervisor credential (the team grants plus the global prefix; the only local principal that may reach the hub) | team grants plus `global.director.inbox`, `$JS.<domain>.API.>` narrowed to its own stream and the presence bucket, `$JS.ACK.>` | team grants plus `global.<cluster>.>` |

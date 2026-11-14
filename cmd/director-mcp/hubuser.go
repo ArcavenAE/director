@@ -53,6 +53,8 @@ func hubClasses() fs.FS {
 const hubUsage = `usage: director hub user add NAME --class CLASS [--param k=v]... [--public-key U...]
        director hub user list [--json]
        director hub user adopt PUBLIC_KEY --name NAME --class CLASS [--param k=v]...
+       director hub user rotate [--finish] NAME [--public-key U]
+       director hub user revoke NAME
        director hub settings check
        director hub settings init [--set NAME=VALUE]... [--env NAME[=VALUE]]...
          (--env names a variable the hub's launcher supplies; it stays out of settings.conf)`
@@ -132,6 +134,10 @@ func runHubCmd(args []string, getenv func(string) string, stdout, stderr io.Writ
 			return hubUserList(cfg, args[2:], stdout, stderr)
 		case "adopt":
 			return hubUserAdopt(cfg, args[2:], stdout, stderr)
+		case "rotate":
+			return hubUserRotate(cfg, args[2:], stdout, stderr)
+		case "revoke":
+			return hubUserRevoke(cfg, args[2:], stdout, stderr)
 		}
 		return usage(fmt.Sprintf("unknown user verb %q", args[1]))
 	case "settings":

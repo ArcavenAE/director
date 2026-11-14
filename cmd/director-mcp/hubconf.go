@@ -5,8 +5,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -303,7 +305,7 @@ func classTemplate(class string) (text string, params []string, err error) {
 	paramsOf := func(text string) map[string]bool {
 		seen := map[string]bool{}
 		for _, m := range placeholderRe.FindAllStringSubmatch(text, -1) {
-			if m[1] != "key" {
+			if m[1] != "key" && m[1] != "domain" {
 				seen[m[1]] = true
 			}
 		}
@@ -337,7 +339,7 @@ func classNames() []string {
 
 // renderClass fills a class template with the key and the named parameters.
 // Every parameter the template names must be given and no other is accepted.
-func renderClass(class, key string, params map[string]string) (string, error) {
+func renderClass(class, key string, params map[string]string, domain string) (string, error) {
 	text, want, err := classTemplate(class)
 	if err != nil {
 		return "", err
@@ -356,6 +358,15 @@ func renderClass(class, key string, params map[string]string) (string, error) {
 		}
 	}
 	text = strings.ReplaceAll(text, "{{key}}", key)
+	// The JetStream domain is the running hub's, never a parameter: a wrong one renders
+	// grants that silently allow nothing.
+	if strings.Contains(text, "{{domain}}") {
+		if domain == "" {
+			return "", fmt.Errorf("class %s names the JetStream domain and none was given", class)
+		}
+		text = strings.ReplaceAll(text, "{{domain}}", domain)
+	}
+	text = stripHeaderComments(text)
 	for k, v := range params {
 		text = strings.ReplaceAll(text, "{{"+k+"}}", v)
 	}
@@ -363,6 +374,52 @@ func renderClass(class, key string, params map[string]string) (string, error) {
 		return "", fmt.Errorf("class %s: the template has a placeholder {{%s}} that no parameter fills", class, m[1])
 	}
 	return text, nil
+}
+
+// classUsesDomain reports whether a class's grants name the JetStream domain.
+func classUsesDomain(class string) bool {
+	text, _, err := classTemplate(class)
+	return err == nil && strings.Contains(text, "{{domain}}")
+}
+
+// hubDomain reads the JetStream domain from the running hub's /varz
+// (jetstream.config.domain, measured on nats-server v2.14.6). It is an error when
+// the monitor cannot be read or the hub has no domain.
+func hubDomain(cfg hubCfg) (string, error) {
+	c := http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get(strings.TrimRight(cfg.monitorURL, "/") + "/varz")
+	if err != nil {
+		return "", fmt.Errorf("cannot read the hub's JetStream domain from %s/varz: %v", strings.TrimRight(cfg.monitorURL, "/"), err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("cannot read the hub's JetStream domain: /varz answered %s", resp.Status)
+	}
+	var v struct {
+		JetStream struct {
+			Config struct {
+				Domain string `json:"domain"`
+			} `json:"config"`
+		} `json:"jetstream"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return "", fmt.Errorf("cannot read the hub's JetStream domain: %v", err)
+	}
+	if v.JetStream.Config.Domain == "" {
+		return "", fmt.Errorf("the hub has no JetStream domain (jetstream.config.domain in /varz is empty)")
+	}
+	return v.JetStream.Config.Domain, nil
+}
+
+// stripHeaderComments drops the template's leading comment lines, which document
+// the template and do not belong in every rendered entry.
+func stripHeaderComments(t string) string {
+	lines := strings.Split(t, "\n")
+	i := 0
+	for i < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i]), "#") {
+		i++
+	}
+	return strings.Join(lines[i:], "\n")
 }
 
 // indentBlock indents each non-empty line by six spaces, the depth of an entry

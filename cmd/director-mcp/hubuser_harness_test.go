@@ -46,24 +46,28 @@ type hubScratchOpts struct {
 	brokenConf   bool   // the live conf has a syntax error; the server runs from a valid sibling conf
 	adminOutside bool   // the admin seed lives outside keys/, and keys/ does not exist
 	serverEnv    []string
-	jsVar        bool // with noSettings: the conf reads store_dir from $JS_DIR, which the server gets in its environment
-	badMonitor   bool // the command's monitor URL points at a closed port, so /varz cannot be read
+	jsVar        bool   // with noSettings: the conf reads store_dir from $JS_DIR, which the server gets in its environment
+	badMonitor   bool   // the command's monitor URL points at a closed port, so /varz cannot be read
+	leafListen   bool   // the hub also accepts leafnode connections, on h.leafPort
+	jsDomain     string // the hub's JetStream domain; empty is "global", "-" is none
 }
 
 type hubScratch struct {
-	t          *testing.T
-	home       string
-	conf       string
-	settings   string
-	keys       string
-	pidfile    string
-	logfile    string
-	port       int
-	monPort    int
-	adminSeed  string
-	adminPub   string
-	cmd        *exec.Cmd
-	badMonitor bool
+	envOverride map[string]string // settings the command reads, replacing the defaults
+	t           *testing.T
+	home        string
+	conf        string
+	settings    string
+	keys        string
+	pidfile     string
+	logfile     string
+	port        int
+	monPort     int
+	adminSeed   string
+	adminPub    string
+	cmd         *exec.Cmd
+	badMonitor  bool
+	leafPort    int
 }
 
 // newSeedFile mints a user key into path (0600) and returns its public key.
@@ -135,6 +139,19 @@ func newHubScratch(t *testing.T, o hubScratchOpts) *hubScratch {
 	if o.noRegion {
 		region = ""
 	}
+	domainClause := ", domain: global"
+	switch o.jsDomain {
+	case "":
+	case "-":
+		domainClause = ""
+	default:
+		domainClause = ", domain: " + o.jsDomain
+	}
+	leafLine := ""
+	if o.leafListen {
+		h.leafPort = freePort(t)
+		leafLine = fmt.Sprintf("leafnodes { listen: 127.0.0.1:%d }\n", h.leafPort)
+	}
 	storeDir := fmt.Sprintf("%q", filepath.Join(h.home, "js"))
 	if o.jsVar {
 		storeDir = "$JS_DIR"
@@ -142,8 +159,8 @@ func newHubScratch(t *testing.T, o hubScratchOpts) *hubScratch {
 	body := fmt.Sprintf(`%sserver_name: $HUB_NAME
 %slisten: 127.0.0.1:%d
 http: 127.0.0.1:%d
-jetstream { store_dir: %s, domain: global }
-accounts {
+jetstream { store_dir: %s%s }
+%saccounts {
   FLEET {
     jetstream: enabled
     users: [
@@ -153,7 +170,7 @@ accounts {
     ]
   }
 }
-`, include, tag, h.port, h.monPort, storeDir, h.adminPub, o.extraUsers, region)
+`, include, tag, h.port, h.monPort, storeDir, domainClause, leafLine, h.adminPub, o.extraUsers, region)
 	if err := os.WriteFile(h.conf, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -313,6 +330,9 @@ func (h *hubScratch) env() func(string) string {
 	}
 	if filepath.Dir(h.adminSeed) != h.keys {
 		m["DIRECTOR_HUB_ADMIN_NKEY"] = h.adminSeed
+	}
+	for k, v := range h.envOverride {
+		m[k] = v
 	}
 	return func(k string) string { return m[k] }
 }
