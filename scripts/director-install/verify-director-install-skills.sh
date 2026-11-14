@@ -113,6 +113,13 @@ else
   bad "default ref" "$(cat "$out/stderr") $(link_target)"
 fi
 
+# --- 4b. reinstalling B over B keeps A as the previous install -------------------
+if [[ "$(cat "$home/lib/skills/.previous" 2>/dev/null)" == "$A" ]]; then
+  ok "reinstalling the installed sha keeps lib/skills/.previous at A"
+else
+  bad "reinstalling B over B changed lib/skills/.previous" "$(cat "$home/lib/skills/.previous" 2>/dev/null || echo missing)"
+fi
+
 # --- 5. the switch leaves nothing temporary behind -----------------------------
 leftover="$(find "$home" -maxdepth 3 \( -name '.stage.*' -o -name '*.new.*' -o -name '.skills-current.new*' \) | grep -v '^$' || true)"
 [[ -L "$home/skills-current" && -z "$leftover" ]] && ok "the atomic switch and the install leave no temporary file behind" \
@@ -129,6 +136,10 @@ fi
 # --- 7. a commit whose check fails changes nothing ------------------------------
 di skills --ref "$A" >/dev/null 2>&1 || true
 before="$(link_target)"
+# Everything under the home except the mirror, so a refused install that stages under
+# another name (lib/skills/.tmp.X, $DIRECTOR_HOME/tmp) and leaves it is seen.
+home_listing() { [[ -d "$home" ]] || return 0; (cd "$home" && find . -path ./src -prune -o -print | LC_ALL=C sort); }
+home_listing > "$out/listing.before"
 if di skills --ref bad; then
   bad "a commit that lacks the stansfield skill was installed"
 else
@@ -140,6 +151,12 @@ else
   [[ -d "$home/lib/skills/$A" && ! -e "$home/lib/skills/$R" ]] \
     && ok "a commit whose check fails leaves no version directory" \
     || bad "failed check left $home/lib/skills/$R"
+  home_listing > "$out/listing.after"
+  if [[ -s "$out/listing.before" ]] && cmp -s "$out/listing.before" "$out/listing.after"; then
+    ok "a refused install leaves \$DIRECTOR_HOME (outside src/) exactly as it was"
+  else
+    bad "a refused install changed \$DIRECTOR_HOME" "$(diff "$out/listing.before" "$out/listing.after" | head -5)"
+  fi
   if [[ -d "$home/lib/skills" ]] && ! ls -A "$home/lib/skills" | grep -q '^\.stage'; then
     ok "a commit whose check fails leaves no stage directory"
   else
@@ -183,7 +200,7 @@ fi
 
 # --- 11. rollback with nothing to roll back to ----------------------------------
 h2="$root/home2"
-if env DIRECTOR_HOME="$h2" DIRECTOR_SRC_URL="$src" "$INSTALLER" skills --rollback >"$out/stdout" 2>"$out/stderr"; then
+if env DIRECTOR_HOME="$h2" DIRECTOR_SRC_URL="$src" DIRECTOR_MANIFESTS_DIR="$root/manifests" "$INSTALLER" skills --rollback >"$out/stdout" 2>"$out/stderr"; then
   bad "--rollback with no previous install exited 0"
 else
   grep -q "no previous skills install" "$out/stderr" \
@@ -194,7 +211,7 @@ fi
 # --- 12. something at the link that is not ours is refused, untouched -----------
 h3="$root/home3"; mkdir -p "$h3/skills-current/skills/director"
 echo "hand copy" > "$h3/skills-current/skills/director/SKILL.md"
-if env DIRECTOR_HOME="$h3" DIRECTOR_SRC_URL="$src" "$INSTALLER" skills --ref "$A" >"$out/stdout" 2>"$out/stderr"; then
+if env DIRECTOR_HOME="$h3" DIRECTOR_SRC_URL="$src" DIRECTOR_MANIFESTS_DIR="$root/manifests" "$INSTALLER" skills --ref "$A" >"$out/stdout" 2>"$out/stderr"; then
   bad "an install over a directory it did not make exited 0"
 else
   [[ "$(cat "$h3/skills-current/skills/director/SKILL.md")" == "hand copy" && ! -L "$h3/skills-current" ]] \
@@ -204,6 +221,17 @@ else
   grep -q "not installed by director-install" "$out/stderr" \
     && ok "the refusal says the directory was not installed by director-install" \
     || bad "foreign directory message" "$(cat "$out/stderr")"
+fi
+
+# A regular file at the link is refused and left as it was.
+h5="$root/home5"; mkdir -p "$h5"; echo "hand file" > "$h5/skills-current"
+if env DIRECTOR_HOME="$h5" DIRECTOR_SRC_URL="$src" DIRECTOR_MANIFESTS_DIR="$root/manifests" "$INSTALLER" skills --ref "$A" >"$out/stdout" 2>"$out/stderr"; then
+  bad "an install over a regular file it did not make exited 0"
+else
+  [[ -f "$h5/skills-current" && ! -L "$h5/skills-current" && "$(cat "$h5/skills-current")" == "hand file" ]] \
+    && grep -q "not installed by director-install" "$out/stderr" \
+    && ok "a regular file at the link is refused, named as not installed by director-install, and left untouched" \
+    || bad "regular file at the link" "$(cat "$out/stderr")"
 fi
 
 # --- 13. --status: lag counts only skills/ and commands/ commits, exits 0 --------
@@ -239,7 +267,7 @@ fi
 
 # --- 16. the cast-launch and director-mcp verbs are untouched by the new one ----
 h4="$root/home4"
-if env DIRECTOR_HOME="$h4" DIRECTOR_SRC_URL="$src" "$INSTALLER" skills --ref "$A" >/dev/null 2>&1 \
+if env DIRECTOR_HOME="$h4" DIRECTOR_SRC_URL="$src" DIRECTOR_MANIFESTS_DIR="$root/manifests" "$INSTALLER" skills --ref "$A" >/dev/null 2>&1 \
    && [[ ! -e "$h4/bin/cast-launch" && ! -e "$h4/bin/director-mcp" && ! -e "$h4/lib/cast-launch" ]]; then
   ok "a skills install makes no cast-launch or director-mcp link"
 else
