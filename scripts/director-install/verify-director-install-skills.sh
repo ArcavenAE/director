@@ -234,6 +234,19 @@ else
     || bad "regular file at the link" "$(cat "$out/stderr")"
 fi
 
+# A symlink that does not point at a version directory under lib/skills (a hand link into a
+# checkout) is also not ours: refused, and the link and its target are left as they were.
+h6="$root/home6"; mkdir -p "$h6" "$root/hand-checkout"
+ln -s "$root/hand-checkout" "$h6/skills-current"
+if env DIRECTOR_HOME="$h6" DIRECTOR_SRC_URL="$src" DIRECTOR_MANIFESTS_DIR="$root/manifests" "$INSTALLER" skills --ref "$A" >"$out/stdout" 2>"$out/stderr"; then
+  bad "an install over a hand symlink exited 0"
+else
+  [[ "$(readlink "$h6/skills-current")" == "$root/hand-checkout" && -z "$(ls -A "$root/hand-checkout")" ]] \
+    && grep -q "not installed by director-install" "$out/stderr" \
+    && ok "a symlink to somewhere outside lib/skills is refused and left as it was" \
+    || bad "hand symlink at the link" "$(cat "$out/stderr") $(readlink "$h6/skills-current")"
+fi
+
 # --- 13. --status: lag counts only skills/ and commands/ commits, exits 0 --------
 di skills --ref "$A" >/dev/null 2>&1 || true
 want_behind="$(git -C "$src" rev-list --count "$A..$B" -- skills commands)"
