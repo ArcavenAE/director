@@ -1290,6 +1290,28 @@ else
   bad "relay log default cast" "$(cat "$root/out/stderr")"
 fi
 rm -rf "$root/.director"
+# A new log file is 0600; an existing seat dir, its mode and an existing log are left as they are.
+rm -rf "$rl_state"
+if cast builder DIRECTOR_STATE="$rl_state"; then
+  [[ "$(mode_of "$rl_state/verify-builder-0/relay-log.md" 2>/dev/null)" == 600 ]] \
+    && ok "relay log: a log file the launcher creates is 0600" \
+    || bad "relay log: new file mode" "mode: $(mode_of "$rl_state/verify-builder-0/relay-log.md" 2>&1)"
+else
+  bad "relay log new-file cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$rl_state"; mkdir -p "$rl_state/verify-builder-0"; chmod 755 "$rl_state/verify-builder-0"
+printf 'kept\n' > "$rl_state/verify-builder-0/relay-log.md"; chmod 644 "$rl_state/verify-builder-0/relay-log.md"
+if cast builder DIRECTOR_STATE="$rl_state"; then
+  [[ "$(cat "$rl_state/verify-builder-0/relay-log.md")" == kept \
+     && "$(mode_of "$rl_state/verify-builder-0")" == 755 \
+     && "$(mode_of "$rl_state/verify-builder-0/relay-log.md")" == 644 ]] \
+    && in_env RELAY_LOG "$rl_state/verify-builder-0/relay-log.md" claude.env \
+    && ok "relay log: an existing seat dir and log are kept as they are (content, 0755, 0644) and RELAY_LOG names it" \
+    || bad "relay log: existing dir and file" "RELAY_LOG: $(grep '^RELAY_LOG=' "$root/out/claude.env" || echo unset)"
+else
+  bad "relay log existing-file cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$rl_state"
 
 # CAST_LAUNCH mode with a launcher whose name is not cast-launch.sh (an installed
 # copy): the Bedrock cases must run on a patched copy there too and never reach
