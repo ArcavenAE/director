@@ -1256,6 +1256,41 @@ else
 fi
 envout_reset
 
+# --- RELAY_LOG: a cast seat gets its own relay log (director#634) --------------
+# Without RELAY_LOG the shim's inbox_summary warns that replies cannot be joined to
+# asks. The launcher exports a per-seat file under the seat's own state directory,
+# and keeps a RELAY_LOG the caller already set. Scratch HOME and DIRECTOR_STATE only.
+mode_of() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+rl_state="$root/relay-state"; rm -rf "$rl_state"
+if cast builder DIRECTOR_STATE="$rl_state"; then
+  want="$rl_state/verify-builder-0/relay-log.md"
+  in_env RELAY_LOG "$want" claude.env \
+    && ok "relay log: a cast with no RELAY_LOG gets the per-seat path under DIRECTOR_STATE" \
+    || bad "relay log: per-seat path" "want RELAY_LOG=$want, got: $(grep '^RELAY_LOG=' "$root/out/claude.env" || echo unset)"
+  [[ -f "$want" && "$(mode_of "$rl_state/verify-builder-0")" == 700 ]] \
+    && ok "relay log: the seat dir is created at 0700 and the log file exists, so the lane has a file to read" \
+    || bad "relay log: seat dir or file" "dir mode: $(mode_of "$rl_state/verify-builder-0" 2>&1), file: $([[ -f "$want" ]] && echo present || echo absent)"
+else
+  bad "relay log cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$rl_state"
+if cast builder DIRECTOR_STATE="$rl_state" RELAY_LOG="$root/explicit-relay.md"; then
+  in_env RELAY_LOG "$root/explicit-relay.md" claude.env && [[ ! -e "$rl_state/verify-builder-0" ]] \
+    && ok "relay log: an explicit RELAY_LOG is kept as given and no seat dir is made" \
+    || bad "relay log: explicit value" "got: $(grep '^RELAY_LOG=' "$root/out/claude.env" || echo unset); seat dir: $([[ -e "$rl_state/verify-builder-0" ]] && echo made || echo absent)"
+else
+  bad "relay log explicit cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$rl_state"
+if cast builder; then
+  in_env RELAY_LOG "$root/.director/state/verify-builder-0/relay-log.md" claude.env \
+    && ok "relay log: with no DIRECTOR_STATE the default is under the director home, in the scratch HOME here" \
+    || bad "relay log: default state dir" "got: $(grep '^RELAY_LOG=' "$root/out/claude.env" || echo unset)"
+else
+  bad "relay log default cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$root/.director"
+
 # CAST_LAUNCH mode with a launcher whose name is not cast-launch.sh (an installed
 # copy): the Bedrock cases must run on a patched copy there too and never reach
 # the real keychain tool. Run this script again against a renamed copy; its own
