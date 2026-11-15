@@ -1260,7 +1260,7 @@ envout_reset
 # Without RELAY_LOG the shim's inbox_summary warns that replies cannot be joined to
 # asks. The launcher exports a per-seat file under the seat's own state directory,
 # and keeps a RELAY_LOG the caller already set. Scratch HOME and DIRECTOR_STATE only.
-mode_of() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+mode_of() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }  # GNU first: BSD stat has no -c, GNU stat -f means filesystem status
 rl_state="$root/relay-state"; rm -rf "$rl_state"
 if cast builder DIRECTOR_STATE="$rl_state"; then
   want="$rl_state/verify-builder-0/relay-log.md"
