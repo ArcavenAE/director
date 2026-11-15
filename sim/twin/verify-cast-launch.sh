@@ -143,7 +143,7 @@ fi
 # --- 11. the shim default resolves under ~/.director, no env var needed ------
 mkdir -p "$root/.director/bin"
 cp "$root/bin/director-mcp" "$root/.director/bin/director-mcp"
-if env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" \
+if env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" \
      MARVEL_ROLE=builder MARVEL_SESSION=verify-default-0 \
      WARDROBE_ROOT="$root/wardrobe/contents" TWIN_CWD="$root" \
      DIRECTOR_TEAM=fleet DIRECTOR_WORKSPACE=verifyws \
@@ -157,7 +157,7 @@ fi
 
 # --- 12. a missing shim still refuses, and says where to put one -------------
 rm -f "$root/.director/bin/director-mcp"
-if env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" \
+if env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" \
      MARVEL_ROLE=builder MARVEL_SESSION=verify-noshim-0 \
      WARDROBE_ROOT="$root/wardrobe/contents" TWIN_CWD="$root" \
      DIRECTOR_TEAM=fleet DIRECTOR_WORKSPACE=verifyws \
@@ -251,7 +251,7 @@ cast_with() { # role, then args for the launcher (marvel's trailing args)
   local role="$1"; shift
   rm -f "$root/out/claude.env" "$root/out/claude.args" "$root/out/preflight.env"
   env -i \
-    PATH="$root/bin:/usr/bin:/bin" HOME="$root" \
+    PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" \
     MARVEL_ROLE="$role" MARVEL_SESSION="verify-$role-0" \
     WARDROBE_ROOT="$root/wardrobe/contents" \
     DIRECTOR_SHIM_BIN="$root/bin/director-mcp" \
@@ -508,7 +508,7 @@ composer_screen() { printf '%s\n' '' '──────────────
 hrun() { # runs the helper with the fake tmux; leaves rc in $hrc and output in $hout
   local dl="${1:-2}"
   hrc=0
-  hout="$(env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" FAKE="$fake" \
+  hout="$(env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" FAKE="$fake" \
     DIRECTOR_DEVCH_DEADLINE="$dl" DIRECTOR_DEVCH_POLL=0.1 DIRECTOR_DEVCH_AFTER=2 \
     DIRECTOR_DEVCH_COMPOSER_CHECK="$root/bin/composer-check-stub" \
     "$HELPER" --pane %7 2>&1)" || hrc=$?
@@ -1104,7 +1104,7 @@ refuses "bedrock item unset" "needs CLAUDE_BEDROCK_KEY_ITEM" \
 # xtrace must never print the key: run the launcher under bash -x and under an
 # exported SHELLOPTS=xtrace and look for the canary in stdout and stderr.
 cast_x() { rm -f "$root/out/claude.env" "$root/out/claude.args"
-    env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" MARVEL_ROLE=builder MARVEL_SESSION=verify-builder-0 \
+    env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" MARVEL_ROLE=builder MARVEL_SESSION=verify-builder-0 \
       WARDROBE_ROOT="$root/wardrobe/contents" DIRECTOR_SHIM_BIN="$root/bin/director-mcp" TWIN_CWD="$root" \
       DIRECTOR_TEAM=fleet DIRECTOR_WORKSPACE=verifyws "${BEDROCK_ON[@]}" "$@" \
       >"$root/out/stdout" 2>"$root/out/stderr"; }
@@ -1139,7 +1139,7 @@ if [[ -x "$wrapper" ]]; then
     || bad "claude-bedrock-launch: the key block differs from cast-launch's"
   wrap() { # extra KEY=VALUE pairs, then args after --
     rm -f "$root/out/claude.env" "$root/out/claude.args"
-    env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" "$@" \
+    env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" "$@" \
       "$wrapper" --flag "a b" >"$root/out/stdout" 2>"$root/out/stderr"
   }
   if wrap "${BEDROCK_ON[@]}"; then

@@ -67,7 +67,7 @@ cast() { # role, then extra KEY=VALUE pairs
   local role="$1"; shift
   rm -f "$root/out/claude.env" "$root/out/claude.args" "$root/out/preflight.env"
   env -i \
-    PATH="$root/bin:/usr/bin:/bin" HOME="$root" \
+    PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" \
     MARVEL_ROLE="$role" MARVEL_SESSION="verify-$role-0" \
     WARDROBE_ROOT="$root/wardrobe/contents" \
     DIRECTOR_SHIM_BIN="$root/bin/director-mcp" \
