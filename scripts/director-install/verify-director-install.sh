@@ -30,7 +30,7 @@ src="$root/src"
 g() { git -C "$src" -c user.name=verify -c user.email=verify@example.invalid "$@"; }
 mkdir -p "$src/sim/twin"
 git init -q -b main "$src"
-cp "$repo/sim/twin/cast-launch.sh" "$repo/sim/twin/verify-cast-launch.sh" "$src/sim/twin/"
+cp "$repo/sim/twin/cast-launch.sh" "$repo/sim/twin/cast-stubs.sh" "$repo/sim/twin/dismiss-devch" "$repo/sim/twin/claude-bedrock-launch" "$repo/sim/twin/verify-cast-launch.sh" "$src/sim/twin/"
 g add -A && g commit -q -m A
 A="$(g rev-parse HEAD)"
 echo "# change B" >> "$src/sim/twin/cast-launch.sh"
