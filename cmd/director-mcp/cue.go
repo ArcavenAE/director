@@ -762,6 +762,12 @@ func tellDirector(ctx context.Context, bus *Bus, logf func(string, ...any), kind
 	if bus.globalCfg == nil {
 		return
 	}
+	// The director seat owns global://director. A warning sent there lands in its own
+	// inbox, counts as one more waiting message, and the next receipt window reports it
+	// again (#626). The log line above is the report.
+	if bus.globalCfg.selfAddress() == "global://director" {
+		return
+	}
 	raw, _ := json.Marshal(map[string]any{"to": "global://director", "performative": "INFORM", "text": text})
 	env, ws, err := buildSendEnvelope(bus.self, raw)
 	if err == nil {
