@@ -128,6 +128,27 @@ export DIRECTOR_AGENT_ID="${DIRECTOR_AGENT_ID:-$MARVEL_SESSION}"
 if [[ ! "$DIRECTOR_AGENT_ID" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ ]]; then
   echo "cast-launch: refusing id '$DIRECTOR_AGENT_ID'; it must match the closed class (R-76), never rewritten" >&2; exit 1
 fi
+# The relay log (director#634). The shim's inbox_summary joins a reply to its ask
+# through the relay log and warns, on every call, when it finds none. The seat is
+# known only at cast, a --copy install has no checkout to find a log in, and one
+# install-time path would be shared by every seat on the host, so each seat gets its
+# own file under its own state directory. A RELAY_LOG the caller already set is kept
+# as given and nothing is created for it. A directory or file that exists is left as it
+# is (no chmod, no truncate); only a missing directory is made (with its missing parents, all
+# at 0700: mkdir -m would set the mode on the last one only) and a missing
+# file is made empty, at 0600. A failure here warns and casts without the variable,
+# which is how every seat cast before this ran.
+if [[ -z "${RELAY_LOG:-}" ]]; then
+  rl_dir="${DIRECTOR_STATE:-${DIRECTOR_HOME:-$HOME/.director}/state}/$DIRECTOR_AGENT_ID"
+  rl_file="$rl_dir/relay-log.md"
+  if { [[ -d "$rl_dir" ]] || (umask 077; mkdir -p "$rl_dir"); } \
+     && { [[ -e "$rl_file" ]] || (umask 077; : >> "$rl_file"); }; then
+    export RELAY_LOG="$rl_file"
+  else
+    echo "cast-launch: WARNING: could not make the relay log $rl_file; casting without RELAY_LOG, so this seat's inbox_summary will warn that replies cannot be joined to asks" >&2
+  fi
+  unset rl_dir rl_file
+fi
 # The session's role, so the shim reads its role inbox and the roster can
 # resolve role://<team>/<role> to a live holder. The manifest role is the name
 # senders address; marvel wins if it already set DIRECTOR_ROLE.

@@ -143,7 +143,7 @@ fi
 # --- 11. the shim default resolves under ~/.director, no env var needed ------
 mkdir -p "$root/.director/bin"
 cp "$root/bin/director-mcp" "$root/.director/bin/director-mcp"
-if env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" \
+if env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" \
      MARVEL_ROLE=builder MARVEL_SESSION=verify-default-0 \
      WARDROBE_ROOT="$root/wardrobe/contents" TWIN_CWD="$root" \
      DIRECTOR_TEAM=fleet DIRECTOR_WORKSPACE=verifyws \
@@ -157,7 +157,7 @@ fi
 
 # --- 12. a missing shim still refuses, and says where to put one -------------
 rm -f "$root/.director/bin/director-mcp"
-if env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" \
+if env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" \
      MARVEL_ROLE=builder MARVEL_SESSION=verify-noshim-0 \
      WARDROBE_ROOT="$root/wardrobe/contents" TWIN_CWD="$root" \
      DIRECTOR_TEAM=fleet DIRECTOR_WORKSPACE=verifyws \
@@ -251,7 +251,7 @@ cast_with() { # role, then args for the launcher (marvel's trailing args)
   local role="$1"; shift
   rm -f "$root/out/claude.env" "$root/out/claude.args" "$root/out/preflight.env"
   env -i \
-    PATH="$root/bin:/usr/bin:/bin" HOME="$root" \
+    PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" \
     MARVEL_ROLE="$role" MARVEL_SESSION="verify-$role-0" \
     WARDROBE_ROOT="$root/wardrobe/contents" \
     DIRECTOR_SHIM_BIN="$root/bin/director-mcp" \
@@ -508,7 +508,7 @@ composer_screen() { printf '%s\n' '' '──────────────
 hrun() { # runs the helper with the fake tmux; leaves rc in $hrc and output in $hout
   local dl="${1:-2}"
   hrc=0
-  hout="$(env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" FAKE="$fake" \
+  hout="$(env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" FAKE="$fake" \
     DIRECTOR_DEVCH_DEADLINE="$dl" DIRECTOR_DEVCH_POLL=0.1 DIRECTOR_DEVCH_AFTER=2 \
     DIRECTOR_DEVCH_COMPOSER_CHECK="$root/bin/composer-check-stub" \
     "$HELPER" --pane %7 2>&1)" || hrc=$?
@@ -1104,7 +1104,7 @@ refuses "bedrock item unset" "needs CLAUDE_BEDROCK_KEY_ITEM" \
 # xtrace must never print the key: run the launcher under bash -x and under an
 # exported SHELLOPTS=xtrace and look for the canary in stdout and stderr.
 cast_x() { rm -f "$root/out/claude.env" "$root/out/claude.args"
-    env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" MARVEL_ROLE=builder MARVEL_SESSION=verify-builder-0 \
+    env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" MARVEL_ROLE=builder MARVEL_SESSION=verify-builder-0 \
       WARDROBE_ROOT="$root/wardrobe/contents" DIRECTOR_SHIM_BIN="$root/bin/director-mcp" TWIN_CWD="$root" \
       DIRECTOR_TEAM=fleet DIRECTOR_WORKSPACE=verifyws "${BEDROCK_ON[@]}" "$@" \
       >"$root/out/stdout" 2>"$root/out/stderr"; }
@@ -1139,7 +1139,7 @@ if [[ -x "$wrapper" ]]; then
     || bad "claude-bedrock-launch: the key block differs from cast-launch's"
   wrap() { # extra KEY=VALUE pairs, then args after --
     rm -f "$root/out/claude.env" "$root/out/claude.args"
-    env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" "$@" \
+    env -i PATH="$root/bin:/usr/bin:/bin" HOME="$root" TMPDIR="$root" "$@" \
       "$wrapper" --flag "a b" >"$root/out/stdout" 2>"$root/out/stderr"
   }
   if wrap "${BEDROCK_ON[@]}"; then
@@ -1255,6 +1255,89 @@ else
   bad "env-out: refused slice.sh, claude ran"
 fi
 envout_reset
+
+# --- RELAY_LOG: a cast seat gets its own relay log (director#634) --------------
+# Without RELAY_LOG the shim's inbox_summary warns that replies cannot be joined to
+# asks. The launcher exports a per-seat file under the seat's own state directory,
+# and keeps a RELAY_LOG the caller already set. Scratch HOME and DIRECTOR_STATE only.
+mode_of() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }  # GNU first: BSD stat has no -c, GNU stat -f means filesystem status
+rl_state="$root/relay-state"; rm -rf "$rl_state"
+if cast builder DIRECTOR_STATE="$rl_state"; then
+  want="$rl_state/verify-builder-0/relay-log.md"
+  in_env RELAY_LOG "$want" claude.env \
+    && ok "relay log: a cast with no RELAY_LOG gets the per-seat path under DIRECTOR_STATE" \
+    || bad "relay log: per-seat path" "want RELAY_LOG=$want, got: $(grep '^RELAY_LOG=' "$root/out/claude.env" || echo unset)"
+  [[ -f "$want" && "$(mode_of "$rl_state/verify-builder-0")" == 700 ]] \
+    && ok "relay log: the seat dir is created at 0700 and the log file exists, so the lane has a file to read" \
+    || bad "relay log: seat dir or file" "dir mode: $(mode_of "$rl_state/verify-builder-0" 2>&1), file: $([[ -f "$want" ]] && echo present || echo absent)"
+else
+  bad "relay log cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$rl_state"
+if cast builder DIRECTOR_STATE="$rl_state" RELAY_LOG="$root/explicit-relay.md"; then
+  in_env RELAY_LOG "$root/explicit-relay.md" claude.env && [[ ! -e "$rl_state/verify-builder-0" ]] \
+    && ok "relay log: an explicit RELAY_LOG is kept as given and no seat dir is made" \
+    || bad "relay log: explicit value" "got: $(grep '^RELAY_LOG=' "$root/out/claude.env" || echo unset); seat dir: $([[ -e "$rl_state/verify-builder-0" ]] && echo made || echo absent)"
+else
+  bad "relay log explicit cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$rl_state"
+if cast builder; then
+  in_env RELAY_LOG "$root/.director/state/verify-builder-0/relay-log.md" claude.env \
+    && ok "relay log: with no DIRECTOR_STATE the default is under the director home, in the scratch HOME here" \
+    || bad "relay log: default state dir" "got: $(grep '^RELAY_LOG=' "$root/out/claude.env" || echo unset)"
+else
+  bad "relay log default cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$root/.director"
+# On a HOME with no director home yet, the launcher makes the parents too, and none of them
+# is left at the umask mode: the first cast leaves the director home, its state dir and the
+# seat dir at 0700 (director#635 review).
+rm -rf "$root/.director"
+if cast builder; then
+  pm=""
+  for d in "$root/.director" "$root/.director/state" "$root/.director/state/verify-builder-0"; do
+    pm+=" $(basename "$d")=$(mode_of "$d" 2>/dev/null || echo absent)"
+  done
+  [[ "$pm" == " .director=700 state=700 verify-builder-0=700" ]] \
+    && ok "relay log: on a fresh HOME the director home, state dir and seat dir are all 0700" \
+    || bad "relay log: fresh-HOME parent modes" "modes:$pm"
+else
+  bad "relay log fresh-HOME cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$root/.director"
+# When the log cannot be made, the launcher warns and still casts, without RELAY_LOG.
+rm -rf "$rl_state"; mkdir -p "$rl_state"; : > "$rl_state/not-a-dir"
+if cast builder DIRECTOR_STATE="$rl_state/not-a-dir"; then
+  grep -q 'could not make the relay log' "$root/out/stderr" && ! has_env RELAY_LOG claude.env \
+    && ok "relay log: when it cannot be made the launcher warns and casts without RELAY_LOG" \
+    || bad "relay log: warn-and-cast" "stderr: $(cat "$root/out/stderr"); RELAY_LOG: $(grep '^RELAY_LOG=' "$root/out/claude.env" || echo unset)"
+else
+  bad "relay log: a cast with an unmakeable log must still succeed" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$rl_state"
+# A new log file is 0600; an existing seat dir, its mode and an existing log are left as they are.
+rm -rf "$rl_state"
+if cast builder DIRECTOR_STATE="$rl_state"; then
+  [[ "$(mode_of "$rl_state/verify-builder-0/relay-log.md" 2>/dev/null)" == 600 ]] \
+    && ok "relay log: a log file the launcher creates is 0600" \
+    || bad "relay log: new file mode" "mode: $(mode_of "$rl_state/verify-builder-0/relay-log.md" 2>&1)"
+else
+  bad "relay log new-file cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$rl_state"; mkdir -p "$rl_state/verify-builder-0"; chmod 755 "$rl_state/verify-builder-0"
+printf 'kept\n' > "$rl_state/verify-builder-0/relay-log.md"; chmod 644 "$rl_state/verify-builder-0/relay-log.md"
+if cast builder DIRECTOR_STATE="$rl_state"; then
+  [[ "$(cat "$rl_state/verify-builder-0/relay-log.md")" == kept \
+     && "$(mode_of "$rl_state/verify-builder-0")" == 755 \
+     && "$(mode_of "$rl_state/verify-builder-0/relay-log.md")" == 644 ]] \
+    && in_env RELAY_LOG "$rl_state/verify-builder-0/relay-log.md" claude.env \
+    && ok "relay log: an existing seat dir and log are kept as they are (content, 0755, 0644) and RELAY_LOG names it" \
+    || bad "relay log: existing dir and file" "RELAY_LOG: $(grep '^RELAY_LOG=' "$root/out/claude.env" || echo unset)"
+else
+  bad "relay log existing-file cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$rl_state"
 
 # CAST_LAUNCH mode with a launcher whose name is not cast-launch.sh (an installed
 # copy): the Bedrock cases must run on a patched copy there too and never reach
