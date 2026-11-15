@@ -134,13 +134,14 @@ fi
 # install-time path would be shared by every seat on the host, so each seat gets its
 # own file under its own state directory. A RELAY_LOG the caller already set is kept
 # as given and nothing is created for it. A directory or file that exists is left as it
-# is (no chmod, no truncate); only a missing directory is made, at 0700, and a missing
+# is (no chmod, no truncate); only a missing directory is made (with its missing parents, all
+# at 0700: mkdir -m would set the mode on the last one only) and a missing
 # file is made empty, at 0600. A failure here warns and casts without the variable,
 # which is how every seat cast before this ran.
 if [[ -z "${RELAY_LOG:-}" ]]; then
   rl_dir="${DIRECTOR_STATE:-${DIRECTOR_HOME:-$HOME/.director}/state}/$DIRECTOR_AGENT_ID"
   rl_file="$rl_dir/relay-log.md"
-  if { [[ -d "$rl_dir" ]] || mkdir -p -m 0700 "$rl_dir"; } \
+  if { [[ -d "$rl_dir" ]] || (umask 077; mkdir -p "$rl_dir"); } \
      && { [[ -e "$rl_file" ]] || (umask 077; : >> "$rl_file"); }; then
     export RELAY_LOG="$rl_file"
   else
