@@ -1290,6 +1290,22 @@ else
   bad "relay log default cast" "$(cat "$root/out/stderr")"
 fi
 rm -rf "$root/.director"
+# On a HOME with no director home yet, the launcher makes the parents too, and none of them
+# is left at the umask mode: the first cast leaves the director home, its state dir and the
+# seat dir at 0700 (director#635 review).
+rm -rf "$root/.director"
+if cast builder; then
+  pm=""
+  for d in "$root/.director" "$root/.director/state" "$root/.director/state/verify-builder-0"; do
+    pm+=" $(basename "$d")=$(mode_of "$d" 2>/dev/null || echo absent)"
+  done
+  [[ "$pm" == " .director=700 state=700 verify-builder-0=700" ]] \
+    && ok "relay log: on a fresh HOME the director home, state dir and seat dir are all 0700" \
+    || bad "relay log: fresh-HOME parent modes" "modes:$pm"
+else
+  bad "relay log fresh-HOME cast" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$root/.director"
 # A new log file is 0600; an existing seat dir, its mode and an existing log are left as they are.
 rm -rf "$rl_state"
 if cast builder DIRECTOR_STATE="$rl_state"; then
