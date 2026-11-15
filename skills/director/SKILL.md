@@ -409,11 +409,11 @@ hook's three-line checklist asks about:
    cannot check who wrote it.
 4. Move the rows: `dws refresh --local` (`board-html` runs it on render). This
    gives the moved rows.
-5. Write the operations dashboard, at most every 30 minutes. Run `dash-writer run`; if it prints
+5. Write the operations dashboard, at most every 30 minutes. Run `${DIRECTOR_HOME:-$HOME/.director}/bin/dash-writer run`; if it prints
    `skipped`, stop here. Otherwise `list` dash_panels, dash_daily and dash_meta, write a
-   `{collection/doc_id: version}` map to scratch, and run `dash-writer run --versions <file>`.
+   `{collection/doc_id: version}` map to scratch, and run `${DIRECTOR_HOME:-$HOME/.director}/bin/dash-writer run --versions <file>`.
    Apply its `writes` unedited as one ArtifactData batch. Only if the batch reports success, run
-   `dash-writer ack` with the `ack` it printed. On refusal, no ack and no retry: the next tick runs
+   `${DIRECTOR_HOME:-$HOME/.director}/bin/dash-writer ack` with the `ack` it printed. On refusal, no ack and no retry: the next tick runs
    fresh. Two refusals in a row go to the operator as text. A busy tick may skip this step. The
    writer reads `dash-withhold.txt` (0600, in `$DIRECTOR_STATE`, one name per line); seed it from the
    tracked private-names list plus the client-team session prefixes, and know that with no list the
