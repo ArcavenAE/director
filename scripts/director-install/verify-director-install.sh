@@ -27,7 +27,7 @@ mkdir -p "$out"
 # Commit A is this checkout's launcher and verify, so the verify step during
 # install runs the real verify against the real launcher as installed.
 src="$root/src"
-g() { git -C "$src" -c user.name=verify -c user.email=verify@example.invalid -c commit.gpgsign=false "$@"; }
+g() { git -C "$src" -c user.name=verify -c user.email=verify@example.invalid "$@"; }
 mkdir -p "$src/sim/twin"
 git init -q -b main "$src"
 cp "$repo/sim/twin/cast-launch.sh" "$repo/sim/twin/verify-cast-launch.sh" "$src/sim/twin/"
@@ -223,7 +223,7 @@ fi
 # The source is a scratch repo holding this checkout's shim source and recipe,
 # so the real recipe builds the real shim. Only --version is run, and it exits before any connection.
 msrc="$root/msrc"; mhome="$root/mhome"
-mg() { git -C "$msrc" -c user.name=verify -c user.email=verify@example.invalid -c commit.gpgsign=false "$@"; }
+mg() { git -C "$msrc" -c user.name=verify -c user.email=verify@example.invalid "$@"; }
 mkdir -p "$msrc/cmd" "$msrc/scripts"
 git init -q -b main "$msrc"
 cp -R "$repo/cmd/director-mcp" "$msrc/cmd/director-mcp"
