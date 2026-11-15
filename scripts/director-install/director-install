@@ -9,6 +9,9 @@
 #   director-install director-mcp --release TAG|latest-alpha
 #                                              install a published release, no Go needed
 #   director-install director-mcp --rollback   switch the shim back to the previous install
+#   director-install skills [--ref REF]        install the director and stansfield skills and
+#                                              the director command at REF (default origin/main)
+#   director-install skills --rollback         switch the skills back to the previous install
 #   director-install --status                  what is installed and how far behind
 #   director-install -h | --help
 #
@@ -96,7 +99,7 @@ MLIB="$DIRECTOR_HOME/lib/director-mcp"
 MLINK="$BIN/director-mcp"
 
 die() { echo "director-install: $*" >&2; exit 1; }
-usage() { sed -n '5,13p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '5,15p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Create the mirror on first use; fetch it otherwise.
 sync_mirror() {
@@ -178,6 +181,101 @@ rollback_cast_launch() {
   [[ -n "$prev" && -d "$LIB/$prev" ]] || die "no previous install to roll back to"
   switch_to "$prev"
   echo "director-install: cast-launch rolled back -> $prev"
+}
+
+# --- skills ----------------------------------------------------------------------
+# The director and stansfield skills and the director command, installed from a
+# commit the way cast-launch is: `git archive REF skills commands` into
+# $DIRECTOR_HOME/lib/skills/<sha>/, a STAMP, a check on the archived copy, then one
+# atomic switch of $DIRECTOR_HOME/skills-current. A seat that links
+# ~/.claude/skills/director into skills-current runs merged code, not whatever a
+# working checkout holds. Nothing here changes a seat's links, and install.sh is
+# unchanged.
+SLIB="$DIRECTOR_HOME/lib/skills"
+SKLINK="$DIRECTOR_HOME/skills-current"
+
+# The sha the skills link points at when this installer made it, or empty.
+current_skills() {
+  local t
+  t="$(readlink "$SKLINK" 2>/dev/null)" || return 0
+  [[ "$t" == "$SLIB"/* && "$(dirname "$t")" == "$SLIB" ]] || return 0
+  basename "$t"
+}
+
+# Anything at the link that this installer did not make is left exactly as it is:
+# a regular file, a directory, or a symlink that does not point at a version
+# directory under lib/skills (a hand link into a checkout, say).
+refuse_foreign_skills_link() {
+  [[ -e "$SKLINK" || -L "$SKLINK" ]] || return 0
+  [[ -n "$(current_skills)" ]] && return 0
+  die "$SKLINK was not installed by director-install; left untouched and nothing was switched. Move it aside to install the skills from a commit."
+}
+
+switch_skills() {
+  local sha="$1" prev tmp
+  prev="$(current_skills)"
+  mkdir -p "$DIRECTOR_HOME"
+  tmp="$DIRECTOR_HOME/.skills-current.new.$$"
+  ln -sfn "$SLIB/$sha" "$tmp"
+  # rename(2), not mv: mv -f onto a symlink that points at a directory moves the new
+  # link into that directory and leaves the old one live.
+  perl -e 'rename($ARGV[0], $ARGV[1]) or die "rename: $!\n"' "$tmp" "$SKLINK"
+  if [[ -n "$prev" && "$prev" != "$sha" ]]; then
+    printf '%s\n' "$prev" > "$SLIB/.previous.new.$$"
+    mv -f "$SLIB/.previous.new.$$" "$SLIB/.previous"
+  fi
+}
+
+# What a skills install must hold. Prints the first thing missing, if any.
+skills_check() {
+  local dir="$1" sk
+  for sk in director stansfield; do
+    [[ -f "$dir/skills/$sk/SKILL.md" ]] || { echo "skills/$sk/SKILL.md is missing"; return 1; }
+    grep -qx "name: $sk" "$dir/skills/$sk/SKILL.md" || { echo "skills/$sk/SKILL.md does not declare name: $sk"; return 1; }
+  done
+  [[ -f "$dir/commands/director.md" ]] || { echo "commands/director.md is missing"; return 1; }
+  return 0
+}
+
+install_skills() {
+  local ref="$1" sha stage why
+  refuse_foreign_skills_link
+  sync_mirror
+  sha="$(resolve "$ref")"
+  mkdir -p "$SLIB"
+  if [[ ! -d "$SLIB/$sha" ]]; then
+    stage="$(mktemp -d "$SLIB/.stage.XXXXXX")"
+    trap 'rm -rf "$stage"' EXIT
+    git -C "$MIRROR" archive "$sha" skills commands 2>"$stage/archive.err" | tar -x -C "$stage" \
+      || { echo "director-install: skills check failed for $ref ($sha): it has no skills/ or commands/ to archive; nothing was switched." >&2; exit 1; }
+    if ! why="$(skills_check "$stage")"; then
+      echo "director-install: skills check failed for $ref ($sha): $why; nothing was switched." >&2
+      exit 1
+    fi
+    rm -f "$stage/archive.err"
+    {
+      echo "sha=$sha"
+      echo "ref=$ref"
+      echo "source=$(git -C "$MIRROR" config --get remote.origin.url)"
+      echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$stage/STAMP"
+    mv "$stage" "$SLIB/$sha"
+    trap - EXIT
+    echo "director-install: checked $sha (skills director, stansfield; command director)"
+  else
+    echo "director-install: $sha is already installed and checked"
+  fi
+  switch_skills "$sha"
+  echo "director-install: skills -> $sha ($ref)"
+}
+
+rollback_skills() {
+  local prev
+  refuse_foreign_skills_link
+  prev="$(cat "$SLIB/.previous" 2>/dev/null || true)"
+  [[ -n "$prev" && -d "$SLIB/$prev" ]] || die "no previous skills install to roll back to"
+  switch_skills "$prev"
+  echo "director-install: skills rolled back -> $prev"
 }
 
 # --- director-mcp, the shim --------------------------------------------------
@@ -461,6 +559,24 @@ status() {
     fi
     [[ "$fetched" == no ]] && echo "WARN: fetch failed; the count is against the mirror as last fetched"
   fi
+  local ksha behind_k
+  ksha="$(current_skills)"
+  if [[ -z "$ksha" ]]; then
+    if [[ -e "$SKLINK" || -L "$SKLINK" ]]; then
+      echo "WARN: $SKLINK was not installed by director-install; install: director-install skills --ref origin/main"
+    else
+      echo "skills: not installed (install: director-install skills --ref origin/main)"
+    fi
+  else
+    local kinst kref
+    kinst="$(sed -n 's/^installed_at=//p' "$SLIB/$ksha/STAMP" 2>/dev/null)"
+    kref="$(sed -n 's/^ref=//p' "$SLIB/$ksha/STAMP" 2>/dev/null)"
+    if [[ -d "$MIRROR" ]] && behind_k="$(git -C "$MIRROR" rev-list --count "$ksha..refs/heads/main" -- skills commands 2>/dev/null)"; then
+      echo "skills: ${ksha:0:12} (ref ${kref:-?}) installed ${kinst:-?}; $behind_k skills/ and commands/ commits behind main"
+    else
+      echo "skills: ${ksha:0:12} (ref ${kref:-?}) installed ${kinst:-?}; lag unknown (no mirror, or main not in it)"
+    fi
+  fi
   local msha
   msha="$(current_mcp)"
   if [[ -n "$msha" ]]; then
@@ -519,6 +635,19 @@ case "${1:-}" in
     if [[ "$action" == rollback ]]; then rollback_director_mcp
     elif [[ -n "$release" ]]; then install_director_mcp_release "$release"
     else install_director_mcp "$ref"; fi
+    ;;
+  skills)
+    shift
+    ref="origin/main" action=install
+    while (($#)); do
+      case "$1" in
+        --ref) [[ $# -ge 2 ]] || die "--ref needs a value"; ref="$2"; shift ;;
+        --rollback) action=rollback ;;
+        *) die "unknown argument: $1" ;;
+      esac
+      shift
+    done
+    if [[ "$action" == rollback ]]; then rollback_skills; else install_skills "$ref"; fi
     ;;
   --status) status || true; exit 0 ;;
   -h|--help) usage ;;
