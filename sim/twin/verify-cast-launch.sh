@@ -1306,6 +1306,16 @@ else
   bad "relay log fresh-HOME cast" "$(cat "$root/out/stderr")"
 fi
 rm -rf "$root/.director"
+# When the log cannot be made, the launcher warns and still casts, without RELAY_LOG.
+rm -rf "$rl_state"; mkdir -p "$rl_state"; : > "$rl_state/not-a-dir"
+if cast builder DIRECTOR_STATE="$rl_state/not-a-dir"; then
+  grep -q 'could not make the relay log' "$root/out/stderr" && ! has_env RELAY_LOG claude.env \
+    && ok "relay log: when it cannot be made the launcher warns and casts without RELAY_LOG" \
+    || bad "relay log: warn-and-cast" "stderr: $(cat "$root/out/stderr"); RELAY_LOG: $(grep '^RELAY_LOG=' "$root/out/claude.env" || echo unset)"
+else
+  bad "relay log: a cast with an unmakeable log must still succeed" "$(cat "$root/out/stderr")"
+fi
+rm -rf "$rl_state"
 # A new log file is 0600; an existing seat dir, its mode and an existing log are left as they are.
 rm -rf "$rl_state"
 if cast builder DIRECTOR_STATE="$rl_state"; then
