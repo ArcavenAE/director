@@ -2,7 +2,7 @@
 # Prove verify-cast-launch.sh's summary counts what it prints (director#649).
 # A case that calls ok() or bad() inside a subshell, such as the right side of a
 # pipeline, prints its line and updates a copy of the counters, so the summary
-# misses it. Two runs of the verifier, each about three minutes:
+# misses it. Three runs of the verifier, each about three minutes:
 #   A. a clean run. Against its own log: the PASS lines equal the summary's
 #      passed count, and the FAIL lines equal its failed count.
 #   B. a run where one case fails. The test points CAST_LAUNCH at a copy of this
@@ -10,6 +10,10 @@
 #      "option 2 reworded" screen, so one devch case, run in a pipeline, fails
 #      without any edit to the verifier. The verifier must print a FAIL line for
 #      it, count it in the summary, and exit nonzero.
+#   C. a run that loses its tally. The copy's helper, for the same screen, points
+#      the verifier's tally file at /dev/null (every later count is lost, and
+#      grep reads an empty file as zero). The verifier must fail with a message
+#      naming the tally and exit nonzero, never print a summary and exit 0.
 # Usage: sim/twin/verify-cast-launch-count.sh     Exit nonzero on any miss.
 set -euo pipefail
 
@@ -110,6 +114,42 @@ if (( lf > 0 && vrc == 0 )); then
   bad "failing run: the verifier exits nonzero when it prints a FAIL line" "$lf FAIL lines and exit 0"
 else
   ok "failing run: the verifier's exit status agrees with its FAIL lines (exit $vrc, $lf FAIL lines)"
+fi
+
+# --- C. a run that loses its tally ------------------------------------------------
+# HOME is the harness root in the devch cases, so the stub can reach the tally.
+twinC="$scratch/twinC"
+mkdir -p "$twinC"
+cp -R "$here/." "$twinC/"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '# Test copy: the real helper, except that the "option 2 reworded" screen also\n'
+  printf '# points the verifier tally at /dev/null (HOME is the harness root there).\n'
+  printf 'real=%q\n' "$here/dismiss-devch"
+  cat <<'STUB'
+if [[ -n "${FAKE:-}" ]] && grep -q '2\. Quit' "$FAKE/before" 2>/dev/null; then
+  rc=0
+  "$real" "$@" || rc=$?
+  rm -f "$HOME/tally"
+  ln -s /dev/null "$HOME/tally"
+  exit "$rc"
+fi
+exec "$real" "$@"
+STUB
+} > "$twinC/dismiss-devch"
+chmod +x "$twinC/dismiss-devch"
+
+logC="$scratch/lost-tally.log"
+run_verifier "$logC" "$twinC/cast-launch.sh"
+if (( vrc == 0 )); then
+  bad "lost tally: the verifier exits nonzero" "exit 0; last line: $(tail -1 "$logC")"
+else
+  ok "lost tally: the verifier exits nonzero (exit $vrc)"
+fi
+if grep -qi 'tally' "$logC"; then
+  ok "lost tally: the verifier prints a message naming the tally"
+else
+  bad "lost tally: the verifier prints a message naming the tally" "no line mentions the tally; last line: $(tail -1 "$logC")"
 fi
 
 if (( fail > 0 )); then
