@@ -1,6 +1,6 @@
 # What this workflow does not cover, so a green check is read for what it is:
-#   - scripts/: its verifiers (verify-install.sh, verify-skill-ledger.sh,
-#     and director-install) are not run here; draft-sweep and its verifier live in skills/director/scripts/.
+#   - scripts/: its verifiers (verify-install.sh and director-install) are not run here;
+#     verify-skill-ledger.sh is, in the skill-verifiers job. draft-sweep and its verifier live in skills/director/scripts/.
 #   - sim/twin/verify-cast-launch.sh is not run here; the recipes job runs its cases 4 and 6
 #     as a data table (sim/twin/parity-table.sh) against cast-launch.sh.
 #   - probe/: 23 shell scripts, 8 of them verify-*.sh, most of which need a live broker or
@@ -91,12 +91,12 @@ jobs:
           persist-credentials: false
 
       - name: Run each verifier with bash
-        # Every skills/director/scripts/verify-*.sh, one at a time, all of them
-        # even after a failure, so one run shows every miss.
+        # Every skills/director/scripts/verify-*.sh and scripts/verify-skill-ledger.sh,
+        # one at a time, all of them even after a failure, so one run shows every miss.
         run: |
           set -uo pipefail
           failed=()
-          for f in skills/director/scripts/verify-*.sh; do
+          for f in skills/director/scripts/verify-*.sh scripts/verify-skill-ledger.sh; do
             echo "::group::${f}"
             if bash "$f"; then echo "ok ${f}"; else echo "::error file=${f}::${f} failed"; failed+=("$f"); fi
             echo "::endgroup::"
