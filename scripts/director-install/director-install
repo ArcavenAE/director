@@ -246,8 +246,12 @@ install_skills() {
   if [[ ! -d "$SLIB/$sha" ]]; then
     stage="$(mktemp -d "$SLIB/.stage.XXXXXX")"
     trap 'rm -rf "$stage"' EXIT
-    git -C "$MIRROR" archive "$sha" skills commands 2>"$stage/archive.err" | tar -x -C "$stage" \
-      || { echo "director-install: skills check failed for $ref ($sha): it has no skills/ or commands/ to archive; nothing was switched." >&2; exit 1; }
+    if ! git -C "$MIRROR" archive "$sha" skills commands 2>"$stage/archive.err" | tar -x -C "$stage"; then
+      # git's own error is the cause; the stage, and archive.err with it, is removed on exit.
+      why="$(head -c 400 "$stage/archive.err" 2>/dev/null | tr '\n' ' ')"
+      echo "director-install: skills archive failed for $ref ($sha): ${why:-no error text from git or tar}; nothing was switched." >&2
+      exit 1
+    fi
     if ! why="$(skills_check "$stage")"; then
       echo "director-install: skills check failed for $ref ($sha): $why; nothing was switched." >&2
       exit 1
@@ -568,13 +572,19 @@ status() {
       echo "skills: not installed (install: director-install skills --ref origin/main)"
     fi
   else
-    local kinst kref
+    local kinst notmain mrc
     kinst="$(sed -n 's/^installed_at=//p' "$SLIB/$ksha/STAMP" 2>/dev/null)"
-    kref="$(sed -n 's/^ref=//p' "$SLIB/$ksha/STAMP" 2>/dev/null)"
+    # No ref is printed: the stamp keeps the ref of the first install of a sha, so it can
+    # name a ref that is not the one the last switch used. The sha is the fact.
     if [[ -d "$MIRROR" ]] && behind_k="$(git -C "$MIRROR" rev-list --count "$ksha..refs/heads/main" -- skills commands 2>/dev/null)"; then
-      echo "skills: ${ksha:0:12} (ref ${kref:-?}) installed ${kinst:-?}; $behind_k skills/ and commands/ commits behind main"
+      # The count above reads 0 for a sha that main lacks, so say it is not on main.
+      notmain=""
+      mrc=0
+      git -C "$MIRROR" merge-base --is-ancestor "$ksha" refs/heads/main 2>/dev/null || mrc=$?
+      [[ "$mrc" == 1 ]] && notmain="; WARN: this sha is not on main"
+      echo "skills: ${ksha:0:12} installed ${kinst:-?}; $behind_k skills/ and commands/ commits behind main$notmain"
     else
-      echo "skills: ${ksha:0:12} (ref ${kref:-?}) installed ${kinst:-?}; lag unknown (no mirror, or main not in it)"
+      echo "skills: ${ksha:0:12} installed ${kinst:-?}; lag unknown (no mirror, or main not in it)"
     fi
   fi
   local msha
