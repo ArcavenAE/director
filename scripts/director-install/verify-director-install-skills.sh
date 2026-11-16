@@ -339,6 +339,26 @@ else
     || bad "a failing tar's own error is not in the failure message" "$(grep "skills archive failed" "$out/stderr")"
 fi
 
+# --- 18b. when git fails and tar then fails on its input, git's error survives -------
+# tar's stderr is appended to the same file git's goes to. If it truncated that file
+# instead, tar's shorter text would overwrite the start of git's. The tar stub reads
+# its input to the end first, so it always writes after git has.
+fbt="$root/fakebin-both"; mkdir -p "$fbt"
+cp "$fb/git" "$fbt/git"
+printf '#!/usr/bin/env bash\ncat >/dev/null\necho "tar: input stub failure" >&2\nexit 2\n' > "$fbt/tar"; chmod +x "$fbt/tar"
+h8b="$root/home8b"
+if env PATH="$fbt:$PATH" DIRECTOR_HOME="$h8b" DIRECTOR_SRC_URL="$src" DIRECTOR_MANIFESTS_DIR="$root/manifests" \
+     "$INSTALLER" skills --ref "$A" >"$out/stdout" 2>"$out/stderr"; then
+  bad "an install whose git and tar both fail succeeded"
+else
+  grep "skills archive failed" "$out/stderr" | grep -q "not a valid object name" \
+    && ok "when git and then tar fail, git's own error is in the failure message" \
+    || bad "git's own error is not in the failure message when tar also fails" "$(grep "skills archive failed" "$out/stderr")"
+  grep "skills archive failed" "$out/stderr" | grep -q "tar: input stub failure" \
+    && ok "when git and then tar fail, tar's own error is in the failure message too" \
+    || bad "tar's own error is not in the failure message when git also fails" "$(grep "skills archive failed" "$out/stderr")"
+fi
+
 # --- 19. --status warns when the installed sha is not on main ----------------------
 # B is a descendant of A. In src2 main stops at A and a branch carries B, so B is
 # installed and is not an ancestor of main.
