@@ -71,7 +71,7 @@ Three facts shape the design:
 
 ## 2. Limits no option crosses
 
-- The hub stays on kinu (I-232, I-332).
+- The hub stays on kinu for now (I-232, I-332); where it runs later is Q1.
 - No NATS or bd credential rotation (I-259). Rotation is later work only.
 - No live stop, restart or config change on either kinu server before the
   operator approves a cutover.
@@ -111,12 +111,13 @@ change to the hub, so it waits for the operator's approval at the cutover. It
 binds no future host (R2).
 
 **KN-3. While the hub is on kinu, logout and reboot-before-login are a hub
-outage.** Files under the user's home are not readable before the first
-login, so a boot-time LaunchDaemon cannot read the hub's conf and keys there.
-It would buy only survival of logout, at the cost of a root install. Moving the
+outage.** On a host where files under the user's home are not readable
+before the first login, a boot-time LaunchDaemon cannot read the hub's conf
+and keys there (inferred, not measured on kinu). It would buy only survival of logout, at the cost of a root install. Moving the
 conf and keys out of the home, or turning on auto-login, would be a custody
-change, not a boot fix. The outage is named in section 6. A move off host
-(Q1) is the larger answer.
+change, not a boot fix. The outage is named in section 6. The operator
+accepted it for now, not as a design decision (R3). A move off host (Q1) is
+the larger answer.
 
 **KN-4. One writer per port at the cutover.** Two supervisors for 4222 is a
 split brain with the port as the lease. The window:
@@ -148,7 +149,8 @@ lands as part of n5a4y's rollout rather than as a kinu step.
 
 **KN-6. Render `server_name: <cluster>`** from the already validated `Domain`.
 It applies at each managed broker's next restart:
-- on mokuzai and corporate, one approved bus restart each;
+- on mokuzai and corporate, one bus restart each, approved by that cluster's
+  supervisor;
 - on kinu, at the cutover, where the local broker's name changes from
   `director-phase0` to `kinu`.
 
@@ -282,7 +284,7 @@ Flat tickets, no umbrella. "R" names the red tests a ticket turns green.
 | ticket | repo | change | R | after |
 |---|---|---|---|---|
 | aae-orc-kfkjp | marvel | rewrite `kinu-bus-cutover-runbook.md` for launchd (KN-4), plus a scratch-port rehearsal script | CheckPortFreeAfterBootout; CheckOldPlistMovedToRollbackDir; CheckHubLeafzNamesKinu; CheckHubLeafzLacksOldName; CheckRollbackRestoresLaunchdBroker; CheckKinuConfigMatchesFleetShape; CheckKinuLeafConfKeptForRollback; CheckServingVersionMatchesConfiguredBinary | a7h5h, n5a4y, ktts0, 5jpjc |
-| aae-orc-02w0t | ops, mokuzai and corporate | apply `server_name` by one approved bus restart per host | the hub `/leafz` names mokuzai and corporate, with no server id | a7h5h, released |
+| aae-orc-02w0t | ops, mokuzai and corporate | apply `server_name` by one bus restart per host, each approved by that cluster's supervisor | the hub `/leafz` names mokuzai and corporate, with no server id | a7h5h, released |
 | aae-orc-ku0g8 | ops, a kinu seat | rehearsal on scratch ports and labels; touches no live server | every runbook check passes, transcript on the ticket | kfkjp, c6o29, ktts0, stqn9, xsyfv, x2wz4, released |
 
 ### Phase 3: the cutover, only with the operator's approval
@@ -345,7 +347,7 @@ the cutover turns authorization on.
 
 ## 8. Rulings
 
-### Ruled by the operator, 2026-11-16 (I-511, relayed by director)
+### Ruled by the operator, 2026-11-16 (I-511; quotes from director's relay of 19:33Z)
 
 | | ruling, verbatim where quoted | effect here |
 |---|---|---|
@@ -353,6 +355,13 @@ the cutover turns authorization on.
 | O2 | on the leaf seed files at rest: "keeping the credential file on disk is allowed for now but file a bd ticket that it should probably move to a vault, keychain, or other credential store in the future" | the files stay; gtzgt writes the ruling into the enrollment doc; the move is later work, aae-orc-3fyyy. The party had split on this (Beatrix for recording the files as the durable form, Batten for treating them as non-conforming) |
 | O3 | on open items: "they should be like they are with the other two hosts" | where the design had a choice, kinu matches mokuzai and corporate: the bus config shape and binary form (KN-5); the first team passwords minted at the flip, as they were on the other two hosts' flips; no special off-host alert path for kinu (section 6) |
 | O4 | on the hub: "I'm not sure who manages the global nats, I think it is likely to move off host in the future" | Q1 below stays open; the hub observer is configured by address, not by host (KN-8); nothing here assumes the hub stays on kinu |
+
+### Accepted for now by the operator, 2026-11-16 (relayed by director)
+
+- **R3.** On accepting logout and reboot-before-login as a named hub outage
+  while the hub is on kinu, the operator: "I think we can accept this for now,
+  not as a design decision". This is an interim acceptance, which the design
+  does not settle. KN-3 and section 6 name the outage, and Q1 may make it moot.
 
 ### Open question
 
@@ -370,7 +379,6 @@ one then, or sooner if Q1 is answered.
 | | question | recommended | other options |
 |---|---|---|---|
 | R2 | Change the hub's current service file to `KeepAlive true`, in the approved cutover window? | yes. It closes the clean-exit hole on today's host and binds no future host | keep `SuccessfulExit=false` until Q1 is answered |
-| R3 | While the hub is on kinu, accept logout and reboot-before-login as a named hub outage? | yes. A boot-time daemon needs the conf and keys moved out of the home, which is a custody change, and Q1 may make it moot | a LaunchDaemon with a custody row; auto-login (also a custody change) |
 
 ### Votes changed to fit a ruling
 
