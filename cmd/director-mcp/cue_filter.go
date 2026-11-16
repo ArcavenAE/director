@@ -18,12 +18,17 @@ import (
 // The decision is the filter's own, globalTier.foreign, the one dropForeign
 // acts on, so the cue cannot count a message the filter would deliver as
 // dropped. Every doubt counts the message: a peek that fails, a message that
-// does not decode, a roster read that fails, an ambiguous FOR line.
+// does not decode, a roster read that fails, an ambiguous FOR line, and a peek
+// that returns its whole limit, since that peek may have stopped short of what
+// waits and cannot say which listed messages are still unacked.
 //
 // Cost on the 2 s poll: nothing is read with the filter off, or while the
 // global tier has nothing unacked. While it does, one peek is made, and its
 // result is reused while the durable's position (waiting count, ack floor and
-// delivered sequence) is unchanged, for at most cueFilterReuse.
+// delivered sequence) is unchanged, for at most cueFilterReuse. An uncached
+// peek also reads the roster once for each listed message with a well-formed FOR
+// line that names no seat here, up to summaryDefault (200) reads. A message with
+// no FOR line, an ambiguous one, or one that names this seat, reads no roster.
 
 // cueFilterReuse bounds how long one peek's result is reused for an unchanged
 // durable position. The roster the filter reads can change with no change to
@@ -72,6 +77,13 @@ func leaveOutDropped(ctx context.Context, c tierCounts) uint64 {
 		items, _, maybeConsumed, err := peekWaiting(pctx, g.js, g.cons(), "global", summaryDefault)
 		if err != nil {
 			return c.global // a doubt: count it all, and read again next poll
+		}
+		if len(items) >= summaryDefault {
+			// The peek returned its whole limit, so it may have stopped before
+			// the end of what waits. That is a doubt, and a doubt cues: count
+			// the durable's own number and cache it as no drops.
+			g.cueDrop.put(key, now, 0)
+			return c.global
 		}
 		for _, it := range items {
 			if it.Env == nil {
