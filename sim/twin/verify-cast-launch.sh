@@ -1400,6 +1400,21 @@ if [[ -z "${VERIFY_NESTED:-}" ]]; then
   fi
 fi
 
-pass="$(grep -c '^P$' "$tally" || true)"; fail="$(grep -c '^F$' "$tally" || true)"
+# The summary fails closed: a tally that is missing, unreadable, a link, or not a
+# regular file means the counts are lost, and grep -c would read that as zero.
+if [[ ! -f "$tally" || -L "$tally" || ! -r "$tally" ]]; then
+  echo "verify-cast-launch: the tally $tally is not a readable regular file, so the counts cannot be trusted" >&2
+  exit 1
+fi
+tally_count() { # P or F: the number of lines, or a failure when grep errs or prints no number
+  local n rc=0
+  n="$(grep -c "^$1\$" "$tally")" || rc=$?
+  (( rc <= 1 )) && [[ "$n" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$n"
+}
+if ! pass="$(tally_count P)" || ! fail="$(tally_count F)"; then
+  echo "verify-cast-launch: the tally $tally could not be counted, so the counts cannot be trusted" >&2
+  exit 1
+fi
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
