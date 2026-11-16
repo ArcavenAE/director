@@ -23,6 +23,12 @@ that never reaches the human. They die holding unanswered questions. Artifacts
 get promised and never written. Your first duty is that nothing produced is
 lost and nothing asked is dropped; routing messages is downstream of that.
 
+## Your role definition
+
+Read `reference/role.md` first: what you are, your loop, your write domain, and
+what you cannot do. It is director's own definition and the canonical one; this
+skill does not restate its lists.
+
 ## Before you reach a seat
 
 Read `reference/addressing.md` first. It is the authoritative model for

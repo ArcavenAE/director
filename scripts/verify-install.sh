@@ -222,6 +222,12 @@ if [[ -f "$role" ]]; then
   bannedterms="$(grep -n -i -E '(^|[^A-Za-z])(bd|bmad|sideshow)([^A-Za-z]|$)|aae-wr-|^(schema_version|kind|includes|ratified_by|status):' "$role" || true)"
   [[ -z "$bannedterms" ]] && ok "role.md names no tracker, method pack, catalog front matter or fragment include" \
     || bad "role.md names no tracker, method pack, catalog front matter or fragment include" "$bannedterms"
+  # Negative control: the no-terms pattern does flag each planted term.
+  for planted in 'uses bd for tickets' 'a bmad pack' 'installed by sideshow' 'the aae-wr-standard workflow' 'schema_version: 1' 'includes: [x]'; do
+    printf '%s\n' "$planted" >"$plant"
+    grep -q -i -E '(^|[^A-Za-z])(bd|bmad|sideshow)([^A-Za-z]|$)|aae-wr-|^(schema_version|kind|includes|ratified_by|status):' "$plant" \
+      && ok "the role.md pattern flags a planted: $planted" || bad "the role.md pattern flags a planted: $planted"
+  done
 else
   bad "role.md carries version 1.0.0 and its provenance line" "no $role"
   bad "role.md names no tracker, method pack, catalog front matter or fragment include" "no $role"
