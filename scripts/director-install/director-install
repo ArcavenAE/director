@@ -246,8 +246,8 @@ install_skills() {
   if [[ ! -d "$SLIB/$sha" ]]; then
     stage="$(mktemp -d "$SLIB/.stage.XXXXXX")"
     trap 'rm -rf "$stage"' EXIT
-    if ! git -C "$MIRROR" archive "$sha" skills commands 2>"$stage/archive.err" | tar -x -C "$stage"; then
-      # git's own error is the cause; the stage, and archive.err with it, is removed on exit.
+    if ! git -C "$MIRROR" archive "$sha" skills commands 2>"$stage/archive.err" | tar -x -C "$stage" 2>>"$stage/archive.err"; then
+      # git's or tar's own error is the cause; the stage, and archive.err with it, is removed on exit.
       why="$(head -c 400 "$stage/archive.err" 2>/dev/null | tr '\n' ' ')"
       echo "director-install: skills archive failed for $ref ($sha): ${why:-no error text from git or tar}; nothing was switched." >&2
       exit 1
