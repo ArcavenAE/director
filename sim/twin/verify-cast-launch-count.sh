@@ -5,11 +5,15 @@
 # misses it. Three runs of the verifier, each about three minutes:
 #   A. a clean run. Against its own log: the PASS lines equal the summary's
 #      passed count, and the FAIL lines equal its failed count.
-#   B. a run where one case fails. The test points CAST_LAUNCH at a copy of this
-#      directory whose dismiss-devch helper reports the wrong exit status for the
-#      "option 2 reworded" screen, so one devch case, run in a pipeline, fails
-#      without any edit to the verifier. The verifier must print a FAIL line for
-#      it, count it in the summary, and exit nonzero.
+#      A clean run also exits 0 and prints no FAIL line.
+#   B. a run where a case fails, in the verifier and in the nested runs it starts.
+#      The test runs a copy of this directory, verifier included, whose
+#      dismiss-devch helper reports the wrong exit status for the "option 2
+#      reworded" screen, so that devch case, run in a pipeline, fails without any
+#      edit to the verifier, and so do the two nested runs, which copy that helper.
+#      The verifier must print a FAIL line for it, count it in the summary, exit
+#      nonzero, and keep the nested runs' own log lines from starting a PASS or
+#      FAIL line of its log: its PASS and FAIL lines still equal its summary.
 #   C. a run that loses its tally. The copy's helper, for the same screen, points
 #      the verifier's tally file at /dev/null (every later count is lost, and
 #      grep reads an empty file as zero). The verifier must fail with a message
@@ -28,13 +32,15 @@ bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/cast-launch-count.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 
-# run_verifier LOG LAUNCH: runs the verifier, leaves its exit status in vrc.
+# run_verifier LOG LAUNCH [VERIFIER]: runs the verifier (or the copy VERIFIER names),
+# leaves its exit status in vrc.
 run_verifier() {
   vrc=0
+  local v="${3:-$verifier}"
   if [[ -n "$2" ]]; then
-    CAST_LAUNCH="$2" bash "$verifier" > "$1" 2>&1 || vrc=$?
+    CAST_LAUNCH="$2" bash "$v" > "$1" 2>&1 || vrc=$?
   else
-    bash "$verifier" > "$1" 2>&1 || vrc=$?
+    bash "$v" > "$1" 2>&1 || vrc=$?
   fi
 }
 
@@ -67,6 +73,11 @@ if summary_of "$logA"; then
 else
   bad "clean run: the verifier printed a summary" "no 'N passed, M failed' line; exit $vrc; last line: $(tail -1 "$logA")"
 fi
+if (( vrc == 0 )) && ! grep -q '^FAIL' "$logA"; then
+  ok "clean run: the verifier exited 0 and printed no FAIL line"
+else
+  bad "clean run: the verifier exited 0 and printed no FAIL line" "exit $vrc; first FAIL line: $(grep -m1 '^FAIL' "$logA" | cut -c1-200)"
+fi
 
 # --- B. a run where one case fails ----------------------------------------------
 # The copy holds the launcher and helper the verifier tests. Its helper runs the
@@ -93,7 +104,7 @@ STUB
 chmod +x "$twin/dismiss-devch"
 
 logB="$scratch/failing.log"
-run_verifier "$logB" "$twin/cast-launch.sh"
+run_verifier "$logB" "$twin/cast-launch.sh" "$twin/verify-cast-launch.sh"
 if grep -q '^FAIL devch: option 2 reworded' "$logB"; then
   ok "failing run: the verifier printed a FAIL line for the case that was made to fail"
 else
@@ -108,6 +119,14 @@ if summary_of "$logB"; then
   fi
 else
   bad "failing run: the verifier printed a summary" "no 'N passed, M failed' line; exit $vrc; last line: $(tail -1 "$logB")"
+fi
+if summary_of "$logB"; then
+  lp="$(grep -c '^PASS' "$logB" || true)"
+  if [[ "$lp" == "$spass" ]]; then
+    ok "failing run: PASS lines equal the summary's passed count ($lp)"
+  else
+    bad "failing run: PASS lines equal the summary's passed count" "$lp PASS lines, summary says $spass passed (a nested run's log lines can start a PASS line)"
+  fi
 fi
 lf="$(grep -c '^FAIL' "$logB" || true)"
 if (( lf > 0 && vrc == 0 )); then
