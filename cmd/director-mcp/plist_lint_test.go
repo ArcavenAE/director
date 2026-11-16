@@ -178,13 +178,35 @@ func TestPlistCarriesNoSeed(t *testing.T) {
 	}
 }
 
+// The hub's conf and keys sit under the user's home (design KN-3), so its
+// working directory and log paths are home paths. The file carries the
+// placeholder below in place of the home; the cutover script substitutes it at
+// install, so no real account name is ever written in a tracked file.
+const hubHomePlaceholder = "__HUB_HOME__"
+
 func TestPlistHasWorkingDirectoryAndLogPaths(t *testing.T) {
 	m := parsePlist(t, hubPlistFile)
 	for _, k := range []string{"WorkingDirectory", "StandardOutPath", "StandardErrorPath"} {
 		p := plistString(t, m, k)
-		if !path.IsAbs(p) {
-			t.Errorf("%s must be an absolute path, got %q", k, p)
+		if !strings.HasPrefix(p, hubHomePlaceholder+"/") {
+			t.Errorf("%s must start with the placeholder %s/ (home paths are filled in at install), got %q", k, hubHomePlaceholder, p)
 		}
+		if !path.IsAbs(strings.Replace(p, hubHomePlaceholder, "/h", 1)) {
+			t.Errorf("%s is not absolute once the placeholder is replaced: %q", k, p)
+		}
+	}
+}
+
+func TestPlistWritesNoLiteralAccountHome(t *testing.T) {
+	literal := regexp.MustCompile(`/(Users|home)/[^/<\s]+`)
+	for _, f := range []string{hubPlistFile, rollbackPlistFile} {
+		if m := literal.FindString(readFileText(t, f)); m != "" {
+			t.Errorf("%s: names a literal account home %q; use %s", f, m, hubHomePlaceholder)
+		}
+	}
+	// The placeholder itself is allowed, and it is not a literal home.
+	if literal.MatchString(hubHomePlaceholder + "/logs") {
+		t.Errorf("the placeholder must not look like a literal account home")
 	}
 }
 
