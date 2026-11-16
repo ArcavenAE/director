@@ -18,10 +18,12 @@ import (
 	"testing"
 )
 
-const (
-	hubPlistFile      = "../../deploy/launchd/com.arcaven.nats-global.plist"
-	rollbackPlistFile = "../../deploy/launchd/rollback/com.arcaven.nats-local.plist"
-)
+const hubPlistFile = "../../deploy/launchd/com.arcaven.nats-global.plist"
+
+// The binary is pinned per host at install: a version in a tracked file would
+// choose it for the fleet (design O3), so the file carries a placeholder the
+// cutover fills in with an absolute path.
+const natsServerBinPlaceholder = "__NATS_SERVER_BIN__"
 
 // parsePlist reads an XML property list into map[string]any, []any, string and
 // bool values. It handles the element set a launchd service file uses.
@@ -129,11 +131,17 @@ func TestPlistProgramIsAbsoluteAndNotShim(t *testing.T) {
 		t.Fatalf("ProgramArguments is missing or empty: %v", m["ProgramArguments"])
 	}
 	prog, ok := args[0].(string)
-	if !ok || !path.IsAbs(prog) {
-		t.Fatalf("ProgramArguments[0] must be an absolute path, got %q", args[0])
+	if !ok {
+		t.Fatalf("ProgramArguments[0] is not a string: %v", args[0])
 	}
-	if path.Base(prog) != "nats-server" {
-		t.Errorf("ProgramArguments[0] must be the nats-server binary, got %q", prog)
+	if prog != natsServerBinPlaceholder {
+		// A literal path is allowed if it is absolute and not under a shim.
+		if !path.IsAbs(prog) {
+			t.Fatalf("ProgramArguments[0] must be %s or an absolute path, got %q", natsServerBinPlaceholder, prog)
+		}
+		if path.Base(prog) != "nats-server" {
+			t.Errorf("ProgramArguments[0] must be the nats-server binary, got %q", prog)
+		}
 	}
 	for _, el := range strings.Split(prog, "/") {
 		l := strings.ToLower(el)
@@ -143,6 +151,21 @@ func TestPlistProgramIsAbsoluteAndNotShim(t *testing.T) {
 	}
 	if _, set := m["Program"]; set && m["Program"] != prog {
 		t.Errorf("Program and ProgramArguments[0] disagree: %v vs %s", m["Program"], prog)
+	}
+}
+
+func TestPlistProgramPinsNoVersion(t *testing.T) {
+	m := parsePlist(t, hubPlistFile)
+	args, _ := m["ProgramArguments"].([]any)
+	if len(args) == 0 {
+		t.Fatalf("ProgramArguments is missing or empty")
+	}
+	prog, _ := args[0].(string)
+	if prog != natsServerBinPlaceholder {
+		t.Errorf("ProgramArguments[0] must be the placeholder %s (the install pins the binary), got %q", natsServerBinPlaceholder, prog)
+	}
+	if regexp.MustCompile(`\d+\.\d+\.\d+`).MatchString(prog) {
+		t.Errorf("ProgramArguments[0] carries a version: %q", prog)
 	}
 }
 
@@ -163,7 +186,7 @@ func TestPlistKeepAliveIsUnconditional(t *testing.T) {
 
 func TestPlistCarriesNoSeed(t *testing.T) {
 	deny := regexp.MustCompile(`(?i)seed|password|passwd|secret|token|nkey|cred|key`)
-	for _, f := range []string{hubPlistFile, rollbackPlistFile} {
+	for _, f := range []string{hubPlistFile} {
 		m := parsePlist(t, f)
 		if env, ok := m["EnvironmentVariables"].(map[string]any); ok {
 			for k := range env {
@@ -199,7 +222,7 @@ func TestPlistHasWorkingDirectoryAndLogPaths(t *testing.T) {
 
 func TestPlistWritesNoLiteralAccountHome(t *testing.T) {
 	literal := regexp.MustCompile(`/(Users|home)/[^/<\s]+`)
-	for _, f := range []string{hubPlistFile, rollbackPlistFile} {
+	for _, f := range []string{hubPlistFile} {
 		if m := literal.FindString(readFileText(t, f)); m != "" {
 			t.Errorf("%s: names a literal account home %q; use %s", f, m, hubHomePlaceholder)
 		}
@@ -211,7 +234,7 @@ func TestPlistWritesNoLiteralAccountHome(t *testing.T) {
 }
 
 func TestPlistNamesNoHomeOrSeat(t *testing.T) {
-	for _, f := range []string{hubPlistFile, rollbackPlistFile} {
+	for _, f := range []string{hubPlistFile} {
 		text := readFileText(t, f)
 		for _, bad := range []string{"/Users/", "/home/", "~/", "$HOME", "/var/root"} {
 			if strings.Contains(text, bad) {
@@ -234,29 +257,8 @@ func TestHubPlistLabelAndStart(t *testing.T) {
 	}
 }
 
-func TestRollbackPlistIsTheOldLocalBrokerFile(t *testing.T) {
-	m := parsePlist(t, rollbackPlistFile)
-	if got := plistString(t, m, "Label"); got != "com.arcaven.nats-local" {
-		t.Errorf("Label = %q, want com.arcaven.nats-local", got)
-	}
-	if m["RunAtLoad"] != true {
-		t.Errorf("RunAtLoad must be true (the old rule, kept as it was), got %v", m["RunAtLoad"])
-	}
-	ka, ok := m["KeepAlive"].(map[string]any)
-	if !ok || ka["SuccessfulExit"] != false {
-		t.Errorf("the rollback copy keeps the old rule KeepAlive SuccessfulExit=false, got %v", m["KeepAlive"])
-	}
-	if filepath.Base(rollbackPlistFile) != plistString(t, m, "Label")+".plist" {
-		t.Errorf("file name must be <Label>.plist")
-	}
-	hub := parsePlist(t, hubPlistFile)
-	if hub["Label"] == m["Label"] {
-		t.Errorf("the hub file and the rollback copy must have different labels")
-	}
-}
-
 func TestPlistFilesAreWellFormedPlists(t *testing.T) {
-	for _, f := range []string{hubPlistFile, rollbackPlistFile} {
+	for _, f := range []string{hubPlistFile} {
 		text := readFileText(t, f)
 		if !strings.Contains(text, "<!DOCTYPE plist") || !strings.Contains(text, `<plist version="1.0">`) {
 			t.Errorf("%s: missing the plist doctype or version header", f)
