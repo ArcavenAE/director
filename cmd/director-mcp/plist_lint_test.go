@@ -23,8 +23,8 @@ const hubPlistFile = "../../deploy/launchd/com.arcaven.nats-global.plist"
 // The binary is pinned per host at install: a version in a tracked file would
 // choose it for the fleet (design O3), so the file carries a placeholder the
 // cutover fills in with the absolute directory of the pinned nats-server. The
-// launcher runs nats-server by name from PATH, so the pin is the first PATH
-// directory.
+// pin holds when the installed launcher resolves nats-server from PATH, so it
+// is the first PATH directory.
 const natsServerBinDirPlaceholder = "__NATS_SERVER_BIN_DIR__"
 
 // The program is the launcher already installed on the hub host, named by

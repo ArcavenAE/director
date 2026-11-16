@@ -3,9 +3,9 @@
 <!--
   Reference launchd service file for the global NATS hub, with its lint tests.
   It is the public, host-neutral reference. It is NOT the installed file: the
-  file loaded on the hub host is kept with that host's installer, and the two
-  are kept in agreement on the program, KeepAlive, RunAtLoad and the
-  environment keys.
+  file loaded on the hub host is kept with that host's installer, and the
+  installer's check holds the two files in agreement on the program,
+  KeepAlive, RunAtLoad and the environment keys.
   Design: sim/design/kinu-nats-deployment.md, KN-2 (ruling R2). Bead aae-orc-5jpjc.
 
   Why KeepAlive true: nats-server exits 0 on a graceful stop (TERM and INT,
@@ -15,8 +15,8 @@
   `launchctl bootout`, never a kill. A bad conf is relaunched every 10 seconds
   (the default ThrottleInterval), which is loud by design.
 
-  This file is applied only in the approved cutover window, never before.
-  Nothing here is installed or loaded by this repository.
+  The installed file is applied only in the approved cutover window, never
+  before. Nothing here is installed or loaded by this repository.
 
   The program is the launcher installed on the hub host, run through bash. It
   sets the names the hub conf reads before it execs nats-server, so a plist
@@ -27,14 +27,16 @@
   Placeholders, filled in by the cutover:
     __HUB_HOME__             the hub account's home directory (also HOME below).
     __NATS_SERVER_BIN_DIR__  the absolute directory of the pinned nats-server.
-  The pinned binary comes first in PATH, so a version-manager shim directory
+  The pin holds when the installed launcher resolves nats-server from PATH:
+  the pinned binary comes first in PATH, so a version-manager shim directory
   is never consulted, and no version is chosen in this file (design O3). The
-  cutover checks the realpath and the version before loading this file.
+  cutover checks the realpath and the version before loading the installed
+  file.
 
   No seed, password or token is set here.
 
   This file does not decide who supervises the hub (open question Q1); it is
-  the service file for where the hub runs today.
+  the reference for the hub's service file.
 -->
 <plist version="1.0">
 <dict>
