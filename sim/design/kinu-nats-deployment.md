@@ -49,8 +49,7 @@ Q1). It also lists, plainly, the failures nothing in this plan can report.
 
 Sources: a kinu seat's read-only checks, relayed by the arcaven supervisor
 (launchd labels, ports, versions, the hub conf's `server_name` and `http`
-lines, the hub's `/leafz`, kinu's leaf remote URL, `fdesetup status` reporting
-FileVault On); `marvel bus status` on mokuzai; marvel `internal/bus/render.go`
+lines, the hub's `/leafz`, kinu's leaf remote URL); `marvel bus status` on mokuzai; marvel `internal/bus/render.go`
 (no `server_name` is rendered). `marvel bus status --cluster kinu` reports no
 bus configured.
 
@@ -111,10 +110,10 @@ design. This fixes the clean-exit hole on today's host. It is a live config
 change to the hub, so it waits for the operator's approval at the cutover. It
 binds no future host (R2).
 
-**KN-3. While the hub is on kinu, logout and reboot-before-unlock are a hub
-outage.** FileVault is On, so a boot-time LaunchDaemon cannot read files in the
-user's home before an unlock at preboot. Inferred, not measured on kinu. It
-would buy only survival of logout, at the cost of a root install. Moving the
+**KN-3. While the hub is on kinu, logout and reboot-before-login are a hub
+outage.** Files under the user's home are not readable before the first
+login, so a boot-time LaunchDaemon cannot read the hub's conf and keys there.
+It would buy only survival of logout, at the cost of a root install. Moving the
 conf and keys out of the home, or turning on auto-login, would be a custody
 change, not a boot fix. The outage is named in section 6. A move off host
 (Q1) is the larger answer.
@@ -371,7 +370,7 @@ one then, or sooner if Q1 is answered.
 | | question | recommended | other options |
 |---|---|---|---|
 | R2 | Change the hub's current service file to `KeepAlive true`, in the approved cutover window? | yes. It closes the clean-exit hole on today's host and binds no future host | keep `SuccessfulExit=false` until Q1 is answered |
-| R3 | While the hub is on kinu, accept logout and reboot-before-unlock as a named hub outage? | yes. A boot-time daemon needs the conf and keys moved out of the home, which is a custody change, and Q1 may make it moot | a LaunchDaemon with a custody row; auto-login (also a custody change) |
+| R3 | While the hub is on kinu, accept logout and reboot-before-login as a named hub outage? | yes. A boot-time daemon needs the conf and keys moved out of the home, which is a custody change, and Q1 may make it moot | a LaunchDaemon with a custody row; auto-login (also a custody change) |
 
 ### Votes changed to fit a ruling
 
