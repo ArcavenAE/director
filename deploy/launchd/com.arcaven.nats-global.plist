@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Reviewed launchd service file for the global NATS hub's CURRENT host (kinu).
+  Reference launchd service file for the global NATS hub, with its lint tests.
+  It is the public, host-neutral reference. It is NOT the installed file: the
+  file loaded on the hub host is kept with that host's installer, and the two
+  are kept in agreement on the program, KeepAlive, RunAtLoad and the
+  environment keys.
   Design: sim/design/kinu-nats-deployment.md, KN-2 (ruling R2). Bead aae-orc-5jpjc.
 
   Why KeepAlive true: nats-server exits 0 on a graceful stop (TERM and INT,
