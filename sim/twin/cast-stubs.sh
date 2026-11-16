@@ -3,7 +3,10 @@
 # sim/twin/parity-table.sh so both drive the launcher the same way: the stubs
 # (a role-library root, the shim, claude, curl), cast(), and the lookups over what
 # claude was handed and ran with. The caller sets LAUNCH first. Not run on its own.
-root="$(mktemp -d)"
+# A template under TMPDIR: on macOS a template-less mktemp -d ignores TMPDIR, so the
+# root would land under the per-user temp directory and a run under a scratch-only
+# write profile could not start (director#648, as #434).
+root="$(mktemp -d "${TMPDIR:-/tmp}/cast-stubs.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 
 # --- the stubs ----------------------------------------------------------------
