@@ -9,6 +9,11 @@
 #      sandbox-exec inside another sandbox ("sandbox_apply: Operation not
 #      permitted"), so under an outer scratch-only profile this check is
 #      skipped, with the refusal quoted, and check 1 carries the proof.
+#   3. when the root cannot be made (TMPDIR unwritable), sourcing the stubs stops
+#      with a message and a nonzero status, and creates none of the paths the
+#      stubs would otherwise write at the top of the filesystem (/wardrobe, /out,
+#      /bin/claude, /bin/curl, /bin/director-mcp). Skipped when run as root,
+#      where an unguarded stub would really write them.
 # Usage: sim/twin/verify-cast-stubs-tmpdir.sh     Exit nonzero on any miss.
 #        A skipped check is neither a pass nor a fail and is counted apart.
 set -euo pipefail
@@ -53,6 +58,33 @@ if [[ "$(uname -s)" == Darwin && -x /usr/bin/sandbox-exec ]]; then
   fi
 else
   skipped "cast-stubs.sh sources under a scratch-only write profile" "needs macOS sandbox-exec"
+fi
+
+# 3. a root that cannot be made stops the source before any write.
+if (( EUID == 0 )); then
+  skipped "cast-stubs.sh stops when the root cannot be made" "running as root, where an unguarded stub would write /wardrobe, /out and /bin"
+else
+  unwritable="$scratch/unwritable"
+  mkdir "$unwritable"
+  chmod 500 "$unwritable"
+  stray=(/wardrobe /out /bin/claude /bin/curl /bin/director-mcp)
+  pre=()
+  for p in "${stray[@]}"; do [[ -e "$p" ]] && pre+=("$p"); done
+  src_rc=0
+  src_out="$(TMPDIR="$unwritable" LAUNCH=/usr/bin/true bash -c 'cd "$2" && source "$1"' _ "$stubs" "$scratch" 2>&1)" || src_rc=$?
+  chmod 700 "$unwritable"
+  made=()
+  for p in "${stray[@]}"; do
+    [[ -e "$p" ]] || continue
+    already=0
+    for q in ${pre[@]+"${pre[@]}"}; do [[ "$q" == "$p" ]] && already=1; done
+    (( already == 1 )) || made+=("$p")
+  done
+  if (( src_rc != 0 )) && [[ "$src_out" == *"no harness root"* ]] && (( ${#made[@]} == 0 )); then
+    ok "cast-stubs.sh stops when the root cannot be made"
+  else
+    bad "cast-stubs.sh stops when the root cannot be made" "source exit $src_rc; message: ${src_out//$'\n'/ }; paths created: ${made[*]:-none}"
+  fi
 fi
 
 if (( fail > 0 )); then
