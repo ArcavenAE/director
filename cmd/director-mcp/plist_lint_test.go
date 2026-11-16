@@ -22,8 +22,16 @@ const hubPlistFile = "../../deploy/launchd/com.arcaven.nats-global.plist"
 
 // The binary is pinned per host at install: a version in a tracked file would
 // choose it for the fleet (design O3), so the file carries a placeholder the
-// cutover fills in with an absolute path.
-const natsServerBinPlaceholder = "__NATS_SERVER_BIN__"
+// cutover fills in with the absolute directory of the pinned nats-server.
+// start.sh runs nats-server by name from PATH, so the pin is the first PATH
+// directory; the program itself is the checked-in start script, which writes
+// the pid file the hub-user commands read before they send SIGHUP.
+const (
+	natsServerBinDirPlaceholder = "__NATS_SERVER_BIN_DIR__"
+	checkoutPlaceholder         = "__DIRECTOR_CHECKOUT__"
+	startScriptRel              = "probe/nats-global-tier/hub/start.sh"
+	startScriptInRepo           = "../../" + startScriptRel
+)
 
 // parsePlist reads an XML property list into map[string]any, []any, string and
 // bool values. It handles the element set a launchd service file uses.
@@ -124,48 +132,113 @@ func readFileText(t *testing.T, file string) string {
 	return string(b)
 }
 
-func TestPlistProgramIsAbsoluteAndNotShim(t *testing.T) {
-	m := parsePlist(t, hubPlistFile)
-	args, ok := m["ProgramArguments"].([]any)
-	if !ok || len(args) == 0 {
+func hubProgramArgs(t *testing.T, m map[string]any) []string {
+	t.Helper()
+	raw, ok := m["ProgramArguments"].([]any)
+	if !ok || len(raw) == 0 {
 		t.Fatalf("ProgramArguments is missing or empty: %v", m["ProgramArguments"])
 	}
-	prog, ok := args[0].(string)
+	out := make([]string, len(raw))
+	for i, v := range raw {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("ProgramArguments[%d] is not a string: %v", i, v)
+		}
+		out[i] = s
+	}
+	return out
+}
+
+func hubPathDirs(t *testing.T, m map[string]any) []string {
+	t.Helper()
+	env, ok := m["EnvironmentVariables"].(map[string]any)
 	if !ok {
-		t.Fatalf("ProgramArguments[0] is not a string: %v", args[0])
+		t.Fatalf("EnvironmentVariables is missing")
 	}
-	if prog != natsServerBinPlaceholder {
-		// A literal path is allowed if it is absolute and not under a shim.
-		if !path.IsAbs(prog) {
-			t.Fatalf("ProgramArguments[0] must be %s or an absolute path, got %q", natsServerBinPlaceholder, prog)
-		}
-		if path.Base(prog) != "nats-server" {
-			t.Errorf("ProgramArguments[0] must be the nats-server binary, got %q", prog)
-		}
+	p, ok := env["PATH"].(string)
+	if !ok || p == "" {
+		t.Fatalf("EnvironmentVariables.PATH is missing")
 	}
-	for _, el := range strings.Split(prog, "/") {
-		l := strings.ToLower(el)
-		if strings.Contains(l, "shim") || l == ".mise" || l == "mise" || l == ".asdf" || l == "asdf" {
-			t.Errorf("ProgramArguments[0] is under a shim or version-manager directory (%q): %s", el, prog)
-		}
+	return strings.Split(p, ":")
+}
+
+// The hub must start through the checked-in start script: it writes the pid
+// file and starts the provisioning that hub-user add and remove rely on.
+func TestPlistProgramIsTheStartScript(t *testing.T) {
+	m := parsePlist(t, hubPlistFile)
+	args := hubProgramArgs(t, m)
+	want := checkoutPlaceholder + "/" + startScriptRel
+	if args[0] != want {
+		t.Errorf("ProgramArguments[0] must be the start script %q, got %q", want, args[0])
 	}
-	if _, set := m["Program"]; set && m["Program"] != prog {
-		t.Errorf("Program and ProgramArguments[0] disagree: %v vs %s", m["Program"], prog)
+	if len(args) != 1 {
+		t.Errorf("the start script takes no arguments, got %v", args[1:])
+	}
+	if _, set := m["Program"]; set && m["Program"] != args[0] {
+		t.Errorf("Program and ProgramArguments[0] disagree: %v vs %s", m["Program"], args[0])
 	}
 }
 
-func TestPlistProgramPinsNoVersion(t *testing.T) {
+func TestStartScriptThePlistRunsExistsAndExecsTheServer(t *testing.T) {
+	text := readFileText(t, startScriptInRepo)
+	for _, want := range []string{"exec nats-server", "--pid", "--log"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("%s no longer contains %q, which the service file relies on", startScriptRel, want)
+		}
+	}
+}
+
+func TestPlistPathPinsTheBinaryAndHasNoShim(t *testing.T) {
 	m := parsePlist(t, hubPlistFile)
-	args, _ := m["ProgramArguments"].([]any)
-	if len(args) == 0 {
-		t.Fatalf("ProgramArguments is missing or empty")
+	dirs := hubPathDirs(t, m)
+	if dirs[0] != natsServerBinDirPlaceholder {
+		t.Errorf("the first PATH directory must be the placeholder %s (the install pins the binary), got %q", natsServerBinDirPlaceholder, dirs[0])
 	}
-	prog, _ := args[0].(string)
-	if prog != natsServerBinPlaceholder {
-		t.Errorf("ProgramArguments[0] must be the placeholder %s (the install pins the binary), got %q", natsServerBinPlaceholder, prog)
+	for _, d := range dirs {
+		if d != natsServerBinDirPlaceholder && !path.IsAbs(d) {
+			t.Errorf("PATH directory %q must be absolute or the placeholder", d)
+		}
+		l := strings.ToLower(d)
+		if strings.Contains(l, "shim") || strings.Contains(l, "mise") || strings.Contains(l, "asdf") {
+			t.Errorf("PATH directory %q is a shim or version-manager directory", d)
+		}
+		if regexp.MustCompile(`\d+\.\d+\.\d+`).MatchString(d) {
+			t.Errorf("PATH directory %q carries a version", d)
+		}
 	}
-	if regexp.MustCompile(`\d+\.\d+\.\d+`).MatchString(prog) {
-		t.Errorf("ProgramArguments[0] carries a version: %q", prog)
+}
+
+// Below the home placeholder the file names only what the checked-in start
+// script already names.
+func TestPlistPathsBelowTheHomePlaceholderAreOnesMainCarries(t *testing.T) {
+	allowed := map[string]bool{
+		hubHomePlaceholder + "/.director/nats-global":                     true,
+		hubHomePlaceholder + "/.director/nats-global/log/nats-server.log": true,
+	}
+	m := parsePlist(t, hubPlistFile)
+	for _, k := range []string{"WorkingDirectory", "StandardOutPath", "StandardErrorPath"} {
+		p := plistString(t, m, k)
+		if !allowed[p] {
+			t.Errorf("%s = %q names a path the start script does not carry", k, p)
+		}
+	}
+	text := readFileText(t, hubPlistFile)
+	for _, line := range strings.Split(text, "\n") {
+		if i := strings.Index(line, hubHomePlaceholder+"/"); i >= 0 {
+			rest := line[i:]
+			if j := strings.IndexAny(rest, "<\" "); j >= 0 {
+				rest = rest[:j]
+			}
+			if !allowed[rest] {
+				t.Errorf("a path below %s is not one main carries: %q", hubHomePlaceholder, rest)
+			}
+		}
+	}
+	start := readFileText(t, startScriptInRepo)
+	for _, frag := range []string{"$HOME/.director/nats-global", "log/nats-server.log"} {
+		if !strings.Contains(start, frag) {
+			t.Errorf("%s no longer carries %q", startScriptRel, frag)
+		}
 	}
 }
 
