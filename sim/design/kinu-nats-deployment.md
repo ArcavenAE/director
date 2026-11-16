@@ -103,12 +103,13 @@ marvel stay on record for whoever answers Q1:
 Until Q1 is answered, the hub keeps its launchd service on kinu, and this plan
 makes no change that assumes it stays there.
 
-**KN-2. Proposed for the hub's current service file: `KeepAlive true`** (party
-5 to 0). The only deliberate stop becomes `launchctl bootout`. A bad conf then
-relaunches every 10 seconds (the default `ThrottleInterval`), which is loud by
-design. This fixes the clean-exit hole on today's host. It is a live config
-change to the hub, so it waits for the operator's approval at the cutover. It
-binds no future host (R2).
+**KN-2. The hub's current service file gets `KeepAlive true`** (party 5 to 0;
+ruled, R2). It is set in the approved cutover window and not before, since it is
+a live config change to the hub. A deliberate hub stop is then a `launchctl
+bootout`, never a kill, because launchd now relaunches the server after any
+exit. A bad conf relaunches every 10 seconds (the default `ThrottleInterval`),
+which is loud by design. This fixes the clean-exit hole on today's host. It
+binds no future host.
 
 **KN-3. While the hub is on kinu, logout and reboot-before-login are a hub
 outage.** On a host where files under the user's home are not readable
@@ -291,7 +292,7 @@ Flat tickets, no umbrella. "R" names the red tests a ticket turns green.
 
 | ticket | repo | change | R | after |
 |---|---|---|---|---|
-| aae-orc-bxg5f | ops, a kinu seat | KN-1 flip from the rewritten runbook: the same bus config shape and binary form as mokuzai and corporate, re-push of the leaf seed before the post-checks, and every post-check reading taken after the window opens. The hub's KeepAlive change (KN-2) rides the same approved window only if the operator approves it there (R2) | the upgrade post-check reads "hub leaf up" on kinu; the hub `/leafz` names kinu, mokuzai and corporate and not `director-phase0`; the hub status lines show no missing leaf | ku0g8, 02w0t, **the operator's approval** |
+| aae-orc-bxg5f | ops, a kinu seat | KN-1 flip from the rewritten runbook: the same bus config shape and binary form as mokuzai and corporate, re-push of the leaf seed before the post-checks, and every post-check reading taken after the window opens. The hub's service file gets `KeepAlive true` in the same approved window (KN-2, ruled R2); from then on a deliberate hub stop is `launchctl bootout`, never a kill | the upgrade post-check reads "hub leaf up" on kinu; the hub `/leafz` names kinu, mokuzai and corporate and not `director-phase0`; the hub status lines show no missing leaf | ku0g8, 02w0t, **the operator's approval** |
 
 The window's earlier preconditions on bxg5f stand: the director seat
 credential, every kinu session respawning, and the authorization block going
@@ -356,6 +357,13 @@ the cutover turns authorization on.
 | O3 | on open items: "they should be like they are with the other two hosts" | where the design had a choice, kinu matches mokuzai and corporate: the bus config shape and binary form (KN-5); the first team passwords minted at the flip, as they were on the other two hosts' flips; no special off-host alert path for kinu (section 6) |
 | O4 | on the hub: "I'm not sure who manages the global nats, I think it is likely to move off host in the future" | Q1 below stays open; the hub observer is configured by address, not by host (KN-8); nothing here assumes the hub stays on kinu |
 
+### Ruled by the operator after review, 2026-11-16 (relayed by director, 20:15Z)
+
+- **R2.** The operator, verbatim: "R2 let lanchd restart the hub even after a
+  clean exit". Approved: the hub's current service file gets `KeepAlive true`,
+  set in the approved cutover window and not before (KN-2). A deliberate hub
+  stop is then a `launchctl bootout`, never a kill.
+
 ### Accepted for now by the operator, 2026-11-16 (relayed by director)
 
 - **R3.** On accepting logout and reboot-before-login as a named hub outage
@@ -370,15 +378,6 @@ the cutover turns authorization on.
   hub's host by config, the service file in 5jpjc describes the hub's current
   host only, and no ticket depends on the hub staying on kinu. When Q1 is
   answered, the party's reasons on the hub (KN-1) are the starting evidence.
-
-### Still for the operator, each with a recommendation
-
-Each recommendation is valid until 2026-11-30. The architect role re-checks each
-one then, or sooner if Q1 is answered.
-
-| | question | recommended | other options |
-|---|---|---|---|
-| R2 | Change the hub's current service file to `KeepAlive true`, in the approved cutover window? | yes. It closes the clean-exit hole on today's host and binds no future host | keep `SuccessfulExit=false` until Q1 is answered |
 
 ### Votes changed to fit a ruling
 
