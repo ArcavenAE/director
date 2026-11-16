@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,5 +114,85 @@ func TestCueCountAfterAPullDroppedAMessageCountsOnlyNewMail(t *testing.T) {
 	pubEnv(t, r.ctx, r.gjs, r.bus.global.cfg.inboxSubject(), "plain1", "INFORM", "no FOR line")
 	if n := cueCountOf(t, r); n != 1 {
 		t.Fatalf("cue count after new mail = %d, want 1", n)
+	}
+}
+
+// A message the filter dropped is acked, and it can sit above the ack floor
+// behind a message the seat has not acked. The peek lists both, but the durable
+// counts only the unacked one, so the cue's count stays at 1: the kept message.
+func TestCueCountKeepsAnUnackedMessageBehindWhichAnAckedDropSits(t *testing.T) {
+	r, _ := forPathRig(t)
+	sub := r.bus.global.cfg.inboxSubject()
+	pubEnv(t, r.ctx, r.gjs, sub, "plain0", "INFORM", "no FOR line")
+	pubEnv(t, r.ctx, r.gjs, sub, "drop1", "INFORM", "FOR alpha-supervisor\nnot for you")
+	batch, err := r.bus.global.cons().FetchNoWait(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for m := range batch.Messages() {
+		var e Envelope
+		if err := json.Unmarshal(m.Data(), &e); err != nil {
+			t.Fatal(err)
+		}
+		if e.MessageID == "drop1" {
+			if err := m.DoubleAck(r.ctx); err != nil { // acked out of order, plain0 stays unacked
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := batch.Error(); err != nil {
+		t.Fatal(err)
+	}
+	if n := cueCountOf(t, r); n != 1 {
+		t.Fatalf("cue count = %d, want 1 (plain0 is unacked; drop1 is acked above the floor)", n)
+	}
+}
+
+// A peek that returns its whole limit may have stopped before the end of what
+// waits, so it cannot tell which listed messages are still waiting. That is a
+// doubt, and a doubt cues: the count is the durable's own, with nothing left out.
+func TestCueCountIsTheDurablesCountWhenThePeekReturnsItsFullLimit(t *testing.T) {
+	r, _ := forPathRig(t)
+	sub := r.bus.global.cfg.inboxSubject()
+	for i := 0; i < summaryDefault; i++ {
+		pubEnv(t, r.ctx, r.gjs, sub, fmt.Sprintf("drop%d", i), "INFORM", "FOR alpha-supervisor\nnot for you")
+	}
+	if n := cueCountOf(t, r); n != summaryDefault {
+		t.Fatalf("cue count = %d, want %d: a full-limit peek is a doubt, so nothing is left out", n, summaryDefault)
+	}
+}
+
+// The same shape as above with enough acked drops that the peek stops at its
+// limit before it reaches the newest unacked message. Counting what the peek
+// listed would take the acked drops off a count that includes mail past the
+// limit, and the cue would read one too few.
+func TestCueCountKeepsUnackedMailWhenAckedDropsFillThePeek(t *testing.T) {
+	r, _ := forPathRig(t)
+	sub := r.bus.global.cfg.inboxSubject()
+	pubEnv(t, r.ctx, r.gjs, sub, "plain0", "INFORM", "no FOR line")
+	for i := 0; i < summaryDefault; i++ {
+		pubEnv(t, r.ctx, r.gjs, sub, fmt.Sprintf("drop%d", i), "INFORM", "FOR alpha-supervisor\nnot for you")
+	}
+	pubEnv(t, r.ctx, r.gjs, sub, "plainLast", "INFORM", "no FOR line")
+	batch, err := r.bus.global.cons().FetchNoWait(summaryDefault + 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for m := range batch.Messages() {
+		var e Envelope
+		if err := json.Unmarshal(m.Data(), &e); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(e.MessageID, "drop") {
+			if err := m.DoubleAck(r.ctx); err != nil { // acked out of order above the floor
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := batch.Error(); err != nil {
+		t.Fatal(err)
+	}
+	if n := cueCountOf(t, r); n != 2 {
+		t.Fatalf("cue count = %d, want 2 (plain0 and plainLast are unacked; the drops are acked)", n)
 	}
 }
