@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Reviewed launchd service file for the global NATS hub's CURRENT host (kinu).
+  Design: sim/design/kinu-nats-deployment.md, KN-2 (ruling R2). Bead aae-orc-5jpjc.
+
+  Why KeepAlive true: nats-server exits 0 on a graceful stop (TERM and INT,
+  measured on 2.14.6), and the old rule, KeepAlive SuccessfulExit=false,
+  relaunches only after a nonzero exit, so a graceful stop left the hub down
+  with nothing reporting it. With KeepAlive true a deliberate stop is a
+  `launchctl bootout`, never a kill. A bad conf is relaunched every 10 seconds
+  (the default ThrottleInterval), which is loud by design.
+
+  This file is applied only in the approved cutover window, never before.
+  Nothing here is installed or loaded by this repository.
+
+  The program is the checked-in start script, not nats-server: the script
+  writes the pid file that the hub-user add and remove commands read before
+  they send SIGHUP, and it starts the provisioning that applies the declared
+  retention. It takes no arguments and finds its own files under the hub's
+  state directory.
+
+  Placeholders, filled in by the cutover:
+    __DIRECTOR_CHECKOUT__    where the director checkout sits on the host.
+    __HUB_HOME__             the hub account's home directory.
+    __NATS_SERVER_BIN_DIR__  the absolute directory of the pinned nats-server.
+  The binary is pinned through PATH because start.sh runs nats-server by
+  name. It comes first in PATH, so a version-manager shim directory is never
+  consulted, and no version is chosen in this file (design O3). The cutover
+  checks the realpath and the version before loading this file.
+
+  No seed, password or token is set here.
+
+  This file does not decide who supervises the hub (open question Q1); it is
+  the service file for where the hub runs today.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.arcaven.nats-global</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__DIRECTOR_CHECKOUT__/probe/nats-global-tier/hub/start.sh</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>__HUB_HOME__/.director/nats-global</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>__NATS_SERVER_BIN_DIR__:/opt/homebrew/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>__HUB_HOME__/.director/nats-global/log/nats-server.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HUB_HOME__/.director/nats-global/log/nats-server.log</string>
+</dict>
+</plist>
