@@ -25,7 +25,9 @@ package main
 // prose is still scanned for this seat's own full name (its agent id, or the id
 // without the -gN-M suffix) as a whole token in any case; a hit delivers, so a
 // seat named inside prose is not dropped. Role words, team names and prefixes
-// do not count.
+// do not count. A name written name@cluster counts when the name part matches
+// by that rule and the cluster is this seat's cluster; name@other-cluster does
+// not match, and a name with no cluster matches as before.
 
 import (
 	"context"
@@ -155,11 +157,18 @@ func forList(text string) (names, prose []string) {
 // forProseNamesSelf reports whether the cut prose holds this seat's own full
 // name as a whole token, in any case: its agent id, or the id without the -gN-M
 // suffix. Role words, team names and prefixes do not count, so ordinary prose
-// about other seats does not deliver everywhere.
+// about other seats does not deliver everywhere. A token written name@cluster
+// counts when the cluster is this seat's cluster; name@other-cluster does not.
 func (f *forFilter) forProseNamesSelf(prose []string) bool {
 	own := []string{f.agentID, forGenSfx.ReplaceAllString(f.agentID, "")}
 	for _, w := range prose {
 		w = strings.Trim(w, ".,;:!?()[]\"'`")
+		if i := strings.LastIndex(w, "@"); i >= 0 {
+			if w[i+1:] != f.cluster {
+				continue // name@other-cluster is not this seat
+			}
+			w = w[:i]
+		}
 		for _, n := range own {
 			if n != "" && strings.EqualFold(w, n) {
 				return true
