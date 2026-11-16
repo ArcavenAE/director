@@ -7,7 +7,7 @@
 # refresh. Without a ledger or the CLI the sweep runs as before. The commands the
 # skill names exist, and the line form it states is the one the page renders.
 #
-# Guard: the step 4 fence is the one pinned below (main's, plus the Drafts line, 5yupe).
+# Guard: the step 4 fence is the one pinned below (main's, plus the Drafts line, 5yupe, and the lines of #519 and #593).
 #
 # Usage: scripts/verify-skill-ledger.sh   Exit nonzero on any miss. Touches only a temp dir.
 set -euo pipefail
@@ -38,7 +38,9 @@ PY
 # Guard: the printed contract does not change.
 # 5yupe: the operator ruled change-fence on 2026-10-16. The fence gained one line, "Drafts:",
 # and this hash is the new printed contract; the old one was f8b035199d1d451f.
-FENCE=078551f4cde96bee31644d80b33d0bea24e50d8736d9e00e8493660c0d48aead
+# Re-pinned 2026-11 after #519 added the "Waiting on you:" line and #593 the "Unattached:" line;
+# each PR changed the printed fence on purpose and neither re-pinned, because CI did not run this script.
+FENCE=d5c1438567d41b6e0f7b59f771bd54416348c9cf68315ad8a85bdd8e50710e51
 got="$(part fence | shasum -a 256 | cut -d' ' -f1)"
 [[ "$got" == "$FENCE" ]] && ok "the step 4 fence is the pinned one" || bad "the step 4 fence is the pinned one" "$got"
 
@@ -78,18 +80,19 @@ printf '# director board\n' >"$DIRECTOR_STATE/board.md"
 printf '{"c1": {"status": "open"}}' >"$root/cards.json"
 DWS_NOW=2030-12-31T09:00:00Z "$(dirname "$DWS")/desk-snapshot" write --cards "$root/cards.json" --reported 1 >/dev/null
 DWS_NOW=2030-12-31T10:00:00Z "$DWS" open w1 --title "one" --stage designed --owner architect --blocked operator --ask c1 --next "rule on X" >/dev/null
-# The row fields the skill names are the fields dws show --json emits. The list
-# is read from the skill's step 4 text (its backticked lower-case words, less the
-# value `operator`), so renaming a field there changes what is checked here.
-fields="$(python3 - <<'PY' "$step4"
+# The row fields step 4 depends on are named in step 4 and are keys of a real
+# `dws show --json` row. The keys are read from dws's own output. Other backticked
+# words in step 4 (the values `operator` and `parked`, the idea-row words `current`,
+# `remote` and `unreachable`) are not row fields and do not fail this check.
+words="$(python3 - <<'PY' "$step4"
 import re, sys
-print(" ".join(sorted({w for w in re.findall(r"`([a-z_]+)`", sys.argv[1]) if w != "operator"})))
+print(" ".join(sorted(set(re.findall(r"`([a-z_]+)`", sys.argv[1])))))
 PY
 )"
-[[ "$fields" == "blocked last_moved next owner slug" ]] && ok "step 4 names the row fields blocked, last_moved, next, owner and slug" || bad "step 4 names the row fields blocked, last_moved, next, owner and slug" "read: $fields"
-for f in $fields; do
-  "$DWS" show --json | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin)["rows"][0] else 1)' "$f" \
-    && ok "dws show --json rows carry the $f field the skill names" || bad "dws show --json rows carry the $f field the skill names" 
+keys="$("$DWS" show --json | python3 -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["rows"][0])))')"
+for f in blocked last_moved next owner slug stage reason; do
+  case " $words " in *" $f "*) ok "step 4 names the row field $f";; *) bad "step 4 names the row field $f" "step 4 words: $words";; esac
+  case " $keys " in *" $f "*) ok "dws show --json rows carry the $f field the skill names";; *) bad "dws show --json rows carry the $f field the skill names" "row keys: $keys";; esac
 done
 DWS_NOW=2030-12-31T12:00:00Z "$BOARD_HTML" >/dev/null 2>&1 || bad "the page renders the fixture"
 form="$(python3 - "$skill" <<'PY'
