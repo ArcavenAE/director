@@ -952,6 +952,23 @@ else
   bad "musthaq-pr-watch cast" "$(cat "$root/out/stderr")"
 fi
 
+# --- beadle-board-refresh: a manifest role that is the worker role ------------
+# Same class as daily-sweep and musthaq-pr-watch: without a row it falls through
+# to WROLE=$MARVEL_ROLE, there is no role named beadle-board-refresh, and
+# slice.sh exits 1 with "no role 'beadle-board-refresh'". The stub echoes the
+# role it was handed, so the case checks which role id reached it. As a worker
+# it holds no global address.
+if cast beadle-board-refresh "${GLOBAL_ON[@]}"; then
+  grep -q "stub slice for worker" "$root/out/claude.args" \
+    && ok "beadle-board-refresh: slices the worker role" \
+    || bad "beadle-board-refresh: slices the worker role" "$(grep -o 'stub slice for [^ ]*' "$root/out/claude.args" | head -1)"
+  has_env DIRECTOR_GLOBAL_ROLE claude.env \
+    && bad "beadle-board-refresh: leaked a global role" \
+    || ok "beadle-board-refresh: the global levers are cleared like any worker"
+else
+  bad "beadle-board-refresh cast" "$(cat "$root/out/stderr")"
+fi
+
 # --- the seat reaches slice.sh, so the spawn line leads with it (ruling 44) ---
 if cast builder; then
   args="$(tr '\n' ' ' < "$root/out/slice.args")"

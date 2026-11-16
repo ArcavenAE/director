@@ -65,6 +65,7 @@ case "$MARVEL_ROLE" in
   claude-reviewer)   WROLE=reviewer; SCOPE="";;
   daily-sweep)       WROLE=worker; SCOPE="";;
   musthaq-pr-watch)  WROLE=worker; SCOPE="";;
+  beadle-board-refresh) WROLE=worker; SCOPE="";;
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
 esac
 [[ -n "${CAST_SCOPE:-}" ]] && SCOPE="$CAST_SCOPE"
