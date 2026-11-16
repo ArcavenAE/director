@@ -6,7 +6,11 @@
 # A template under TMPDIR: on macOS a template-less mktemp -d ignores TMPDIR, so the
 # root would land under the per-user temp directory and a run under a scratch-only
 # write profile could not start (director#648, as #434).
-root="$(mktemp -d "${TMPDIR:-/tmp}/cast-stubs.XXXXXX")"
+#
+# Stop here when no root was made. An empty root would send the writes below to
+# /wardrobe, /out and /bin, and a shell without set -e would carry on into them.
+root="$(mktemp -d "${TMPDIR:-/tmp}/cast-stubs.XXXXXX")" && [[ -d "$root" ]] \
+  || { echo "cast-stubs: no harness root (mktemp -d under ${TMPDIR:-/tmp} failed)" >&2; return 1; }
 trap 'rm -rf "$root"' EXIT
 
 # --- the stubs ----------------------------------------------------------------
