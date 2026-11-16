@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Reviewed launchd service file for the global NATS hub's CURRENT host (kinu).
+  Design: sim/design/kinu-nats-deployment.md, KN-2 (ruling R2). Bead aae-orc-5jpjc.
+
+  Why KeepAlive true: nats-server exits 0 on a graceful stop (TERM and INT,
+  measured on 2.14.6), and the old rule, KeepAlive SuccessfulExit=false,
+  relaunches only after a nonzero exit, so a graceful stop left the hub down
+  with nothing reporting it. With KeepAlive true a deliberate stop is a
+  `launchctl bootout`, never a kill. A bad conf is relaunched every 10 seconds
+  (the default ThrottleInterval), which is loud by design.
+
+  This file is applied only in the approved cutover window, never before.
+  Nothing here is installed or loaded by this repository.
+
+  __HUB_HOME__ stands for the hub account's home directory. The cutover
+  replaces it at install, so no account name is written in a tracked file.
+  The hub's conf is probe/nats-global-tier/hub/nats-server.conf, placed in
+  the hub's state directory; it reads the store path from the environment
+  variable below. No seed, password or token is set here.
+
+  The program path is the pinned Homebrew Cellar binary (v2.14.6), never the
+  version-manager shim on PATH (KN-5). The cutover checks the realpath and
+  the version before loading this file.
+
+  This file does not decide who supervises the hub (open question Q1); it is
+  the service file for where the hub runs today.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.arcaven.nats-global</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/homebrew/Cellar/nats-server/2.14.6/bin/nats-server</string>
+		<string>-c</string>
+		<string>__HUB_HOME__/.director/nats-global/nats-server.conf</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>__HUB_HOME__/.director/nats-global</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>DIRECTOR_GLOBAL_STORE</key>
+		<string>__HUB_HOME__/.director/nats-global/store</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>__HUB_HOME__/.director/nats-global/log/hub.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HUB_HOME__/.director/nats-global/log/hub.err.log</string>
+</dict>
+</plist>
