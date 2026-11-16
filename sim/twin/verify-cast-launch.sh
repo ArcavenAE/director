@@ -23,12 +23,17 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAUNCH="${CAST_LAUNCH:-$here/cast-launch.sh}"
 [[ -x "$LAUNCH" ]] || { echo "cast-launch.sh not executable at $LAUNCH"; exit 2; }
 
-pass=0; fail=0
-ok()  { echo "PASS $1"; pass=$((pass+1)); }
-bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
+# The counts come from where the lines are printed: ok() and bad() append one line
+# to a tally file as they print, and the summary counts the file. A counter kept in
+# a shell variable is lost when a case runs in a subshell (the right side of a
+# pipeline, a command substitution), which printed PASS lines the summary never
+# counted and let a FAIL line leave the exit status 0 (director#649).
+ok()  { echo "PASS $1"; echo P >> "$tally"; }
+bad() { echo "FAIL $1${2:+ -- $2}"; echo F >> "$tally"; }
 
 # the stubs and cast() live in cast-stubs.sh, shared with parity-table.sh
 source "$here/cast-stubs.sh"
+tally="$root/tally"; : > "$tally"
 
 GLOBAL_ON=(DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=mokuzai)
 
@@ -1395,5 +1400,21 @@ if [[ -z "${VERIFY_NESTED:-}" ]]; then
   fi
 fi
 
+# The summary fails closed: a tally that is missing, unreadable, a link, or not a
+# regular file means the counts are lost, and grep -c would read that as zero.
+if [[ ! -f "$tally" || -L "$tally" || ! -r "$tally" ]]; then
+  echo "verify-cast-launch: the tally $tally is not a readable regular file, so the counts cannot be trusted" >&2
+  exit 1
+fi
+tally_count() { # P or F: the number of lines, or a failure when grep errs or prints no number
+  local n rc=0
+  n="$(grep -c "^$1\$" "$tally")" || rc=$?
+  (( rc <= 1 )) && [[ "$n" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$n"
+}
+if ! pass="$(tally_count P)" || ! fail="$(tally_count F)"; then
+  echo "verify-cast-launch: the tally $tally could not be counted, so the counts cannot be trusted" >&2
+  exit 1
+fi
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
