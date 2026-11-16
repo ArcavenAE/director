@@ -3,9 +3,9 @@ module github.com/ArcavenAE/director/probe/leaf-fabric/fabtool
 go 1.26.5
 
 require (
-	github.com/nats-io/jwt/v2 v2.8.2
+	github.com/nats-io/jwt/v2 v2.8.3
 	github.com/nats-io/nats.go v1.55.0
-	github.com/nats-io/nkeys v0.4.16
+	github.com/nats-io/nkeys v0.4.17
 )
 
 require (
