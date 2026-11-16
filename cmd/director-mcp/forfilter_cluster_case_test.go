@@ -43,3 +43,20 @@ func TestForFilterNamesSelfClusterCompareIsCaseSensitive(t *testing.T) {
 		t.Fatal("operator@C1 names a seat on another cluster, not this seat on c1")
 	}
 }
+
+// In the roster lookup, otherTeamSeat matches a presence row only when the
+// cluster written in the token equals the row's cluster exactly. The pin asks
+// for alpha-supervisor on C1 while its only presence row is on c1: the token's
+// cluster is upper case and the row's is lower case, and that is another
+// cluster, so no row matches. The FOR line pattern keeps an upper-case cluster
+// out of drops(), so the pin calls otherTeamSeat directly.
+func TestForFilterOtherTeamSeatClusterCompareIsCaseSensitive(t *testing.T) {
+	f := forTestFilter(forTestRows(), nil)
+	rows, _ := f.roster(context.Background())
+	if !f.otherTeamSeat("alpha-supervisor", "c1", rows) {
+		t.Fatal("control: alpha-supervisor@c1 should match its presence row on c1")
+	}
+	if f.otherTeamSeat("alpha-supervisor", "C1", rows) {
+		t.Fatal("alpha-supervisor@C1 names another cluster, so the row on c1 must not match")
+	}
+}
