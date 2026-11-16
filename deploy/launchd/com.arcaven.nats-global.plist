@@ -20,9 +20,10 @@
   the hub's state directory; it reads the store path from the environment
   variable below. No seed, password or token is set here.
 
-  The program path is the pinned Homebrew Cellar binary (v2.14.6), never the
-  version-manager shim on PATH (KN-5). The cutover checks the realpath and
-  the version before loading this file.
+  __NATS_SERVER_BIN__ stands for the absolute path of the nats-server binary
+  the install pins (KN-5): never the version-manager shim on PATH, and not a
+  version chosen in this file. The cutover fills it in and checks the
+  realpath and the version before loading this file.
 
   This file does not decide who supervises the hub (open question Q1); it is
   the service file for where the hub runs today.
@@ -33,7 +34,7 @@
 	<string>com.arcaven.nats-global</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/opt/homebrew/Cellar/nats-server/2.14.6/bin/nats-server</string>
+		<string>__NATS_SERVER_BIN__</string>
 		<string>-c</string>
 		<string>__HUB_HOME__/.director/nats-global/nats-server.conf</string>
 	</array>
