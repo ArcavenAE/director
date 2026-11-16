@@ -14,20 +14,18 @@
   This file is applied only in the approved cutover window, never before.
   Nothing here is installed or loaded by this repository.
 
-  The program is the checked-in start script, not nats-server: the script
-  writes the pid file that the hub-user add and remove commands read before
-  they send SIGHUP, and it starts the provisioning that applies the declared
-  retention. It takes no arguments and finds its own files under the hub's
-  state directory.
+  The program is the launcher installed on the hub host, run through bash. It
+  sets the names the hub conf reads before it execs nats-server, so a plist
+  that ran nats-server directly would leave the conf unreadable, and under
+  KeepAlive true it would be relaunched every 10 seconds and stay down. None
+  of that logic is in this repository.
 
   Placeholders, filled in by the cutover:
-    __DIRECTOR_CHECKOUT__    where the director checkout sits on the host.
-    __HUB_HOME__             the hub account's home directory.
+    __HUB_HOME__             the hub account's home directory (also HOME below).
     __NATS_SERVER_BIN_DIR__  the absolute directory of the pinned nats-server.
-  The binary is pinned through PATH because start.sh runs nats-server by
-  name. It comes first in PATH, so a version-manager shim directory is never
-  consulted, and no version is chosen in this file (design O3). The cutover
-  checks the realpath and the version before loading this file.
+  The pinned binary comes first in PATH, so a version-manager shim directory
+  is never consulted, and no version is chosen in this file (design O3). The
+  cutover checks the realpath and the version before loading this file.
 
   No seed, password or token is set here.
 
@@ -40,12 +38,15 @@
 	<string>com.arcaven.nats-global</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>__DIRECTOR_CHECKOUT__/probe/nats-global-tier/hub/start.sh</string>
+		<string>/bin/bash</string>
+		<string>__HUB_HOME__/.director/nats-global/hub-start.sh</string>
 	</array>
 	<key>WorkingDirectory</key>
 	<string>__HUB_HOME__/.director/nats-global</string>
 	<key>EnvironmentVariables</key>
 	<dict>
+		<key>HOME</key>
+		<string>__HUB_HOME__</string>
 		<key>PATH</key>
 		<string>__NATS_SERVER_BIN_DIR__:/opt/homebrew/bin:/usr/bin:/bin</string>
 	</dict>
