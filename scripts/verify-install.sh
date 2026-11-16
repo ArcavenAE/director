@@ -207,5 +207,31 @@ grep -qF "$BINHOME/schedule-ack" "$skill" && ok "skill calls schedule-ack from t
 [[ -x "$here/skills/director/scripts/schedule-ack" ]] && ok "the fallback scripts/schedule-ack exists in the checkout" || bad "the fallback scripts/schedule-ack exists in the checkout"
 [[ -f "$cp_home/director/bin/schedule-ack" && ! -L "$cp_home/director/bin/schedule-ack" && -x "$cp_home/director/bin/schedule-ack" ]] && ok "copy install puts a real executable schedule-ack in the bin home" || bad "copy install puts a real executable schedule-ack in the bin home"
 
+# Director's own role definition ships with the skill and the skill points at it (aae-orc-xq3el).
+# It must stand alone: no catalog front matter, no fragment includes, and none of the terms of
+# the trackers, method packs or catalogs it must not depend on. Scoped to this one file; other
+# director files name some of these terms on purpose.
+role="$here/skills/director/reference/role.md"
+[[ -f "$role" && -f "$clean/claude/skills/director/reference/role.md" ]] \
+  && ok "a clean install carries reference/role.md with the skill" || bad "a clean install carries reference/role.md with the skill"
+grep -qF 'reference/role.md' "$skill" \
+  && ok "the skill points at reference/role.md" || bad "the skill points at reference/role.md"
+if [[ -f "$role" ]]; then
+  grep -qE '^version: 1\.0\.0$' "$role" && grep -qF "derived from wardrobe's director role, 0.3.0" "$role" \
+    && ok "role.md carries version 1.0.0 and its provenance line" || bad "role.md carries version 1.0.0 and its provenance line"
+  bannedterms="$(grep -n -i -E '(^|[^A-Za-z])(bd|bmad|sideshow)([^A-Za-z]|$)|aae-wr-|^(schema_version|kind|includes|ratified_by|status):' "$role" || true)"
+  [[ -z "$bannedterms" ]] && ok "role.md names no tracker, method pack, catalog front matter or fragment include" \
+    || bad "role.md names no tracker, method pack, catalog front matter or fragment include" "$bannedterms"
+  # Negative control: the no-terms pattern does flag each planted term.
+  for planted in 'uses bd for tickets' 'a bmad pack' 'installed by sideshow' 'the aae-wr-standard workflow' 'schema_version: 1' 'includes: [x]'; do
+    printf '%s\n' "$planted" >"$plant"
+    grep -q -i -E '(^|[^A-Za-z])(bd|bmad|sideshow)([^A-Za-z]|$)|aae-wr-|^(schema_version|kind|includes|ratified_by|status):' "$plant" \
+      && ok "the role.md pattern flags a planted: $planted" || bad "the role.md pattern flags a planted: $planted"
+  done
+else
+  bad "role.md carries version 1.0.0 and its provenance line" "no $role"
+  bad "role.md names no tracker, method pack, catalog front matter or fragment include" "no $role"
+fi
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

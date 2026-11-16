@@ -333,6 +333,10 @@ else
   grep -q "skills archive failed" "$out/stderr" \
     && ok "a failing tar is reported as a failed archive" \
     || bad "a failing tar is not reported as a failed archive" "$(cat "$out/stderr")"
+  # tar's own text is also printed above the message, so look at the message line itself.
+  grep "skills archive failed" "$out/stderr" | grep -q "tar: stub failure" \
+    && ok "a failing tar's own error is in the failure message" \
+    || bad "a failing tar's own error is not in the failure message" "$(grep "skills archive failed" "$out/stderr")"
 fi
 
 # --- 19. --status warns when the installed sha is not on main ----------------------
