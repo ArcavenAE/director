@@ -12,6 +12,16 @@ package main
 // name on a stale row, a roster that cannot be read. A drop acks the message
 // on the seat's durable, so a wrong drop loses mail, and every doubt goes to
 // delivery for that reason.
+//
+// Where the names end. The FOR text is read as a comma-separated list, split on
+// commas before any word splitting. The first element is always names, so
+// "FOR a b" reads two names, as it always has. A later element made only of
+// names and the joiners "and", "or" and "only" is names, and an element that is
+// exactly one token is a name, so a mistyped seat-shaped name still reaches the
+// roster and delivers. The first later element that holds more than one name
+// between joiners ("on repo#1 at abc1234") is prose, and it ends the list along
+// with everything after it. Prose therefore never spoils a line that names
+// seats first, and it never turns into a name that could drop mail.
 
 import (
 	"context"
@@ -92,17 +102,37 @@ func forText(data string) (string, bool) {
 	return "", false
 }
 
-// forTokens splits the FOR text on commas and whitespace, drops the words
-// "and", "or" and "only", and trims trailing . ; : from each token. Seat names hold no
+// forTokens reads the FOR text as a comma-separated list and returns its names.
+// The first element is always names. A later element is names when, with the
+// joiners "and", "or" and "only" removed, each run of words between joiners is
+// one token; otherwise it is prose and it ends the list, along with everything
+// after it. Trailing . ; : are trimmed from each token. Seat names hold no
 // spaces, so splitting on whitespace never cuts a name.
 func forTokens(text string) []string {
 	var out []string
-	for _, f := range strings.Fields(strings.ReplaceAll(text, ",", " ")) {
-		f = strings.TrimRight(f, ".;:")
-		if f == "" || f == "and" || f == "or" || f == "only" {
-			continue
+	for i, el := range strings.Split(text, ",") {
+		var names []string
+		run, prose := 0, false
+		for _, f := range strings.Fields(el) {
+			f = strings.TrimRight(f, ".;:")
+			if f == "" {
+				continue
+			}
+			if f == "and" || f == "or" || f == "only" {
+				run = 0
+				continue
+			}
+			run++
+			if i > 0 && run > 1 {
+				prose = true
+				break
+			}
+			names = append(names, f)
 		}
-		out = append(out, f)
+		if prose {
+			break
+		}
+		out = append(out, names...)
 	}
 	return out
 }
