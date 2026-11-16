@@ -7,7 +7,7 @@
 # refresh. Without a ledger or the CLI the sweep runs as before. The commands the
 # skill names exist, and the line form it states is the one the page renders.
 #
-# Guard: the step 4 fence is the one pinned below (main's, plus the Drafts line, 5yupe, and the lines of #519 and #593).
+# Guard: the step 4 fence is the one pinned below (main's, plus the Drafts line, 5yupe, and the changes of #361, #363, #519 and #593).
 #
 # Usage: scripts/verify-skill-ledger.sh   Exit nonzero on any miss. Touches only a temp dir.
 set -euo pipefail
@@ -38,8 +38,10 @@ PY
 # Guard: the printed contract does not change.
 # 5yupe: the operator ruled change-fence on 2026-10-16. The fence gained one line, "Drafts:",
 # and this hash is the new printed contract; the old one was f8b035199d1d451f.
-# Re-pinned 2026-11 after #519 added the "Waiting on you:" line and #593 the "Unattached:" line;
-# each PR changed the printed fence on purpose and neither re-pinned, because CI did not run this script.
+# Re-pinned 2026-11. The old pin was the fence of #318. Four later PRs changed the printed fence on
+# purpose and none re-pinned, because CI did not run this script: #361 (the "Stalled ideas" block and
+# "Unverified ideas" line), #363 (the "Introspect:" line), #519 (the "Waiting on you:" line) and #593
+# (the "Unattached:" line).
 FENCE=d5c1438567d41b6e0f7b59f771bd54416348c9cf68315ad8a85bdd8e50710e51
 got="$(part fence | shasum -a 256 | cut -d' ' -f1)"
 [[ "$got" == "$FENCE" ]] && ok "the step 4 fence is the pinned one" || bad "the step 4 fence is the pinned one" "$got"
