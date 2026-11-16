@@ -47,7 +47,13 @@ party.
 
 **E0. Mint (hub operator, kinu).** `nats auth nkey gen user` for the NKey user
 `leaf-<cluster>` (the cluster label), staging the seed at the standard operator-side
-path `~/.director/nats/leaf-<cluster>.nk`, mode 0600 and transient. The filename
+path `~/.director/nats/leaf-<cluster>.nk`, mode 0600.
+The operator ruled on where leaf seeds rest (I-511, V6, relayed by director, correction
+entry R-6586): "keeping the credential file on disk is allowed for now but file a bd ticket
+that it should probably move to a vault, keychain, or other credential store in the future".
+That covers the leaf seed files at rest, including the stage file for each cluster's leaf
+seed on the hub operator's side (E0). Director scoped the move to after the NATS redesign
+(I-259). The later move is tracked in aae-orc-3fyyy. The filename
 embeds the label, so the seed file, the NKey user, and the subject partition all read
 the same token. The public key goes into the hub config and the hub reloads.
 Unchanged from brief 8 apart from naming that stage path as the standard; the hub is
