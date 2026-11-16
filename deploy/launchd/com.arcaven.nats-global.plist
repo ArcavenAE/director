@@ -14,16 +14,22 @@
   This file is applied only in the approved cutover window, never before.
   Nothing here is installed or loaded by this repository.
 
-  __HUB_HOME__ stands for the hub account's home directory. The cutover
-  replaces it at install, so no account name is written in a tracked file.
-  The hub's conf is probe/nats-global-tier/hub/nats-server.conf, placed in
-  the hub's state directory; it reads the store path from the environment
-  variable below. No seed, password or token is set here.
+  The program is the checked-in start script, not nats-server: the script
+  writes the pid file that the hub-user add and remove commands read before
+  they send SIGHUP, and it starts the provisioning that applies the declared
+  retention. It takes no arguments and finds its own files under the hub's
+  state directory.
 
-  __NATS_SERVER_BIN__ stands for the absolute path of the nats-server binary
-  the install pins (KN-5): never the version-manager shim on PATH, and not a
-  version chosen in this file. The cutover fills it in and checks the
-  realpath and the version before loading this file.
+  Placeholders, filled in by the cutover:
+    __DIRECTOR_CHECKOUT__    where the director checkout sits on the host.
+    __HUB_HOME__             the hub account's home directory.
+    __NATS_SERVER_BIN_DIR__  the absolute directory of the pinned nats-server.
+  The binary is pinned through PATH because start.sh runs nats-server by
+  name. It comes first in PATH, so a version-manager shim directory is never
+  consulted, and no version is chosen in this file (design O3). The cutover
+  checks the realpath and the version before loading this file.
+
+  No seed, password or token is set here.
 
   This file does not decide who supervises the hub (open question Q1); it is
   the service file for where the hub runs today.
@@ -34,24 +40,22 @@
 	<string>com.arcaven.nats-global</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>__NATS_SERVER_BIN__</string>
-		<string>-c</string>
-		<string>__HUB_HOME__/.director/nats-global/nats-server.conf</string>
+		<string>__DIRECTOR_CHECKOUT__/probe/nats-global-tier/hub/start.sh</string>
 	</array>
 	<key>WorkingDirectory</key>
 	<string>__HUB_HOME__/.director/nats-global</string>
 	<key>EnvironmentVariables</key>
 	<dict>
-		<key>DIRECTOR_GLOBAL_STORE</key>
-		<string>__HUB_HOME__/.director/nats-global/store</string>
+		<key>PATH</key>
+		<string>__NATS_SERVER_BIN_DIR__:/opt/homebrew/bin:/usr/bin:/bin</string>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>__HUB_HOME__/.director/nats-global/log/hub.out.log</string>
+	<string>__HUB_HOME__/.director/nats-global/log/nats-server.log</string>
 	<key>StandardErrorPath</key>
-	<string>__HUB_HOME__/.director/nats-global/log/hub.err.log</string>
+	<string>__HUB_HOME__/.director/nats-global/log/nats-server.log</string>
 </dict>
 </plist>
