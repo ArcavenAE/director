@@ -1041,12 +1041,22 @@ chmod +x "$root/bin/security"
 # below, by reading them only: the pin is present.
 LAUNCH_ORIG="$LAUNCH"
 patched="$root/patched"; mkdir -p "$patched"
+# An installed launcher is a link (~/.director/bin/cast-launch) to a file in a versioned
+# directory, and the wrapper sits beside that file, not beside the link. Follow the link the
+# way cast-launch.sh does for its helper (no readlink -f or realpath: macOS before 12.3 and
+# bash 3.2 lack them), and look for the wrapper in the directory the launcher really is in.
+orig_src="$LAUNCH_ORIG"
+while [[ -L "$orig_src" ]]; do
+  orig_t="$(readlink "$orig_src")"
+  if [[ "$orig_t" == /* ]]; then orig_src="$orig_t"; else orig_src="$(dirname "$orig_src")/$orig_t"; fi
+done
+orig_dir="$(cd "$(dirname "$orig_src")" && pwd)"
 # $LAUNCH is patched whatever it is called, so CAST_LAUNCH=<installed path> is
-# tested as installed too. The wrapper is the file beside it, when there is one.
+# tested as installed too. The wrapper is the file beside the launcher itself, when there is one.
 sed "s#/usr/bin/security#$root/bin/security#g" "$LAUNCH" > "$patched/cast-launch.sh"
 chmod +x "$patched/cast-launch.sh"
-if [[ -f "$(dirname "$LAUNCH")/claude-bedrock-launch" ]]; then
-  sed "s#/usr/bin/security#$root/bin/security#g" "$(dirname "$LAUNCH")/claude-bedrock-launch" > "$patched/claude-bedrock-launch"
+if [[ -f "$orig_dir/claude-bedrock-launch" ]]; then
+  sed "s#/usr/bin/security#$root/bin/security#g" "$orig_dir/claude-bedrock-launch" > "$patched/claude-bedrock-launch"
   chmod +x "$patched/claude-bedrock-launch"
 fi
 # Refuse to run a Bedrock case on a copy that still names the real tool: that
@@ -1148,7 +1158,7 @@ fi
 
 # claude-bedrock-launch carries cast-launch's key block word for word.
 wrapper="$(dirname "$LAUNCH")/claude-bedrock-launch"
-wrapper_orig="$(dirname "$LAUNCH_ORIG")/claude-bedrock-launch"
+wrapper_orig="$orig_dir/claude-bedrock-launch"
 if [[ -x "$wrapper" ]]; then
   blk() { sed -n '/^bedrock_note=""$/,/^unset bedrock_xtrace$/p' "$1"; }
   [[ -n "$(blk "$LAUNCH_ORIG")" && "$(blk "$LAUNCH_ORIG")" == "$(blk "$wrapper_orig")" ]] \
@@ -1369,6 +1379,19 @@ if [[ -z "${VERIFY_NESTED:-}" ]]; then
     ok "CAST_LAUNCH with a renamed launcher: all cases pass on the patched copy, none on the original"
   else
     bad "CAST_LAUNCH with a renamed launcher" "$(tail -3 "$root/out/nested.log")"
+  fi
+  # An installed launcher is a link (~/.director/bin/cast-launch) to a file in a versioned
+  # directory, and the wrapper sits in that directory, not beside the link. Run this script
+  # again through such a link: it must find the wrapper where the link points.
+  instreal="$root/instreal"; instbin="$root/instbin"; mkdir -p "$instreal" "$instbin"
+  cp "$LAUNCH_ORIG" "$instreal/cast-launch.sh"; chmod +x "$instreal/cast-launch.sh"
+  [[ -f "$wrapper_orig" ]] && cp "$wrapper_orig" "$instreal/claude-bedrock-launch"
+  [[ -f "$here/dismiss-devch" ]] && cp "$here/dismiss-devch" "$instreal/dismiss-devch"
+  ln -s "$instreal/cast-launch.sh" "$instbin/cast-launch"
+  if VERIFY_NESTED=1 CAST_LAUNCH="$instbin/cast-launch" "${BASH_SOURCE[0]}" >"$root/out/nested-link.log" 2>&1; then
+    ok "CAST_LAUNCH through an installed link: the wrapper is found where the link points, and all cases pass"
+  else
+    bad "CAST_LAUNCH through an installed link" "$(grep -m1 '^FAIL' "$root/out/nested-link.log"); $(tail -1 "$root/out/nested-link.log")"
   fi
 fi
 
