@@ -65,7 +65,32 @@ func TestForFilterCommaListDecisions(t *testing.T) {
 		{"space separated names keep today's rule", "FOR alpha-supervisor beta-supervisor", true},
 		{"space separated with an unknown name delivers", "FOR alpha-supervisor nobody-here", false},
 		{"this seat before the prose delivers", "FOR alpha-supervisor, operator, on repo#1:\nbody", false},
-		{"this seat only inside the prose does not deliver", "FOR alpha-supervisor, see operator and ops:\nbody", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := forTestFilter(rows, nil)
+			if got, _ := f.drops(context.Background(), &Envelope{Content: Content{Data: c.data}}); got != c.drop {
+				t.Fatalf("%q: drop = %v, want %v", c.data, got, c.drop)
+			}
+		})
+	}
+}
+
+func TestForFilterProseNamingThisSeatDelivers(t *testing.T) {
+	rows := append(forTestRows(),
+		forRow("beta-supervisor-g1-0", "beta", "supervisor", "c1", time.Second))
+	cases := []struct {
+		name, data string
+		drop       bool
+	}{
+		{"this seat's short id in cut prose delivers", "FOR alpha-supervisor, see operator and ops:\nbody", false},
+		{"this seat's full id in cut prose delivers", "FOR alpha-supervisor, see operator-g3-0 on repo#1:\nbody", false},
+		{"case is ignored", "FOR alpha-supervisor, see Operator on repo#1:\nbody", false},
+		{"punctuation around the name is ignored", "FOR alpha-supervisor, ask (operator), then repo#1:\nbody", false},
+		{"prose naming a different seat still drops", "FOR alpha-supervisor, see beta-supervisor on repo#1:\nbody", true},
+		{"a role word is not this seat", "FOR alpha-supervisor, see supervisor on repo#1:\nbody", true},
+		{"this team's name is not this seat", "FOR alpha-supervisor, see ops on repo#1:\nbody", true},
+		{"a prefix of this seat is not this seat", "FOR alpha-supervisor, see operator-extra on repo#1:\nbody", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
