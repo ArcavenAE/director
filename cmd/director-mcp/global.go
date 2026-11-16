@@ -472,6 +472,10 @@ type globalTier struct {
 	// DIRECTOR_FOR_FILTER is not 1 (forfilter.go).
 	forFilter *forFilter
 
+	// cueDrop is the cue count's last peek for a durable position
+	// (cue_filter.go).
+	cueDrop cueFilterCache
+
 	// forDrops counts messages dropForeign has dropped, so a pull that came
 	// back empty only because it dropped can go on to the mail behind them.
 	forDrops atomic.Int64
