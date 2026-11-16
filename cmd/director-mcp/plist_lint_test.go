@@ -22,16 +22,15 @@ const hubPlistFile = "../../deploy/launchd/com.arcaven.nats-global.plist"
 
 // The binary is pinned per host at install: a version in a tracked file would
 // choose it for the fleet (design O3), so the file carries a placeholder the
-// cutover fills in with the absolute directory of the pinned nats-server.
-// start.sh runs nats-server by name from PATH, so the pin is the first PATH
-// directory; the program itself is the checked-in start script, which writes
-// the pid file the hub-user commands read before they send SIGHUP.
-const (
-	natsServerBinDirPlaceholder = "__NATS_SERVER_BIN_DIR__"
-	checkoutPlaceholder         = "__DIRECTOR_CHECKOUT__"
-	startScriptRel              = "probe/nats-global-tier/hub/start.sh"
-	startScriptInRepo           = "../../" + startScriptRel
-)
+// cutover fills in with the absolute directory of the pinned nats-server. The
+// launcher runs nats-server by name from PATH, so the pin is the first PATH
+// directory.
+const natsServerBinDirPlaceholder = "__NATS_SERVER_BIN_DIR__"
+
+// The program is the launcher already installed on the hub host, named by
+// placeholder path only. It sets the names the hub conf reads, so none of that
+// logic is in this repository.
+const installedLauncher = "__HUB_HOME__/.director/nats-global/hub-start.sh"
 
 // parsePlist reads an XML property list into map[string]any, []any, string and
 // bool values. It handles the element set a launchd service file uses.
@@ -162,29 +161,37 @@ func hubPathDirs(t *testing.T, m map[string]any) []string {
 	return strings.Split(p, ":")
 }
 
-// The hub must start through the checked-in start script: it writes the pid
-// file and starts the provisioning that hub-user add and remove rely on.
-func TestPlistProgramIsTheStartScript(t *testing.T) {
+// The hub must start through the installed launcher, which exports the names
+// the hub conf reads before it execs the server. A plist that ran the server
+// or another script directly would leave the conf unreadable, and under
+// KeepAlive true it would be relaunched every 10 seconds and stay down.
+func TestPlistProgramIsTheInstalledLauncher(t *testing.T) {
 	m := parsePlist(t, hubPlistFile)
 	args := hubProgramArgs(t, m)
-	want := checkoutPlaceholder + "/" + startScriptRel
-	if args[0] != want {
-		t.Errorf("ProgramArguments[0] must be the start script %q, got %q", want, args[0])
+	want := []string{"/bin/bash", installedLauncher}
+	if len(args) != len(want) {
+		t.Fatalf("ProgramArguments must be exactly %v (bash, then the installed launcher, no flags), got %v", want, args)
 	}
-	if len(args) != 1 {
-		t.Errorf("the start script takes no arguments, got %v", args[1:])
+	for i := range want {
+		if args[i] != want[i] {
+			t.Errorf("ProgramArguments[%d] must be %q, got %q", i, want[i], args[i])
+		}
 	}
 	if _, set := m["Program"]; set && m["Program"] != args[0] {
 		t.Errorf("Program and ProgramArguments[0] disagree: %v vs %s", m["Program"], args[0])
 	}
 }
 
-func TestStartScriptThePlistRunsExistsAndExecsTheServer(t *testing.T) {
-	text := readFileText(t, startScriptInRepo)
-	for _, want := range []string{"exec nats-server", "--pid", "--log"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("%s no longer contains %q, which the service file relies on", startScriptRel, want)
-		}
+// The launcher finds its files from HOME, so the job's HOME is the hub home
+// placeholder, filled in with the same value as every other home path.
+func TestPlistHomeIsThePlaceholder(t *testing.T) {
+	m := parsePlist(t, hubPlistFile)
+	env, ok := m["EnvironmentVariables"].(map[string]any)
+	if !ok {
+		t.Fatalf("EnvironmentVariables is missing")
+	}
+	if env["HOME"] != hubHomePlaceholder {
+		t.Errorf("EnvironmentVariables.HOME must be %s, got %v", hubHomePlaceholder, env["HOME"])
 	}
 }
 
@@ -208,18 +215,19 @@ func TestPlistPathPinsTheBinaryAndHasNoShim(t *testing.T) {
 	}
 }
 
-// Below the home placeholder the file names only what the checked-in start
-// script already names.
-func TestPlistPathsBelowTheHomePlaceholderAreOnesMainCarries(t *testing.T) {
+// Below the home placeholder the file names only the state directory, its log
+// and the installed launcher.
+func TestPlistPathsBelowTheHomePlaceholderAreAllowedOnes(t *testing.T) {
 	allowed := map[string]bool{
 		hubHomePlaceholder + "/.director/nats-global":                     true,
 		hubHomePlaceholder + "/.director/nats-global/log/nats-server.log": true,
+		installedLauncher: true,
 	}
 	m := parsePlist(t, hubPlistFile)
 	for _, k := range []string{"WorkingDirectory", "StandardOutPath", "StandardErrorPath"} {
 		p := plistString(t, m, k)
 		if !allowed[p] {
-			t.Errorf("%s = %q names a path the start script does not carry", k, p)
+			t.Errorf("%s = %q names a path outside the allowed set", k, p)
 		}
 	}
 	text := readFileText(t, hubPlistFile)
@@ -230,14 +238,8 @@ func TestPlistPathsBelowTheHomePlaceholderAreOnesMainCarries(t *testing.T) {
 				rest = rest[:j]
 			}
 			if !allowed[rest] {
-				t.Errorf("a path below %s is not one main carries: %q", hubHomePlaceholder, rest)
+				t.Errorf("a path below %s is not an allowed one: %q", hubHomePlaceholder, rest)
 			}
-		}
-	}
-	start := readFileText(t, startScriptInRepo)
-	for _, frag := range []string{"$HOME/.director/nats-global", "log/nats-server.log"} {
-		if !strings.Contains(start, frag) {
-			t.Errorf("%s no longer carries %q", startScriptRel, frag)
 		}
 	}
 }
