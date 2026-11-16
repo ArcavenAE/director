@@ -287,6 +287,82 @@ else
   bad "a skills install touched the launcher or the shim paths"
 fi
 
+# --- 17. an archive failure is reported by its real cause --------------------------
+# A failing `git archive` for another reason than a missing skills/ tree (a sha the
+# mirror cannot read, say) must print git's own error, not "no skills/ or commands/".
+fb="$root/fakebin-git"; mkdir -p "$fb"
+real_git="$(command -v git)"
+cat > "$fb/git" <<GIT
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == archive ]]; then echo "fatal: not a valid object name deadbeefdeadbeef" >&2; exit 128; fi
+done
+exec "$real_git" "\$@"
+GIT
+chmod +x "$fb/git"
+h7="$root/home7"
+if env PATH="$fb:$PATH" DIRECTOR_HOME="$h7" DIRECTOR_SRC_URL="$src" DIRECTOR_MANIFESTS_DIR="$root/manifests" \
+     "$INSTALLER" skills --ref "$A" >"$out/stdout" 2>"$out/stderr"; then
+  bad "an install whose git archive fails succeeded"
+else
+  grep -q "not a valid object name" "$out/stderr" && grep -q "skills archive failed" "$out/stderr" \
+    && ok "a failing git archive prints git's own error under a skills archive failed label" \
+    || bad "the real archive error is not printed" "$(cat "$out/stderr")"
+  grep -q "no skills/ or commands/" "$out/stderr" \
+    && bad "a failing git archive is labelled as a missing skills/ or commands/ tree" "$(cat "$out/stderr")" \
+    || ok "a failing git archive is not labelled as a missing skills/ or commands/ tree"
+  grep -q "nothing was switched" "$out/stderr" \
+    && ok "a failed archive says nothing was switched" \
+    || bad "a failed archive does not say nothing was switched" "$(cat "$out/stderr")"
+  [[ ! -e "$h7/skills-current" ]] \
+    && ok "a failed archive leaves no skills-current link" \
+    || bad "a failed archive left skills-current"
+fi
+
+# --- 18. a failing tar is not reported as a missing tree either ---------------------
+ft="$root/fakebin-tar"; mkdir -p "$ft"
+printf '#!/usr/bin/env bash\necho "tar: stub failure" >&2\nexit 2\n' > "$ft/tar"; chmod +x "$ft/tar"
+h8="$root/home8"
+if env PATH="$ft:$PATH" DIRECTOR_HOME="$h8" DIRECTOR_SRC_URL="$src" DIRECTOR_MANIFESTS_DIR="$root/manifests" \
+     "$INSTALLER" skills --ref "$A" >"$out/stdout" 2>"$out/stderr"; then
+  bad "an install whose tar fails succeeded"
+else
+  grep -q "no skills/ or commands/" "$out/stderr" \
+    && bad "a failing tar is labelled as a missing skills/ or commands/ tree" "$(cat "$out/stderr")" \
+    || ok "a failing tar is not labelled as a missing skills/ or commands/ tree"
+  grep -q "skills archive failed" "$out/stderr" \
+    && ok "a failing tar is reported as a failed archive" \
+    || bad "a failing tar is not reported as a failed archive" "$(cat "$out/stderr")"
+fi
+
+# --- 19. --status warns when the installed sha is not on main ----------------------
+# B is a descendant of A. In src2 main stops at A and a branch carries B, so B is
+# installed and is not an ancestor of main.
+src2="$root/src2"
+git clone -q --no-hardlinks "$src" "$src2"
+git -C "$src2" branch -f ahead "$B"
+git -C "$src2" update-ref refs/heads/main "$A"
+h9="$root/home9"
+if env DIRECTOR_HOME="$h9" DIRECTOR_SRC_URL="$src2" DIRECTOR_MANIFESTS_DIR="$root/manifests" "$INSTALLER" skills --ref ahead >/dev/null 2>&1 \
+   && env DIRECTOR_HOME="$h9" DIRECTOR_SRC_URL="$src2" DIRECTOR_MANIFESTS_DIR="$root/manifests" "$INSTALLER" --status >"$out/stdout" 2>"$out/stderr"; then
+  grep -q "^skills: ${B:0:12} .*not on main" "$out/stdout" \
+    && ok "--status says an installed sha that is not on main is not on main" \
+    || bad "--status does not warn that the installed sha is not on main" "$(cat "$out/stdout")"
+else
+  bad "--status or the install from a branch ahead of main failed" "$(cat "$out/stderr")"
+fi
+# and an installed sha that is on main carries no such warning
+if di skills --ref "$A" && di --status; then
+  grep -q "^skills: .*not on main" "$out/stdout" \
+    && bad "--status warns about a sha that is on main" "$(cat "$out/stdout")" \
+    || ok "--status carries no not-on-main warning for a sha on main"
+  grep -q "^skills: .*(ref " "$out/stdout" \
+    && bad "--status prints a ref for the skills install, which the stamp keeps from the first install" "$(cat "$out/stdout")" \
+    || ok "--status prints the sha and no ref for the skills install"
+else
+  bad "--status after installing a sha on main failed"
+fi
+
 echo "---"
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
