@@ -27,7 +27,10 @@ trap 'rm -rf "$scratch"' EXIT
 scratch="$(cd "$scratch" && pwd -P)"
 
 # 1. the root lies under the given TMPDIR.
-root="$(TMPDIR="$scratch" LAUNCH=/usr/bin/true bash -c 'source "$1"; printf "%s" "$root"' _ "$stubs")"
+# The stubs run from scratch: macOS /bin/bash 3.2 writes here-document temp files
+# in the working directory, not TMPDIR, so a read-only working directory under a
+# scratch-only profile would stop the stubs for a reason that is not this one.
+root="$(TMPDIR="$scratch" LAUNCH=/usr/bin/true bash -c 'cd "$2" && source "$1" && printf "%s" "$root"' _ "$stubs" "$scratch")"
 if [[ "$root" == "$scratch"/* ]]; then
   ok "cast-stubs.sh root is under TMPDIR"
 else
@@ -40,7 +43,7 @@ if [[ "$(uname -s)" == Darwin && -x /usr/bin/sandbox-exec ]]; then
   # A nested sandbox-exec is refused by macOS whatever the stubs do, so probe
   # that first and skip, quoting the refusal, rather than fail on it.
   if refusal="$(/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true 2>&1)"; then
-    if err="$(TMPDIR="$scratch" LAUNCH=/usr/bin/true /usr/bin/sandbox-exec -p "$profile" bash -c 'source "$1"; [[ -d "$root" ]]' _ "$stubs" 2>&1)"; then
+    if err="$(TMPDIR="$scratch" LAUNCH=/usr/bin/true /usr/bin/sandbox-exec -p "$profile" bash -c 'cd "$2" && source "$1" && [[ -d "$root" ]]' _ "$stubs" "$scratch" 2>&1)"; then
       ok "cast-stubs.sh sources under a scratch-only write profile"
     else
       bad "cast-stubs.sh sources under a scratch-only write profile" "${err//$'\n'/ }"
