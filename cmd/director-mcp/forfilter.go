@@ -27,7 +27,8 @@ package main
 // seat named inside prose is not dropped. Role words, team names and prefixes
 // do not count. A name written name@cluster counts when the name part matches
 // by that rule and the cluster is this seat's cluster; name@other-cluster does
-// not match, and a name with no cluster matches as before.
+// not match, and a name with no cluster, or an empty one ("name@"), matches as
+// before.
 
 import (
 	"context"
@@ -164,7 +165,7 @@ func (f *forFilter) forProseNamesSelf(prose []string) bool {
 	for _, w := range prose {
 		w = strings.Trim(w, ".,;:!?()[]\"'`")
 		if i := strings.LastIndex(w, "@"); i >= 0 {
-			if w[i+1:] != f.cluster {
+			if c := w[i+1:]; c != "" && c != f.cluster {
 				continue // name@other-cluster is not this seat
 			}
 			w = w[:i]

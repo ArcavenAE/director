@@ -21,6 +21,7 @@ func TestForFilterProseNameAtClusterDelivers(t *testing.T) {
 		{"full id at another cluster drops", "FOR alpha-supervisor, see operator-g3-0@c2 on repo#1:\nbody", true},
 		{"a prefix of this seat at this cluster drops", "FOR alpha-supervisor, see operator-extra@c1 on repo#1:\nbody", true},
 		{"a role word at this cluster drops", "FOR alpha-supervisor, see supervisor@c1 on repo#1:\nbody", true},
+		{"an empty cluster counts as no cluster and delivers", "FOR alpha-supervisor, see operator@ on repo#1:\nbody", false},
 		{"bare short id still delivers", "FOR alpha-supervisor, see operator on repo#1:\nbody", false},
 		{"another seat at this cluster still drops", "FOR alpha-supervisor, see ops-builder@c1 on repo#1:\nbody", true},
 	}
