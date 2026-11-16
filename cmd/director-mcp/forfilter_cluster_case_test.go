@@ -32,8 +32,9 @@ func TestForFilterProseClusterCompareIsCaseSensitive(t *testing.T) {
 }
 
 // In the name path, namesSelf takes the cluster as written and compares it
-// exactly. The FOR line pattern keeps an upper-case cluster from reaching it
-// through drops(), so the pin calls it directly.
+// exactly. On the token side, forSeat allows lower-case clusters only, so an
+// upper-case cluster written in a FOR token cannot reach it through drops();
+// the pin calls it directly.
 func TestForFilterNamesSelfClusterCompareIsCaseSensitive(t *testing.T) {
 	f := forTestFilter(forTestRows(), nil)
 	if !f.namesSelf("operator", "c1") {
@@ -48,8 +49,10 @@ func TestForFilterNamesSelfClusterCompareIsCaseSensitive(t *testing.T) {
 // cluster written in the token equals the row's cluster exactly. The pin asks
 // for alpha-supervisor on C1 while its only presence row is on c1: the token's
 // cluster is upper case and the row's is lower case, and that is another
-// cluster, so no row matches. The FOR line pattern keeps an upper-case cluster
-// out of drops(), so the pin calls otherTeamSeat directly.
+// cluster, so no row matches. On the token side, forSeat allows lower-case
+// clusters only, so an upper-case cluster written in a FOR token cannot reach
+// otherTeamSeat through drops(); the pin calls it directly. This says nothing
+// about the row side, where a row's cluster may carry upper case.
 func TestForFilterOtherTeamSeatClusterCompareIsCaseSensitive(t *testing.T) {
 	f := forTestFilter(forTestRows(), nil)
 	rows, _ := f.roster(context.Background())
