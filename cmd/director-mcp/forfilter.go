@@ -12,6 +12,20 @@ package main
 // name on a stale row, a roster that cannot be read. A drop acks the message
 // on the seat's durable, so a wrong drop loses mail, and every doubt goes to
 // delivery for that reason.
+//
+// Where the names end. The FOR text is read as a comma-separated list, split on
+// commas before any word splitting. The first element is always names, so
+// "FOR a b" reads two names, as it always has. A later element made only of
+// names and the joiners "and", "or" and "only" is names, and an element that is
+// exactly one token is a name, so a mistyped seat-shaped name still reaches the
+// roster and delivers. The first later element that holds more than one name
+// between joiners ("on repo#1 at abc1234") is prose, and it ends the list along
+// with everything after it. Prose therefore never spoils a line that names
+// seats first, and it never turns into a name that could drop mail. The cut
+// prose is still scanned for this seat's own full name (its agent id, or the id
+// without the -gN-M suffix) as a whole token in any case; a hit delivers, so a
+// seat named inside prose is not dropped. Role words, team names and prefixes
+// do not count.
 
 import (
 	"context"
@@ -92,19 +106,67 @@ func forText(data string) (string, bool) {
 	return "", false
 }
 
-// forTokens splits the FOR text on commas and whitespace, drops the words
-// "and", "or" and "only", and trims trailing . ; : from each token. Seat names hold no
-// spaces, so splitting on whitespace never cuts a name.
+// forTokens reads the FOR text as a comma-separated list and returns its names.
+// See forList.
 func forTokens(text string) []string {
-	var out []string
-	for _, f := range strings.Fields(strings.ReplaceAll(text, ",", " ")) {
-		f = strings.TrimRight(f, ".;:")
-		if f == "" || f == "and" || f == "or" || f == "only" {
-			continue
+	names, _ := forList(text)
+	return names
+}
+
+// forList reads the FOR text as a comma-separated list and returns its names
+// and the prose that ended the list. The first element is always names. A later
+// element is names when, with the joiners "and", "or" and "only" removed, each
+// run of words between joiners is one token; otherwise it is prose, and it ends
+// the list along with everything after it. Trailing . ; : are trimmed from each
+// name. Seat names hold no spaces, so splitting on whitespace never cuts a name.
+// The prose words come back whole, for the this-seat scan in drops.
+func forList(text string) (names, prose []string) {
+	els := strings.Split(text, ",")
+	for i, el := range els {
+		var got []string
+		run, isProse := 0, false
+		for _, f := range strings.Fields(el) {
+			f = strings.TrimRight(f, ".;:")
+			if f == "" {
+				continue
+			}
+			if f == "and" || f == "or" || f == "only" {
+				run = 0
+				continue
+			}
+			run++
+			if i > 0 && run > 1 {
+				isProse = true
+				break
+			}
+			got = append(got, f)
 		}
-		out = append(out, f)
+		if isProse {
+			for _, rest := range els[i:] {
+				prose = append(prose, strings.Fields(rest)...)
+			}
+			break
+		}
+		names = append(names, got...)
 	}
-	return out
+	return names, prose
+}
+
+// forProseNamesSelf reports whether the cut prose holds this seat's own full
+// name as a whole token, in any case: its agent id, or the id without the -gN-M
+// suffix. Role words, team names and prefixes do not count, so ordinary prose
+// about other seats does not deliver everywhere.
+func (f *forFilter) forProseNamesSelf(prose []string) bool {
+	own := []string{f.agentID, forGenSfx.ReplaceAllString(f.agentID, "")}
+	for _, w := range prose {
+		w = strings.Trim(w, ".,;:!?()[]\"'`")
+		for _, n := range own {
+			if n != "" && strings.EqualFold(w, n) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // forSplit separates a token's name from its @cluster suffix. A role:// token
@@ -188,7 +250,7 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 	if !ok {
 		return false, ""
 	}
-	toks := forTokens(text)
+	toks, prose := forList(text)
 	if len(toks) == 0 {
 		return false, ""
 	}
@@ -202,6 +264,9 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 		if f.namesSelf(name, cluster) {
 			return false, ""
 		}
+	}
+	if f.forProseNamesSelf(prose) {
+		return false, "" // this seat is named in the prose: deliver
 	}
 	rows, err := f.roster(ctx)
 	if err != nil {
