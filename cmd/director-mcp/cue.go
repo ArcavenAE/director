@@ -685,7 +685,11 @@ type busCueSource struct{ b *Bus }
 // remaining(). The same read marks the seat's pending tracker, so with the cue
 // on the age is sampled every poll.
 func (s busCueSource) count(ctx context.Context) (uint64, error) {
-	return s.b.pendingByTier(ctx)
+	c, err := s.b.pendingTiers(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return c.local + leaveOutDropped(ctx, c), nil
 }
 
 func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {

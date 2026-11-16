@@ -298,6 +298,18 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 	return true, text
 }
 
+// foreign is the one decision whether the filter drops a message: false with
+// the filter off, otherwise drops(), with every doubt going to delivery. It
+// acks and counts nothing. dropForeign acts on it by acking, and the cue's
+// count (cue_filter.go) leaves out what it reports true, so the two cannot
+// drift (director#572).
+func (g *globalTier) foreign(ctx context.Context, e *Envelope) (bool, string) {
+	if g.forFilter == nil {
+		return false, ""
+	}
+	return g.forFilter.drops(ctx, e)
+}
+
 // dropForeign is the one place a received message meets the filter. Every path
 // that takes mail off the global durable calls it before it hands the message
 // on: the blocking fetch (fetchOne) and the no-wait pull behind takeWaiting and
@@ -309,10 +321,7 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 // reports true, so a message proven foreign is never delivered; the broker
 // redelivers it and it is dropped again.
 func (g *globalTier) dropForeign(ctx context.Context, m jetstream.Msg, e *Envelope, seq uint64) bool {
-	if g.forFilter == nil {
-		return false
-	}
-	drop, text := g.forFilter.drops(ctx, e)
+	drop, text := g.foreign(ctx, e)
 	if !drop {
 		return false
 	}

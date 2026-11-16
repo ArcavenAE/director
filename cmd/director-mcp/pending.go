@@ -252,25 +252,45 @@ func (b *Bus) oldestPending() time.Duration { return b.pending.age(time.Now()) }
 // marked unverified, and the error is the first such tier's. A hub not yet
 // attached is left out, as in remaining().
 func (b *Bus) pendingByTier(ctx context.Context) (uint64, error) {
-	info, err := b.readTier(ctx, "local", b.js, "AGENT_INBOX", b.cons())
+	c, err := b.pendingTiers(ctx)
 	if err != nil {
 		return 0, err
 	}
-	n := info.NumPending + uint64(info.NumAckPending)
+	return c.local + c.global, nil
+}
+
+// tierCounts is one read of the tiers' waiting counts. g and ginfo are set
+// when the global tier is attached, so the cue's count can look at what waits
+// there (cue_filter.go).
+type tierCounts struct {
+	local, global uint64
+	g             *globalTier
+	ginfo         *jetstream.ConsumerInfo
+}
+
+// pendingTiers is pendingByTier's read, with the two tiers kept apart.
+func (b *Bus) pendingTiers(ctx context.Context) (tierCounts, error) {
+	info, err := b.readTier(ctx, "local", b.js, "AGENT_INBOX", b.cons())
+	if err != nil {
+		return tierCounts{}, err
+	}
+	c := tierCounts{local: info.NumPending + uint64(info.NumAckPending)}
 	if b.globalCfg == nil {
-		return n, nil
+		return c, nil
 	}
 	b.globalMu.Lock()
 	g := b.global
 	b.globalMu.Unlock()
 	if g == nil {
-		return n, nil
+		return c, nil
 	}
 	gi, err := b.readTier(ctx, "global", g.js, g.cfg.streamName(), g.cons())
 	if err != nil {
-		return 0, err
+		return tierCounts{}, err
 	}
-	return n + gi.NumPending + uint64(gi.NumAckPending), nil
+	c.global = gi.NumPending + uint64(gi.NumAckPending)
+	c.g, c.ginfo = g, gi
+	return c, nil
 }
 
 // streamReadTimeout bounds one tier's whole read for a sample: the consumer
