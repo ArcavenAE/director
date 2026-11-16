@@ -1370,6 +1370,19 @@ if [[ -z "${VERIFY_NESTED:-}" ]]; then
   else
     bad "CAST_LAUNCH with a renamed launcher" "$(tail -3 "$root/out/nested.log")"
   fi
+  # An installed launcher is a link (~/.director/bin/cast-launch) to a file in a versioned
+  # directory, and the wrapper sits in that directory, not beside the link. Run this script
+  # again through such a link: it must find the wrapper where the link points.
+  instreal="$root/instreal"; instbin="$root/instbin"; mkdir -p "$instreal" "$instbin"
+  cp "$LAUNCH_ORIG" "$instreal/cast-launch.sh"; chmod +x "$instreal/cast-launch.sh"
+  [[ -f "$wrapper_orig" ]] && cp "$wrapper_orig" "$instreal/claude-bedrock-launch"
+  [[ -f "$here/dismiss-devch" ]] && cp "$here/dismiss-devch" "$instreal/dismiss-devch"
+  ln -s "$instreal/cast-launch.sh" "$instbin/cast-launch"
+  if VERIFY_NESTED=1 CAST_LAUNCH="$instbin/cast-launch" "${BASH_SOURCE[0]}" >"$root/out/nested-link.log" 2>&1; then
+    ok "CAST_LAUNCH through an installed link: the wrapper is found where the link points, and all cases pass"
+  else
+    bad "CAST_LAUNCH through an installed link" "$(grep -m1 '^FAIL' "$root/out/nested-link.log"); $(tail -1 "$root/out/nested-link.log")"
+  fi
 fi
 
 echo "$pass passed, $fail failed"
