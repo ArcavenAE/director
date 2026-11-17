@@ -29,6 +29,16 @@ content: |
   the contract; the shim side then goes to the arcaven builder and the daemon
   side to the marvel builder, and the operator edits the manifest. It queues
   behind the architect's current designs.
+
+  HARVEST 2026-11-17, against the design audit of that date (49 design docs, pinned at director 0b48fc6; each row named by its doc under sim/design/).
+  shim-timer-heartbeat.md: the shim timer presence and the bus beat are on
+  main (PRs 54 and 498); lease renewal, the harness observers, the observed
+  state, the shutdown-edge delete and the per-host watcher are open. So a shim
+  now feeds a presence beat, which addresses part of "a seat whose shim failed
+  to connect never reports running". cluster-gone-alert.md: C1 to C3 are on
+  main; C4 and marvel's `DIRECTOR_PRESENCE_LOST_AFTER` stamp were not found.
+  The contract itself is still the architect's call, as this node says. The
+  question stays open.
 edges:
   - target: finding-007-deaf-session-reports-silence-as-normal
     type: supports
