@@ -41,6 +41,17 @@ content: |
   HARVEST 2026-10-09: finding-021 (`sender.instance`, self-asserted) bears
   on what a sender can learn about its own sends; the detail is on
   question-idle-seat-receive-latency.
+
+  HARVEST 2026-11-17, against the design audit of that date (49 design docs, pinned at director 0b48fc6; each row named by its doc under sim/design/).
+  Three designs bear on what a seat can learn about mail it sent.
+  ask-ledger.md: A1, A2 (the presence half) and A3 are on main (PRs 251, 254,
+  255); A4, the `delivered_at` field, is declared and never set, and no
+  cross-cluster row merge was found. asks-die-unread.md: a successor reads
+  past its predecessor's floor through MARVEL_PREDECESSOR (#565), and unread
+  mail has a live max_age (#556); the `catching-up` presence (U2) was not
+  found. envelope-sender-instance.md: built (PR 190), so the self-asserted
+  `sender.instance` of finding-021 is in the envelope. The question stays
+  open: A4 and U2 are not built, and no finding records the sender's side.
 edges:
   - target: finding-010-explicit-workspace-send-is-accepted-for-a-mailbox-nobody-reads
     type: derives
