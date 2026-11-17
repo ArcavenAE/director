@@ -37,7 +37,7 @@ content: |
   kinu-nats-deployment.md: the launchd plist, the hub launcher and the marvel
   `bus.binary` setting are on main (PRs 662 and 663); the operator ruled four
   points on 2026-11-16; the phase 3 live cutover has not run. This node was
-  last edited 2026-10-08 and predates all of that. global-nats-leaf-attach.md:
+  last edited 2026-10-09 (UTC) and predates all of that. global-nats-leaf-attach.md:
   marvel's leaf connect and disconnect shipped; moving the global tier onto
   shared infrastructure is not done. The question stays open until the cutover.
 edges:
