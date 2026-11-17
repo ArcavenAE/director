@@ -104,6 +104,15 @@ content: |
 
   Nothing from `sim/notes/` is quoted in any output. Counts and structure
   only.
+
+  HARVEST 2026-11-17: complete. finding-director-7oiu-sim-corpus-fitness-probe
+  records the run: steps 1 to 4 of the design merged in director#288, the
+  20-entry sample (7 tracked, 6 notes-only, 4 session-relative, 2 rulings with
+  no record, 1 with no Earned-by line), and a GO for the BRS run at director
+  62b55fc. It also records that 107 of the 230 register entries cite only
+  notes, and that every section the PRD needs still has at least one tracked
+  source. The finding states the hypothesis outcome in its own words; this
+  note does not restate it. No confidence change is made here.
 edges:
   - target: question-director-requirements-audit-themes
     type: supports
