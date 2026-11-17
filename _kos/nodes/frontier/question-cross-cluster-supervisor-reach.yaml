@@ -94,6 +94,14 @@ content: |
     operator's cluster held no global-tier presence until each restarted.
     Director stayed the relay for every cross-cluster review, and the
     recorded delays all sit on that hop.
+
+  HARVEST 2026-11-17, against the design audit of that date (49 design docs, pinned at director 0b48fc6; each row named by its doc under sim/design/).
+  Two designs bear on question C (reach granted pair by pair and layer by
+  layer). global-bus-tier.md: the hub, the leaf classes and the shim's global
+  mode are on main; TLS and the cross-host stage are open. leaf-fabric-one-address-space.md:
+  72 hour retention (#78) and the address derivations are on main; the outbox
+  sourcing, the notifier and the flag-day cutover are not, and marvel's
+  subjects are still `agent.<ws>.<team>`. The question stays open.
 edges:
   - target: finding-009-hub-grant-reload-misses-existing-leaf
     type: derives
