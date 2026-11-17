@@ -45,9 +45,14 @@ content: |
   from this node's: the design's A is this node's option B (the shim filter),
   and the design's B, per-seat inboxes, is a third form that is neither of this
   node's two options as written (team-addressed subjects, or a shim filter).
-  So "none chosen" above is out of date: the operator ruled for per-seat
-  inboxes, and the design says the shim filter is not ruled. The cutover is not
-  built, so the question stays open until it is.
+  The design also scopes the ruling: "The collision this ruling addresses is
+  the narrower case inside one team: the supervisor and the research
+  supervisor share a team, so even a team-qualified global address would still
+  reach both." This node asks about cross-team traffic, so the ruling is not a
+  ruling on this question. This note is a reading, not a decision: per-seat
+  inboxes would also answer this question once the cutover ships, and until
+  then "none chosen" above stands for the cross-team question. The cutover is
+  not built, and the question stays open.
 edges:
   - target: finding-006-global-tier-has-no-per-agent-address
     type: derives

@@ -25,7 +25,8 @@ content: |
   tools/ in the orchestrator; the runner is in this repository. The `diag`
   runner and gate 0 (`scripts/diag/diag`, `scripts/diag/gate0.sh`, with
   `scripts/diag/verify-diag.sh`) merged on 2026-10-26 (PR 420). Gates A
-  onward, and any file under `scripts/diag/checks/`, were not found. The
+  onward were not found, and there is no check file under
+  `scripts/diag/checks/` (only its README). The
   brief is not done: its questions 1 to 3 are still unanswered and no finding
   exists.
 
