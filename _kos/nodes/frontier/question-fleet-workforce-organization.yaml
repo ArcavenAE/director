@@ -23,6 +23,18 @@ content: |
 
   OPEN: which of finding-005's staffing rules (scale up, redistribute,
   escalate) become director requirements once the load signal exists.
+
+  HARVEST 2026-11-17, against the design audit of that date (49 design docs, pinned at director 0b48fc6; each row named by its doc under sim/design/).
+  The question asks what signal a supervisor needs to see load. Four
+  designs bear on it. route-ledger.md: built (PR 545), a shape and a read-only
+  checker; the ledger records `depth_at_route`. fleet-health.md: built (PR 433,
+  the `freebusy` script), a free and busy view. ask-ledger.md: A1 to A3 on
+  main, A4 and the cross-cluster merge not. director-functions-redesign.md:
+  most K items on main; K16 (owed forwards) and K17 (per-seat depth) had no
+  trace in code or PR titles. Per-seat depth is the signal the question names
+  and the one still missing; brief-work-queue-depth-owner is the open probe
+  for it. The question stays open; the staffing rules of finding-005 are still
+  unjudged.
 edges:
   - target: question-global-supervisor-delivery-scope
     type: derives

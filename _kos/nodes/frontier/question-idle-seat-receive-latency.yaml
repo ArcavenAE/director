@@ -59,6 +59,18 @@ content: |
   - Retention: the live AGENT_INBOX read 72h against a documented 168h, so an
     idle seat's mail and durable could expire after three days; `provision.sh`
     raises it at start (#459, f166790).
+
+  HARVEST 2026-11-17, against the design audit of that date (49 design docs, pinned at director 0b48fc6; each row named by its doc under sim/design/).
+  Five designs bear on how mail reaches an idle seat. channel-cue.md:
+  built (`cue.go`, PRs 578 and 590), the wake path of candidate A; its back-off
+  ticket is open. receive-without-polling.md is an estimate whose first part
+  became channel-cue. timed-inbox-look.md: the `look` subcommand is on main
+  (PR 553); the scheduled job and the sandbox profile are not.
+  unread-slice-m.md: built (`unread.go`, PR 191), so unread depth and age are
+  readable per seat. asks-die-unread.md: a live max_age (#556) and a successor
+  reading past its predecessor's floor (#565) are on main. None of these rows
+  records the sender-side receipt the question names (`cue.unanswered`
+  reaching the sender). The question stays open.
 edges:
   - target: finding-013-an-idle-supervisor-without-the-cue-reads-mail-hours-late
     type: derives

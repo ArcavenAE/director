@@ -35,6 +35,24 @@ content: |
   class: one errand supervisor drained 182 held messages on 2026-10-02 and
   321 on 2026-10-04, none addressed to it.
 
+  HARVEST 2026-11-17, against the design audit of that date (49 design docs, pinned at director 0b48fc6; each row named by its doc under sim/design/).
+  global-per-seat-inbox.md (partial: address derivations only, which
+  nothing in the live path calls; the shim wiring and the cutover are not
+  done) records an operator ruling of 2026-10-07, "global supervision
+  collision: B". The design's own text reads: "B is per-seat global inboxes, in
+  the direction of R-94 as amended, delivered by the brief 11 cutover. Option A
+  (a shim-side filter as a stopgap) is not ruled." The design's labels differ
+  from this node's: the design's A is this node's option B (the shim filter),
+  and the design's B, per-seat inboxes, is a third form that is neither of this
+  node's two options as written (team-addressed subjects, or a shim filter).
+  The design also scopes the ruling: "The collision this ruling addresses is
+  the narrower case inside one team: the supervisor and the research
+  supervisor share a team, so even a team-qualified global address would still
+  reach both." This node asks about cross-team traffic, so the ruling is not a
+  ruling on this question. This note is a reading, not a decision: per-seat
+  inboxes would also answer this question once the cutover ships, and until
+  then "none chosen" above stands for the cross-team question. The cutover is
+  not built, and the question stays open.
 edges:
   - target: finding-006-global-tier-has-no-per-agent-address
     type: derives

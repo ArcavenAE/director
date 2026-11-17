@@ -198,6 +198,19 @@ content: |
   - What a new user would meet: getting-started now has a hand-start path
     (#463, 68a8be7).
 
+  HARVEST 2026-11-17, against the design audit of that date (49 design docs, pinned at director 0b48fc6; each row named by its doc under sim/design/).
+  Five designs bear on the start path. director-bootstrap.md: `role.md`,
+  `director-init` and `director-profile` are on main (PR 587); the PreToolUse
+  guard, the trap doors and a director-alone verify were not found.
+  launcher-distribution.md: `director-install` for cast-launch and the release
+  install are on main; the bootstrap on the second cluster (L3) and two host
+  items are open. identity-at-spawn.md: launcher-assigned identity (ID-A) is on
+  main (PR 54), the case of finding-003 and finding-026. identity-default.md:
+  the shim refuses a shared fallback identity (`seatenv.go`); the lease-guarded
+  address is not built and follows the seat-lease decision.
+  shim-release-and-pinned-install.md: built (PRs 464 and 619), a reproducible
+  release and a pinned install, which bears on finding-018 and finding-020. The
+  question stays open.
 edges:
   - target: finding-015-a-respawned-seat-still-replays-its-inbox-after-the-resume-fix
     type: derives

@@ -29,6 +29,17 @@ content: |
   shipping the CA and matching its digest, and the cutover.
 
   OPEN: the final SAN set, and the cutover itself.
+
+  HARVEST 2026-11-17, against the design audit of that date (49 design docs, pinned at director 0b48fc6; each row named by its doc under sim/design/).
+  Three designs bear on the open items (the final SAN set, and the
+  cutover). global-bus-tier.md: the hub, the leaf classes and the shim's global
+  mode are on main; TLS on the hub and the cross-host stage are open.
+  kinu-nats-deployment.md: the launchd plist, the hub launcher and the marvel
+  `bus.binary` setting are on main (PRs 662 and 663); the operator ruled four
+  points on 2026-11-16; the phase 3 live cutover has not run. This node was
+  last edited 2026-10-09 (UTC) and predates all of that. global-nats-leaf-attach.md:
+  marvel's leaf connect and disconnect shipped; moving the global tier onto
+  shared infrastructure is not done. The question stays open until the cutover.
 edges:
   - target: question-cross-cluster-supervisor-reach
     type: derives

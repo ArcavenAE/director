@@ -31,6 +31,14 @@ content: |
   The audit is a proposal, not a ruling.
 
   The audit itself is in the research seat's session notes, not committed.
+
+  HARVEST 2026-11-17, against the design audit of that date (49 design docs, pinned at director 0b48fc6; each row named by its doc under sim/design/).
+  corpus-to-brief-and-spectacle.md (partial): the evidence-locus census
+  and the public evidence ledger are on main (PR 428, `sim/evidence-ledger.md`);
+  no brief, requirements document or architecture document built from the
+  register exists yet. The row also notes that the recommendation in that
+  design expired on 2026-10-27. finding-director-7oiu recorded GO for the
+  brief run. The question stays open.
 edges:
   - target: finding-006-global-tier-has-no-per-agent-address
     type: supports

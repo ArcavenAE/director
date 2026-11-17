@@ -19,6 +19,17 @@ content: |
   [measured] bd sql. No runner exists: the orc has no tools/diag/
   [measured] git ls-tree aae-orc origin/main tools/.
 
+  UPDATE 2026-11-17, against the design audit of that date (the row for
+  sim/design/ops-diagnostics-battery.md, pinned at director 0b48fc6): the
+  premise "No runner exists" no longer holds. The measurement above looked at
+  tools/ in the orchestrator; the runner is in this repository. The `diag`
+  runner and gate 0 (`scripts/diag/diag`, `scripts/diag/gate0.sh`, with
+  `scripts/diag/verify-diag.sh`) merged on 2026-10-26 (PR 420). Gates A
+  onward were not found, and there is no check file under
+  `scripts/diag/checks/` (only its README). The
+  brief is not done: its questions 1 to 3 are still unanswered and no finding
+  exists.
+
   So the open question is not "should there be a battery" (ruled yes) but:
 
   1. Which of the six areas does U3's check list leave without a positive
