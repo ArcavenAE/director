@@ -94,9 +94,29 @@ func (b *Bus) noteRoleDelivered(seq uint64) {
 	b.localMu.Unlock()
 }
 
-// noteLocalAcked records an acked local stream sequence.
+// noteInheritedDelivered records the stream sequence of an inherited message
+// that was fetched and will be acked later by sequence alone. The inherited
+// durable's sequences interleave with the own durable's, so crediting the own
+// counter for one would make a rebuilt own durable skip unread own mail below it
+// (director#684, the same interleaving noteRoleDelivered covers for role mail).
+func (b *Bus) noteInheritedDelivered(seq uint64) {
+	b.localMu.Lock()
+	if b.inheritedSeqs == nil {
+		b.inheritedSeqs = map[uint64]struct{}{}
+	}
+	b.inheritedSeqs[seq] = struct{}{}
+	b.localMu.Unlock()
+}
+
+// noteLocalAcked records an acked local stream sequence. An inherited sequence
+// credits no counter of the seat's own durables.
 func (b *Bus) noteLocalAcked(seq uint64) {
 	b.localMu.Lock()
+	if _, inh := b.inheritedSeqs[seq]; inh {
+		delete(b.inheritedSeqs, seq)
+		b.localMu.Unlock()
+		return
+	}
 	_, isRole := b.roleSeqs[seq]
 	delete(b.roleSeqs, seq)
 	st := b.stateOf(isRole)

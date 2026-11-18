@@ -369,8 +369,18 @@ func (b *Bus) drainInherited(ctx context.Context, n int, res *batchResult) {
 	if cons == nil || n <= 0 {
 		return
 	}
+	// Noted before settle can ack: in the handled mode a message already in the
+	// ledger is acked on the pull and never returned, so noting only returned
+	// items would let that ack credit the own counter (director#684, review of
+	// #688). The pull's drop hook runs first and drops nothing.
+	noteInherited := func(_ context.Context, _ jetstream.Msg, _ *Envelope, seq uint64) bool {
+		if b.handled != nil || ackLaterFrom(ctx) != nil {
+			b.noteInheritedDelivered(seq) // acked later by sequence alone
+		}
+		return false
+	}
 	items, disc, err := drainAll(func(k int) ([]drained, int, error) {
-		return pullNoWait(ctx, cons, k, "local", b.handled, nil)
+		return pullNoWait(ctx, cons, k, "local", b.handled, noteInherited)
 	}, n)
 	for i := range items {
 		items[i].InheritedFrom = pred
