@@ -236,8 +236,9 @@ its own rows, and writes nothing. The hook counts as wired when a `UserPromptSub
 Claude Code settings file (user level, or the `.claude` of the directory it runs in, each as
 `settings.json` and `settings.local.json`) names `standing-hook` or resolves by realpath to the
 installed one; the `hook:` row always lists the paths searched. A hook wired through a wrapper
-with another name is a known false negative. No readable settings file, or another harness: the
-hook is not checked, no failure. Exit 1: `--check` drifts, the hook is not wired, or an existing
+with another name is a known false negative. The check reads Claude Code settings files only. When
+none exists or parses, the hook is not checked and that is not a failure; a host that has a Claude
+Code settings file is checked even when another harness is in use. Exit 1: `--check` drifts, the hook is not wired, or an existing
 state directory is not writable; ages and seats only print.
 
 The hook also writes a seen-stamp each time it runs, so `doctor` can tell a hook

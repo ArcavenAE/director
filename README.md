@@ -332,8 +332,9 @@ searched (the user settings under `$CLAUDE_CONFIG_DIR`, else `~/.claude`, and th
 directory of the folder you ran it in), so a result that depends on that folder is visible. A
 command counts when it names `standing-hook` or resolves to the installed one by path. A hook
 wired through a wrapper script with another name reads as not wired: that is a known false
-negative. With no readable settings file, or on another harness, the hook is not checked and
-that is not a failure. The ages block (last drain, Desk read, ledger, digest, tick) and the
+negative. The check reads Claude Code settings files only. When none exists or parses, the hook is
+not checked and that is not a failure; a host that has a Claude Code settings file is checked
+even when another harness is in use. The ages block (last drain, Desk read, ledger, digest, tick) and the
 seats whose cue is not live only report. It exits 1 when `--check` exits 1, when the hook is
 not wired, or when the state directory is not writable. Whether a wired hook ever ran is a
 later row (the seen-stamp).

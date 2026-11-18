@@ -25,8 +25,9 @@ A hooks.UserPromptSubmit command counts when it names standing-hook or when a wo
 resolves, by realpath, to the installed standing-hook, whatever the link is called. The hook row
 always lists the paths searched, so a result that depends on the working directory shows. Known
 false negative: a hook wired through a wrapper script with another name, which neither names
-standing-hook nor resolves to it, reads as not wired. With no readable settings file, and on
-every other harness, the hook is not checked and that is not a failure. It cannot read a plugin
+standing-hook nor resolves to it, reads as not wired. The check reads Claude Code
+settings files only. When none exists or parses, the hook is not checked and that is not a failure;
+a host that has a Claude Code settings file is checked even when another harness is in use. It cannot read a plugin
 hooks file (not built) or whether a wired hook ever ran (the seen-stamp, a later row).
 
 It writes nothing, creates no directory, and starts no process but director-init --check.
