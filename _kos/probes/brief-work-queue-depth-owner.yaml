@@ -127,6 +127,11 @@ content: |
   an update to R-115 if the derived count meets it. If it does not, the
   finding names which missing signal a seat or supervisor would have to
   emit.
+
+  CARRIED FORWARD 2026-11-18 (UTC), kos harvest at director 5180c3e: no sampling
+  record and no finding exist. Left: the 24 hours of sampling on one cluster
+  once the ask lane is on, compared with each supervisor's hand count, then the
+  finding.
 edges: []
 provenance:
   created_by: agent

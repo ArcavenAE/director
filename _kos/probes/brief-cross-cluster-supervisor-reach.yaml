@@ -71,6 +71,13 @@ content: |
   2026-09-27 reload); question A closes. Void: no harvest; rerun. Step 4
   and question B feed a runbook or code change. If step 3 also fails: a
   new finding naming what remains, and question A stays open.
+
+  CARRIED FORWARD 2026-11-18 (UTC), kos harvest at director 5180c3e: no finding
+  exists for step 2 or step 4. Left: step 2 (a PROBE publish to
+  global.kinu.supervisor.inbox from a seat on a team holding a role named exactly
+  "supervisor", after a b1f4953 build has re-rendered authorization, read from
+  the GLOBAL_TO_kinu message count) and step 4 (the scratch-hub reload test;
+  finding-009 still says it was not reproduced on a scratch hub).
 edges:
   - target: question-cross-cluster-supervisor-reach
     type: supports

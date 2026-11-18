@@ -244,6 +244,12 @@ content: |
 
   Source numbers follow the research file, so gaps in the list are sources
   that the research consulted and this brief does not cite.
+
+  CARRIED FORWARD 2026-11-18 (UTC), kos harvest at director 5180c3e: no finding
+  exists and no collector run is recorded. Left: the one-shot read-only
+  collector run that fills the proposed fields for every live seat on all three
+  clusters, each empty cell attributed to a named missing source, then the
+  finding. Sections 1 to 4 above stand as desk research.
 edges:
   - target: question-director-requirements-audit-themes
     type: supports
