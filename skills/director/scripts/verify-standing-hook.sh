@@ -389,6 +389,21 @@ DIRECTOR_STATE="$root/seen-file" clk >"$root/seen-nd0.out" 2>/dev/null || true
 rc=0; DIRECTOR_STATE="$root/seen-file" clk --seen >"$root/seen-nd.out" 2>"$root/seen-nd.err" || rc=$?
 { [[ "$rc" == 0 && ! -s "$root/seen-nd.err" ]] && cmp -s "$root/seen-nd0.out" "$root/seen-nd.out"; } \
   && ok "a state path that is a file: same stdout, exit 0, nothing on stderr" || bad "state path is a file" "rc=$rc err=[$(head -c 200 "$root/seen-nd.err")]"
+# a write that fails after the temp file exists (hook-seen is a directory, so the rename fails) leaves no temp file
+# behind: --seen would otherwise add one on every prompt. beat keeps raising, as it always did.
+rm -rf "$seen_state"; mkdir -p "$seen_state/hook-seen"
+clk >"$root/seen-d0.out" 2>/dev/null || true
+rc=0; clk --seen >"$root/seen-d.out" 2>"$root/seen-d.err" || rc=$?
+{ [[ "$rc" == 0 && ! -s "$root/seen-d.err" ]] && cmp -s "$root/seen-d0.out" "$root/seen-d.out"; } \
+  && ok "hook-seen is a directory: same stdout, exit 0, nothing on stderr" || bad "hook-seen is a directory" "rc=$rc err=[$(head -c 200 "$root/seen-d.err")]"
+[[ "$(ls -A "$seen_state" | grep -c '^\.stamp\.' || true)" == 0 ]] \
+  && ok "hook-seen is a directory: no .stamp.* temp file is left behind" || bad "a failed --seen left a temp file" "$(ls -A "$seen_state" | tr '\n' ' ')"
+rm -rf "$seen_state"; mkdir -p "$seen_state/last-drain"
+rc=0; clk beat >/dev/null 2>&1 || rc=$?
+[[ "$rc" != 0 ]] && ok "beat still fails loudly when its stamp cannot be written (last-drain is a directory)" || bad "beat swallowed a write failure"
+[[ "$(ls -A "$seen_state" | grep -c '^\.stamp\.' || true)" == 0 ]] \
+  && ok "a failed beat leaves no temp file either" || bad "a failed beat left a temp file" "$(ls -A "$seen_state" | tr '\n' ' ')"
+
 rm -rf "$seen_state"
 clk --seen >/dev/null 2>&1 || true
 [[ -s "$seen_state/hook-seen" ]] && ok "--seen creates a missing state directory, as beat does" || bad "--seen with no state directory"
