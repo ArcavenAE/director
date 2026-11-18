@@ -150,7 +150,11 @@ out of `[loop]`: it is marvel's, and `DIRECTOR_MANIFESTS_DIR` already overrides
 it.
 
 A user without Claude Code gets `director status`, which prints exactly what the
-hook prints. crush can call it from its own hook. codex and opencode have no
+hook prints: it runs the standing hook (the one installed beside the launcher as
+invoked, then beside the launcher a link points at, else the checkout's), so the output, the exit code and the environment are the
+hook's. It takes no argument, so it never reaches the hook's `beat` or
+`scan-beat`, and it writes nothing. With no hook to run it stops with exit 3.
+crush can call it from its own hook. codex and opencode have no
 pre-prompt hook, so the user's agent instructions ask the agent to run it. That
 is a request, not a cue, and this design says so rather than claim parity.
 
