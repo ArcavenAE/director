@@ -135,7 +135,8 @@ accounts {
 	if err := os.WriteFile(conf, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, "-c", conf)
+	logPath := filepath.Join(dir, "nats-server.log")
+	cmd := exec.Command(bin, "-c", conf, "-l", logPath)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -147,14 +148,13 @@ accounts {
 		seedPath:    seedPath,
 		unknownSeed: unknownPath,
 	}
-	for i := 0; i < 50; i++ {
-		if nc, err := nats.Connect(h.adminURL); err == nil {
+	watchScratchServer(cmd).await(t, logPath, func() error {
+		nc, err := nats.Connect(h.adminURL)
+		if err == nil {
 			nc.Close()
-			return h
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatal("scratch hub did not come up")
+		return err
+	}, scratchHubStartDeadline)
 	return h
 }
 

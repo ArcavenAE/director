@@ -264,14 +264,13 @@ func (h *hubScratch) startServer(bin, conf string, extraEnv []string) {
 	}
 	h.cmd = cmd
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
-	for i := 0; i < 60; i++ {
-		if nc, err := h.connectAs(h.adminSeed, ""); err == nil {
+	watchScratchServer(cmd).await(t, h.logfile, func() error {
+		nc, err := h.connectAs(h.adminSeed, "")
+		if err == nil {
 			nc.Close()
-			return
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatal("scratch hub did not come up")
+		return err
+	}, scratchHubStartDeadline)
 }
 
 func (h *hubScratch) url() string { return fmt.Sprintf("nats://127.0.0.1:%d", h.port) }
