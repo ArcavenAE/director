@@ -948,6 +948,11 @@ type sendResult struct {
 	// whether a consumer filters the subject was not established, so the result
 	// must not say that none does.
 	CheckFailed string
+	// Audit is empty when the audit copy was recorded, and reads "not recorded:
+	// <error>" when it was not, after one retry. The send is accepted either way:
+	// the inbox has it, and a failed send is retried by the caller, so the
+	// recipient would get it twice (#248).
+	Audit string
 }
 
 // hintedVerdict decides a hinted send from what the consumer lookup returned. A
@@ -1085,7 +1090,7 @@ func (b *Bus) publishSend(ctx context.Context, e *Envelope, wsHint string) (*sen
 			return nil, atStage("publish", err)
 		}
 	}
-	b.auditMirrorStored(ctx, e, body, subject, res.Sequence)
+	res.Audit = b.auditMirrorStored(ctx, e, body, subject, res.Sequence)
 	return res, nil
 }
 
@@ -1115,29 +1120,38 @@ func (b *Bus) publishGlobalOnce(ctx context.Context, e *Envelope, body []byte) (
 	if err != nil {
 		return nil, atStage("global", err)
 	}
-	b.auditMirror(ctx, e, body)
-	return &sendResult{Tier: "global", Stream: ack.Stream, Sequence: ack.Sequence}, nil
+	return &sendResult{Tier: "global", Stream: ack.Stream, Sequence: ack.Sequence, Audit: b.auditMirror(ctx, e, body)}, nil
 }
 
-// auditMirror puts a copy on the append-only local stream (section 2.3). Best
-// effort in the probe: a missing audit stream must not fail a send that the
-// recipient's inbox already accepted.
-func (b *Bus) auditMirror(ctx context.Context, e *Envelope, body []byte) {
-	b.auditMirrorStored(ctx, e, body, "", 0)
+// auditMirror puts a copy on the append-only local stream (section 2.3). A
+// missing audit stream must not fail a send that the recipient's inbox already
+// accepted, so the outcome is returned for the caller to report, never raised:
+// "" when recorded, "not recorded: <error>" when the retry failed too.
+func (b *Bus) auditMirror(ctx context.Context, e *Envelope, body []byte) string {
+	return b.auditMirrorStored(ctx, e, body, "", 0)
 }
 
 // auditMirrorStored is auditMirror for a local send the inbox stream stored: it
 // adds where, as Director-Inbox-Subject and Director-Inbox-Seq, so the ask
 // reader can later tell a sender whether the message was read or expired
 // unread (aae-orc-t77rr). Subject empty or seq zero leaves the headers off.
-func (b *Bus) auditMirrorStored(ctx context.Context, e *Envelope, body []byte, subject string, seq uint64) {
+//
+// A failed publish is tried once more. Both attempts carry the same
+// Nats-Msg-Id, so a first attempt that landed and lost its ack stores once.
+func (b *Bus) auditMirrorStored(ctx context.Context, e *Envelope, body []byte, subject string, seq uint64) string {
 	amsg := &nats.Msg{Subject: "agent.audit", Data: body, Header: nats.Header{}}
 	amsg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
 	if subject != "" && seq > 0 {
 		amsg.Header.Set("Director-Inbox-Subject", subject)
 		amsg.Header.Set("Director-Inbox-Seq", strconv.FormatUint(seq, 10))
 	}
-	_, _ = b.js.PublishMsg(ctx, amsg)
+	if _, err := b.js.PublishMsg(ctx, amsg); err == nil {
+		return ""
+	}
+	if _, err := b.js.PublishMsg(ctx, amsg); err != nil {
+		return "not recorded: " + err.Error()
+	}
+	return ""
 }
 
 // refusalMaxBytes caps the Director-Refusal header. The full text is in the
