@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# never-polled - list seats that connected and never called wait_for_message
+# (director#222, asks-die-unread D2, design test 7b).
+#
+# STUB for the red commit: it reads its arguments and prints nothing. The
+# behavior lands with the green; verify-never-polled.sh is the spec.
+#
+# Usage: never-polled --roster <file> [--now <RFC3339>] [--minutes N]
+set -euo pipefail
+exit 0
