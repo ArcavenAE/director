@@ -101,6 +101,9 @@ type Bus struct {
 	// cueSampling reports whether the cue watcher samples the pending tracker;
 	// nil when the cue is off.
 	cueSampling func() bool
+	// cueProof reports the nonces real cues sent while unverified and when an
+	// echo last made the cue live; nil with the cue off.
+	cueProof func() (uint64, time.Time)
 	// pending is the age of the oldest waiting message, from sampled counts
 	// (pending.go).
 	pending pendingTracker
@@ -1666,6 +1669,7 @@ func (b *Bus) attachCue(c *cue) {
 	c.oldestUnacked = func() bool { return b.pending.oldestUnacked(time.Now()) }
 	c.mu.Unlock()
 	b.cueState, b.cueSampling = c.presenceAt, c.sampling
+	b.cueProof = c.proof
 	b.sentCls = c.cls
 }
 
@@ -1676,6 +1680,8 @@ func (b *Bus) attachCue(c *cue) {
 type presenceView struct {
 	oldestS   int64
 	cueOn     bool
+	nonces    uint64
+	provedAt  time.Time
 	cue       string
 	cueReason string
 	durable   durableSummary
@@ -1688,6 +1694,9 @@ func (b *Bus) presenceView(ctx context.Context) presenceView {
 		return v
 	}
 	v.cueOn = true
+	if b.cueProof != nil {
+		v.nonces, v.provedAt = b.cueProof()
+	}
 	var stalled bool
 	v.cue, v.cueReason, stalled = b.cueState(age, true, b.pending.unverified())
 	if stalled {
@@ -1732,6 +1741,10 @@ func (v presenceView) fields(rec map[string]any) {
 	}
 	if v.cueOn {
 		rec["cue"] = v.cue
+		rec["cue_nonces_sent"] = v.nonces
+		if !v.provedAt.IsZero() {
+			rec["cue_proved_at"] = v.provedAt.UTC().Format(time.RFC3339)
+		}
 		if v.cueReason != "" {
 			rec["cue_reason"] = v.cueReason
 		}

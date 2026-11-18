@@ -28,6 +28,12 @@ type rosterRow struct {
 	TS         string  `json:"ts,omitempty"`
 	AgeSeconds float64 `json:"age_seconds"`
 	Fresh      bool    `json:"fresh"`
+	// The cue's state as the seat published it, each omitted when the record has
+	// none (a shim with the cue off, or an older one).
+	Cue           string   `json:"cue,omitempty"`
+	CueReason     string   `json:"cue_reason,omitempty"`
+	CueNoncesSent *float64 `json:"cue_nonces_sent,omitempty"`
+	CueProvedAt   string   `json:"cue_proved_at,omitempty"`
 }
 
 type rosterReport struct {
@@ -107,6 +113,10 @@ func rosterRowFromKey(key string, rec map[string]any, now time.Time) (rosterRow,
 	r := rosterRow{
 		AgentID: str("agent_id"), Team: str("team"), Workspace: str("workspace"),
 		Role: str("role"), Instance: str("instance"), State: str("state"), TS: str("ts"),
+	}
+	r.Cue, r.CueReason, r.CueProvedAt = str("cue"), str("cue_reason"), str("cue_proved_at")
+	if n, ok := rec["cue_nonces_sent"].(float64); ok {
+		r.CueNoncesSent = &n
 	}
 	if r.AgentID == "" {
 		r.AgentID = parts[2]
