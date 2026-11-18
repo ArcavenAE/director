@@ -296,8 +296,11 @@ An answer the operator asked for and did not see in the stream goes on the Reply
 A seat writes the card for an operator decision as a file, and the card goes
 to the Desk through one parse, not by retyping. A card missing a part goes
 back to the seat that wrote it, not to the operator. The parse check is structural
-(is this card well-formed?), never whether the decision is good. A minimal
-valid card:
+(is this card well-formed?), never whether the decision is good. A card
+never asks the operator to approve, merge or open a PR. A PR reaches the
+operator only ready (draft=false), reviewed at head by a non-author, with fixes
+in, as MERGE RECOMMENDED; a draft's decision goes up as decision text alone. A
+minimal valid card:
 
 ```markdown
 Source: bus 01EXAMPLE, the request for this card
@@ -327,7 +330,10 @@ options, recommendation, valid until and a source, which is a `**Source.**`
 part or a `Source:` line above the first card. The recommendation's first
 sentence names one option. The expiry is a date, or a date with an event
 clause (`, or until <event>, whichever comes first`), names who re-checks it,
-is not already past, and carries no wording that acts on silence.
+is not already past, and carries no wording that acts on silence. The parse
+also refuses a card whose question asks the operator to approve or merge a
+named PR (`#N`, `owner/repo#N`, a `/pull/N` URL, or PR, pull request or MR
+with a number).
 
 To write the cards, run
 `${DIRECTOR_HOME:-$HOME/.director}/bin/card-ingest parse <file> --area <area> --owner <seat> --prefix <prefix>`,

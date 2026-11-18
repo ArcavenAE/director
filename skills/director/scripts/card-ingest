@@ -85,6 +85,11 @@ PREAMBLE_KEY = re.compile(r"^(Source|Kind):\s*(.*)$")
 OPTION = re.compile(r"^(\d+)\.\s+(.*)$")
 EXPIRY = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:\s*\([^)]*\))?(?:\.|,\s*or\s+(?:until\s+)?(.+?),\s*whichever comes first\.?)(?:\s+(.*))?$", re.S)
 PREFIX = re.compile(r"^[a-z0-9-]{3,48}$")
+# A card never asks the operator to approve or merge a PR (aae-orc-htm0w). The heading's question is refused when it
+# holds an approve or merge verb, in any tense, and a named PR: #N (which also reads owner/repo#N), a /pull/N URL, or
+# PR, pull request or MR followed by a number. A bare number is not a PR form.
+APPROVE_MERGE = re.compile(r"\b(?:approv(?:e|es|ed|ing)|merg(?:e|es|ed|ing))\b", re.I)
+PR_NAMED = re.compile(r"#\d+\b|/pull/\d+\b|\b(?:PR|pull request|MR)\s*#?\d+\b", re.I)
 # A code fence line is the fence token (three or more backticks or tildes) with an optional info
 # string and nothing else; a backtick fence's info string holds no backtick, so a line that starts
 # with inline triple-backtick code is not a fence. A closer is a bare run of the same character.
@@ -268,6 +273,9 @@ def check_card(card, pre, kind_default_source, a, snap, logseen, today):
     question = sents[-1].strip() if sents else ""
     if not question.endswith("?"):
         errs.append("the heading holds no question ending in '?'")
+    named = PR_NAMED.search(question)
+    if named and APPROVE_MERGE.search(question):
+        errs.append("the question asks the operator to approve or merge a PR (%s); a PR reaches the operator only ready, reviewed at head by a non-author, as MERGE RECOMMENDED, and a draft's decision goes up as decision text alone" % named.group(0).strip())
     for w in stray:
         errs.append("'%s:' is not a card part; a source is written '**Source.** <pointer>'" % w)
     for lab, recs in parts.items():
