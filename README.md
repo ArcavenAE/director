@@ -181,6 +181,7 @@ Into `~/.director/bin`, one line each. Each is a script under `skills/director/s
 | `introspect` | the runtime fact check director runs at the sweep and at harvest |
 | `composer-check` | looks at a pane before an inject that ends in Enter |
 | `standing-hook` | prints the drain age and the standing checklist before each answer |
+| `director-doctor` | checks the standing loop: `director-init --check`, then the hook wiring, the ages and the seats not live (`director doctor`) |
 | `director-session` | starts one director session by hand, with the channel cue bound when asked |
 | `director-install` | installs components from a commit (above) |
 
@@ -323,6 +324,19 @@ waiting lines when they apply), for a shell or an agent that has no hook of its
 own. It runs the hook installed beside the launcher (as invoked, then beside the
 launcher a link of yours points at), else the checkout's copy, takes no argument
 and writes nothing.
+
+**Checking the loop.** `scripts/director doctor` runs `director-init --check` and prints its
+output first, unchanged, then three more things, reading only and writing nothing. The hook row
+says whether Claude Code settings wire the standing hook, and always lists the settings paths it
+searched (the user settings under `$CLAUDE_CONFIG_DIR`, else `~/.claude`, and the `.claude`
+directory of the folder you ran it in), so a result that depends on that folder is visible. A
+command counts when it names `standing-hook` or resolves to the installed one by path. A hook
+wired through a wrapper script with another name reads as not wired: that is a known false
+negative. With no readable settings file, or on another harness, the hook is not checked and
+that is not a failure. The ages block (last drain, Desk read, ledger, digest, tick) and the
+seats whose cue is not live only report. It exits 1 when `--check` exits 1, when the hook is
+not wired, or when the state directory is not writable. Whether a wired hook ever ran is a
+later row (the seen-stamp).
 
 **Prove the launcher, then clear the old entry.** Earlier setups left a
 project-local `director-mcp` entry for the aae-orc folder in

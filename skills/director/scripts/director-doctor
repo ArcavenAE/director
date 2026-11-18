@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+"""director-doctor: check the standing loop itself, reading only.
+
+  director-doctor            (also `director doctor`)
+
+Standing loop slice 9 (sim/design/director-standing-loop.md section 7). It extends
+`director-init --check`: that script's output comes first, byte for byte and with its own
+stderr, and its exit status counts. Then doctor adds rows of its own, in this order:
+
+  hook: wired (<file>); searched: <path>[ (absent)], ...
+  hook: not wired; searched: ...             followed by  drift: the standing hook is not wired in Claude Code settings
+  hook: not checked (no Claude Code settings file found); searched: ...
+  ages:                                      then two-space rows, "unknown" when there is no source:
+    last drain, desk read, ledger, digest, tick
+  seats not live: <id> (<reason>), ... | none | unknown (no loop-status.json)
+
+Exit 1 when director-init --check exits 1, when the hook is not wired, or when the state
+directory exists and is not writable. Every age only prints, with the hook's own marks (digest
+over 12 h, ledger over 24 h, tick over DIRECTOR_TICK_MAX_MINUTES, default 90): an age never
+fails the command (SOUL section 8, ADR-007). Exit 2 for a usage error.
+
+"Hook wired" is read from Claude Code settings only: $CLAUDE_CONFIG_DIR (else ~/.claude) and the
+.claude directory of the directory doctor runs in, each as settings.json and settings.local.json.
+A hooks.UserPromptSubmit command counts when it names standing-hook or when a word of it
+resolves, by realpath, to the installed standing-hook, whatever the link is called. The hook row
+always lists the paths searched, so a result that depends on the working directory shows. Known
+false negative: a hook wired through a wrapper script with another name, which neither names
+standing-hook nor resolves to it, reads as not wired. With no readable settings file, and on
+every other harness, the hook is not checked and that is not a failure. It cannot read a plugin
+hooks file (not built) or whether a wired hook ever ran (the seen-stamp, a later row).
+
+It writes nothing, creates no directory, and starts no process but director-init --check.
+Every file it reads is read-only. This file keeps to python 3.9 syntax so any python3 runs it;
+director-init re-executes itself under a newer one.
+"""
+import datetime
+import json
+import os
+import subprocess
+import sys
+
+PROG = "director-doctor"
+WAIT_FMT = "%Y-%m-%dT%H:%M:%SZ"
+DIGEST_MAX_HOURS = 12
+LEDGER_MAX_HOURS = 24
+DEFAULT_TICK_MAX_MINUTES = 90.0
+CHECK_TIMEOUT = 120  # seconds, director-init --check runs marvel and sideshow lookups
+
+
+def err(msg):
+    sys.stderr.write("%s: %s\n" % (PROG, msg))
+
+
+def home():
+    return os.environ.get("HOME", "")
+
+
+def state_dir():
+    return os.environ.get("DIRECTOR_STATE") or os.path.join(home(), ".director", "state")
+
+
+def script_dirs():
+    """The directory this file was started from, then the one its link resolves to."""
+    seen = []
+    for p in (os.path.abspath(sys.argv[0]), os.path.realpath(sys.argv[0])):
+        d = os.path.dirname(p)
+        if d not in seen:
+            seen.append(d)
+    return seen
+
+
+def find_beside(name):
+    for d in script_dirs():
+        p = os.path.join(d, name)
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def age_text(seconds):
+    m = int(seconds // 60)
+    if m < 60:
+        return "%dm" % m
+    h = m // 60
+    return "%dh" % h if h < 48 else "%dd" % (h // 24)
+
+
+def tick_max_minutes():
+    try:
+        v = float(os.environ.get("DIRECTOR_TICK_MAX_MINUTES", ""))
+    except ValueError:
+        return DEFAULT_TICK_MAX_MINUTES
+    return v if v == v and 0 < v < float("inf") else DEFAULT_TICK_MAX_MINUTES
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def parse_stamp(raw):
+    return datetime.datetime.strptime(raw, WAIT_FMT).replace(tzinfo=datetime.timezone.utc)
+
+
+# ---- the hook row ----
+
+def settings_paths():
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home(), ".claude")
+    proj = os.path.join(os.getcwd(), ".claude")
+    return [
+        os.path.join(cfg, "settings.json"),
+        os.path.join(cfg, "settings.local.json"),
+        os.path.join(proj, "settings.json"),
+        os.path.join(proj, "settings.local.json"),
+    ]
+
+
+def hook_commands(doc):
+    """Every command string under hooks.UserPromptSubmit."""
+    out = []
+    groups = doc.get("hooks", {}).get("UserPromptSubmit", []) if isinstance(doc, dict) and isinstance(doc.get("hooks"), dict) else []
+    if not isinstance(groups, list):
+        return out
+    for g in groups:
+        if not isinstance(g, dict):
+            continue
+        if isinstance(g.get("command"), str):
+            out.append(g["command"])
+        inner = g.get("hooks")
+        if isinstance(inner, list):
+            for h in inner:
+                if isinstance(h, dict) and isinstance(h.get("command"), str):
+                    out.append(h["command"])
+    return out
+
+
+def is_the_hook(command, installed_real):
+    if "standing-hook" in command:
+        return True
+    if not installed_real:
+        return False
+    for word in command.split():
+        word = os.path.expandvars(os.path.expanduser(word.strip("\"'")))
+        if os.sep not in word:
+            continue
+        try:
+            if os.path.exists(word) and os.path.realpath(word) == installed_real:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def hook_rows():
+    """(rows, wired_ok): the lines to print and False when the hook is not wired."""
+    installed = find_beside("standing-hook")
+    installed_real = os.path.realpath(installed) if installed else None
+    paths = settings_paths()
+    marks = []
+    parsed = []  # (path, document)
+    for p in paths:
+        if not os.path.exists(p):
+            marks.append(p + " (absent)")
+            continue
+        try:
+            with open(p, encoding="utf-8") as fh:
+                doc = json.load(fh)
+        except (OSError, ValueError):
+            marks.append(p + " (unreadable)")
+            continue
+        marks.append(p)
+        parsed.append((p, doc))
+    searched = "; searched: " + ", ".join(marks)
+    if not parsed:
+        return ["hook: not checked (no Claude Code settings file found)" + searched], True
+    for p, doc in parsed:
+        if any(is_the_hook(c, installed_real) for c in hook_commands(doc)):
+            return ["hook: wired (%s)%s" % (p, searched)], True
+    return [
+        "hook: not wired" + searched,
+        "drift: the standing hook is not wired in Claude Code settings",
+    ], False
+
+
+# ---- the ages block ----
+
+def file_age(path):
+    try:
+        return now().timestamp() - os.stat(path).st_mtime
+    except OSError:
+        return None
+
+
+def age_row(label, seconds, mark):
+    if seconds is None or seconds < 0:
+        return "  %s: unknown" % label
+    return "  %s: %s%s" % (label, age_text(seconds), mark)
+
+
+def read_loop_status():
+    """(doc, None) or (None, reason)."""
+    path = os.path.join(state_dir(), "loop-status.json")
+    if not os.path.exists(path):
+        return None, "no loop-status.json"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        ran = parse_stamp(doc["ran_at"])
+        if not isinstance(doc.get("seats"), list):
+            raise ValueError("no seats list")
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, "loop-status.json unreadable"
+    return (doc, ran), None
+
+
+def ages_rows():
+    sd = state_dir()
+    rows = ["ages:"]
+    drain = None
+    try:
+        with open(os.path.join(sd, "last-drain"), encoding="utf-8") as fh:
+            drain = (now() - parse_stamp(fh.readline().strip())).total_seconds()
+    except (OSError, ValueError):
+        drain = None
+    rows.append(age_row("last drain", drain, ""))
+    rows.append(age_row("desk read", file_age(os.path.join(sd, "desk-reads.jsonl")), ""))
+    for name, label, hours in (("workstreams.jsonl", "ledger", LEDGER_MAX_HOURS), ("digest.md", "digest", DIGEST_MAX_HOURS)):
+        a = file_age(os.path.join(sd, name))
+        rows.append(age_row(label, a, " (over %dh)" % hours if a is not None and a > hours * 3600 else ""))
+    status, why = read_loop_status()
+    tick = None
+    mark = ""
+    if status:
+        tick = (now() - status[1]).total_seconds()
+        bound = tick_max_minutes()
+        if tick > bound * 60:
+            mark = " (stale, over %gm)" % bound
+    rows.append(age_row("tick", tick, mark))
+    return rows, status, why
+
+
+def seats_row(status, why):
+    if not status:
+        return "seats not live: unknown (%s)" % why
+    dead = []
+    for seat in status[0]["seats"]:
+        if not isinstance(seat, dict) or not isinstance(seat.get("id"), str):
+            continue
+        cue = seat.get("cue")
+        if not isinstance(cue, str) or cue in ("", "live"):
+            continue
+        reason = seat.get("cue_reason")
+        dead.append("%s (%s)" % (seat["id"], reason) if isinstance(reason, str) and reason else seat["id"])
+    return "seats not live: " + (", ".join(dead) if dead else "none")
+
+
+# ---- main ----
+
+def main(argv):
+    if len(argv) == 1 and argv[0] in ("-h", "--help"):
+        sys.stdout.write(__doc__)
+        return 0
+    if argv:
+        err("usage: director-doctor")
+        return 2
+    rc = 0
+    init = find_beside("director-init")
+    if init is None:
+        err("director-init not found beside this script; nothing was checked")
+        return 1
+    try:
+        res = subprocess.run([init, "--check"], capture_output=True, text=True, timeout=CHECK_TIMEOUT)
+        sys.stdout.write(res.stdout)
+        sys.stderr.write(res.stderr)
+        if res.returncode != 0:
+            rc = 1
+    except subprocess.TimeoutExpired:
+        print("drift: director-init --check timed out after %d s" % CHECK_TIMEOUT)
+        rc = 1
+    except OSError as e:
+        print("drift: director-init --check could not run: %s" % e)
+        rc = 1
+    rows, wired = hook_rows()
+    for r in rows:
+        print(r)
+    if not wired:
+        rc = 1
+    sd = state_dir()
+    if os.path.isdir(sd) and not os.access(sd, os.W_OK | os.X_OK):
+        print("drift: the state directory is not writable: %s" % sd)
+        rc = 1
+    ages, status, why = ages_rows()
+    for r in ages:
+        print(r)
+    print(seats_row(status, why))
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

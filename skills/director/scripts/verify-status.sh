@@ -63,13 +63,16 @@ pin() { # pin <name> <rc> <stdout> <stderr> <args...>
 # recorded from main unchanged and in order, and exactly one added line, "       director status". Dropping that
 # one line gives main's usage byte for byte.
 STATUS_LINE='       director status'
+# S9 adds one more line, "       director doctor" (director's S9 ruling): dropping it too still gives main's bytes.
+DOCTOR_LINE='       director doctor'
 pin_usage() { # pin_usage <name> <args...>
   local n="$1"; shift
   cap "usage-$n" "" "$L" "$@"
   local err; err="$(cat "$root/usage-$n.err")"
   local count; count="$(grep -cxF -- "$STATUS_LINE" "$root/usage-$n.err" || true)"
-  local rest; rest="$(grep -vxF -- "$STATUS_LINE" "$root/usage-$n.err" || true)"
-  if [[ "$(cat "$root/usage-$n.rc")" == 2 && ! -s "$root/usage-$n.out" && "$count" == 1 && "$rest" == "$USAGE" ]]; then ok "usage, exit 2: main's lines in order plus one status line: $n"; else bad "usage, exit 2: main's lines in order plus one status line: $n" "rc=$(cat "$root/usage-$n.rc") count=$count err=[$err]"; fi
+  local dcount; dcount="$(grep -cxF -- "$DOCTOR_LINE" "$root/usage-$n.err" || true)"
+  local rest; rest="$(grep -vxF -e "$STATUS_LINE" -e "$DOCTOR_LINE" "$root/usage-$n.err" || true)"
+  if [[ "$(cat "$root/usage-$n.rc")" == 2 && ! -s "$root/usage-$n.out" && "$count" == 1 && "$dcount" == 1 && "$rest" == "$USAGE" ]]; then ok "usage, exit 2: main's lines in order plus the status and doctor lines: $n"; else bad "usage, exit 2: main's lines in order plus the status and doctor lines: $n" "rc=$(cat "$root/usage-$n.rc") count=$count err=[$err]"; fi
 }
 # no argument (exercises the dispatch's default branch) and an unknown word (exercises `*) usage`)
 pin_usage no-argument

@@ -115,6 +115,8 @@ install_one "$SRC/skills/director/scripts/director-session" "$DIRECTOR_HOME/bin/
 # newer and refuse with one line otherwise. They install nothing themselves.
 install_one "$SRC/skills/director/scripts/director-profile" "$DIRECTOR_HOME/bin/director-profile"
 install_one "$SRC/skills/director/scripts/director-init" "$DIRECTOR_HOME/bin/director-init"
+# director-doctor (standing loop S9, `director doctor`) runs director-init --check from beside itself, then checks the hook wiring and the ages.
+install_one "$SRC/skills/director/scripts/director-doctor" "$DIRECTOR_HOME/bin/director-doctor"
 # route-ledger reads a supervisor route ledger by the shared shape (rlel4); the skill names it by its bin-home path.
 install_one "$SRC/skills/director/scripts/route-ledger" "$DIRECTOR_HOME/bin/route-ledger"
 # schedule-ack: the sweep line for a scheduled firing with no acked result (H-6); the skill names it by its bin-home path.
