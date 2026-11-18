@@ -88,15 +88,23 @@ the profile today and no hook wiring). This design adds to it:
   prints the tick's age and what is due.
 - The loop scripts ship inside the plugin's per-version directory, so an
   upgrade and a rollback cover them, not only the launcher and the shim.
-- One profile table, `[loop]`: state dir, idea roots, ticket id pattern,
-  workspace, tick interval, scheduler, digest maximum age.
+- One profile table, `[loop]`, a closed set of optional keys: `state_dir`,
+  `ticket_pattern` (a regex) and `workspace` are strings, `idea_roots` is a list
+  of strings, `tick_interval` is whole minutes, `digest_max_age` is whole hours,
+  and `scheduler` accepts only `"none"` until slice 16 widens it. An unknown key
+  is refused as `loop.<key>`.
 
 Five defaults today fit only the first install: the shipped idea roots, the
 session's default workspace, the ticket id pattern the stalled-ideas scan and
 `introspect` match, `introspect`'s project filter, and the manifests directory.
-On another machine they return empty results, not errors. They move into the
-profile, and a fresh install writes empty roots rather than another user's
-paths.
+On another machine they return empty results, not errors. The keys now exist,
+and no script reads them yet: each script keeps its current value as the
+fallback, so an install that already exists is unchanged, and removing the
+built-in values is a later, separate ruling. A fresh install ships a
+comment-only `idea-roots.conf` and says so in one line, rather than another
+user's paths; an existing file is never touched. The manifests directory stays
+out of `[loop]`: it is marvel's, and `DIRECTOR_MANIFESTS_DIR` already overrides
+it.
 
 A user without Claude Code gets `director status`, which prints exactly what the
 hook prints. crush can call it from its own hook. codex and opencode have no

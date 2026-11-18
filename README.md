@@ -130,8 +130,9 @@ into the platform's knowledge graph.
 That installs the director and stansfield skills and the command, creates
 `~/.director/bin` (override with `DIRECTOR_HOME`), links the tools
 listed under "What install.sh links" into it, and creates the state root. It
-also writes default idea roots to `idea-roots.conf` in the state root when that
-file is absent.
+also writes a comment-only `idea-roots.conf` to the state root when that file is
+absent, and prints a line naming it: a root is a path on one machine, so add yours
+before running `dbi`.
 
 ### What installs what
 

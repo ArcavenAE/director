@@ -149,11 +149,11 @@ set -e
 
 # The default idea roots (ld16k): written when absent, never over an operator's file.
 cf="$clean/director/state/idea-roots.conf"
-[[ -s "$cf" ]] && grep -q '_kos/ideas' "$cf" && ok "a clean install writes the default idea-roots.conf" || bad "a clean install writes the default idea-roots.conf"
+[[ -s "$cf" && "$(grep -vcE '^[[:space:]]*(#|$)' "$cf" || true)" == 0 ]] && ok "a clean install writes the comment-only default idea-roots.conf" || bad "a clean install writes the comment-only default idea-roots.conf"
 echo "# mine" >"$cf"
 run_install "$clean" && [[ "$(cat "$cf")" == "# mine" ]] && ok "a second install leaves an edited idea-roots.conf alone" || bad "a second install leaves an edited idea-roots.conf alone"
 cp "$here/skills/director/idea-roots.conf" "$root/roots.conf"
-[[ "$(grep -vc -E '^(#|$)' "$root/roots.conf")" == 7 ]] && ok "the shipped default names the design's seven roots" || bad "the shipped default names the design's seven roots"
+[[ "$(grep -vc -E '^(#|$)' "$root/roots.conf" || true)" == 0 ]] && ok "the shipped default names no root (a root is one machine's path)" || bad "the shipped default names no root (a root is one machine's path)"
 
 # A dangling symlink at the conf path must stop the install, not be written through.
 sl="$root/sl"; mkdir -p "$sl/director/state"
