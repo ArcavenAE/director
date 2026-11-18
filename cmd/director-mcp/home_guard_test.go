@@ -12,18 +12,33 @@ import (
 
 // underDir reports whether path sits inside dir, once both are resolved
 // through symlinks (on macOS the temp directory is under /var, a link to
-// /private/var).
+// /private/var). A path whose last levels do not exist yet still resolves: the
+// longest existing prefix is resolved and the rest is joined back on.
 func underDir(path, dir string) bool {
-	p, err := filepath.EvalSymlinks(filepath.Dir(path))
-	if err != nil {
-		p = filepath.Dir(path)
-	}
+	p := resolveExisting(path)
 	d, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		d = dir
 	}
-	p = filepath.Join(p, filepath.Base(path))
 	return p == d || strings.HasPrefix(p, d+string(filepath.Separator))
+}
+
+// resolveExisting resolves the longest prefix of path that exists through
+// symlinks and joins the levels that do not exist onto it.
+func resolveExisting(path string) string {
+	path = filepath.Clean(path)
+	rest := ""
+	for {
+		if r, err := filepath.EvalSymlinks(path); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return filepath.Join(path, rest)
+		}
+		rest = filepath.Join(filepath.Base(path), rest)
+		path = parent
+	}
 }
 
 // A test run must not resolve a state path under the developer's real home:

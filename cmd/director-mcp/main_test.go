@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -50,38 +50,48 @@ func runGuarded(m *testing.M) int {
 
 // finishRun checks the guard after the tests ran and returns the exit code. A
 // test that set HOME or DIRECTOR_STATE with os.Setenv and did not restore it
-// would let later tests reach the real home, so the run fails.
+// would let later tests reach the real home, so the run fails. The leak is
+// reported whatever the tests returned, so a failing run that also leaked shows
+// both causes.
 func finishRun(code int, scratch string, stderr io.Writer) int {
-	if err := homeGuardHolds(scratch); err != nil && code == 0 {
+	if err := homeGuardHolds(scratch); err != nil {
 		fmt.Fprintf(stderr, "director-mcp tests: after the run, %v\n", err)
-		return 1
+		if code == 0 {
+			return 1
+		}
 	}
 	return code
 }
 
-// removeScratch removes the scratch home the run made.
+// removeScratch removes the scratch home the run made, and says so on stderr
+// when it cannot, since what stays behind is on the developer's disk.
 func removeScratch(scratch string, stderr io.Writer) {
-	os.RemoveAll(scratch)
+	if err := os.RemoveAll(scratch); err != nil {
+		fmt.Fprintf(stderr, "director-mcp tests: could not remove the scratch home %q: %v\n", scratch, err)
+	}
 }
 
-// pinGoCaches sets GOMODCACHE and GOCACHE to where go finds them now, before HOME
-// moves, unless the caller set them. Without it a test that runs the go tool
-// (version_test.go builds the binary) gets cold caches under the scratch HOME,
-// fetches every module again and leaves a read-only module cache behind.
-// When go cannot be asked, the caches stay unset and the test that needs go
-// fails on its own.
+// pinGoCaches sets the module cache, the build cache, the go config file and
+// GOPATH to where go finds them now, before HOME moves, unless the caller set
+// them. Without it a test that runs the go tool (version_test.go builds the
+// binary) gets cold caches under the scratch HOME, fetches every module again
+// and leaves a read-only module cache behind, and go reads an empty config
+// from the scratch HOME. go env -json carries the values whole, since GOENV
+// holds a space on macOS. When go cannot be asked, they stay unset and the test
+// that needs go fails on its own.
 func pinGoCaches() {
-	out, err := exec.Command("go", "env", "GOMODCACHE", "GOCACHE").Output()
+	names := []string{"GOMODCACHE", "GOCACHE", "GOENV", "GOPATH"}
+	out, err := exec.Command("go", append([]string{"env", "-json"}, names...)...).Output()
 	if err != nil {
 		return
 	}
-	lines := strings.Fields(string(out))
-	if len(lines) != 2 {
+	var got map[string]string
+	if err := json.Unmarshal(out, &got); err != nil {
 		return
 	}
-	for i, name := range []string{"GOMODCACHE", "GOCACHE"} {
-		if os.Getenv(name) == "" {
-			os.Setenv(name, lines[i])
+	for _, name := range names {
+		if os.Getenv(name) == "" && got[name] != "" {
+			os.Setenv(name, got[name])
 		}
 	}
 }
