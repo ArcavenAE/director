@@ -12,6 +12,11 @@ build does not do is refused with "not in the first build", never ignored:
 roles-from, same-cluster and check team rules. [[model]] entries are read and
 printed, not interpreted. Unknown keys are refused, with the key named.
 
+A [loop] table (the standing loop, slice 4) is checked and printed as loop.<key>:
+value, written as in the file. Every key is optional: state_dir, ticket_pattern and
+workspace are strings, idea_roots a list of strings, tick_interval whole minutes,
+digest_max_age whole hours, scheduler only "none". No script reads it yet.
+
 Paths in handoff, rules_text, doc_domain and write_domain expand ~ and
 $DIRECTOR_STATE only; a relative path is relative to the profile file's directory.
 
@@ -49,11 +54,19 @@ TEAM_RULES = ("has-entry",)
 NOT_YET = ("roles-from", "same-cluster", "check")
 TOP_KEYS = (
     "schema_version", "name", "fleet_sources", "handoff", "doc_domain",
-    "write_domain", "rules_text", "model", "team",
+    "write_domain", "rules_text", "model", "team", "loop",
 )
 MODEL_KEYS = ("kind", "pack", "path", "scope")
 TEAM_KEYS = ("match", "entry_role", "rules")
 PATH_LISTS = ("rules_text", "doc_domain", "write_domain")
+# [loop], the standing loop's table (sim/design/director-standing-loop.md section 3):
+# every key optional, each with its type. No script reads it yet, so it is checked
+# and printed as written, never expanded.
+LOOP_STRINGS = ("state_dir", "ticket_pattern", "workspace")
+LOOP_INTS = ("tick_interval", "digest_max_age")  # minutes, hours
+LOOP_LISTS = ("idea_roots",)
+LOOP_SCHEDULERS = ("none",)  # slice 16 widens it
+LOOP_KEYS = LOOP_STRINGS + LOOP_INTS + LOOP_LISTS + ("scheduler",)
 
 
 def say_err(msg):
@@ -117,6 +130,8 @@ def validate(data):
                 errs.append("unknown key: model[%d].%s" % (i, key))
             elif not isinstance(val, str):
                 errs.append("model[%d].%s must be a string" % (i, key))
+    if "loop" in data:
+        errs.extend(validate_loop(data["loop"]))
     teams = data.get("team", [])
     if not isinstance(teams, list) or not all(isinstance(t, dict) for t in teams):
         errs.append("team must be an array of tables ([[team]])")
@@ -143,6 +158,28 @@ def validate(data):
                         errs.append("team[%d]: not in the first build: %s" % (i, r))
                     elif r not in TEAM_RULES:
                         errs.append("unknown team rule: %s" % r)
+    return errs
+
+
+def validate_loop(loop):
+    """The refusals for the [loop] table; empty means it is sound."""
+    if not isinstance(loop, dict):
+        return ["loop must be a table ([loop])"]
+    errs = []
+    for key, val in loop.items():
+        if key not in LOOP_KEYS:
+            errs.append("unknown key: loop.%s" % key)
+        elif key in LOOP_STRINGS:
+            if not isinstance(val, str):
+                errs.append("loop.%s must be a string" % key)
+        elif key in LOOP_INTS:
+            if not isinstance(val, int) or isinstance(val, bool):
+                errs.append("loop.%s must be an integer" % key)
+        elif key in LOOP_LISTS:
+            if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
+                errs.append("loop.%s must be a list of strings" % key)
+        elif key == "scheduler" and val not in LOOP_SCHEDULERS:
+            errs.append('loop.scheduler must be "none" (got %r)' % (val,))
     return errs
 
 
@@ -204,6 +241,11 @@ def cmd_check(arg):
             if k in m:
                 parts.extend([k, m[k]])
         print(" ".join(parts))
+    loop = data.get("loop", {})
+    for key in LOOP_KEYS:
+        if key in loop:
+            for v in (loop[key] if key in LOOP_LISTS else [loop[key]]):
+                print("loop.%s: %s" % (key, v))
     for t in data.get("team", []):
         print("team %s: entry_role %s, rules %s" % (
             t["match"], t["entry_role"], ", ".join(t.get("rules", ["has-entry"]))))
