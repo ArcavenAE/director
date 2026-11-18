@@ -414,7 +414,14 @@ hook's three-line checklist asks about:
 
 1. Drain the bus inbox: `inbox_summary`, then `wait_for_message` with `max`
    above 1 until `remaining` is 0 or the reply is the silence note. This gives
-   the messages to answer.
+   the messages to answer. A wait result that carries the `push` note ("live:
+   this wait did not block") came back at once because the cue is live. When
+   it holds no message, end the turn and do not call another wait; the next cue
+   notice wakes the session. Do not send an INFORM that only acknowledges a
+   message ("ACK", "received", "noted"): it wakes the receiver for a turn that
+   asks nothing. Send one when it carries a result, a ruling or a change of
+   state the receiver acts on; `report_status` is the signal for working and
+   blocked-on.
 2. Record the drain. The shim writes `last-drain` when the batch wait in step 1 returns with `remaining` 0. If step 1 ended on the silence note or a single-message wait, run `${DIRECTOR_HOME:-$HOME/.director}/bin/standing-hook beat` yourself.
 3. Read answered Desk cards and refresh the snapshot: `desk-snapshot write`.
    This gives `desk-snapshot.json`. Read page picks beside it: export the work ledger
