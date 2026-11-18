@@ -23,6 +23,11 @@ Design: sim/design/card-ingest.md (issue #320). A script cannot write the Desk
       slug the read does not hold), appends a "checked" line to the log, and exits
       nonzero on any mismatch or missing slug.
 
+  card-ingest template
+      Prints one minimal valid card to stdout and writes nothing. Replace its example text with the
+      real question; `card-ingest parse` accepts it as printed. Its Valid until date is seven days
+      from now(), so a copy left on a shelf does not carry a date that has already passed.
+
   card-ingest backfill --docs DIR
       DIR holds the decisions docs as read back from the Desk (<slug>.json). For each
       open card with no rec_key whose recommendation names exactly one 'Option N' the
@@ -588,6 +593,32 @@ def cmd_check(a):
         raise SystemExit(1)
 
 
+TEMPLATE_DAYS = 7
+TEMPLATE = """Source: bus 01EXAMPLE, the request for this card
+
+## Card 1. Should the example report run at 06:00 or 07:00?
+
+**IN SHORT.** The example report runs at 06:00 and often misses late data. Moving it to 07:00 catches that data.
+
+**Problem.** Late data arrives between 06:00 and 06:40 on most days.
+
+**Terms.** None.
+
+**Options.**
+1. *Keep 06:00.* Nothing changes. The cost is a report short of late data.
+2. *Move to 07:00.* One schedule line changes. The cost is a later report.
+
+**Recommendation.** Option 2. Complete data matters more than an hour.
+
+**Valid until** {date}. The reporting seat re-checks it then.
+"""
+
+
+def cmd_template(a):
+    day = datetime.datetime.strptime(now()[:10], "%Y-%m-%d").date() + datetime.timedelta(days=TEMPLATE_DAYS)
+    sys.stdout.write(TEMPLATE.format(date=day.isoformat()))
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="card-ingest")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -599,6 +630,8 @@ def main(argv):
     w.add_argument("--update", action="store_true")
     w.add_argument("--intake", help="the intake id (I-<n>) of the operator ask these cards come from")
     w.set_defaults(fn=cmd_parse)
+    t = sub.add_parser("template")
+    t.set_defaults(fn=cmd_template)
     b = sub.add_parser("backfill")
     b.add_argument("--docs", required=True, help="directory of <slug>.json decision docs, or one JSON file of {slug: doc}")
     b.set_defaults(fn=cmd_backfill)

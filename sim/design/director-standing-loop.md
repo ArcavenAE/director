@@ -109,10 +109,10 @@ what is due, seats whose cue is not live) and adds the digest and ledger ages to
 its waiting line when they pass 12 and 24 hours. The tick counts as stale past 90
 minutes, `DIRECTOR_TICK_MAX_MINUTES`, which is provisional until the operator
 rules a cadence, as `tick_interval` is. With no `loop-status.json` the hook prints
-what it printed before. Three clauses are not built: relayed asks with no card
-(after slice 11), card batches parsed and never checked (after slice 13), and
-"beat broken", which waits for a slice to name the drain record it compares with
-`last-drain`. Nothing acts on silence.
+what it printed before. Two clauses are not built: card batches parsed and never checked
+(after slice 13), and "beat broken", which waits for a slice to name the drain
+record it compares with `last-drain`. The third, relays asking the operator to
+decide with no card, is built in slice 11. Nothing acts on silence.
 a53a's dissent stands: when nobody types, nothing reaches the session. This
 design adds no alarm outside the hook; any alarm is for the ruling a53a already
 asks for.
@@ -290,7 +290,7 @@ Each red test is named here and written in its slice's PR; none exists yet.
 | 8 | Plugin `hooks.json`: `standing-hook`, a SessionStart status line, the hook's seen-stamp | `verify-plugin-hooks.sh names-standing-hook`; `verify-standing-hook.sh writes-seen-stamp` (no plugin, no stamp) | Boot 0 and the hook binding |
 | 9 | `director doctor`, extending `director-init --check` | `verify-director-doctor.sh` cases `unwired-hook-exit1`, `stale-digest-exit0`, `seat-not-live-listed` (no command); its seen-stamp row follows 8 | 3, 5 |
 | 10 | Loop scripts inside the plugin's per-version directory | `verify-director-install.sh rollback-restores-standing-hook` (scripts sit outside every version) | Boot 0 |
-| 11 | `card-ingest template`; the relay template's "Operator decision: card file path, or none" field | `verify-card-ingest.sh template_parses_clean`; `has_operator_decision_field` (neither exists); the hook's relayed-asks-with-no-card clause (moved here from slice 6) | none |
+| 11 | `card-ingest template` (its Valid until is now plus 7 days from parse's clock); the relay template's "Operator decision: card file path, or none" field, after Ask and before Context; `relay-log append --card <path\|none>`, written as a `**Card:**` line after Kind (a widening of this row, ruled in scope by director 01M7R3ECP4); the hook's relayed-asks-with-no-card clause (moved here from slice 6): `relay-log` entries of Kind question in the last 24 h with no Card line, read from `$RELAY_LOG`, gated on `loop-status.json`, silent at 0, `UNKNOWN (<reason>)` when the log cannot be read, the oldest named by its R-number | `verify-card-ingest.sh template_parses_clean`, `template_valid_until_is_now_plus_7_days`, `has_operator_decision_field`; `verify-relay-log.sh` six `relay_log_card_*` cases; `verify-standing-hook.sh` four `hook_relays_with_no_card_*` cases (neither the subcommand, the field, the flag nor the clause exists) | none |
 | 12 | The role library: the shared fragment names the Card standard and its trigger | a render check that every role carrying the Desk-writes clause names the Card standard (0 match today) | 11 |
 | 13 | Desk outbox: `card-ingest parse` appends `cards.jsonl`, `check` appends `applied.jsonl`; reconcile reports | `verify-card-ingest.sh parse-appends-cards-jsonl` (no file); `verify-standing-hook.sh batch_parsed_not_checked_is_waiting` (moved here from slice 6) | none |
 | 14 | Answer mirror: `desk-snapshot` keeps answer choices in `answers.jsonl` | `verify-desk-snapshot.sh answers_persisted_with_choice` (choices are dropped) | none |
