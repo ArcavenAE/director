@@ -40,3 +40,16 @@ func TestHomeGuardKeepsTheStatePathOffTheRealHome(t *testing.T) {
 		t.Errorf("stateDir() = %q is outside the temp directory %q", dir, tmp)
 	}
 }
+
+// The guard's own check names the offending path when HOME or the state
+// directory resolves outside the directory it was given.
+func TestHomeGuardHoldsReportsAPathOutsideScratch(t *testing.T) {
+	other := t.TempDir()
+	err := homeGuardHolds(other)
+	if err == nil {
+		t.Fatalf("homeGuardHolds(%q) = nil, want an error: HOME is the guard's scratch directory, not this one", other)
+	}
+	if !strings.Contains(err.Error(), "outside the scratch home") {
+		t.Errorf("error = %q, want it to say the path is outside the scratch home", err)
+	}
+}
