@@ -45,6 +45,16 @@ is in place, under one flock on desk-reads.lock (a refused write appends none):
       {"read_at": T, "cards": N, "answered": [ids], "answered_not_relayed": [{"card": id, "answered_at": T|null}]}
 A card is answered-not-relayed when it has an answer and its status is not one of CLOSING_STATUSES (the
 relay moves a card to "relayed"). The standing hook reads the newest row.
+
+The answer mirror (S14, sim/design/director-standing-loop.md section 8 row 14): the same write also keeps
+the answers it read in $DIRECTOR_STATE/desk/answers.jsonl, one line each: the Desk's record exactly as read
+(choice, note, ready, at, and anything else it carries) plus "read_at" (the snapshot's) and "card" (the card
+id, from "card" or "card_id"). An answer with no choice is still a row. The file is append-only: a row is
+appended only when its (card, choice, note, at) is not already in the file, decided under one flock on
+desk/answers.lock, so a repeat read adds nothing and a changed answer adds one row and rewrites none. It is
+written only when --answers is given, after the snapshot and the desk-reads row, and a refused write appends
+nothing. If the append fails, the helper exits nonzero naming the file and the snapshot stays in place.
+desk-snapshot.json and desk-reads.jsonl are written exactly as before.
 Whoever runs it is a claim, as with dws --actor: the helper checks the input's
 shape and completeness, not that a session really read the Desk.
 """
@@ -55,6 +65,9 @@ STATE = os.environ.get("DIRECTOR_STATE") or f"{HOME}/.director/state"
 SNAPSHOT = os.path.join(STATE, "desk-snapshot.json")
 READS = os.path.join(STATE, "desk-reads.jsonl")
 READS_LOCK = os.path.join(STATE, "desk-reads.lock")
+DESK = os.path.join(STATE, "desk")
+ANSWERS = os.path.join(DESK, "answers.jsonl")
+ANSWERS_LOCK = os.path.join(DESK, "answers.lock")
 ASK_ID = re.compile(r"^I-[0-9]+$")
 STAMP = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?Z$")  # the Desk writes toISOString(), which carries milliseconds
 # The statuses in which a card is no longer waiting for the relay (CLOSING_STATUSES in dws).
@@ -63,6 +76,10 @@ CLOSING_STATUSES = ("closed", "resolved", "withdrawn", "superseded", "relayed")
 
 class Refused(Exception):
     pass
+
+
+class AppendFailed(Exception):
+    """The answer mirror could not be appended; the snapshot is already in place."""
 
 
 def now():
@@ -142,6 +159,7 @@ def parse_answers(raw, cards):
         raise Refused("the answers file is not a list of answer records")
     answered = set()
     times = {}
+    rows = []
     for r in raw:
         if not isinstance(r, dict):
             raise Refused("an answer in the list is not an object")
@@ -153,6 +171,7 @@ def parse_answers(raw, cards):
         if cid not in cards:
             raise Refused(f"an answer names card {cid}, which the cards read does not hold")
         answered.add(cid)
+        rows.append((cid, r))
         for key in ("at", "answered_at", "created_at"):
             t = r.get(key)
             m = STAMP.match(t) if isinstance(t, str) else None
@@ -161,7 +180,54 @@ def parse_answers(raw, cards):
                 if cid not in times or t > times[cid]:
                     times[cid] = t
                 break
-    return len(raw), sorted(answered), dict(sorted(times.items()))
+    return len(raw), sorted(answered), dict(sorted(times.items())), rows
+
+
+def answer_key(row):
+    return (row.get("card"), row.get("choice"), row.get("note"), row.get("at"))
+
+
+def append_answers(read_at, rows):
+    """Append the answers just read to desk/answers.jsonl, each only if its (card, choice, note, at) is not
+    already there, under one flock. Rows are the Desk's record verbatim plus read_at and card."""
+    try:
+        os.makedirs(DESK, exist_ok=True)
+        fd = os.open(ANSWERS_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            seen = set()
+            lead = b""
+            if os.path.exists(ANSWERS):
+                with open(ANSWERS, "rb") as f:
+                    data = f.read()
+                if data and not data.endswith(b"\n"):
+                    lead = b"\n"
+                for line in data.decode("utf-8", "replace").splitlines():
+                    try:
+                        old = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(old, dict):
+                        seen.add(answer_key(old))
+            out = []
+            for cid, rec in rows:
+                row = dict(rec)
+                row["read_at"] = read_at
+                row["card"] = cid
+                k = answer_key(row)
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+            if out:
+                with open(ANSWERS, "ab") as f:
+                    f.write(lead + "".join(out).encode("utf-8"))
+                    f.flush()
+                    os.fsync(f.fileno())
+        finally:
+            os.close(fd)
+    except OSError as err:
+        raise AppendFailed(f"cannot append to {ANSWERS}: {err.strerror or err}")
 
 
 def cmd_write(a):
@@ -183,6 +249,7 @@ def cmd_write(a):
         raise Refused(f"{a.reported} cards is at the read limit {a.limit}; the read may be truncated. Read again with a higher limit")
     answered = None
     answer_times = {}
+    answer_rows = []
     if a.answers is not None:
         if a.answers_reported is None:
             raise Refused("--answers needs --answers-reported, the count the answers read itself reported")
@@ -193,7 +260,7 @@ def cmd_write(a):
             raise Refused(f"cannot read the answers file {a.answers}: {err.strerror}")
         except ValueError as err:
             raise Refused(f"the answers file is not JSON: {err}")
-        n, answered, answer_times = parse_answers(araw, cards)
+        n, answered, answer_times, answer_rows = parse_answers(araw, cards)
         if n != a.answers_reported:
             raise Refused(f"the answers read reported {a.answers_reported} answers and the file holds {n}; the read is incomplete or the wrong file")
         if a.answers_reported >= a.limit:
@@ -247,6 +314,8 @@ def cmd_write(a):
                 os.fsync(f.fileno())
         finally:
             os.close(fd)
+    if answered is not None:
+        append_answers(snap["read_at"], answer_rows)
     print(f"desk-snapshot: {snap['cards']} cards, {len(snap['open'])} open, read_at {snap['read_at']} -> {SNAPSHOT}")
 
 
@@ -277,6 +346,9 @@ def main(argv):
         a.fn(a)
     except Refused as err:
         print(f"desk-snapshot: refused: {err}", file=sys.stderr)
+        return 1
+    except AppendFailed as err:
+        print(f"desk-snapshot: the snapshot is written but the answer mirror failed: {err}", file=sys.stderr)
         return 1
     return 0
 
