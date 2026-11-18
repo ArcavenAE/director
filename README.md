@@ -320,8 +320,9 @@ rebuilt, because it was never in the session.
 **Status without a session.** `scripts/director status` prints what the standing
 hook prints before each answer (the drain age, the checklist, and the loop and
 waiting lines when they apply), for a shell or an agent that has no hook of its
-own. It runs the hook installed beside the launcher, else the checkout's copy,
-takes no argument and writes nothing.
+own. It runs the hook installed beside the launcher (as invoked, then beside the
+launcher a link of yours points at), else the checkout's copy, takes no argument
+and writes nothing.
 
 **Prove the launcher, then clear the old entry.** Earlier setups left a
 project-local `director-mcp` entry for the aae-orc folder in
