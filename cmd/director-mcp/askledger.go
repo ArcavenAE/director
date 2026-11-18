@@ -51,11 +51,14 @@ type auditRec struct {
 	At      time.Time
 	Refused bool
 	Env     Envelope
-	// InboxSeq and InboxSubject are where the inbox stream stored the send,
-	// from the audit mirror's Director-Inbox-* headers; zero and empty for a
-	// send the mirror did not stamp (a broadcast, a global send, an older shim).
+	// InboxSeq and InboxSubject are where the stream stored the send, from the
+	// audit mirror's Director-Inbox-* headers; zero and empty for a send the
+	// mirror did not stamp (a broadcast, an older shim). InboxStream names that
+	// stream: empty for a record written before the header existed, which was
+	// always AGENT_INBOX. A global send's copy names its hub stream.
 	InboxSeq     uint64
 	InboxSubject string
+	InboxStream  string
 }
 
 // askParty is one end of an ask, as sent and as resolved (design section 4a).
@@ -266,7 +269,11 @@ func (l *askLedger) Ingest(rec auditRec) {
 	if e.MessageID == "" {
 		return
 	}
-	if rec.InboxSeq > 0 && rec.InboxSubject != "" {
+	// Sends feeds the delivery check, which reads AGENT_INBOX only. A copy that
+	// names another stream (a global send's hub stream) is kept out: its
+	// sequence is the hub's, and comparing it with the local inbox would read a
+	// live send as expired unread.
+	if rec.InboxSeq > 0 && rec.InboxSubject != "" && (rec.InboxStream == "" || rec.InboxStream == "AGENT_INBOX") {
 		l.Sends[e.MessageID] = sendRec{Seq: rec.InboxSeq, Subject: rec.InboxSubject, Perf: e.Performative, At: rec.At}
 	}
 	if _, dup := l.Seen[e.MessageID]; dup {

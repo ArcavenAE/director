@@ -292,6 +292,7 @@ func (r *askReader) readAudit(ctx context.Context) {
 		rec := auditRec{Broker: b, Seq: seq, At: msg.Time, Refused: msg.Header.Get("Director-Outcome") == "refused"}
 		if n, err := strconv.ParseUint(msg.Header.Get("Director-Inbox-Seq"), 10, 64); err == nil {
 			rec.InboxSeq, rec.InboxSubject = n, msg.Header.Get("Director-Inbox-Subject")
+			rec.InboxStream = msg.Header.Get("Director-Inbox-Stream")
 		}
 		if json.Unmarshal(msg.Data, &rec.Env) != nil {
 			r.ledger.LastSeq[b] = seq // not an envelope: nothing to ledger
