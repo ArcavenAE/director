@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // director#677 review: the default single-message wait, the summary's flagged
@@ -12,6 +14,11 @@ import (
 // inherited mail itself out. Each case runs on a scratch nats-server.
 
 func inheritedSuccessor(t *testing.T, ctx context.Context, perf string, n int) *Bus {
+	b, _ := inheritedSuccessorJS(t, ctx, perf, n)
+	return b
+}
+
+func inheritedSuccessorJS(t *testing.T, ctx context.Context, perf string, n int) (*Bus, jetstream.JetStream) {
 	t.Helper()
 	url := startScratchServer(t)
 	_, js := provision(t, ctx, url)
@@ -25,7 +32,7 @@ func inheritedSuccessor(t *testing.T, ctx context.Context, perf string, n int) *
 	if !waitFor(5*time.Second, func() bool { return len(inheritDurables(t, ctx, js, "succ")) == 1 }) {
 		t.Fatal("nothing inherited")
 	}
-	return succ
+	return succ, js
 }
 
 // The default wait (max omitted) is one message per call. It must hand over the
@@ -95,5 +102,50 @@ func TestAReturnedInheritedMessageKeepsItsMarkerInTheSingleForm(t *testing.T) {
 	out := returnedResult(ctx, succ, waitArgs{Max: 1}, succ.takeReturned(1))
 	if out["inherited_from"] != "pred" {
 		t.Errorf("the single-form returned result carries inherited_from = %v, want pred: %v", out["inherited_from"], out)
+	}
+}
+
+// With the default long wait and no mail of its own, a single wait must hand out
+// the inherited mail at once, not one message per timeout: that delay is what
+// the inheritance exists to remove.
+func TestALongSingleWaitReturnsInheritedMailWithoutWaitingOutTheTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	succ := inheritedSuccessor(t, ctx, "INFORM", 3)
+	for i := 1; i <= 3; i++ {
+		start := time.Now()
+		out, err := toolWait(ctx, succ, json.RawMessage(`{"timeout_seconds":30}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		env, _ := out.(map[string]any)["message"].(*Envelope)
+		if env == nil {
+			t.Fatalf("wait %d returned no message", i)
+		}
+		if took := time.Since(start); took > 5*time.Second {
+			t.Errorf("wait %d took %v with inherited mail already waiting, want under 5s (timeout 30s)", i, took)
+		}
+	}
+}
+
+// Pin: the seat's own mail that is already waiting is returned before inherited
+// mail, as in the batch form.
+func TestOwnMailIsReturnedBeforeInheritedMailByASingleWait(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	succ, js := inheritedSuccessorJS(t, ctx, "INFORM", 2)
+	pubEnv(t, ctx, js, lineInbox("succ"), "own1", "INFORM", "to this seat")
+	var got []string
+	for i := 0; i < 3; i++ {
+		out, err := toolWait(ctx, succ, json.RawMessage(`{"timeout_seconds":2}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if env, _ := out.(map[string]any)["message"].(*Envelope); env != nil {
+			got = append(got, env.MessageID)
+		}
+	}
+	if len(got) < 1 || got[0] != "own1" {
+		t.Errorf("single waits returned %v, want own1 first", got)
 	}
 }
