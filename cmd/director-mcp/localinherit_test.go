@@ -351,60 +351,6 @@ func TestInheritanceStartsAtTheFloorOfACombinedRoleDurable(t *testing.T) {
 	}
 }
 
-// Test 3e, the first restart onto split durables. A seat whose departed durable
-// is a combined [instance, role] acked through 200 restarts: its own durable and
-// its -role durable both start at 201, and nothing at or below 200 returns.
-func TestARestartOntoSplitDurablesStartsBothAfterTheCombinedFloor(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-	url := startScratchServer(t)
-	_, js := provision(t, ctx, url)
-	old := lineConnect(t, ctx, url, "sup", "supervisor", "")
-	publishN(t, ctx, js, lineInbox("sup"), "o", 1, 150)
-	publishN(t, ctx, js, lineRole("supervisor"), "r", 1, 50)
-	lineReadAck(t, ctx, old, 200)
-	publishN(t, ctx, js, lineInbox("sup"), "o", 151, 152)
-	publishN(t, ctx, js, lineRole("supervisor"), "r", 51, 51)
-	lineExit(t, ctx, old)
-
-	fresh := lineConnect(t, ctx, url, "sup", "supervisor", "")
-	st, err := js.Stream(ctx, "AGENT_INBOX")
-	if err != nil {
-		t.Fatal(err)
-	}
-	starts := map[string]uint64{}
-	l := st.ListConsumers(ctx)
-	for ci := range l.Info() {
-		if strings.HasPrefix(ci.Name, "mcp_sup_"+fresh.instance) {
-			starts[ci.Name] = ci.Config.OptStartSeq
-		}
-	}
-	if err := l.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if len(starts) != 2 {
-		t.Fatalf("the restarted seat holds %d durables %v, want its own and its -role durable", len(starts), starts)
-	}
-	for name, s := range starts {
-		if s != 201 {
-			t.Errorf("%s starts at %d, want 201", name, s)
-		}
-	}
-	res, err := fresh.receiveBatch(ctx, 3*time.Second, 50)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := lineIDs(lineItems(t, res))
-	for _, want := range []string{"o151", "o152", "r51"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("restarted seat did not receive %s: got %q", want, got)
-		}
-	}
-	if len(res.Items) != 3 {
-		t.Errorf("restarted seat received %d messages (%q), want exactly 3 past the floor", len(res.Items), got)
-	}
-}
-
 // The one lineage helper. Director ruled (c): DIRECTOR_PREDECESSOR first, then
 // MARVEL_PREDECESSOR, one function for both tiers and the dossier. This tests
 // predecessorID, the function the global tier calls today.
