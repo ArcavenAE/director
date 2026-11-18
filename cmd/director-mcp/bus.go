@@ -1136,8 +1136,9 @@ func (b *Bus) auditMirror(ctx context.Context, e *Envelope, body []byte) string 
 // reader can later tell a sender whether the message was read or expired
 // unread (aae-orc-t77rr). Subject empty or seq zero leaves the headers off.
 //
-// A failed publish is tried once more. Both attempts carry the same
-// Nats-Msg-Id, so a first attempt that landed and lost its ack stores once.
+// A failed publish is tried once more, for at most auditRetryBudget. Both
+// attempts carry the same Nats-Msg-Id, so a first attempt that landed and lost
+// its ack stores once.
 func (b *Bus) auditMirrorStored(ctx context.Context, e *Envelope, body []byte, subject string, seq uint64) string {
 	amsg := &nats.Msg{Subject: "agent.audit", Data: body, Header: nats.Header{}}
 	amsg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
@@ -1148,11 +1149,20 @@ func (b *Bus) auditMirrorStored(ctx context.Context, e *Envelope, body []byte, s
 	if _, err := b.js.PublishMsg(ctx, amsg); err == nil {
 		return ""
 	}
-	if _, err := b.js.PublishMsg(ctx, amsg); err != nil {
+	rctx, cancel := context.WithTimeout(ctx, auditRetryBudget)
+	defer cancel()
+	if _, err := b.js.PublishMsg(rctx, amsg); err != nil {
 		return "not recorded: " + err.Error()
 	}
 	return ""
 }
+
+// auditRetryBudget caps the retry of a failed audit publish. A first attempt
+// can already have waited the client's whole publish timeout (a stream that
+// exists but does not answer), and a second wait of that length would double
+// what a send costs in that state. A missing stream fails in about half a
+// second and fits.
+const auditRetryBudget = time.Second
 
 // refusalMaxBytes caps the Director-Refusal header. The full text is in the
 // tool result; the header is for a reader filtering the audit stream.

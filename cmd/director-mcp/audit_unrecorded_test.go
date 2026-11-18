@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -27,16 +29,26 @@ func inboxCount(t *testing.T, ctx context.Context, js jetstream.JetStream) uint6
 	return info.State.Msgs
 }
 
-func inboxCountOrZero(ctx context.Context, js jetstream.JetStream) uint64 {
-	s, err := js.Stream(ctx, "AGENT_INBOX")
-	if err != nil {
-		return 0
+// failFirstAuditJS wraps the broker handle so the first audit publish fails for
+// real (the stream is gone) and the stream is back before the second. It
+// counts audit attempts, so a test can show the retry ran and not infer it
+// from timing.
+type failFirstAuditJS struct {
+	jetstream.JetStream
+	attempts atomic.Int32
+	restore  func()
+}
+
+func (j *failFirstAuditJS) PublishMsg(ctx context.Context, m *nats.Msg, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
+	if m.Subject != "agent.audit" {
+		return j.JetStream.PublishMsg(ctx, m, opts...)
 	}
-	info, err := s.Info(ctx)
-	if err != nil {
-		return 0
+	n := j.attempts.Add(1)
+	ack, err := j.JetStream.PublishMsg(ctx, m, opts...)
+	if n == 1 && err != nil {
+		j.restore()
 	}
-	return info.State.Msgs
+	return ack, err
 }
 
 func TestASendWhoseAuditPublishFailsIsAcceptedAndSaysUnrecorded(t *testing.T) {
@@ -81,31 +93,24 @@ func TestASendWhoseAuditPublishFailsOnceIsRecordedByTheRetry(t *testing.T) {
 	sender := liveSeatNoCleanup(t, ctx, url, Sender{AgentID: "sup", Workspace: "w", Team: "t"})
 	liveSeatNoCleanup(t, ctx, url, Sender{AgentID: "a", Workspace: "w", Team: "t"})
 
-	// The client's own publish already waits about half a second for a missing
-	// stream. The audit stream comes back a little after that wait ends, so the
-	// first attempt fails and only a second attempt can find the stream.
-	created := make(chan error, 1)
-	go func() {
-		for inboxCountOrZero(ctx, js) < 1 {
-			select {
-			case <-ctx.Done():
-				created <- ctx.Err()
-				return
-			case <-time.After(time.Millisecond):
-			}
+	// The first audit attempt fails against the missing stream and the stream
+	// is back before the second, so only a retry can record the copy. The
+	// wrapper counts attempts: a first attempt that succeeded would leave one.
+	wrap := &failFirstAuditJS{JetStream: js}
+	wrap.restore = func() {
+		if _, err := js.CreateStream(ctx, jetstream.StreamConfig{Name: "AGENT_AUDIT", Subjects: []string{"agent.audit"}}); err != nil {
+			t.Error(err)
 		}
-		time.Sleep(600 * time.Millisecond)
-		_, err := js.CreateStream(ctx, jetstream.StreamConfig{Name: "AGENT_AUDIT", Subjects: []string{"agent.audit"}})
-		created <- err
-	}()
+	}
+	sender.js = wrap
 
 	raw, _ := json.Marshal(map[string]any{"to": "agent://t/a", "performative": "INFORM", "text": "hi"})
 	out, err := toolSend(ctx, sender, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := <-created; err != nil {
-		t.Fatal(err)
+	if got := wrap.attempts.Load(); got != 2 {
+		t.Errorf("audit publish attempts = %d, want 2 (the first failed, the retry recorded it)", got)
 	}
 	m := asMap(t, out)
 	if v, present := m["audit"]; present {
