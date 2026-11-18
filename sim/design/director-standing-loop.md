@@ -81,8 +81,8 @@ tool is not installed is skipped, with that reason. A fifth step, `profile`,
 appears only when the profile is refused. When `director-profile check` refuses
 it, the step is a gap carrying the first error line, both defaults apply, and
 the tick exits 0. When the tick itself refuses a `[loop]` value that is not a
-positive integer, the gap names `loop.<key>` and that key's default applies. A
-missing profile file, or one with no `[loop]`, adds no step.
+positive integer, the gap names `loop.<key>` and that key's default applies. No
+profile file at the default path, or one with no `[loop]`, stays clean.
 
 What is due comes from the stamps the loop already keeps, never from mail:
 
