@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]
 # director env [--seat-file <path>]
+# director status
 #
 # Starts a Claude Code session as the director, on purpose. The director MCP
 # server comes from config/director-mcp.json in this repo, handed to claude with
@@ -50,7 +51,7 @@ required=(DIRECTOR_AGENT_ID DIRECTOR_TEAM DIRECTOR_WORKSPACE)
 absolute_paths=(DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA)
 observer_keys=(DIRECTOR_HUB_OBSERVER_URL DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA)
 
-usage() { printf 'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director env [--seat-file <path>]\n       director prove\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)\n' >&2; exit 2; }
+usage() { printf 'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director env [--seat-file <path>]\n       director prove\n       director status\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)\n' >&2; exit 2; }
 stop() { printf 'STOP: %s\n' "$*" >&2; exit 3; }
 
 dhome="${DIRECTOR_HOME:-$HOME/.director}"
@@ -125,6 +126,18 @@ read_seat_file() { # $1 = path
 
 case "${1:-}" in
   prove) prove; exit 0 ;;
+  status)
+    # Prints what the standing hook prints: the same bytes, stderr, exit code and environment, because it
+    # runs the hook and does not copy it. The hook installed beside this launcher comes first, as
+    # invoked and then beside the resolved launcher (a user's own link to an install); the
+    # checkout's copy is only the fallback. It takes no argument, so it never reaches the hook's `beat`
+    # or `scan-beat`, which write stamps. It reads no seat file and no MCP config.
+    [[ $# -eq 1 ]] || usage
+    hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/standing-hook"
+    [[ -x "$hook" ]] || hook="$(cd "$(dirname "$src")" && pwd)/standing-hook"
+    [[ -x "$hook" ]] || hook="$here/skills/director/scripts/standing-hook"
+    [[ -x "$hook" ]] || stop "standing-hook not found; nothing was run"
+    exec "$hook" ;;
   env)
     shift
     seat_file="${DIRECTOR_HOME:-$HOME/.director}/seat.env"
