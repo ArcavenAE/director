@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -51,5 +52,27 @@ func TestHomeGuardHoldsReportsAPathOutsideScratch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "outside the scratch home") {
 		t.Errorf("error = %q, want it to say the path is outside the scratch home", err)
+	}
+}
+
+// A test that runs the go tool (version_test.go builds the binary) must reach
+// the developer's module and build caches, not a cold copy under the scratch
+// HOME: with HOME moved, go would default both under it, fetch every module
+// again, and leave a read-only module cache behind that the guard cannot
+// remove.
+func TestHomeGuardKeepsTheGoCachesOffTheScratchHome(t *testing.T) {
+	out, err := exec.Command("go", "env", "GOMODCACHE", "GOCACHE").Output()
+	if err != nil {
+		t.Fatalf("go env: %v", err)
+	}
+	lines := strings.Fields(string(out))
+	if len(lines) != 2 {
+		t.Fatalf("go env printed %q, want GOMODCACHE and GOCACHE", out)
+	}
+	home := os.Getenv("HOME")
+	for i, name := range []string{"GOMODCACHE", "GOCACHE"} {
+		if underDir(lines[i], home) {
+			t.Errorf("%s = %q is under the scratch HOME %q", name, lines[i], home)
+		}
 	}
 }
