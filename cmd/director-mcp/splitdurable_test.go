@@ -304,3 +304,39 @@ func TestTheCuesReadsSeeRoleSubjectMail(t *testing.T) {
 		t.Errorf("the cue's oldest = %+v (err %v), want the role message rq1", meta, err)
 	}
 }
+
+// director#677 limit, closed by the one consumer list: inherited mail is counted
+// by the cue's pending count (pendingTiers), as it is by remaining and the
+// summary, so an idle successor is rung for it.
+func TestTheCuesPendingCountIncludesInheritedMail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	pred := lineConnect(t, ctx, url, "pred", "", "")
+	publishN(t, ctx, js, lineInbox("pred"), "p", 1, 3)
+	lineExit(t, ctx, pred)
+
+	succ := lineConnect(t, ctx, url, "succ", "", "pred")
+	// control: before the inheritance starts nothing of the predecessor's counts.
+	if n, err := (busCueSource{b: succ}).count(ctx); err != nil || n != 0 {
+		t.Fatalf("CONTROL FAILED: the cue's count before the inheritance = %d (err %v), want 0", n, err)
+	}
+	runHeartbeat(t, ctx, succ, 40*time.Millisecond)
+	if !waitFor(5*time.Second, func() bool { return len(inheritDurables(t, ctx, js, "succ")) == 1 }) {
+		t.Fatal("nothing inherited")
+	}
+	if rem := succ.remaining(ctx); rem["inherited"] != 3 {
+		t.Fatalf("CONTROL FAILED: remaining counts %v, want inherited 3", rem)
+	}
+	if n, err := (busCueSource{b: succ}).count(ctx); err != nil || n != 3 {
+		t.Errorf("the cue's count = %d (err %v), want 3 inherited messages waiting", n, err)
+	}
+	if n, err := succ.pendingByTier(ctx); err != nil || n != 3 {
+		t.Errorf("pendingByTier = %d (err %v), want 3", n, err)
+	}
+	meta, err := (busCueSource{b: succ}).oldestMeta(ctx)
+	if err != nil || meta == nil {
+		t.Errorf("the cue's oldest = %+v (err %v), want the oldest inherited message", meta, err)
+	}
+}
