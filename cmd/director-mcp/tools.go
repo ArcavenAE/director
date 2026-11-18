@@ -604,6 +604,9 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 	if res.GlobalWarn != "" {
 		out["global_warning"] = res.GlobalWarn
 	}
+	if res.LocalWarn != "" {
+		out["local_warning"] = res.LocalWarn
+	}
 	if n := bus.presenceNotices(); len(n) > 0 {
 		out["presence_notice"] = n
 	}

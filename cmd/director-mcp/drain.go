@@ -58,6 +58,9 @@ type drained struct {
 	// may or may not have applied it, so the message is returned rather than
 	// dropped, and may be delivered once more later.
 	AckUnconfirmed bool `json:"ack_unconfirmed,omitempty"`
+	// InheritedFrom names the predecessor whose unread mail this is, set only on
+	// a message read from the inherited durable (localinherit.go).
+	InheritedFrom string `json:"inherited_from,omitempty"`
 }
 
 // tierRank puts local before global. The two tiers share no clock the shim
@@ -311,6 +314,7 @@ func (b *Bus) drainLocal(ctx context.Context, n int, res *batchResult) error {
 		}
 		res.LocalWarn = fmt.Sprintf("local inbox drain stopped early: %v", err)
 	}
+	b.drainInherited(ctx, n-len(items), res)
 	return nil
 }
 
@@ -329,6 +333,10 @@ func (b *Bus) receiveBatch(ctx context.Context, timeout time.Duration, max int) 
 		}
 		res.GlobalWarn = joinWarn(res.GlobalWarn, first.GlobalWarn)
 		if first.Env == nil {
+			// The inherited durable can start while the call waits; its mail is
+			// waiting now, so one more look before the call returns empty.
+			b.drainInherited(ctx, max, &res)
+			orderDrained(res.Items)
 			return res, nil
 		}
 		res.Items = append(res.Items, drained{Env: first.Env, Tier: first.Tier, Seq: first.Seq})
@@ -364,6 +372,15 @@ func (b *Bus) remainingRead(ctx context.Context) (out map[string]uint64, failed 
 		out["local"] = waitingAfter(info, own["local"])
 	} else {
 		failed = append(failed, "local")
+	}
+	if ic, _ := b.inheritCons(); ic != nil {
+		// Mail inherited from a predecessor is waiting mail too: an empty
+		// local inbox with inherited mail left is not drained.
+		if info, err := ic.Info(ctx); err == nil {
+			out["inherited"] = waitingAfter(info, 0)
+		} else {
+			failed = append(failed, "inherited")
+		}
 	}
 	if b.globalCfg != nil {
 		b.globalMu.Lock()
@@ -690,6 +707,9 @@ type summaryResult struct {
 	// ack floor, which the summary cannot tell apart from waiting ones.
 	MaybeConsumed map[string]int
 	GlobalWarn    string
+	// LocalWarn is a warning about the local side that does not fail the call: the
+	// inherited source could not be read.
+	LocalWarn string
 	// ReadUnhandled lists delivered messages not yet in the handled ledger.
 	ReadUnhandled []unhandledRow
 	// Rejected are the ledger's rejected lines: envelopes the handled mode
@@ -719,6 +739,20 @@ func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, err
 		res.MaybeConsumed["local"] = maybe
 	}
 	all := items
+	if ic, _ := b.inheritCons(); ic != nil {
+		// The inherited durable is a third source after local: its waiting mail
+		// is listed with the rest and counted under its own name.
+		iitems, iexp, imaybe, ierr := peekWaiting(ctx, b.js, ic, "local", limit)
+		if ierr != nil {
+			res.LocalWarn = fmt.Sprintf("inherited inbox summary failed: %v", ierr)
+		} else {
+			res.Expected["inherited"], res.Read["inherited"] = iexp, len(iitems)
+			if imaybe > 0 {
+				res.MaybeConsumed["inherited"] = imaybe
+			}
+			all = append(all, iitems...)
+		}
+	}
 	if b.globalCfg != nil {
 		g, gerr := b.globalReady(ctx)
 		if gerr != nil {

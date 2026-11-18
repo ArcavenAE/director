@@ -263,16 +263,19 @@ func runDossierCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Wr
 	}
 	o := dossierOpts{Role: cli.role, Predecessor: cli.pred, PredSource: "flag", PredState: cli.predState,
 		HandoffPath: cli.handoffPath, HandoffMark: cli.handoffMark, Pointers: cli.pointers, JSON: cli.json, State: st, DWS: os.Getenv("DIRECTOR_DWS"), Now: time.Now()}
-	if o.Predecessor == "" {
-		if p := os.Getenv("MARVEL_PREDECESSOR"); dossierToken.MatchString(p) {
-			o.Predecessor, o.PredSource = p, "env MARVEL_PREDECESSOR"
-		} else {
-			o.PredSource = "unknown"
-		}
-	}
 	o.Successor = os.Getenv("DIRECTOR_AGENT_ID")
 	if !dossierToken.MatchString(o.Successor) {
 		o.Successor = "unknown-successor"
+	}
+	if o.Predecessor == "" {
+		// The same input the shim's tiers read (localinherit.go): the name after
+		// the last "/", so marvel's <workspace>/<name> value reads as the name.
+		if p := predecessorID(o.Successor); p != "" && dossierToken.MatchString(p) {
+			_, src := predecessorFromEnv()
+			o.Predecessor, o.PredSource = p, src
+		} else {
+			o.PredSource = "unknown"
+		}
 	}
 	if o.DWS == "" {
 		o.DWS = "dws"

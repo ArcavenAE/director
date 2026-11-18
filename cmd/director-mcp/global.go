@@ -678,20 +678,6 @@ func (g *globalTier) seatFloor(ctx context.Context, agentID, self string) (uint6
 	return floor, ""
 }
 
-// predecessorID is the agent id of the session this one replaced, read from
-// MARVEL_PREDECESSOR, which marvel sets to "<workspace>/<name>" for a seat a
-// shift or a wake started. The name is the predecessor's agent id. It is empty
-// when there is no link, when the value has no name, or when the name is this
-// seat's own id (a restart, which the ordinary lookup already covers).
-func predecessorID(self string) string {
-	link := os.Getenv("MARVEL_PREDECESSOR")
-	name := link[strings.LastIndex(link, "/")+1:]
-	if name == "" || name == self {
-		return ""
-	}
-	return name
-}
-
 // predecessorFloor is the highest ack floor among the durables the explicit
 // predecessor left on the hub stream, 0 when there is no link or none acked
 // anything. A new generation has a new agent id, so seatFloor's prefix never

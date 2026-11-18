@@ -120,6 +120,9 @@ type Bus struct {
 	restoreMu sync.Mutex
 	// dh counts the local durable's rebuilds (durablehealth.go).
 	dh durableHealth
+	// inh is the lineage state: the predecessor, the trigger and the inherited
+	// durable (localinherit.go).
+	inh inheritState
 	// lookup is a test seam for the broker lookup of the local durable; nil in
 	// production (localrecover.go lookupLocal).
 	lookup func(ctx context.Context, durable string) error
@@ -332,6 +335,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	}
 	b.consumer = cons
 	b.local = localState{cfg: baseCfg, acked: floor, checked: time.Now()}
+	b.armInherit(ctx)
 	b.noteResumed("local", floor, cons, localWhy, floorSource{})
 	return b, nil
 }
@@ -1822,6 +1826,7 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 			b.stateMu.Unlock()
 			// A seat that has stopped polling still asks the broker whether its
 			// local durable exists, at the poll path's own rate (director#269).
+			b.inheritTick(ctx, logf)
 			if _, rerr := b.recheckLocal(ctx); rerr != nil && logf != nil {
 				logf("local durable: %v", rerr)
 			}
