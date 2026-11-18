@@ -71,7 +71,7 @@ def first_line(text):
 def run(argv):
     """(rc, stdout, stderr); rc None when the program could not start or ran out of time."""
     try:
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=CALL_TIMEOUT, stdin=subprocess.DEVNULL)
+        p = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=CALL_TIMEOUT, stdin=subprocess.DEVNULL)
     except FileNotFoundError:
         return None, "", "not found"
     except (subprocess.TimeoutExpired, OSError) as e:
