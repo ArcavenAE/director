@@ -34,6 +34,7 @@ func TestGlobalDurableProbeErrorFreshSeatStartsAtHead(t *testing.T) {
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
 	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
 	t.Setenv("MARVEL_PREDECESSOR", "")
+	t.Setenv("DIRECTOR_PREDECESSOR", "") // read before MARVEL_PREDECESSOR (localinherit.go)
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "old")
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g1", "INFORM", "old")
 	b, err := connect(ctx, url, freshSeat("probeerr-g1-0"), gcfg)
@@ -81,6 +82,7 @@ func TestGlobalDurableProbeErrorLaterGenerationKeepsTheReplay(t *testing.T) {
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
 	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
 	t.Setenv("MARVEL_PREDECESSOR", "")
+	t.Setenv("DIRECTOR_PREDECESSOR", "") // read before MARVEL_PREDECESSOR (localinherit.go)
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "may be a lost predecessor's unread mail")
 	b, err := connect(ctx, url, freshSeat("probeerr-g2-0"), gcfg)
 	if err != nil {

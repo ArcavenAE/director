@@ -57,6 +57,9 @@ var (
 	forSeat   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(@[a-z0-9-]+)?$`)
 	forRole   = regexp.MustCompile(`^role://[a-z0-9-]+/[a-z0-9-]+$`)
 	forGenSfx = regexp.MustCompile(`-g[0-9]+-[0-9]+$`)
+	// forTicket is an intake id as written in prose ("I-578"), in any case. A
+	// lowercase one is seat-shaped, so it is named here instead of left to forSeat.
+	forTicket = regexp.MustCompile(`(?i)^i-[0-9]+$`)
 	// forGenOnly matches the generation of an id and keeps its replica index,
 	// so a successor (g2-1 for g1-1) matches and a parallel replica (g1-1 for
 	// g1-0) does not.
@@ -148,7 +151,11 @@ func forTokens(text string) []string {
 // and the prose that ended the list. The first element is always names. A later
 // element is names when, with the joiners "and", "or" and "only" removed, each
 // run of words between joiners is one token; otherwise it is prose, and it ends
-// the list along with everything after it. Trailing . ; : are trimmed from each
+// the list along with everything after it. A lone ticket id (forTicket, "I-578"
+// in any case) after a comma ("FOR a-supervisor, I-578:") is prose too, so it is
+// never a name that would spoil the line (aae-orc-c93bj). The names read before
+// the ticket id in the same element are kept. Any other lone token is a name,
+// and one that is not seat-shaped leaves the line ambiguous, which delivers. Trailing . ; : are trimmed from each
 // name. Seat names hold no spaces, so splitting on whitespace never cuts a name.
 // The prose words come back whole, for the this-seat scan in drops.
 func forList(text string) (names, prose []string) {
@@ -167,6 +174,11 @@ func forList(text string) (names, prose []string) {
 			}
 			run++
 			if i > 0 && run > 1 {
+				isProse = true
+				break
+			}
+			if i > 0 && forTicket.MatchString(f) {
+				names = append(names, got...)
 				isProse = true
 				break
 			}
@@ -288,7 +300,7 @@ func (f *forFilter) fresh(r map[string]any) bool {
 }
 
 // drops decides one envelope. It returns true and the FOR text only when
-// every token resolves to a seat of another team.
+// every token on the leading FOR lines resolves to a seat other than this one.
 func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 	texts := forTexts(e.Content.Data)
 	if len(texts) == 0 {
@@ -355,7 +367,7 @@ func (g *globalTier) foreign(ctx context.Context, e *Envelope) (bool, string) {
 // on: the blocking fetch (fetchOne) and the no-wait pull behind takeWaiting and
 // receiveBatch (pullNoWait). A third receive path must call it too.
 //
-// It reports true when the message was for another team's seat; the message is
+// It reports true when the message was for another seat; the message is
 // then acked (confirmed) and logged with its id, and the caller does not return
 // it. With the filter off it reports false and does nothing. A failed ack still
 // reports true, so a message proven foreign is never delivered; the broker
