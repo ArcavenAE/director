@@ -16,6 +16,7 @@ text, the outcome) with a UTC stamp in the heading:
   **Workstream:** <slug>[, <slug>]        (only when --ws is given)
   **Intake:** <id>                        (only when --ask is given)
   **Kind:** <word>                        (only when --kind is given)
+  **Card:** <path or none>                (only when --card is given)
   **Text, verbatim:**
   > <each line of the text, prefixed with "> ">
   **Outcome:** <outcome, "pending" when none is given>
@@ -31,6 +32,10 @@ quoted and links nothing.
 what sort of entry it is (relay, ruling, build, research, question or answer). Both are written by the
 writer as field lines after the Workstream line and checked for shape only, as --ws is: the intake
 file is never opened, so an entry written with no ask id behaves exactly as it did before.
+
+--card names the card file a relay that asks the operator to decide points at, or the word none, and is written as
+a **Card:** line after the Kind line. It is checked for one non-empty line only: the file is never opened. The
+standing hook counts Kind question entries of the last 24 hours that carry no Card line (S11, design section 6).
 
 An answer entry (--kind answer) owes the operator a Reply Shelf row, and nothing else prompts for it. It needs
 --ask, and after the heading the writer prints one more line naming the shelf-row call to make, with the ask
@@ -104,6 +109,7 @@ def main():
     a.add_argument("--ws", action="append", default=[], help="a workstream slug the entry is about; repeatable")
     a.add_argument("--ask", help="the intake id (I-<n>) of the operator ask this entry answers")
     a.add_argument("--kind", choices=KINDS, help="what sort of entry this is")
+    a.add_argument("--card", help="the card file path the entry asks the operator to decide on, or the word none")
     g = a.add_mutually_exclusive_group(required=True)
     g.add_argument("--text")
     g.add_argument("--text-file")
@@ -132,8 +138,11 @@ def main():
             sys.exit(f"relay-log: --ask {args.ask!r} is not an intake id (I-<n>); nothing written")
         if args.kind == "answer" and args.ask is None:
             sys.exit("relay-log: --kind answer needs --ask (the intake id of the ask it answers); nothing written")
+        if args.card is not None and (not args.card.strip() or "\n" in args.card):
+            sys.exit("relay-log: --card must be one non-empty line, a card file path or none; nothing written")
         ws_line = ("**Workstream:** " + ", ".join(dict.fromkeys(args.ws)) + "\n") if args.ws else ""
         ws_line += (f"**Intake:** {args.ask}\n" if args.ask else "") + (f"**Kind:** {args.kind}\n" if args.kind else "")
+        ws_line += f"**Card:** {args.card}\n" if args.card is not None else ""
 
     fd = os.open(log + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)

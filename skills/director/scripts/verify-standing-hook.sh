@@ -244,8 +244,8 @@ done
 # Read from $DIRECTOR_STATE/loop-status.json (director-tick), digest.md and workstreams.jsonl (mtimes). Every
 # clause is gated on loop-status.json existing: with no status file the output is byte-identical to a hook that
 # knows nothing of the loop, which is what every install without a tick sees. The hook stays read-only and
-# starts no new subprocess. Deferred, and not tested here: relayed asks with no card (slice 11), batches parsed
-# and never checked (slice 13), and "beat broken" (no drain record is named yet).
+# starts no new subprocess. Deferred, and not tested here: batches parsed and never checked (slice 13), and
+# "beat broken" (no drain record is named yet). The relays-with-no-card clause (slice 11) is tested at the end of this section.
 ago() { python3 -I -c 'import datetime as d,sys;print((d.datetime.now(d.timezone.utc)-d.timedelta(minutes=float(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1"; }
 touch_ago() { python3 -I -c 'import os,sys,time;t=time.time()-float(sys.argv[2])*60;os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
 saved_state="$DIRECTOR_STATE"
