@@ -1371,6 +1371,51 @@ else
 fi
 rm -rf "$rl_state"
 
+# --- MARVEL_PREDECESSOR -> DIRECTOR_PREDECESSOR (B2-R1; director#220 U1) -------
+# marvel sets MARVEL_PREDECESSOR to "<workspace>/<id>" for a seat a shift, a wake or
+# a crash repair started. The shim reads an optional DIRECTOR_PREDECESSOR, the id
+# alone (sim/design/asks-die-unread.md, D1). The launcher maps the one to the other
+# and puts it in the shim's mcp_json env block. Unset or empty means today's behavior.
+# A malformed value is skipped with a warning (below).
+if cast builder MARVEL_PREDECESSOR="verifyws/verify-builder-7"; then
+  in_mcp DIRECTOR_PREDECESSOR verify-builder-7 \
+    && ok "predecessor: MARVEL_PREDECESSOR=<workspace>/<id> reaches the shim's mcp_json as DIRECTOR_PREDECESSOR=<id>" \
+    || bad "predecessor: mapping" "want \"DIRECTOR_PREDECESSOR\":\"verify-builder-7\" in the mcp-config, got: $(grep -o '"DIRECTOR_PREDECESSOR":"[^"]*"' "$root/out/claude.args" || echo absent)"
+  in_env MARVEL_PREDECESSOR "verifyws/verify-builder-7" claude.env \
+    && ok "predecessor: the seat's own environment still carries MARVEL_PREDECESSOR as marvel set it" \
+    || bad "predecessor: MARVEL_PREDECESSOR kept" "got: $(grep '^MARVEL_PREDECESSOR=' "$root/out/claude.env" || echo unset)"
+else
+  bad "predecessor cast" "$(cat "$root/out/stderr")"
+fi
+for pcase in unset empty; do
+  pargs=(); [[ "$pcase" == empty ]] && pargs=(MARVEL_PREDECESSOR=)
+  if cast builder ${pargs[@]+"${pargs[@]}"}; then
+    has_mcp DIRECTOR_PREDECESSOR \
+      && bad "predecessor: $pcase" "DIRECTOR_PREDECESSOR is in the mcp-config: $(grep -o '"DIRECTOR_PREDECESSOR":"[^"]*"' "$root/out/claude.args")" \
+      || ok "predecessor: with MARVEL_PREDECESSOR $pcase the mcp-config carries no DIRECTOR_PREDECESSOR (today's behavior)"
+  else
+    bad "predecessor $pcase cast" "$(cat "$root/out/stderr")"
+  fi
+done
+# A value that is not "<workspace>/<id>" is skipped with a warning, never refused: lineage
+# is optional, so a bad link must not stop a seat from launching. The warning names the
+# variable and the reason and never the value (director ruling on #220 U1).
+for badpred in "leakmark7" "verifyws/Leak Mark7" "verifyws/" "/leakmark7" "verifyws/leakmark7/extra" 'verifyws/leak"mark7'; do
+  if cast builder MARVEL_PREDECESSOR="$badpred"; then
+    if has_mcp DIRECTOR_PREDECESSOR; then
+      bad "predecessor: malformed '$badpred'" "DIRECTOR_PREDECESSOR is in the mcp-config: $(grep -o '"DIRECTOR_PREDECESSOR":"[^"]*"' "$root/out/claude.args")"
+    elif ! grep -q 'MARVEL_PREDECESSOR' "$root/out/stderr"; then
+      bad "predecessor: malformed '$badpred'" "no warning naming MARVEL_PREDECESSOR; stderr: $(cat "$root/out/stderr")"
+    elif grep -q 'leak' "$root/out/stderr"; then
+      bad "predecessor: malformed '$badpred'" "the warning carries the value: $(cat "$root/out/stderr")"
+    else
+      ok "predecessor: malformed '$badpred' launches with no DIRECTOR_PREDECESSOR and a warning that names the variable, not the value"
+    fi
+  else
+    bad "predecessor: malformed '$badpred' must still launch" "$(cat "$root/out/stderr")"
+  fi
+done
+
 # CAST_LAUNCH mode with a launcher whose name is not cast-launch.sh (an installed
 # copy): the Bedrock cases must run on a patched copy there too and never reach
 # the real keychain tool. Run this script again against a renamed copy; its own
