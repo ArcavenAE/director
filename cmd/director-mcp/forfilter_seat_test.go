@@ -109,3 +109,26 @@ func TestForFilterForLineAfterTextIsNotRead(t *testing.T) {
 		t.Fatal("a FOR line after other text was read")
 	}
 }
+
+// Parallel replicas do not share FOR mail: the predecessor match strips the
+// generation only, so g1-1 does not take mail for g1-0 (director's ruling).
+func TestForFilterParallelReplicaDrops(t *testing.T) {
+	f := seatFilter([]map[string]any{
+		forRow("alpha-supervisor-g1-0", "alpha", "supervisor", "c1", time.Second),
+	})
+	f.agentID = "alpha-supervisor-g1-1"
+	if !forDrop(t, f, "FOR alpha-supervisor-g1-0") {
+		t.Fatal("mail for replica 0 was delivered to replica 1")
+	}
+}
+
+// Guard: a predecessor at the same replica index still delivers, g2-1 for g1-1.
+func TestForFilterSameIndexPredecessorDelivers(t *testing.T) {
+	f := seatFilter([]map[string]any{
+		forRow("alpha-supervisor-g1-1", "alpha", "supervisor", "c1", time.Second),
+	})
+	f.agentID = "alpha-supervisor-g2-1"
+	if forDrop(t, f, "FOR alpha-supervisor-g1-1") {
+		t.Fatal("mail for this replica's predecessor was dropped")
+	}
+}
