@@ -153,3 +153,51 @@ func TestAuditRetryStoresOnce(t *testing.T) {
 		t.Errorf("audit holds %d records after two publishes of one message id, want 1", got)
 	}
 }
+
+// The global send mirrors to the LOCAL audit stream too, and its accepted
+// result must carry the same outcome. This drives publishGlobalOnce on a bus
+// whose global tier is attached to the scratch broker's hub domain, with the
+// local audit stream gone.
+func TestAGlobalSendWhoseAuditPublishFailsIsAcceptedAndSaysUnrecorded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, js := provision(t, ctx, url)
+	createAudit(t, ctx, js)
+	if err := js.DeleteStream(ctx, "AGENT_AUDIT"); err != nil {
+		t.Fatal(err)
+	}
+	gjs, err := jetstream.NewWithDomain(nc, "global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kv, err := gjs.KeyValue(ctx, globalPresenceBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	putRow(t, ctx, kv, "presence.director.01AAAAAAAAAAAAAAAAAAAAAAAA", directorRow("director", "01AAAAAAAAAAAAAAAAAAAAAAAA"))
+
+	cfg := globalConfig{Domain: "global", Cluster: "c1", Role: roleSupervisor}
+	bus, err := connect(ctx, url, Sender{AgentID: "sup", Workspace: "w", Team: "t"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bus.close()
+	bus.globalCfg = &cfg
+	bus.global = &globalTier{cfg: cfg, js: gjs, kv: kv}
+
+	e := &Envelope{MessageID: "m-global-audit", Recipient: Recipient{Address: "global://director"}}
+	res, err := bus.publishGlobalOnce(ctx, e, []byte(`{}`))
+	if err != nil {
+		t.Fatalf("a global send the hub accepted failed because its audit copy could not be written: %v", err)
+	}
+	if res.Tier != "global" {
+		t.Errorf("tier = %q, want global", res.Tier)
+	}
+	if !strings.HasPrefix(res.Audit, "not recorded:") {
+		t.Errorf("Audit = %q, want a text that starts with %q", res.Audit, "not recorded:")
+	}
+	if got := storedDirectorMessages(t, ctx, gjs); got != 1 {
+		t.Errorf("the hub's director stream holds %d copies, want exactly 1", got)
+	}
+}
