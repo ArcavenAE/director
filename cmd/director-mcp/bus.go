@@ -1562,11 +1562,10 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 	g.violations = b.violations
 	log.Print(forFilterStatus(os.Getenv("DIRECTOR_FOR_FILTER"), b.self.Team, gcfg.Cluster, gcfg.Role))
 	if os.Getenv("DIRECTOR_FOR_FILTER") == "1" {
-		g.forFilter = &forFilter{agentID: b.self.AgentID, team: b.self.Team, role: gcfg.Role, cluster: gcfg.Cluster, now: time.Now, logf: log.Printf,
-			roster: func(ctx context.Context) ([]map[string]any, error) {
-				rows, _, err := g.records(ctx, "")
-				return rows, err
-			}}
+		g.forFilter = newForFilter(b.self, gcfg, func(ctx context.Context) ([]map[string]any, error) {
+			rows, _, err := g.records(ctx, "")
+			return rows, err
+		})
 	}
 	b.global = g
 	if g.freshHead {

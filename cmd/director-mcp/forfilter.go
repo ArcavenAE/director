@@ -71,6 +71,13 @@ type forFilter struct {
 	note func(format string, args ...any)
 }
 
+// newForFilter builds the filter for one session: its identity from self, the
+// cluster and role from the global config, and the roster read it is handed.
+// bus.go builds the production filter here, so a test can build the same one.
+func newForFilter(self Sender, gcfg globalConfig, roster func(ctx context.Context) ([]map[string]any, error)) *forFilter {
+	return &forFilter{agentID: self.AgentID, team: self.Team, role: gcfg.Role, cluster: gcfg.Cluster, now: time.Now, logf: log.Printf, roster: roster}
+}
+
 // forFilterStatus is the one line printed when the global tier attaches, so a
 // seat whose filter is on but drops nothing can be told from one where it is
 // off. It carries the team the filter compares against and never the value of
