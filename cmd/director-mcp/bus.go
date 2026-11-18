@@ -425,6 +425,16 @@ func (b *Bus) noteFreshHead(tier, stream string, skipped, first, head uint64, kn
 	b.resumedMu.Unlock()
 }
 
+// noteProbeGap adds to the start note of a seat that started at the head only
+// because the lookup for its earlier durables errored: the gap is a possible
+// missed message, so the note names the error and the count.
+func (b *Bus) noteProbeGap(tier, stream string, perr error, skipped uint64, known bool) {
+	msg := fmt.Sprintf("%s inbox started at the stream head because looking for this seat's earlier durables failed (%v), so mail a predecessor left unread would not reach it: %s on stream %s", tier, perr, skippedPhrase(skipped, known), stream)
+	b.resumedMu.Lock()
+	b.resumed = append(b.resumed, msg)
+	b.resumedMu.Unlock()
+}
+
 // freshHeadNote is the start note for a durable created at the head. It names
 // the hub stream and the sequence range the skipped mail sits in, which the
 // operator's stream tools can read; audit_lookup cannot, since it reads this
@@ -1569,7 +1579,13 @@ func (b *Bus) globalReady(ctx context.Context) (*globalTier, error) {
 	}
 	b.global = g
 	if g.freshHead {
-		b.noteFreshHead("global", g.cfg.streamName(), g.skipped, g.firstSeq, g.headSeq, g.skippedKnown)
+		if g.probeErr != nil {
+			// The usual note says the seat has no earlier durable, which is not
+			// known here; the gap note says what was and was not checked.
+			b.noteProbeGap("global", g.cfg.streamName(), g.probeErr, g.skipped, g.skippedKnown)
+		} else {
+			b.noteFreshHead("global", g.cfg.streamName(), g.skipped, g.firstSeq, g.headSeq, g.skippedKnown)
+		}
 	} else {
 		b.noteResumed("global", g.resumedFrom, g.cons(), g.floorWhy, g.floorFrom)
 	}
