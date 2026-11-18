@@ -128,7 +128,7 @@ d="$(fresh_state idem)"; tick "$d"; cp "$(status "$d")" "$d/first.json" 2>/dev/n
 tick "$d"; cp "$(status "$d")" "$d/second.json" 2>/dev/null || : >"$d/second.json"
 if [[ -s "$d/first.json" ]] && cmp -s "$d/first.json" "$d/second.json"; then okay "two runs at one clock are byte-identical"; else miss "idempotent: two runs at one clock differ or wrote nothing"; fi
 tick "$d" TICK_NOW=2026-11-18T12:00:30Z
-strip='d.pop("ran_at"); print(json.dumps(d,sort_keys=True))'
+strip='json.dumps({k: v for k, v in d.items() if k != "ran_at"}, sort_keys=True)'
 a="$(pyq "$d/first.json" "$strip")"; b="$(pyq "$(status "$d")" "$strip")"
 { [[ "$a" != MISSING && "$a" == "$b" ]] && [[ "$(pyq "$(status "$d")" 'd["ran_at"]')" == 2026-11-18T12:00:30Z ]]; } \
   && okay "a later run differs only in ran_at" || miss "idempotent: a later run differs in more than ran_at"
