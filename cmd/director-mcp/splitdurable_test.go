@@ -197,3 +197,110 @@ func TestRoleMailWaitingIsCountedByEveryLocalRead(t *testing.T) {
 		t.Errorf("remaining local after the drain = %d, want 0: %v", rem["local"], rem)
 	}
 }
+
+// roleStartFixture publishes 40 role messages, has a holder ack through the 37th,
+// and publishes 2 messages to the new seat's own subject. It returns the holder.
+func roleStartFixture(t *testing.T, ctx context.Context, url string, js jetstream.JetStream) *Bus {
+	t.Helper()
+	holder := lineConnect(t, ctx, url, "sup-a", "supervisor", "")
+	publishN(t, ctx, js, lineRole("supervisor"), "r", 1, 40)
+	lineReadAck(t, ctx, holder, 37)
+	publishN(t, ctx, js, lineInbox("sup-b"), "s", 1, 2)
+	return holder
+}
+
+func idSet(items []lineItem) map[string]bool {
+	out := map[string]bool{}
+	for _, i := range items {
+		out[i.ID] = true
+	}
+	return out
+}
+
+// Design test 4a: a new id with no departed durable and no lineage connects
+// holding a role. The stream holds 40 role messages, a live holder acked through
+// the 37th, and 2 messages sit on the new id's own subject. It receives its 2 and
+// role messages 38 to 40, not 1 to 37: mail some holder acked is not replayed.
+func TestANewRoleHolderStartsItsRoleSubjectAfterTheHoldersFloor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	roleStartFixture(t, ctx, url, js)
+
+	fresh := lineConnect(t, ctx, url, "sup-b", "supervisor", "")
+	res, err := fresh.receiveBatch(ctx, 3*time.Second, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := idSet(lineItems(t, res))
+	for _, want := range []string{"s1", "s2", "r38", "r39", "r40"} {
+		if !got[want] {
+			t.Errorf("the new holder did not receive %s", want)
+		}
+	}
+	if len(res.Items) != 5 {
+		t.Errorf("the new holder received %d messages, want exactly 5 (its 2 and role 38 to 40): replayed role mail below the floor", len(res.Items))
+	}
+}
+
+// Design test 4a, repeated with the holder departed and its durable still stored.
+func TestANewRoleHolderStartsAfterADepartedHoldersFloor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	holder := roleStartFixture(t, ctx, url, js)
+	lineExit(t, ctx, holder)
+
+	fresh := lineConnect(t, ctx, url, "sup-b", "supervisor", "")
+	res, err := fresh.receiveBatch(ctx, 3*time.Second, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Items) != 5 {
+		t.Errorf("the new holder received %d messages (%q), want exactly 5 (its 2 and role 38 to 40)", len(res.Items), lineIDs(lineItems(t, res)))
+	}
+}
+
+// Design test 4b, a pin: with no durable that ever filtered the role subject, the
+// first holder reads every role message the stream holds.
+func TestTheFirstRoleHolderReadsAllRoleMail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	publishN(t, ctx, js, lineRole("supervisor"), "r", 1, 40)
+	publishN(t, ctx, js, lineInbox("sup-b"), "s", 1, 2)
+
+	first := lineConnect(t, ctx, url, "sup-b", "supervisor", "")
+	res, err := first.receiveBatch(ctx, 3*time.Second, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Items) != 42 {
+		t.Errorf("the first holder received %d messages, want all 42", len(res.Items))
+	}
+}
+
+// A pin: the cue's count and oldest-message reads see role-subject mail on a role
+// holder. They read the local consumer today and must read both of a split
+// holder's. The cue's lane (laneOpen) lists replies to asks the seat has open, so a
+// bare role REQUEST does not show in it and it is not pinned here.
+func TestTheCuesReadsSeeRoleSubjectMail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	holder := lineConnect(t, ctx, url, "sup", "supervisor", "")
+	pubEnv(t, ctx, js, lineRole("supervisor"), "rq1", "REQUEST", "to the role")
+
+	src := busCueSource{b: holder}
+	if n, err := src.count(ctx); err != nil || n != 1 {
+		t.Errorf("the cue's count = %d (err %v), want 1 for one role message waiting", n, err)
+	}
+	meta, err := src.oldestMeta(ctx)
+	if err != nil || meta == nil || meta.MessageID != "rq1" {
+		t.Errorf("the cue's oldest = %+v (err %v), want the role message rq1", meta, err)
+	}
+}
