@@ -59,12 +59,29 @@ pin() { # pin <name> <rc> <stdout> <stderr> <args...>
   cap "pin-$n" "" "$L" "$@"
   if [[ "$(cat "$root/pin-$n.rc")" == "$rc" && "$(cat "$root/pin-$n.out")" == "$out" && "$(cat "$root/pin-$n.err")" == "$err" ]]; then ok "main's bytes and exit $rc: $n"; else bad "main's bytes and exit $rc: $n" "rc=$(cat "$root/pin-$n.rc") out=[$(cat "$root/pin-$n.out")] err=[$(head -c 200 "$root/pin-$n.err")]"; fi
 }
-# no argument: the usage text on stderr, exit 2 (exercises the dispatch's default branch)
-pin no-argument 2 "" "$USAGE"
-# an unknown word: the same usage and exit (exercises `*) usage`)
-pin unknown-word 2 "" "$USAGE" bogus
-# start with a flag it does not know: usage, exit 2, before any seat file or claude is touched
-pin start-bad-flag 2 "" "$USAGE" start --bogus
+# Every case that prints the usage text (director's S7 ruling (b)): exit 2, nothing on stdout, the four lines
+# recorded from main unchanged and in order, and exactly one added line, "       director status". Dropping that
+# one line gives main's usage byte for byte.
+STATUS_LINE='       director status'
+pin_usage() { # pin_usage <name> <args...>
+  local n="$1"; shift
+  cap "usage-$n" "" "$L" "$@"
+  local err; err="$(cat "$root/usage-$n.err")"
+  local count; count="$(grep -cxF -- "$STATUS_LINE" "$root/usage-$n.err" || true)"
+  local rest; rest="$(grep -vxF -- "$STATUS_LINE" "$root/usage-$n.err" || true)"
+  if [[ "$(cat "$root/usage-$n.rc")" == 2 && ! -s "$root/usage-$n.out" && "$count" == 1 && "$rest" == "$USAGE" ]]; then ok "usage, exit 2: main's lines in order plus one status line: $n"; else bad "usage, exit 2: main's lines in order plus one status line: $n" "rc=$(cat "$root/usage-$n.rc") count=$count err=[$err]"; fi
+}
+# no argument (exercises the dispatch's default branch) and an unknown word (exercises `*) usage`)
+pin_usage no-argument
+pin_usage unknown-word bogus
+# start with a flag it does not know, and with a flag that lacks its value: usage before any seat file or claude
+pin_usage start-bad-flag start --bogus
+pin_usage start-missing-value start --cluster
+# env with a flag it does not know, and with a flag that lacks its value
+pin_usage env-bad-flag env --bogus
+pin_usage env-missing-value env --seat-file
+# prove ignores extra words and is not usage: its STOP, byte for byte
+pin prove-extra-word 3 "" "STOP: no launch id: run this inside a session started by director start" prove x
 # start with no seat file: its STOP for the missing identity values, exit 3, before claude would run
 pin start-no-seat 3 "" "STOP: missing DIRECTOR_AGENT_ID DIRECTOR_TEAM DIRECTOR_WORKSPACE; put them in $home/.director/seat.env as KEY=value lines or pass them by flag (--cluster covers DIRECTOR_CLUSTER only)" start
 # env with no seat file: prints nothing, exit 0
