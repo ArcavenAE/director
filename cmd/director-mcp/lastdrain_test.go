@@ -89,13 +89,16 @@ func TestWaitRemainingNonzeroLeavesLastDrain(t *testing.T) {
 	}
 }
 
-func TestWaitSilenceLeavesLastDrain(t *testing.T) {
+// An empty wait is a drain (design slice 2): with nothing waiting on any tier
+// and no failed read, it writes last-drain. This replaces the slice 1 test that
+// asserted a silent wait wrote nothing; the failed-read cases above still hold.
+func TestWaitSilenceWritesLastDrain(t *testing.T) {
 	ctx, bus, _, path := lastDrainFixture(t)
 	if _, err := toolWait(ctx, bus, json.RawMessage(`{"timeout_seconds":1,"max":5}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("a wait that returned nothing created last-drain (stat err = %v)", err)
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("a wait that returned nothing, with nothing pending, wrote no last-drain: %v", err)
 	}
 }
 

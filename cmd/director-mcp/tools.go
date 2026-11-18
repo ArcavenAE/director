@@ -466,6 +466,7 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		if e := bus.globalExpiredUnread(ctx); e != "" {
 			out["global_expired_unread"] = e
 		}
+		beatSilence(ctx, bus, time.Now())
 	} else {
 		out["tier"] = res.Tier
 		if bus.handled != nil {
@@ -531,6 +532,7 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 		if e := bus.globalExpiredUnread(ctx); e != "" {
 			out["global_expired_unread"] = e
 		}
+		beatSilence(ctx, bus, time.Now())
 	} else {
 		rem, failed := bus.remainingRead(ctx)
 		out["remaining"] = rem

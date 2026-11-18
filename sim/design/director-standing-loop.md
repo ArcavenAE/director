@@ -178,8 +178,11 @@ Desk card unless the operator must decide something.
 The hook also writes a seen-stamp each time it runs, so `doctor` can tell a hook
 that is wired but never reached from one that is not wired; on a harness other
 than Claude Code it cannot read the wiring at all. A wait that returns nothing,
-with every tier at 0 and no failed read, writes `last-drain` with `ended:
-silence`: an empty inbox at that moment is what the beat means. Presence gains
+with every tier at 0 and no failed read, writes `last-drain`, and the shim logs
+`ended: silence`: an empty inbox at that moment is what the beat means.
+`last-drain` stays one stamp line, as `standing-hook` and its verifiers read it,
+so the reason is logged and not stored; a slice that needs it in a file states
+that shape itself. Presence gains
 two cue fields: a count of nonces sent while unverified, which tells "no mail
 since start" from "nonces sent and never echoed", and the time of the last
 proof, which gives a live cue an age.
@@ -193,7 +196,7 @@ Each red test is named here and written in its slice's PR; none exists yet.
 | # | slice | red test (fails today because) | blocked by |
 |---|---|---|---|
 | 1 | Shim: `remaining` excludes the call's own held messages; a batch wait through the real call path writes `last-drain` | `TestRemainingExcludesTheCallsOwnHeldMessages`, `TestABatchWaitThroughCallToolWritesLastDrain` (ack-pending counts the batch) | none |
-| 2 | Shim: an empty wait with every tier at 0 writes `last-drain`, `ended: silence` | `TestASilentWaitWithNothingPendingWritesLastDrain` (the empty branch never beats) | 1 |
+| 2 | Shim: an empty wait with every tier at 0 writes `last-drain` and logs `ended: silence` | `TestASilentWaitWithNothingPendingWritesLastDrain` (the empty branch never beats) | 1 |
 | 3 | Shim: the roster CLI carries `cue` and `cue_reason`; presence adds the unechoed-nonce count and the last-proof time | `TestRosterJSONCarriesCueReason`, `TestPresenceCountsNoncesSentWhileUnverified`, `TestPresenceCarriesCueProvedAt` (no such fields) | none |
 | 4 | Profile `[loop]` table and fresh-install defaults | `verify-director-profile.sh standing-keys-accepted` (unknown key refused); `verify-install-fresh-home.sh no-foreign-roots` (shipped roots name one install) | none (extends the built profile) |
 | 5 | `director tick` writes `loop-status.json` | `verify-director-tick.sh`: fake `tmux` and `nats` log no call, status written, dashboard untouched (no command) | 3, 4 |
