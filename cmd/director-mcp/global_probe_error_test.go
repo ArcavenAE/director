@@ -63,3 +63,31 @@ func TestGlobalDurableProbeErrorFreshSeatStartsAtHead(t *testing.T) {
 		}
 	}
 }
+
+// Guard (director's narrowing of Q2): only a first-generation seat with no
+// predecessor starts at the head. A g2 seat with no predecessor set may be a
+// respawn whose lineage was lost, so a probe error keeps the replay.
+func TestGlobalDurableProbeErrorLaterGenerationKeepsTheReplay(t *testing.T) {
+	prev := earlierDurableProbe
+	earlierDurableProbe = func(context.Context, *globalTier, string, string) (bool, error) {
+		return false, fmt.Errorf("listing hub durables failed (no responders)")
+	}
+	t.Cleanup(func() { earlierDurableProbe = prev })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	nc, _ := provision(t, ctx, url)
+	gjs, _ := jetstream.NewWithDomain(nc, "global")
+	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
+	t.Setenv("MARVEL_PREDECESSOR", "")
+	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "may be a lost predecessor's unread mail")
+	b, err := connect(ctx, url, freshSeat("probeerr-g2-0"), gcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.close()
+	if got := readIDs(t, ctx, b); fmt.Sprint(got) != "[global:g0]" {
+		t.Errorf("a g2 seat with a probe error read %v, want the replay [global:g0]", got)
+	}
+}
