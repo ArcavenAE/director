@@ -67,6 +67,8 @@ STATUS_LINE='       director status'
 DOCTOR_LINE='       director doctor'
 # S8 adds a third, for the new start flag (director's S8 ruling (b)): dropping all three gives main's usage byte for byte.
 PLUGIN_LINE='       director start --plugin-dir <path>   (load a Claude Code plugin tree for this session)'
+# S10 adds a fourth, for the opt-out of the installed plugin default (director's S10 ruling a).
+NOPLUGIN_LINE='       director start --no-plugin   (do not load the installed plugin for this session)'
 pin_usage() { # pin_usage <name> <args...>
   local n="$1"; shift
   cap "usage-$n" "" "$L" "$@"
@@ -74,8 +76,9 @@ pin_usage() { # pin_usage <name> <args...>
   local count; count="$(grep -cxF -- "$STATUS_LINE" "$root/usage-$n.err" || true)"
   local dcount; dcount="$(grep -cxF -- "$DOCTOR_LINE" "$root/usage-$n.err" || true)"
   local pcount; pcount="$(grep -cxF -- "$PLUGIN_LINE" "$root/usage-$n.err" || true)"
-  local rest; rest="$(grep -vxF -e "$STATUS_LINE" -e "$DOCTOR_LINE" -e "$PLUGIN_LINE" "$root/usage-$n.err" || true)"
-  if [[ "$(cat "$root/usage-$n.rc")" == 2 && ! -s "$root/usage-$n.out" && "$count" == 1 && "$dcount" == 1 && "$pcount" == 1 && "$rest" == "$USAGE" ]]; then ok "usage, exit 2: main's lines in order plus the status, doctor and plugin-dir lines: $n"; else bad "usage, exit 2: main's lines in order plus the status, doctor and plugin-dir lines: $n" "rc=$(cat "$root/usage-$n.rc") count=$count err=[$err]"; fi
+  local ncount; ncount="$(grep -cxF -- "$NOPLUGIN_LINE" "$root/usage-$n.err" || true)"
+  local rest; rest="$(grep -vxF -e "$STATUS_LINE" -e "$DOCTOR_LINE" -e "$PLUGIN_LINE" -e "$NOPLUGIN_LINE" "$root/usage-$n.err" || true)"
+  if [[ "$(cat "$root/usage-$n.rc")" == 2 && ! -s "$root/usage-$n.out" && "$count" == 1 && "$dcount" == 1 && "$pcount" == 1 && "$ncount" == 1 && "$rest" == "$USAGE" ]]; then ok "usage, exit 2: main's lines in order plus the status, doctor, plugin-dir and no-plugin lines: $n"; else bad "usage, exit 2: main's lines in order plus the status, doctor, plugin-dir and no-plugin lines: $n" "rc=$(cat "$root/usage-$n.rc") count=$count err=[$err]"; fi
 }
 # no argument (exercises the dispatch's default branch) and an unknown word (exercises `*) usage`)
 pin_usage no-argument

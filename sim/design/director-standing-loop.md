@@ -135,9 +135,15 @@ the profile today and no hook wiring). This design adds to it:
   and a link to the real `standing-hook`. `UserPromptSubmit` runs it with `--seen`
   (stamps `$DIRECTOR_STATE/hook-seen`, silent on failure); `SessionStart` runs it with
   `--loop-line --seen` (the loop line only, nothing with no tick). A plain run still
-  writes nothing. `director start --plugin-dir PATH` is opt-in and the launcher never
-  defaults to a tree; the per-version directory, the `current` link, the default and
-  `director-install` are slice 10. The skill, `role.md` and `.mcp.json` stay out: the
+  writes nothing. `director start --plugin-dir PATH` loads a tree for one session. Built as
+  slice 10: `director-install plugin` installs the tree and the loop scripts it runs
+  (`standing-hook`, `dws`, `dbi`, `director-tick`, `director-profile`, `board-html`,
+  `page-namespace`) into `lib/plugin/<sha>/`, with the link's target copied and a stable
+  `lib/plugin/current` switched by rename, so an upgrade and a rollback cover the hook with
+  the tree. `director start` loads `current` by default when it is a directory, an explicit
+  `--plugin-dir` wins, `--no-plugin` skips it, and a `current` that is not a directory is
+  skipped with a WARN. Running the install is the opt-in; without `current` the launcher
+  hands claude main's arguments. The skill, `role.md` and `.mcp.json` stay out: the
   launcher keeps `--mcp-config`, because `--strict-mcp-config` skips plugin MCP servers.
 - One profile table, `[loop]`, a closed set of optional keys: `state_dir`,
   `ticket_pattern` (a regex) and `workspace` are strings, `idea_roots` is a list

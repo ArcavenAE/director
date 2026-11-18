@@ -216,9 +216,9 @@ run seen-ro "$DH/bin/director" doctor
 
 # the launcher's usage: main's lines, plus the status line S7 added, plus one doctor line right after it
 run usage "$DH/bin/director" nosuchword
-want_usage=$'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director env [--seat-file <path>]\n       director prove\n       director status\n       director doctor\n       director start --plugin-dir <path>   (load a Claude Code plugin tree for this session)\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)'
+want_usage=$'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director env [--seat-file <path>]\n       director prove\n       director status\n       director doctor\n       director start --plugin-dir <path>   (load a Claude Code plugin tree for this session)\n       director start --no-plugin   (do not load the installed plugin for this session)\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)'
 { [[ "$(rcof usage)" == 2 && "$(cat "$root/usage.err")" == "$want_usage" ]]; } \
-  && ok "the launcher's usage gains exactly the status, doctor and plugin-dir lines, in that order" || bad "usage text" "rc=$(rcof usage) err=[$(cat "$root/usage.err")]"
+  && ok "the launcher's usage gains exactly the status, doctor, plugin-dir and no-plugin lines, in that order" || bad "usage text" "rc=$(rcof usage) err=[$(cat "$root/usage.err")]"
 
 # read only
 newhome ro
