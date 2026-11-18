@@ -320,7 +320,10 @@ mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_A
 
 cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_ROLE in team $DIRECTOR_TEAM, address agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID."
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
-cast_line+=" Your first act is to echo the last line of the spawn log at $spawn_log (ruling 84)."
+# Ruling 84 means the seat's OWN line (director). In a team cast the last line
+# of the log belongs to whichever seat spawned last, so the seat greps for its
+# own session name, the same one slice.sh was handed as --seat.
+cast_line+=" Your first act is to echo your own line of the spawn log at $spawn_log (ruling 84): grep -F 'seat=$MARVEL_SESSION ' on it, echo the newest match, and say which line you echoed; if no line for seat=$MARVEL_SESSION exists, say so and echo no other seat's line."
 
 # Exactly one system prompt (aae-orc-1vq6z). claude keeps only the LAST
 # --append-system-prompt, so any flag in "$@" would silently replace the slice.

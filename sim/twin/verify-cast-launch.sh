@@ -989,14 +989,27 @@ fi
 # (ruling 59). A seat that has to guess where it is went looking elsewhere.
 if cast builder; then
   want="$root/.local/state/wardrobe/spawn.log"
-  grep -qF "echo the last line of the spawn log at $want (ruling 84)" "$root/out/claude.args" \
+  grep -qF "echo your own line of the spawn log at $want (ruling 84): grep -F 'seat=verify-builder-0 ' on it" "$root/out/claude.args" \
     && ok "spawn log unset: the cast line names the ruled default path" \
     || bad "cast line default spawn log" "$(grep -o 'spawn log[^.]*' "$root/out/claude.args" | head -1)"
 else
   bad "builder cast for the spawn log default" "$(cat "$root/out/stderr")"
 fi
+# ruling 84 means the seat's OWN line: the cast line names the seat to grep for,
+# says which line was echoed, and tells a seat with no line to say so rather
+# than echo another seat's.
+if cast builder; then
+  grep -qF "echo the newest match, and say which line you echoed" "$root/out/claude.args" \
+    && ok "the cast line asks for the newest match and which line was echoed" \
+    || bad "cast line own-line echo" "$(grep -o 'spawn log[^.]*' "$root/out/claude.args" | head -1)"
+  grep -qF "no line for seat=verify-builder-0 exists, say so and echo no other seat's line" "$root/out/claude.args" \
+    && ok "the cast line tells a seat with no line to say so" \
+    || bad "cast line no-line case" "$(grep -o 'spawn log[^.]*' "$root/out/claude.args" | head -1)"
+else
+  bad "builder cast for the own-line echo" "$(cat "$root/out/stderr")"
+fi
 if cast builder WARDROBE_SPAWN_LOG="$root/elsewhere/spawn.log"; then
-  grep -qF "echo the last line of the spawn log at $root/elsewhere/spawn.log (ruling 84)" "$root/out/claude.args" \
+  grep -qF "echo your own line of the spawn log at $root/elsewhere/spawn.log (ruling 84): grep -F 'seat=verify-builder-0 ' on it" "$root/out/claude.args" \
     && ok "WARDROBE_SPAWN_LOG set: the cast line names the override" \
     || bad "cast line overridden spawn log" "$(grep -o 'spawn log[^.]*' "$root/out/claude.args" | head -1)"
   grep -qF "$root/.local/state/wardrobe/spawn.log" "$root/out/claude.args" \
