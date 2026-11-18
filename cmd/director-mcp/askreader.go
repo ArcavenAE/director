@@ -668,6 +668,8 @@ func runAskLookup(ctx context.Context, js jetstream.JetStream, cli cliArgs, out,
 		line := "delivery: " + res.Delivery.State + " (the inbox's own read, not a reply)"
 		if res.Delivery.Error != "" {
 			line = "delivery: unknown (" + res.Delivery.Error + ")"
+		} else if res.Delivery.Note != "" {
+			line = "delivery: " + res.Delivery.State + " (" + res.Delivery.Note + ")"
 		}
 		_, _ = fmt.Fprintln(out, line)
 	}
