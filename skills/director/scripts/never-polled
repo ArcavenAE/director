@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""never-polled - list seats that connected and never called wait_for_message.
+
+A seat whose presence reads catching-up with nothing waiting, for more than 10
+minutes, is connected and not polling: no doorbell fires for it, because nothing
+is unread (director#222, asks-die-unread D2). The sweep prints one line for each
+under Uncaptured so the seat is seen. It surfaces the seat and does not fix it.
+
+  never-polled [--roster FILE] [--now RFC3339] [--minutes N] [--timeout SECONDS] [--strict]
+
+The roster is the JSON `director-mcp roster --json` prints; without --roster the
+script runs that command (DIRECTOR_MCP_BIN overrides the binary), cut off after
+--timeout seconds (default 30). A row counts when its state is catching-up, it is
+fresh, `waiting` is 0, it carries no `polled_at`, and `connected_at` is more than
+N minutes (default 10) before now. A seat whose predecessor is still live stays
+catching-up while it polls, and its row carries `polled_at` from its first
+wait_for_message, so it is skipped. A row with no `waiting` or no `connected_at`,
+from a shim older than this one, is never listed. Read only: it sends nothing and
+writes nothing. Prints nothing when no seat qualifies.
+
+A roster that cannot be read, or a command that times out, prints one
+`- GAP never-polled: <reason>` line on stdout and exits 0, because the sweep reads
+lines and never an exit code, and a GAP line is not "no seat". A caller that needs
+a failure it can test passes --strict: the same GAP line, exit 2.
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+
+def parse_time(text):
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="never-polled", add_help=True)
+    ap.add_argument("--roster")
+    ap.add_argument("--now")
+    ap.add_argument("--minutes", type=int, default=10)
+    ap.add_argument("--timeout", type=float, default=30)
+    ap.add_argument("--strict", action="store_true")
+    args = ap.parse_args()
+    now = parse_time(args.now) if args.now else datetime.now(timezone.utc)
+    if now is None:
+        print("never-polled: --now is not an RFC3339 time", file=sys.stderr)
+        return 2
+    try:
+        if args.roster:
+            with open(args.roster, "rb") as fh:
+                raw = fh.read()
+        else:
+            binary = os.environ.get("DIRECTOR_MCP_BIN", "director-mcp")
+            raw = subprocess.run([binary, "roster", "--json"], check=True, capture_output=True, timeout=args.timeout).stdout
+        rows = json.loads(raw).get("rows") or []
+    except (OSError, subprocess.SubprocessError, ValueError) as err:
+        print("- GAP never-polled: cannot read the roster: %s" % err)
+        return 2 if args.strict else 0
+    out = []
+    for row in rows:
+        if row.get("state") != "catching-up" or row.get("fresh") is False:
+            continue
+        if row.get("waiting") != 0 or row.get("polled_at"):
+            continue
+        since = parse_time(row.get("connected_at"))
+        if since is None:
+            continue
+        minutes = (now - since).total_seconds() / 60
+        if minutes <= args.minutes:
+            continue
+        out.append((row.get("agent_id", ""), row.get("instance", ""), int(minutes)))
+    for agent, instance, minutes in sorted(out):
+        print("connected, never polled: %s (%s) catching-up for %dm, 0 waiting" % (agent, instance, minutes))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

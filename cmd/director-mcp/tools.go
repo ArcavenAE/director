@@ -442,6 +442,8 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("another wait_for_message is already open in this session (since %s); nothing was read. Wait for its result, then call again.", since.UTC().Format(time.RFC3339))
 	}
 	defer release()
+	bus.noteWaited()
+	defer bus.evalCatchup(ctx)
 	a := parseWaitArgs(raw)
 	// Mail whose reply nobody read (a late cancel) comes back first.
 	if items := bus.takeReturned(a.Max); len(items) > 0 {
@@ -692,11 +694,22 @@ func toolPresence(ctx context.Context, bus *Bus, raw json.RawMessage) (any, erro
 	if a.State == "" {
 		a.State = "idle"
 	}
+	held := bus.catchingUp() && a.State != stateCatchingUp
 	globalWarn, err := bus.setPresence(ctx, a.State)
 	if err != nil {
 		return nil, err
 	}
 	out := map[string]any{"status": "presence recorded", "state": a.State}
+	if held {
+		// The request is recorded and applies when the catch-up ends: say why the
+		// state did not change and how many messages are waiting.
+		out["state"] = stateCatchingUp
+		out["requested"] = a.State
+		if n, ok := bus.waitingNow(ctx); ok {
+			out["waiting"] = n
+		}
+		out["note"] = "presence stays catching-up until every source is drained and wait_for_message has been called once since connect; your request is recorded and applies then"
+	}
 	if globalWarn != "" {
 		out["global_warning"] = globalWarn
 	}

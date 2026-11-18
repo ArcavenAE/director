@@ -19,15 +19,21 @@ const rosterUsage = "director-mcp roster --json"
 // presence bucket itself applies: an older row may belong to a seat that has
 // since moved or gone (forRowFresh).
 type rosterRow struct {
-	AgentID    string  `json:"agent_id"`
-	Team       string  `json:"team"`
-	Workspace  string  `json:"workspace,omitempty"`
-	Role       string  `json:"role"`
-	Instance   string  `json:"instance"`
-	State      string  `json:"state,omitempty"`
-	TS         string  `json:"ts,omitempty"`
-	AgeSeconds float64 `json:"age_seconds"`
-	Fresh      bool    `json:"fresh"`
+	AgentID   string `json:"agent_id"`
+	Team      string `json:"team"`
+	Workspace string `json:"workspace,omitempty"`
+	Role      string `json:"role"`
+	Instance  string `json:"instance"`
+	State     string `json:"state,omitempty"`
+	TS        string `json:"ts,omitempty"`
+	// ConnectedAt is when the shim connected, PolledAt when it first called
+	// wait_for_message and Waiting the count across its sources while it is
+	// catching-up; each is omitted when the record has none.
+	ConnectedAt string   `json:"connected_at,omitempty"`
+	PolledAt    string   `json:"polled_at,omitempty"`
+	Waiting     *float64 `json:"waiting,omitempty"`
+	AgeSeconds  float64  `json:"age_seconds"`
+	Fresh       bool     `json:"fresh"`
 	// The cue's state as the seat published it, each omitted when the record has
 	// none (a shim with the cue off, or an older one).
 	Cue           string   `json:"cue,omitempty"`
@@ -115,6 +121,10 @@ func rosterRowFromKey(key string, rec map[string]any, now time.Time) (rosterRow,
 		Role: str("role"), Instance: str("instance"), State: str("state"), TS: str("ts"),
 	}
 	r.Cue, r.CueReason, r.CueProvedAt = str("cue"), str("cue_reason"), str("cue_proved_at")
+	r.ConnectedAt, r.PolledAt = str("connected_at"), str("polled_at")
+	if n, ok := rec["waiting"].(float64); ok {
+		r.Waiting = &n
+	}
 	if n, ok := rec["cue_nonces_sent"].(float64); ok {
 		r.CueNoncesSent = &n
 	}

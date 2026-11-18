@@ -177,6 +177,7 @@ Into `~/.director/bin`, one line each. Each is a script under `skills/director/s
 | `freebusy` | read-only free/busy table |
 | `idle-shadow` | the idle scheduler's shadow run, read side |
 | `sweep-firings` | read-only board line for a scheduled firing two hours past due with no acked result |
+| `never-polled` | read-only list of seats catching-up for over 10 minutes with nothing waiting: connected and never polled |
 | `dash-writer` | shapes the operations dashboard's documents for the Desk's second tab |
 | `introspect` | the runtime fact check director runs at the sweep and at harvest |
 | `composer-check` | looks at a pane before an inject that ends in Enter |
