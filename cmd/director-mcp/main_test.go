@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +37,7 @@ func runGuarded(m *testing.M) int {
 		return 1
 	}
 	defer os.RemoveAll(scratch)
+	pinGoCaches()
 	os.Setenv("HOME", scratch)
 	os.Setenv("DIRECTOR_STATE", filepath.Join(scratch, ".director", "state"))
 	if err := homeGuardHolds(scratch); err != nil {
@@ -49,6 +52,28 @@ func runGuarded(m *testing.M) int {
 		return 1
 	}
 	return code
+}
+
+// pinGoCaches sets GOMODCACHE and GOCACHE to where go finds them now, before HOME
+// moves, unless the caller set them. Without it a test that runs the go tool
+// (version_test.go builds the binary) gets cold caches under the scratch HOME,
+// fetches every module again and leaves a read-only module cache behind.
+// When go cannot be asked, the caches stay unset and the test that needs go
+// fails on its own.
+func pinGoCaches() {
+	out, err := exec.Command("go", "env", "GOMODCACHE", "GOCACHE").Output()
+	if err != nil {
+		return
+	}
+	lines := strings.Fields(string(out))
+	if len(lines) != 2 {
+		return
+	}
+	for i, name := range []string{"GOMODCACHE", "GOCACHE"} {
+		if os.Getenv(name) == "" {
+			os.Setenv(name, lines[i])
+		}
+	}
 }
 
 // homeGuardHolds returns an error if HOME or the state directory resolves
