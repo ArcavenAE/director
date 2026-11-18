@@ -73,11 +73,14 @@ content: |
   new finding naming what remains, and question A stays open.
 
   CARRIED FORWARD 2026-11-18 (UTC), kos harvest at director 5180c3e: no finding
-  exists for step 2 or step 4. Left: step 2 (a PROBE publish to
-  global.kinu.supervisor.inbox from a seat on a team holding a role named exactly
-  "supervisor", after a b1f4953 build has re-rendered authorization, read from
-  the GLOBAL_TO_kinu message count) and step 4 (the scratch-hub reload test;
-  finding-009 still says it was not reproduced on a scratch hub).
+  names this brief. Step 2 is overtaken: it needs a publish "before any leaf
+  reconnect" after the grant change, and finding-024 (sections 1.1 and 1.2)
+  records the mokuzai leaf link dropping and returning on 2026-10-04, with the
+  held sends to global://kinu/supervisor going out as seq 700 and 701, so that
+  condition appears no longer to be meetable for this grant change, and the
+  two-layer question it would have separated is not answered. Left: step 4 (the scratch-hub
+  reload test; finding-009 still says it was not reproduced on a scratch hub).
+  A fresh reach re-test, if wanted, is a new probe and not step 2.
 edges:
   - target: question-cross-cluster-supervisor-reach
     type: supports
