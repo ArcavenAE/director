@@ -350,8 +350,8 @@ through settings behaves exactly as it did. Load the tree for one session with
 `scripts/director start --plugin-dir plugin/director`. Without the flag `start` hands claude the same
 arguments as before, and nothing defaults to the tree. Installing the tree with director-install is a
 later slice. `claude plugin validate plugin/director` checks it with no model call; set
-`DISABLE_TELEMETRY=1` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` for it, or it tries
-first-party telemetry. `skills/director/scripts/verify-plugin-hooks.sh` runs it when claude is on PATH
+`DISABLE_TELEMETRY=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `DISABLE_AUTOUPDATER=1` for it
+(measured with all three set), or it tries first-party telemetry. `skills/director/scripts/verify-plugin-hooks.sh` runs it when claude is on PATH
 and skips it otherwise; CI has no claude, so there the structural cases carry the check.
 
 **Prove the launcher, then clear the old entry.** Earlier setups left a

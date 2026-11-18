@@ -17,7 +17,8 @@
 # beyond the scratch DIRECTOR_STATE, no write outside scratch. `claude plugin validate` reads the tree and runs no
 # model call; it is skipped, with the reason, when claude is not on PATH. It writes only to HOME (scratch here) and,
 # measured under a write-deny and network-deny sandbox profile with its controls, tries first-party telemetry
-# unless DISABLE_TELEMETRY and CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC are set, which this script sets.
+# unless the variables are set. This script sets all three, as measured: DISABLE_TELEMETRY,
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and DISABLE_AUTOUPDATER.
 #
 # Usage: skills/director/scripts/verify-plugin-hooks.sh   Exit nonzero on any miss.
 set -euo pipefail

@@ -250,7 +250,7 @@ def seen_row():
         return "hook seen: never"
     try:
         with open(path, encoding="utf-8") as fh:
-            age = (now() - parse_stamp(fh.readline().strip())).total_seconds()
+            age = (now() - parse_stamp(fh.readline(64).strip())).total_seconds()  # a stamp is 21 bytes
     except (OSError, ValueError):
         return "hook seen: unknown"
     return "hook seen: unknown" if age < 0 else "hook seen: " + age_text(age)
