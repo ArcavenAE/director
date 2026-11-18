@@ -794,5 +794,34 @@ rc=0; "$CI" check --batch "$(batch_json)" --read "$root/readback.json" >"$root/o
 if [[ $rc -ne 0 ]] && grep -q "MISMATCH ok-prose rec_key" "$root/out"; then ok "check names a backfilled field the Desk does not hold"; else bad "check misses a rec_key mismatch" "rc=$rc $(cat "$root/out")"; fi
 clean_state
 
+# --- S11: `card-ingest template` prints a card that parse accepts (aae-orc-dysqv, design section 6) -----------------
+# Red until the subcommand exists. R1 (director 01M7R3ECP4): the Valid until date is now plus 7 days from parse's
+# own clock, so the printed card never expires on the shelf.
+clean_state
+tpl="$root/template.md"
+rc=0; "$CI" template >"$tpl" 2>"$root/err" || rc=$?
+if [[ $rc -ne 0 ]]; then bad "template_parses_clean" "template exited $rc: $(cat "$root/err")"
+elif ! run "$tpl" >"$root/out" 2>"$root/err"; then bad "template_parses_clean" "parse refused the printed card: $(cat "$root/err")"
+elif [[ "$(nbatch)" != 1 ]]; then bad "template_parses_clean" "parse wrote $(nbatch) batch files, want 1"
+else ok "template_parses_clean"; fi
+if grep -q 'Valid until\*\* 2026-10-26' "$tpl" 2>/dev/null || grep -qE 'Valid until\*\*? ?2026-10-26' "$tpl" 2>/dev/null; then ok "template_valid_until_is_now_plus_7_days"; else bad "template_valid_until_is_now_plus_7_days" "no 'Valid until' of 2026-10-26 (NOW is $NOW) in: $(grep -i 'valid until' "$tpl" 2>/dev/null || echo 'no template output')"; fi
+clean_state
+
+# --- S11: the relay template carries the Operator decision field, after Ask and before Context -----------------------
+rt="$here/../reference/relay-template.md"
+if python3 - "$rt" <<'P'
+import re, sys
+lines = open(sys.argv[1]).read().splitlines()
+def at(prefix):
+    hits = [i for i, l in enumerate(lines) if l.startswith(prefix)]
+    return hits[0] if hits else None
+ask, dec, ctx = at("Ask:"), at("Operator decision:"), at("Context:")
+assert dec is not None, "no line starting 'Operator decision:' in the relay template"
+assert ask is not None and ctx is not None, "Ask: or Context: missing"
+assert ask < dec < ctx, "Operator decision must come after Ask and before Context (lines %s %s %s)" % (ask, dec, ctx)
+assert "card file path, or none" in lines[dec], "the field does not say 'card file path, or none': %r" % lines[dec]
+P
+then ok "has_operator_decision_field"; else bad "has_operator_decision_field" "relay-template.md has no Operator decision field between Ask and Context"; fi
+
 echo "card-ingest: $pass passed, $fail failed"
 [[ "$fail" == 0 ]]

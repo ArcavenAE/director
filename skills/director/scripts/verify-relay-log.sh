@@ -145,5 +145,25 @@ if RELAY_LOG="$al" "$RL" append --to agent://t/a --kind answer --text "no ask" >
 RELAY_LOG="$al" "$RL" append --to agent://t/a --ask I-13 --kind relay --text "plain relay" >"$root/aout3" 2>&1
 [[ "$(grep -c . "$root/aout3")" == 1 ]] && ok "other kinds print the heading alone, as before" || bad "other kinds print the heading alone" "$(cat "$root/aout3")"
 
+# --- S11: --card <path|none> writes a **Card:** line (aae-orc-dysqv; widening of design row 11, ruled in scope by director 01M7R3ECP4) --
+cl="$root/card-relay.md"; : >"$cl"
+RELAY_LOG="$cl" "$RL" append --to agent://t/a --kind question --card /tmp/cards/q1.md --text "decide?" >"$root/cout1" 2>&1 \
+  && ok "relay_log_card_accepts_a_path" || bad "relay_log_card_accepts_a_path" "--card refused: $(cat "$root/cout1")"
+RELAY_LOG="$cl" "$RL" append --to agent://t/a --kind question --card none --text "no decision" >"$root/cout2" 2>&1 \
+  && ok "relay_log_card_accepts_none" || bad "relay_log_card_accepts_none" "--card none refused: $(cat "$root/cout2")"
+RELAY_LOG="$cl" "$RL" append --to agent://t/a --kind question --text "no card given" >"$root/cout3" 2>&1 || true
+grep -q '^\*\*Card:\*\* /tmp/cards/q1.md$' "$cl" && ok "relay_log_card_line_holds_the_path" || bad "relay_log_card_line_holds_the_path" "$(cat "$cl")"
+grep -q '^\*\*Card:\*\* none$' "$cl" && ok "relay_log_card_line_holds_none" || bad "relay_log_card_line_holds_none" "$(cat "$cl")"
+[[ "$(grep -c '^\*\*Card:\*\*' "$cl")" == 2 ]] && ok "relay_log_no_card_flag_writes_no_card_line" || bad "relay_log_no_card_flag_writes_no_card_line" "want 2 Card lines for 3 entries, got $(grep -c '^\*\*Card:\*\*' "$cl")"
+python3 - "$cl" <<'P' && ok "relay_log_card_line_follows_kind_before_text" || bad "relay_log_card_line_follows_kind_before_text" "order of Kind, Card, Text lines is wrong"
+import sys
+t = open(sys.argv[1]).read().split("\n## ")
+e = [x for x in t if "q1.md" in x][0].splitlines()
+k = [i for i, l in enumerate(e) if l.startswith("**Kind:**")]
+c = [i for i, l in enumerate(e) if l.startswith("**Card:**")]
+x = [i for i, l in enumerate(e) if l.startswith("**Text, verbatim:**")]
+assert k and c and x and k[0] < c[0] < x[0], (k, c, x)
+P
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
