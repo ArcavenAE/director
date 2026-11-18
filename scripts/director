@@ -3,6 +3,7 @@
 # director env [--seat-file <path>]
 # director status
 # director doctor
+# director start --plugin-dir <path>   (opt-in; see below)
 #
 # Starts a Claude Code session as the director, on purpose. The director MCP
 # server comes from config/director-mcp.json in this repo, handed to claude with
@@ -52,7 +53,7 @@ required=(DIRECTOR_AGENT_ID DIRECTOR_TEAM DIRECTOR_WORKSPACE)
 absolute_paths=(DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA)
 observer_keys=(DIRECTOR_HUB_OBSERVER_URL DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA)
 
-usage() { printf 'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director env [--seat-file <path>]\n       director prove\n       director status\n       director doctor\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)\n' >&2; exit 2; }
+usage() { printf 'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director env [--seat-file <path>]\n       director prove\n       director status\n       director doctor\n       director start --plugin-dir <path>   (load a Claude Code plugin tree for this session)\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)\n' >&2; exit 2; }
 stop() { printf 'STOP: %s\n' "$*" >&2; exit 3; }
 
 dhome="${DIRECTOR_HOME:-$HOME/.director}"
@@ -169,15 +170,21 @@ case "${1:-}" in
   *) usage ;;
 esac
 
-cluster_flag="" resume="" seat_file="${DIRECTOR_HOME:-$HOME/.director}/seat.env"
+cluster_flag="" resume="" plugin_dir="" seat_file="${DIRECTOR_HOME:-$HOME/.director}/seat.env"
 while (($#)); do
   case "$1" in
     --cluster)   [[ $# -ge 2 ]] || usage; cluster_flag="$2"; shift 2 ;;
     --resume)    [[ $# -ge 2 ]] || usage; resume="$2"; shift 2 ;;
     --seat-file) [[ $# -ge 2 ]] || usage; seat_file="$2"; shift 2 ;;
+    --plugin-dir) [[ $# -ge 2 ]] || usage; plugin_dir="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
+
+# --plugin-dir is opt-in (standing loop S8): with no flag claude gets the arguments it always did, so an existing
+# install's start path does not change. The launcher never defaults to a plugin tree; that is S10's, once
+# director-install puts one in place. The directory is only checked to exist: what is inside is claude's to load.
+if [[ -n "$plugin_dir" && ! -d "$plugin_dir" ]]; then stop "no plugin directory at $plugin_dir; nothing was run"; fi
 
 # A copy of this file with no repo beside it can read a seat file but cannot start a session.
 [[ -f "$config" ]] || stop "no director MCP config at $config: this copy has no repo beside it; run director start from the repo's scripts/director or a link to it"
@@ -212,5 +219,6 @@ mv "$state/launches/$id.tmp" "$state/launches/$id"
 
 args=(--mcp-config "$config")
 if [[ -n "$resume" ]]; then args+=(--resume "$resume"); else args+=(-n director); fi
+if [[ -n "$plugin_dir" ]]; then args+=(--plugin-dir "$plugin_dir"); fi
 
 exec "${CLAUDE_BIN:-claude}" "${args[@]}"

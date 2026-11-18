@@ -176,11 +176,49 @@ run drifting "$DH/bin/director" doctor
 { [[ "$(rcof drifting)" == 1 ]] && head -n 1 "$root/drifting.out" | grep -q '^drift: no profile file at ' && grep -q '^hook: wired ' "$root/drifting.out"; } \
   && ok "when --check drifts doctor exits 1, prints --check's drift lines first and still prints its own rows" || bad "check drift decides the exit" "rc=$(rcof drifting) out=[$(head -c 300 "$root/drifting.out")]"
 
+# the hook seen row (standing loop S8, km3no's remaining row): doctor reads $DIRECTOR_STATE/hook-seen, which
+# `standing-hook --seen` writes, and prints how long ago a hook last ran as "hook seen: <age>", "hook seen: never"
+# with no stamp, "hook seen: unknown" for a stamp it cannot read or that lies in the future. It sits after the hook
+# row(s) and before the ages block, only prints, and never changes the exit status. It is the only thing that tells
+# a hook that is wired but never reached from one that is not wired.
+newhome seen
+settings "$CC/settings.json" "$DH/bin/standing-hook"
+seen_row() { { grep -n '^hook seen: ' "$root/$1.out" || true; } | head -n 1 | cut -d: -f2-; }
+run seen-never "$DH/bin/director" doctor
+{ [[ "$(rcof seen-never)" == 0 && "$(seen_row seen-never)" == "hook seen: never" ]]; } \
+  && ok "hook seen: never when there is no stamp, exit stays 0" || bad "hook seen never" "rc=$(rcof seen-never) row=[$(seen_row seen-never)]"
+printf '%s\n' "$(ago_min 7)" >"$ST/hook-seen"
+run seen-7 "$DH/bin/director" doctor
+{ [[ "$(rcof seen-7)" == 0 && "$(seen_row seen-7)" == "hook seen: 7m" ]]; } \
+  && ok "hook seen: a stamp 7 minutes old reads 7m" || bad "hook seen 7m" "rc=$(rcof seen-7) row=[$(seen_row seen-7)]"
+n_hook="$({ grep -n '^hook: ' "$root/seen-7.out" || true; } | head -n 1 | cut -d: -f1)"; n_seen="$({ grep -n '^hook seen: ' "$root/seen-7.out" || true; } | head -n 1 | cut -d: -f1)"; n_ages="$({ grep -n '^ages:' "$root/seen-7.out" || true; } | head -n 1 | cut -d: -f1)"
+{ [[ -n "$n_hook" && -n "$n_seen" && -n "$n_ages" ]] && ((n_hook < n_seen && n_seen < n_ages)); } \
+  && ok "the hook seen row sits after the hook row and before the ages block" || bad "hook seen row order" "hook=$n_hook seen=$n_seen ages=$n_ages"
+printf '%s\n' "$(ago_min 190)" >"$ST/hook-seen"
+run seen-old "$DH/bin/director" doctor
+{ [[ "$(rcof seen-old)" == 0 && "$(seen_row seen-old)" == "hook seen: 3h" ]]; } \
+  && ok "hook seen: an old stamp reads its age and never fails the command" || bad "hook seen old" "rc=$(rcof seen-old) row=[$(seen_row seen-old)]"
+printf 'garbage\n' >"$ST/hook-seen"
+run seen-bad "$DH/bin/director" doctor
+{ [[ "$(rcof seen-bad)" == 0 && "$(seen_row seen-bad)" == "hook seen: unknown" ]]; } \
+  && ok "hook seen: a stamp that does not parse reads unknown" || bad "hook seen garbled" "rc=$(rcof seen-bad) row=[$(seen_row seen-bad)]"
+printf '2999-01-01T00:00:00Z\n' >"$ST/hook-seen"
+run seen-future "$DH/bin/director" doctor
+[[ "$(seen_row seen-future)" == "hook seen: unknown" ]] && ok "hook seen: a stamp in the future reads unknown" || bad "hook seen future" "row=[$(seen_row seen-future)]"
+printf '%s\n' "$(ago_min 7)" >"$ST/hook-seen"
+settings "$CC/settings.json" "echo not-the-hook"
+run seen-unwired "$DH/bin/director" doctor
+{ [[ "$(rcof seen-unwired)" == 1 && "$(seen_row seen-unwired)" == "hook seen: 7m" ]]; } \
+  && ok "hook seen: printed even when the settings do not wire the hook (the plugin may have); the exit is the unwired verdict" || bad "hook seen, unwired settings" "rc=$(rcof seen-unwired) row=[$(seen_row seen-unwired)]"
+before_s="$(treehash "$ST")"; : >"$calls"
+run seen-ro "$DH/bin/director" doctor
+{ [[ "$before_s" == "$(treehash "$ST")" ]]; } && ok "reading the stamp writes nothing" || bad "doctor wrote while reading the stamp"
+
 # the launcher's usage: main's lines, plus the status line S7 added, plus one doctor line right after it
 run usage "$DH/bin/director" nosuchword
-want_usage=$'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director env [--seat-file <path>]\n       director prove\n       director status\n       director doctor\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)'
+want_usage=$'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director env [--seat-file <path>]\n       director prove\n       director status\n       director doctor\n       director start --plugin-dir <path>   (load a Claude Code plugin tree for this session)\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)'
 { [[ "$(rcof usage)" == 2 && "$(cat "$root/usage.err")" == "$want_usage" ]]; } \
-  && ok "the launcher's usage gains exactly one line, director doctor, after director status" || bad "usage text" "rc=$(rcof usage) err=[$(cat "$root/usage.err")]"
+  && ok "the launcher's usage gains exactly the status, doctor and plugin-dir lines, in that order" || bad "usage text" "rc=$(rcof usage) err=[$(cat "$root/usage.err")]"
 
 # read only
 newhome ro

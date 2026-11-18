@@ -337,8 +337,22 @@ negative. The check reads Claude Code settings files only. When none exists or p
 not checked and that is not a failure; a host that has a Claude Code settings file is checked
 even when another harness is in use. The ages block (last drain, Desk read, ledger, digest, tick) and the
 seats whose cue is not live only report. It exits 1 when `--check` exits 1, when the hook is
-not wired, or when the state directory is not writable. Whether a wired hook ever ran is a
-later row (the seen-stamp).
+not wired, or when the state directory is not writable. A `hook seen:` row after the hook row says when a hook last ran, from the stamp
+`standing-hook --seen` writes (the plugin's wiring does), as an age, `never`, or `unknown`; it only
+prints.
+
+**The plugin tree.** `plugin/director` is a Claude Code plugin that carries only the standing hook:
+`hooks/hooks.json` runs `standing-hook --seen` on each prompt (the full text, as before) and
+`standing-hook --loop-line --seen` at session start (the loop line alone, and nothing when there is no
+tick, so a start adds no context). `scripts/standing-hook` in the tree is a link to the real script.
+`--seen` stamps `$DIRECTOR_STATE/hook-seen`; a plain run of the hook writes nothing, so a hook wired
+through settings behaves exactly as it did. Load the tree for one session with
+`scripts/director start --plugin-dir plugin/director`. Without the flag `start` hands claude the same
+arguments as before, and nothing defaults to the tree. Installing the tree with director-install is a
+later slice. `claude plugin validate plugin/director` checks it with no model call; set
+`DISABLE_TELEMETRY=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `DISABLE_AUTOUPDATER=1` for it
+(measured with all three set), or it tries first-party telemetry. `skills/director/scripts/verify-plugin-hooks.sh` runs it when claude is on PATH
+and skips it otherwise; CI has no claude, so there the structural cases carry the check.
 
 **Prove the launcher, then clear the old entry.** Earlier setups left a
 project-local `director-mcp` entry for the aae-orc folder in

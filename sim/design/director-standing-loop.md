@@ -131,6 +131,14 @@ the profile today and no hook wiring). This design adds to it:
   prints the tick's age and what is due.
 - The loop scripts ship inside the plugin's per-version directory, so an
   upgrade and a rollback cover them, not only the launcher and the shim.
+  Built as slice 8, hooks only: `plugin/director` holds the manifest, the hooks file
+  and a link to the real `standing-hook`. `UserPromptSubmit` runs it with `--seen`
+  (stamps `$DIRECTOR_STATE/hook-seen`, silent on failure); `SessionStart` runs it with
+  `--loop-line --seen` (the loop line only, nothing with no tick). A plain run still
+  writes nothing. `director start --plugin-dir PATH` is opt-in and the launcher never
+  defaults to a tree; the per-version directory, the `current` link, the default and
+  `director-install` are slice 10. The skill, `role.md` and `.mcp.json` stay out: the
+  launcher keeps `--mcp-config`, because `--strict-mcp-config` skips plugin MCP servers.
 - One profile table, `[loop]`, a closed set of optional keys: `state_dir`,
   `ticket_pattern` (a regex) and `workspace` are strings, `idea_roots` is a list
   of strings, `tick_interval` is whole minutes, `digest_max_age` is whole hours,
@@ -230,7 +238,7 @@ section 8, ADR-007): last drain, Desk read, ledger, digest, tick, seats not live
 its own absence. The hook's waiting line carries the top items. Nothing becomes a
 Desk card unless the operator must decide something.
 
-Built as slice 9 (the seen-stamp row stays with slice 8). `director doctor` runs a new
+Built as slice 9. `director doctor` runs a new
 `director-doctor` script that prints `director-init --check`'s output first and unchanged, then
 its own rows, and writes nothing. The hook counts as wired when a `UserPromptSubmit` command in a
 Claude Code settings file (user level, or the `.claude` of the directory it runs in, each as
@@ -241,9 +249,10 @@ none exists or parses, the hook is not checked and that is not a failure; a host
 Code settings file is checked even when another harness is in use. Exit 1: `--check` drifts, the hook is not wired, or an existing
 state directory is not writable; ages and seats only print.
 
-The hook also writes a seen-stamp each time it runs, so `doctor` can tell a hook
-that is wired but never reached from one that is not wired; on a harness other
-than Claude Code it cannot read the wiring at all. A wait that returns nothing,
+The hook writes a seen-stamp when it is run with `--seen`, which the plugin's wiring
+passes (slice 8), so `doctor` can tell a hook that is wired but never reached from
+one that is not wired; a plain run writes nothing, so a hook wired through settings is
+unchanged. On a harness other than Claude Code it cannot read the wiring at all. A wait that returns nothing,
 with every tier at 0 and no failed read, writes `last-drain`, and the shim logs
 `ended: silence`: an empty inbox at that moment is what the beat means.
 `last-drain` stays one stamp line, as `standing-hook` and its verifiers read it,

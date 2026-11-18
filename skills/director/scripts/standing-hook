@@ -16,6 +16,14 @@ Subcommands:
   standing-hook           print the drain age and the checklist (the hook)
   standing-hook beat      record a drain: write the heartbeat from the clock
   standing-hook scan-beat record a stalled-ideas scan (the sweep runs `dbi --json`, then this)
+  standing-hook --seen    print the hook's text and stamp $DIRECTOR_STATE/hook-seen (the plugin's wiring)
+  standing-hook --loop-line  print only the loop line, nothing when there is no loop-status.json
+                          (the plugin's SessionStart; combines with --seen in either order)
+
+`--seen` is the only way hook-seen is written: a plain run writes nothing, so every existing wiring is
+unchanged. The stamp is one RFC 3339 UTC line, written by rename like last-drain, so `director doctor` can
+tell a hook that is wired but never reached from one that is not wired. A stamp that cannot be written is
+silent: the same output and exit as without the flag. The flags are not accepted with beat or scan-beat.
 
 The session runs `standing-hook beat` after each inbox drain. The heartbeat is
 one line, an RFC 3339 UTC stamp, in $DIRECTOR_STATE/last-drain (default
@@ -136,11 +144,20 @@ def stamp(path):
     d = os.path.dirname(path)
     os.makedirs(d, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".stamp.")
-    with os.fdopen(fd, "w") as f:
-        f.write(now().strftime(FMT) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(now().strftime(FMT) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        # a failed write must not leave its temp file behind: --seen swallows the error, so a leftover
+        # would be added on every prompt. The error still propagates, so beat fails loudly as it always did.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def beat():
@@ -149,6 +166,19 @@ def beat():
 
 def scan_beat():
     stamp(scan_file())
+
+
+def seen_file():
+    return os.path.join(os.path.dirname(state_file()), "hook-seen")
+
+
+def seen():
+    """Stamp that the hook ran. Silent on any failure: a stamp is a courtesy to `director doctor`, never a reason
+    for the hook to fail or print."""
+    try:
+        stamp(seen_file())
+    except Exception:
+        pass
 
 
 def scan_file():
@@ -501,11 +531,22 @@ def inbox_line():
     return f"{INBOX_PREFIX}oldest unread {seq} is {age_text(worst[0])} old (bound {age_text(bound)})"
 
 
+FLAGS = ("--seen", "--loop-line")
+
+
 def main():
-    if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] not in ("beat", "scan-beat")):
-        sys.exit("usage: standing-hook [beat|scan-beat]")
-    if len(sys.argv) == 2:
-        (beat if sys.argv[1] == "beat" else scan_beat)()
+    args = sys.argv[1:]
+    if args in (["beat"], ["scan-beat"]):
+        (beat if args[0] == "beat" else scan_beat)()
+        return
+    if len(set(args)) != len(args) or any(a not in FLAGS for a in args):
+        sys.exit("usage: standing-hook [beat|scan-beat|--seen|--loop-line]")
+    if "--seen" in args:
+        seen()
+    if "--loop-line" in args:
+        line = loop_line()
+        if line:
+            print(line)
         return
     print(clock_line())
     print(age_line())

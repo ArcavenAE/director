@@ -77,6 +77,27 @@ check "--resume does not rename it" bash -c "! grep -q -- '\[-n\]' '$root/out'"
 after="$(tree)"
 if [[ "$before" == "$after" ]]; then ok "the launcher wrote nothing under HOME but its launch record"; else bad "the launcher wrote nothing under HOME but its launch record"; fi
 
+# ---- start --plugin-dir (standing loop S8; director's S8 ruling (b)) ------------------------------------
+# Opt-in: with no flag claude gets main's arguments byte for byte, so an existing install's start path does not
+# change. With the flag claude gets exactly one more pair, "--plugin-dir PATH", after the rest. The launcher does
+# not default to any tree: that is S10's, once director-install puts one in place.
+plugdir="$root/plug"; mkdir -p "$plugdir"
+rm -f "$root/out"; run_start start >"$root/stdout" 2>&1 || true
+cp "$root/out" "$root/out.plain"
+check "no --plugin-dir: claude gets main's arguments byte for byte" test "$(sed -n 1p "$root/out.plain")" = "ARGS: [--mcp-config] [$cfg] [-n] [director]"
+rm -f "$root/out"; run_start start --plugin-dir "$plugdir" >"$root/stdout" 2>&1 || true
+check "start --plugin-dir PATH adds exactly --plugin-dir PATH after the rest" test "$(sed -n 1p "$root/out" 2>/dev/null)" = "ARGS: [--mcp-config] [$cfg] [-n] [director] [--plugin-dir] [$plugdir]"
+check "start --plugin-dir changes nothing else claude receives (the environment lines)" bash -c "[[ \"\$(sed 1d '$root/out' | grep -v -e STUBPID -e DIRECTOR_ROLE_MARK -e DIRECTOR_LAUNCH_ID)\" == \"\$(sed 1d '$root/out.plain' | grep -v -e STUBPID -e DIRECTOR_ROLE_MARK -e DIRECTOR_LAUNCH_ID)\" ]]"
+rm -f "$root/out"; run_start start --resume my-director --plugin-dir "$plugdir" >"$root/stdout" 2>&1 || true
+check "--plugin-dir with --resume: the pair follows the resume arguments" test "$(sed -n 1p "$root/out" 2>/dev/null)" = "ARGS: [--mcp-config] [$cfg] [--resume] [my-director] [--plugin-dir] [$plugdir]"
+rm -f "$root/out"; run_start start --plugin-dir "$plugdir" --cluster other-cluster >"$root/stdout" 2>&1 || true
+check "--plugin-dir may come before another flag, and the other flag still works" bash -c "grep -q '^DIRECTOR_CLUSTER=other-cluster\$' '$root/out' && [[ \"\$(sed -n 1p '$root/out')\" == 'ARGS: [--mcp-config] [$cfg] [-n] [director] [--plugin-dir] [$plugdir]' ]]"
+rm -f "$root/out"
+rc=0; run_start start --plugin-dir >"$root/stdout" 2>&1 || rc=$?
+check "--plugin-dir with no value is a usage error, exit 2, and claude is not run" bash -c "[[ $rc == 2 && ! -e '$root/out' ]] && head -c 6 '$root/stdout' | grep -q usage"
+rc=0; run_start start --plugin-dir "$root/no-such-plugin" >"$root/stdout" 2>&1 || rc=$?
+check "a --plugin-dir that is not a directory stops, exit 3, names the path, and claude is not run" bash -c "[[ $rc == 3 && ! -e '$root/out' ]] && grep -q '^STOP: .*$root/no-such-plugin' '$root/stdout'"
+
 # no seat file and no flags: stop, name the missing keys, never run claude
 rm -f "$root/out" "$home/.director/seat.env"
 if run_start start >"$root/stdout" 2>&1; then bad "a missing seat file stops the launcher" "exit 0"; else ok "a missing seat file stops the launcher"; fi
