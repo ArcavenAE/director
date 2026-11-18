@@ -20,32 +20,33 @@ Supervisor mail on the global tier reaches seats it was not meant for. Every sea
 
 ## The smallest fix
 
-1. **Seat-granular drop (inputs 1, 5).** A token is foreign when it resolves, through fresh rows on the cluster it names (any cluster when it names none, as a remote seat's name is written without one in the fan-out), to a seat that is not this seat. The team compare goes. Kept: a bare team name, this seat's own names, and any name whose `-gN-M`-stripped form equals this seat's stripped id (so mail for a predecessor reaches its successor during a shift) still deliver; every doubt still delivers.
+1. **Seat-granular drop (inputs 1, 5).** A token is foreign when it resolves, through fresh rows on the cluster it names (any cluster when it names none, as a remote seat's name is written without one in the fan-out), to a seat that is not this seat. The team compare goes. Kept: a bare team name, this seat's own names, and the id of this seat's predecessor still deliver, so mail for a seat reaches its successor during a shift. A predecessor is the same id with another generation and the same replica index, on this team: `alpha-architect-g2-1` takes mail for `-g1-1`. Parallel replicas do not share FOR mail: `-g1-1` drops mail for `-g1-0` (director's ruling). Every doubt still delivers.
 2. **Local role for the filter's own names (3b).** Build the filter with the session's own role (`DIRECTOR_ROLE`), not the global role, so a research seat answers `<team>-research-supervisor` and not `<team>-supervisor`.
 3. **Every leading FOR line (input 4).** Read the names from each consecutive FOR line at the top of the body, so a seat on line 2 delivers.
 4. **Fresh seat, probe error (input 2), only on a ruling.** When no floor was found, no lookup failed (`why == ""`), the seat is generation 1 of its replica with no predecessor, and only the probe errored, start at the head, log the gap and the skipped count as the clean path does, and report it on `inbox_summary`. This trades a replay for a possible missed message, against the file's own "every doubt goes to delivery", so it is ruling Q2.
 
-Not in this fix: per-seat global addresses (director's (c)), which change the address space; the filter stays opt-in until ruling Q1.
+Not in this fix: per-seat global addresses (director's (c)), which change the address space; the filter stays opt-in until D5.
 
 ## Plan (flat tickets, red first; not filed)
 
 | id | ticket | depends on | red test it turns green (cmd/director-mcp) |
 |---|---|---|---|
-| D1 | seat-granular drop | none | RT1 `TestForFilterSameTeamSiblingDrops`: self `alpha-supervisor-g1-0`, fresh row `alpha-research-supervisor-g1-0` (team alpha), `FOR alpha-research-supervisor-g1-0` drops. Fails today. RT2 `TestForFilterOtherClusterSameTeamDrops`: self on c1, row team alpha on c2, `FOR alpha-research-supervisor-g1-0@c2` drops. Fails today. Guards, green now and after: `TestForFilterOwnPredecessorDelivers` (self g2-0, fresh row g1-0, `FOR` g1-0 delivers); `TestForFilterBareTeamDelivers`. |
+| D1 | seat-granular drop | none | RT1 `TestForFilterSameTeamSiblingDrops`: self `alpha-supervisor-g1-0`, fresh row `alpha-research-supervisor-g1-0` (team alpha), `FOR alpha-research-supervisor-g1-0` drops. Fails today. RT2 `TestForFilterOtherClusterSameTeamDrops`: self on c1, row team alpha on c2, `FOR alpha-research-supervisor-g1-0@c2` drops. Fails today. Guards, green now and after: `TestForFilterOwnPredecessorDelivers` (self g2-0, fresh row g1-0, `FOR` g1-0 delivers); `TestForFilterBareTeamDelivers`. Replica rule: `TestForFilterParallelReplicaDrops` (self g1-1, row g1-0, `FOR` g1-0 drops; fails on the first build) and the guard `TestForFilterSameIndexPredecessorDelivers` (self g2-1, row g1-1, `FOR` g1-1 delivers). |
 | D2 | local role in the filter's names | none | RT3 `TestForFilterResearchSeatIgnoresTeamSupervisorAlias`: a filter built by the production constructor for a seat with `DIRECTOR_ROLE=research-supervisor` and global role supervisor drops `FOR alpha-supervisor` when that alias resolves to the team supervisor's fresh row. Fails today (namesSelf matches). Needs the constructor at bus.go:1565 lifted into a function the test can call. |
 | D3 | every leading FOR line | none | RT4 `TestForFilterReadsEveryLeadingForLine`: self beta, body `FOR alpha-supervisor\nFOR beta-supervisor\n...` delivers. Fails today (drops). Guard: a FOR line after a non-FOR line is still not read. |
 | D4 | fresh seat starts at head on probe error | ruling Q2 | RT5 `TestGlobalDurableProbeErrorFreshSeatStartsAtHead`: `earlierDurableProbe` stubbed to an error, no floor, no predecessor; the consumer config is `DeliverByStartSequence` at head+1 and the log line names the probe error and the skipped count. Fails today (`DeliverAll`). Guards: with a predecessor id, a probe error still delivers all; a g2 seat with no predecessor and a probe error still delivers all. |
+| D6 | inbox_summary and the class-aware cue leave out filter-dropped mail | D1 to D3 | RT6 `TestInboxSummaryLeavesOutGlobalMailTheFilterDrops` and `TestCueWaitingLeavesOutGlobalMailTheFilterDrops`: a FOR-other message is not in the summary's total, expected and read counts, and not in the cue's waiting set. Both fail today. Both lists go through `leaveOutForeign`, built on `g.foreign`, the decision `dropForeign` and the cue's count already use. Control: with the filter off both show everything. |
 | D5 | turn the filter on for supervisor seats | ruling Q1, D1, D2, D3 | not a director-mcp change: manifest env `DIRECTOR_FOR_FILTER=1`. Check: `inbox_summary` reports for_filter on, and a seeded FOR-sibling message is dropped with a log line. |
 
-Plan check: each ticket names its red test; RT1 to RT5 need only the filter, its constructor and the probe seam, all in D1 to D4 themselves; D5's check needs D1 to D3. No cycle.
+Plan check: each ticket names its red test; RT1 to RT6 need only the filter, its constructor and the probe seam, all in D1 to D4 and D6 themselves; D5's check needs D1 to D3. No cycle.
 
 ## Rulings
 
-- **Q1.** Turn the FOR filter on for every global supervisor seat once D1 to D3 land? Default: yes, kinu first. Without it, fixes 1 to 3 change nothing on kinu.
-- **Q2.** May a fresh seat with no predecessor start at the head when only the earlier-durable probe errors? Default: yes, with the gap logged and shown on `inbox_summary`; the alternative keeps today's replay.
-- **Q3.** Is the root of the probe error (input 2's hypothesis) worth a read-only consumer list on the hub with mokuzai's credential? It is a live-bus read I may not run; default: yes, by a mokuzai seat, before D4 builds.
+All three are ruled (director, 2026-11-18).
 
-Each recommendation is valid until 2026-12-02; the arcaven architect re-checks it then.
+- **Q1.** Turn the FOR filter on for every global supervisor seat once D1 to D3 land: yes, kinu first, after D1 to D3 merge.
+- **Q2.** A fresh seat may start at the head when only the earlier-durable probe errors, with the gap logged and shown on `inbox_summary`: yes, narrowed to a generation 1 seat with no predecessor. Any other seat keeps the replay. An unsuffixed FOR name resolves on any cluster (a related ruling on item 1).
+- **Q3.** One read-only consumer list on the hub, by a mokuzai seat, before D4 builds: yes, and done. The mokuzai credential reaches the hub through a leaf without list verbs, which fits the probe-error cause.
 
 ## Where it lands
 
