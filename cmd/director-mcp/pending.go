@@ -270,7 +270,7 @@ type tierCounts struct {
 
 // pendingTiers is pendingByTier's read, with the two tiers kept apart.
 func (b *Bus) pendingTiers(ctx context.Context) (tierCounts, error) {
-	info, err := b.readTier(ctx, "local", b.js, "AGENT_INBOX", b.cons())
+	info, err := b.readLocalTier(ctx)
 	if err != nil {
 		return tierCounts{}, err
 	}
@@ -291,6 +291,62 @@ func (b *Bus) pendingTiers(ctx context.Context) (tierCounts, error) {
 	c.global = gi.NumPending + uint64(gi.NumAckPending)
 	c.g, c.ginfo = g, gi
 	return c, nil
+}
+
+// readLocalTier is readTier for the local tier, which is one source read from
+// several consumers: the own subject's, the role subject's when the seat holds
+// a role, and the inherited one once it exists. The tracker takes one sample per
+// tier, so the consumers' samples are merged: counts add, the ack floor is the
+// lowest of those with something held (the conservative one), and the
+// delivered sequence is the highest. The returned info carries the summed
+// counts and nothing else.
+func (b *Bus) readLocalTier(ctx context.Context) (*jetstream.ConsumerInfo, error) {
+	cons := b.localConsumers()
+	if ic, _ := b.inheritCons(); ic != nil {
+		cons = append(cons, ic)
+	}
+	if len(cons) == 1 {
+		return b.readTier(ctx, "local", b.js, "AGENT_INBOX", cons[0])
+	}
+	at := time.Now()
+	rctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
+	defer cancel()
+	var merged pendingSample
+	merged.at = at
+	sum := &jetstream.ConsumerInfo{}
+	anyUnread, allTotals := false, true
+	floorSet := false
+	for _, c := range cons {
+		info, err := c.Info(rctx)
+		if err != nil {
+			b.pending.mark("local", pendingSample{at: at, failed: err.Error()})
+			return nil, err
+		}
+		s := sampleOf(rctx, b.js, "AGENT_INBOX", info, at)
+		if s.failed != "" {
+			merged.failed = s.failed
+		}
+		sum.NumPending += info.NumPending
+		sum.NumAckPending += info.NumAckPending
+		merged.unread += s.unread
+		merged.ackPending += s.ackPending
+		merged.total += s.total
+		merged.lastSeq = max(merged.lastSeq, s.lastSeq)
+		merged.delivered = max(merged.delivered, s.delivered)
+		if s.unread > 0 {
+			anyUnread = true
+			allTotals = allTotals && s.haveTotal
+		}
+		switch {
+		case s.ackPending > 0 && (!floorSet || s.ackFloor < merged.ackFloor):
+			merged.ackFloor, floorSet = s.ackFloor, true
+		case !floorSet:
+			merged.ackFloor = max(merged.ackFloor, s.ackFloor)
+		}
+	}
+	merged.haveTotal = anyUnread && allTotals
+	b.pending.mark("local", merged)
+	return sum, nil
 }
 
 // streamReadTimeout bounds one tier's whole read for a sample: the consumer

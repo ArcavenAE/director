@@ -706,7 +706,7 @@ func (s busCueSource) count(ctx context.Context) (uint64, error) {
 }
 
 func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
-	items, _, _, err := peekWaiting(ctx, s.b.js, s.b.cons(), "local", 1)
+	items, _, _, err := s.b.peekLocalSources(ctx, 1)
 	if err == nil && len(items) > 0 && items[0].Env != nil {
 		return metaOf(items[0].Env), nil
 	}
@@ -724,7 +724,7 @@ func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
 // laneOpen builds the lane from what is waiting, as inbox_summary does, and
 // returns its size and its oldest item. It reads and acks nothing.
 func (s busCueSource) laneOpen(ctx context.Context) (int, *laneItem) {
-	items, _, _, err := peekWaiting(ctx, s.b.js, s.b.cons(), "local", summaryDefault)
+	items, _, _, err := peekWaiting(ctx, s.b.js, s.b.cons(), "local", summaryDefault) // own subject only: the lane lists replies to this seat's own asks, which land there
 	if err != nil {
 		return 0, nil
 	}

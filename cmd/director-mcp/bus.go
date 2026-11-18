@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -115,6 +116,14 @@ type Bus struct {
 	// (localrecover.go), and the cue watcher reads it on another goroutine.
 	localMu sync.Mutex
 	local   localState
+	// roleCons is the role-subject durable of a seat that holds a role, with its
+	// own rebuild state; nil for a seat with none. roleSeqs holds the stream
+	// sequences of role mail fetched and not yet acked (localrecover.go).
+	roleCons  jetstream.Consumer
+	roleLocal localState
+	roleSeqs  map[uint64]struct{}
+	// roleTurn alternates which local durable a read takes from first.
+	roleTurn atomic.Uint32
 	// restoreMu serializes the local durable restore: the poll and the heartbeat
 	// can both find the durable gone, and only one should rebuild it (localrecover.go).
 	restoreMu sync.Mutex
@@ -302,10 +311,10 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	// durable filters the role subject, so every live holder gets a copy: a
 	// role send is fan-out to its holders, not a work queue
 	// (docs/shim-reference.md, "Role mail").
-	filters := b.selfSubjects()
+	ownSubject := b.inboxSubject(b.self.Workspace, b.self.Team, b.self.AgentID)
 	cfg := jetstream.ConsumerConfig{
-		Durable:           "mcp_" + self.AgentID + "_" + b.instance,
-		FilterSubjects:    filters,
+		Durable:           b.durableOf(false),
+		FilterSubject:     ownSubject,
 		AckPolicy:         jetstream.AckExplicitPolicy,
 		DeliverPolicy:     jetstream.DeliverAllPolicy,
 		MaxDeliver:        -1,
@@ -318,10 +327,28 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		_, err := kv.Get(ctx, "presence."+self.Team+"."+self.AgentID+"."+instance)
 		return err == nil
 	}
-	floor, ferr := seatAckFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", filters, liveLocal)
+	// The own subject resumes after this id's departed durables that read it
+	// (a combined one from before the split counts), the role subject after
+	// every durable of any id that reads it, live or departed. Both floors are
+	// read before either durable is created.
+	floor, ferr := ownSubjectFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", ownSubject, liveLocal)
 	localWhy := ""
 	if ferr != nil && floor == 0 {
 		localWhy = "listing this seat's local durables failed: " + ferr.Error()
+	}
+	var roleCfg jetstream.ConsumerConfig
+	var roleFloor uint64
+	roleWhy := ""
+	if b.self.Role != "" {
+		roleSubject := b.roleSubject(b.self.Workspace, b.self.Team, b.self.Role)
+		roleCfg = cfg
+		roleCfg.Durable = b.durableOf(true)
+		roleCfg.FilterSubject = roleSubject
+		var rerr error
+		roleFloor, _, rerr = roleSubjectFloor(ctx, js, "AGENT_INBOX", roleSubject)
+		if rerr != nil && roleFloor == 0 {
+			roleWhy = "listing the role subject's durables failed: " + rerr.Error()
+		}
 	}
 	baseCfg := cfg // a rebuild starts from this, with its own start sequence
 	if floor > 0 {
@@ -335,8 +362,26 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	}
 	b.consumer = cons
 	b.local = localState{cfg: baseCfg, acked: floor, checked: time.Now()}
+	var roleCons jetstream.Consumer
+	if b.self.Role != "" {
+		baseRole := roleCfg
+		if roleFloor > 0 {
+			roleCfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+			roleCfg.OptStartSeq = roleFloor + 1
+		}
+		roleCons, err = js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", roleCfg)
+		if err != nil {
+			nc.Close()
+			return nil, fmt.Errorf("role durable consumer: %w", err)
+		}
+		b.roleCons = roleCons
+		b.roleLocal = localState{cfg: baseRole, acked: roleFloor, checked: time.Now()}
+	}
 	b.armInherit(ctx)
 	b.noteResumed("local", floor, cons, localWhy, floorSource{})
+	if roleCons != nil {
+		b.noteResumed("local role", roleFloor, roleCons, roleWhy, floorSource{})
+	}
 	return b, nil
 }
 
@@ -1291,13 +1336,13 @@ func (b *Bus) refuseArgs(ctx context.Context, raw json.RawMessage, refusal error
 // A cancelled ctx ends the fetch at once. A message fetched after the cancel
 // is Nak'd, so it is redelivered rather than lost; one already acked is
 // returned, and its caller answers with it.
-func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, uint64, error) {
+func (b *Bus) receiveOn(ctx context.Context, role bool, timeout time.Duration) (*Envelope, uint64, error) {
 	deadline := time.Now().Add(timeout)
 	fctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	rebuilt := false
 	for {
-		msgs, err := fetchBy(fctx, b.cons(), deadline)
+		msgs, err := fetchBy(fctx, b.consOf(role), deadline)
 		if err = fetchErr(ctx, err); err != nil && ctx.Err() != nil {
 			return nil, 0, err
 		}
@@ -1306,7 +1351,7 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			// retried (director#269).
 			if !rebuilt {
 				rebuilt = true
-				if ok, rerr := b.recoverLocal(ctx, err); rerr != nil {
+				if ok, rerr := b.recoverLocalOn(ctx, role, err); rerr != nil {
 					return nil, 0, rerr
 				} else if ok {
 					continue
@@ -1335,6 +1380,9 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			if md, err := m.Metadata(); err == nil {
 				seq = md.Sequence.Stream
 			}
+			if role && (b.handled != nil || ackLaterFrom(ctx) != nil) {
+				b.noteRoleDelivered(seq) // acked later by sequence alone
+			}
 			if b.handled == nil {
 				if al := ackLaterFrom(ctx); al != nil {
 					// Held, not acked: callTool acks after the reply is written.
@@ -1345,7 +1393,7 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 					return &e, seq, nil
 				}
 				_ = m.Ack()
-				b.noteLocalAcked(seq)
+				b.noteAckedOn(role, seq)
 				if b.testAfterAck != nil {
 					b.testAfterAck(ctx)
 				}
@@ -1366,7 +1414,7 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			}
 			if !rebuilt {
 				rebuilt = true
-				if ok, rerr := b.recoverLocal(ctx, err); rerr != nil {
+				if ok, rerr := b.recoverLocalOn(ctx, role, err); rerr != nil {
 					return nil, 0, rerr
 				} else if ok {
 					continue
@@ -1380,13 +1428,50 @@ func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, ui
 			// durableCheckEvery.
 			if !skipped && !rebuilt {
 				rebuilt = true
-				if ok, rerr := b.recheckLocal(ctx); rerr != nil {
+				if ok, rerr := b.recheckLocalOn(ctx, role); rerr != nil {
 					return nil, 0, rerr
 				} else if ok && time.Until(deadline) > 0 {
 					continue
 				}
 			}
 			return nil, 0, nil // a clean empty, not an error
+		}
+	}
+}
+
+// receive is the long poll over this session's local durables. A seat with no
+// role has one, and this is the single fetch above. A role holder has two (own
+// subject and role subject), and the poll is cut into slices: each slice fetches
+// from the own durable for up to tierPollSlice, then takes a no-wait pull from
+// the role durable, and which of the two goes first alternates between calls.
+// Role mail therefore waits at most one slice behind an empty own poll. That is
+// a stated limit of reading two durables in one call.
+func (b *Bus) receive(ctx context.Context, timeout time.Duration) (*Envelope, uint64, error) {
+	if b.consOf(true) == nil {
+		return b.receiveOn(ctx, false, timeout)
+	}
+	deadline := time.Now().Add(timeout)
+	if b.roleTurn.Add(1)%2 == 0 {
+		if e, seq, err := b.receiveOn(ctx, true, 0); e != nil || err != nil {
+			return e, seq, err
+		}
+	}
+	for {
+		slice := time.Until(deadline)
+		if slice > tierPollSlice {
+			slice = tierPollSlice
+		}
+		if slice < 0 {
+			slice = 0
+		}
+		if e, seq, err := b.receiveOn(ctx, false, slice); e != nil || err != nil {
+			return e, seq, err
+		}
+		if e, seq, err := b.receiveOn(ctx, true, 0); e != nil || err != nil {
+			return e, seq, err
+		}
+		if time.Until(deadline) <= 0 {
+			return nil, 0, nil
 		}
 	}
 }
@@ -1829,6 +1914,11 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 			b.inheritTick(ctx, logf)
 			if _, rerr := b.recheckLocal(ctx); rerr != nil && logf != nil {
 				logf("local durable: %v", rerr)
+			}
+			if b.consOf(true) != nil {
+				if _, rerr := b.recheckLocalOn(ctx, true); rerr != nil && logf != nil {
+					logf("local role durable: %v", rerr)
+				}
 			}
 			// The cue watcher samples the pending counts every poll; without
 			// it the beat does, so every row's age is at most a beat stale.

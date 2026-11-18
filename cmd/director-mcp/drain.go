@@ -368,8 +368,22 @@ func (b *Bus) remainingRead(ctx context.Context) (out map[string]uint64, failed 
 	if al := ackLaterFrom(ctx); al != nil {
 		own = al.heldByTier()
 	}
-	if info, err := b.cons().Info(ctx); err == nil {
-		out["local"] = waitingAfter(info, own["local"])
+	// Both of a role holder's durables count, and the messages this call holds
+	// (in one durable or the other) come off the total, capped at what is
+	// ack-pending, as waitingAfter does for one.
+	var pending, ackPending uint64
+	localOK := true
+	for _, c := range b.localConsumers() {
+		info, err := c.Info(ctx)
+		if err != nil {
+			localOK = false
+			break
+		}
+		pending += info.NumPending
+		ackPending += uint64(info.NumAckPending)
+	}
+	if localOK {
+		out["local"] = pending + ackPending - min(own["local"], ackPending)
 	} else {
 		failed = append(failed, "local")
 	}
@@ -724,20 +738,72 @@ type summaryResult struct {
 	Rejected []handledEvent
 }
 
+// peekLocal peeks the local tier's waiting mail without acking: the own
+// subject's durable and, for a role holder, the role subject's, as one source.
+// A durable the broker no longer has is rebuilt once and read again
+// (director#269). The items come back oldest first and cut to limit; the
+// expected and maybe-consumed counts are not cut.
+func (b *Bus) peekLocal(ctx context.Context, limit int) (items []summaryItem, expected uint64, maybe int, err error) {
+	for _, role := range []bool{false, true} {
+		c := b.consOf(role)
+		if c == nil {
+			continue
+		}
+		it, exp, may, perr := peekWaiting(ctx, b.js, c, "local", limit)
+		if perr != nil {
+			if ok, rerr := b.recoverLocalOn(ctx, role, perr); rerr != nil {
+				perr = rerr
+			} else if ok {
+				it, exp, may, perr = peekWaiting(ctx, b.js, b.consOf(role), "local", limit)
+			}
+		}
+		if perr != nil {
+			return nil, 0, 0, perr
+		}
+		items = append(items, it...)
+		expected += exp
+		maybe += may
+	}
+	if b.consOf(true) != nil {
+		sort.SliceStable(items, func(i, j int) bool { return items[i].Seq < items[j].Seq })
+		if limit > 0 && len(items) > limit {
+			items = items[:limit]
+		}
+	}
+	return items, expected, maybe, nil
+}
+
+// peekLocalSources is peekLocal plus the inherited durable, for the cue's reads:
+// the oldest waiting message and the waiting list cover inherited mail as the
+// count does. Read-only; a failed inherited peek is left out and the own and role
+// reads stand.
+func (b *Bus) peekLocalSources(ctx context.Context, limit int) ([]summaryItem, uint64, int, error) {
+	items, exp, maybe, err := b.peekLocal(ctx, limit)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if ic, pred := b.inheritCons(); ic != nil {
+		if iitems, iexp, imaybe, ierr := peekWaiting(ctx, b.js, ic, "local", limit); ierr == nil {
+			for i := range iitems {
+				iitems[i].InheritedFrom = pred
+			}
+			items = append(items, iitems...)
+			exp += iexp
+			maybe += imaybe
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Seq < items[j].Seq })
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, exp, maybe, nil
+}
+
 // summarizeInbox reads what is waiting on both tiers and summarizes it. It
 // acks nothing.
 func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, error) {
 	res := summaryResult{Expected: map[string]uint64{}, Read: map[string]int{}, MaybeConsumed: map[string]int{}}
-	items, exp, maybe, err := peekWaiting(ctx, b.js, b.cons(), "local", limit)
-	if err != nil {
-		// A durable the broker no longer has is rebuilt once and the summary
-		// read again (director#269).
-		if ok, rerr := b.recoverLocal(ctx, err); rerr != nil {
-			err = rerr
-		} else if ok {
-			items, exp, maybe, err = peekWaiting(ctx, b.js, b.cons(), "local", limit)
-		}
-	}
+	items, exp, maybe, err := b.peekLocal(ctx, limit)
 	if err != nil {
 		return res, fmt.Errorf("local inbox summary: %w", err)
 	}
