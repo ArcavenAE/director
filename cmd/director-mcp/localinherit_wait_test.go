@@ -57,6 +57,12 @@ func TestADefaultSingleWaitReturnsTheInheritedMail(t *testing.T) {
 		if m["inherited_from"] != "pred" {
 			t.Errorf("wait %d: inherited_from = %v, want pred", i+1, m["inherited_from"])
 		}
+		if m["tier"] != "local" {
+			t.Errorf("wait %d: tier = %v, want local", i+1, m["tier"])
+		}
+		if w, ok := m["global_warning"]; ok {
+			t.Errorf("wait %d: a seat with the global tier off reports a global warning: %v", i+1, w)
+		}
 	}
 	if len(got) != 3 || got[0] != "p1" || got[1] != "p2" || got[2] != "p3" {
 		t.Errorf("single waits returned %v, want p1 p2 p3", got)
@@ -147,5 +153,38 @@ func TestOwnMailIsReturnedBeforeInheritedMailByASingleWait(t *testing.T) {
 	}
 	if len(got) < 1 || got[0] != "own1" {
 		t.Errorf("single waits returned %v, want own1 first", got)
+	}
+}
+
+// Inherited mail whose durable appears while a single wait is blocked is handed
+// over when that wait's poll times out, in that call.
+func TestASingleWaitThatBeganBeforeTheInheritanceReturnsTheInheritedMail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	pred := lineConnect(t, ctx, url, "pred", "", "")
+	pubEnv(t, ctx, js, lineInbox("pred"), "p1", "INFORM", "to the predecessor")
+	lineExit(t, ctx, pred)
+	succ := lineConnect(t, ctx, url, "succ", "", "pred")
+
+	type result struct {
+		out any
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := toolWait(ctx, succ, json.RawMessage(`{"timeout_seconds":4}`))
+		done <- result{out, err}
+	}()
+	time.Sleep(300 * time.Millisecond) // the wait is open and nothing is inherited yet
+	runHeartbeat(t, ctx, succ, 40*time.Millisecond)
+	r := <-done
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	m := r.out.(map[string]any)
+	if env, _ := m["message"].(*Envelope); env == nil || env.MessageID != "p1" || m["inherited_from"] != "pred" {
+		t.Errorf("the wait that began before the inheritance returned %v, want p1 marked inherited_from pred", m)
 	}
 }
