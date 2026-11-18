@@ -128,11 +128,13 @@ case "${1:-}" in
   prove) prove; exit 0 ;;
   status)
     # Prints what the standing hook prints: the same bytes, stderr, exit code and environment, because it
-    # runs the hook and does not copy it. The hook installed beside this launcher comes first; the
+    # runs the hook and does not copy it. The hook installed beside this launcher comes first, as
+    # invoked and then beside the resolved launcher (a user's own link to an install); the
     # checkout's copy is only the fallback. It takes no argument, so it never reaches the hook's `beat`
     # or `scan-beat`, which write stamps. It reads no seat file and no MCP config.
     [[ $# -eq 1 ]] || usage
     hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/standing-hook"
+    [[ -x "$hook" ]] || hook="$(cd "$(dirname "$src")" && pwd)/standing-hook"
     [[ -x "$hook" ]] || hook="$here/skills/director/scripts/standing-hook"
     [[ -x "$hook" ]] || stop "standing-hook not found; nothing was run"
     exec "$hook" ;;
