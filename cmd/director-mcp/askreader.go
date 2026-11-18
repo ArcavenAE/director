@@ -292,6 +292,7 @@ func (r *askReader) readAudit(ctx context.Context) {
 		rec := auditRec{Broker: b, Seq: seq, At: msg.Time, Refused: msg.Header.Get("Director-Outcome") == "refused"}
 		if n, err := strconv.ParseUint(msg.Header.Get("Director-Inbox-Seq"), 10, 64); err == nil {
 			rec.InboxSeq, rec.InboxSubject = n, msg.Header.Get("Director-Inbox-Subject")
+			rec.InboxStream = msg.Header.Get("Director-Inbox-Stream")
 		}
 		if json.Unmarshal(msg.Data, &rec.Env) != nil {
 			r.ledger.LastSeq[b] = seq // not an envelope: nothing to ledger
@@ -667,6 +668,8 @@ func runAskLookup(ctx context.Context, js jetstream.JetStream, cli cliArgs, out,
 		line := "delivery: " + res.Delivery.State + " (the inbox's own read, not a reply)"
 		if res.Delivery.Error != "" {
 			line = "delivery: unknown (" + res.Delivery.Error + ")"
+		} else if res.Delivery.Note != "" {
+			line = "delivery: " + res.Delivery.State + " (" + res.Delivery.Note + ")"
 		}
 		_, _ = fmt.Fprintln(out, line)
 	}
@@ -686,7 +689,7 @@ func (r *askReader) markExpired(ctx context.Context, now time.Time) {
 		if row.State != askSent || row.ExpiredUnread != "" || now.Sub(row.AskedAt) <= alarmAfter {
 			continue
 		}
-		if _, ok := r.ledger.Sends[row.Ask]; ok {
+		if sr, ok := r.ledger.Sends[row.Ask]; ok && inLocalInbox(sr) {
 			cand = append(cand, row)
 		}
 	}

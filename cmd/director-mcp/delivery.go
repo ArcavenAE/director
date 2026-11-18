@@ -10,10 +10,14 @@ import (
 // sendRec is one local send as the audit mirror recorded it: where the inbox
 // stream stored it. Seq is the inbox stream's own sequence, not the audit's.
 type sendRec struct {
-	Seq     uint64    `json:"seq"`
-	Subject string    `json:"subject"`
-	Perf    string    `json:"performative"`
-	At      time.Time `json:"at"`
+	Seq     uint64 `json:"seq"`
+	Subject string `json:"subject"`
+	// Stream is the stream Seq belongs to: empty for a record written before the
+	// header existed (always AGENT_INBOX), AGENT_INBOX for a local send, and the
+	// hub stream for a global one.
+	Stream string    `json:"stream,omitempty"`
+	Perf   string    `json:"performative"`
+	At     time.Time `json:"at"`
 }
 
 // sendKeep is how long a send record is kept: the inbox's max age plus a day,
@@ -68,12 +72,21 @@ func readsSubject(cfg jetstream.ConsumerConfig, subject string) bool {
 	return false
 }
 
+// inLocalInbox reports whether a send's sequence is AGENT_INBOX's own.
+func inLocalInbox(s sendRec) bool { return s.Stream == "" || s.Stream == "AGENT_INBOX" }
+
 // deliveryOf computes the delivery state of one send. Order matters: a covering
 // durable whose ack floor reached the send is a read, whatever the stream has
 // since dropped; otherwise a send below the stream's first sequence is expired
 // unread; otherwise no covering durable is no_reader and the rest is not yet
 // read.
 func deliveryOf(s sendRec, v inboxView) delivery {
+	if !inLocalInbox(s) {
+		// The sequence belongs to the hub's stream, and v is a read of AGENT_INBOX:
+		// comparing them would read a live send as expired unread. Reading the hub
+		// stream is a later change.
+		return delivery{State: deliveryUnknown, Note: "stored in " + s.Stream + ", which this check does not read"}
+	}
 	if v.Err != nil {
 		return delivery{State: deliveryUnknown, Error: v.Err.Error()}
 	}
