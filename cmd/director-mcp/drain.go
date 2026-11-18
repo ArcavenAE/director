@@ -501,6 +501,10 @@ type summaryItem struct {
 	Tier string
 	Seq  uint64
 	Env  *Envelope
+	// InheritedFrom names the predecessor whose mail this is, set on an item
+	// peeked from the inherited durable so a flag on it is not read as addressed
+	// to this seat.
+	InheritedFrom string
 }
 
 // flagged is a waiting message that likely needs an answer.
@@ -512,6 +516,8 @@ type flagged struct {
 	Performative string   `json:"performative"`
 	Reasons      []string `json:"reasons"`
 	Excerpt      string   `json:"excerpt"`
+	// InheritedFrom is set when the message is a predecessor's (localinherit.go).
+	InheritedFrom string `json:"inherited_from,omitempty"`
 }
 
 type inboxSummary struct {
@@ -602,6 +608,7 @@ func summarize(items []summaryItem) inboxSummary {
 				Tier: it.Tier, Sequence: it.Seq, MessageID: it.Env.MessageID,
 				Sender: senderLabel(it.Env), Performative: it.Env.Performative,
 				Reasons: why, Excerpt: excerpt(it.Env.Content.Data, 160),
+				InheritedFrom: it.InheritedFrom,
 			})
 		}
 	}
@@ -749,6 +756,10 @@ func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, err
 			res.Expected["inherited"], res.Read["inherited"] = iexp, len(iitems)
 			if imaybe > 0 {
 				res.MaybeConsumed["inherited"] = imaybe
+			}
+			_, ipred := b.inheritCons()
+			for i := range iitems {
+				iitems[i].InheritedFrom = ipred
 			}
 			all = append(all, iitems...)
 		}
