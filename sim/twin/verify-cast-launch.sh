@@ -485,6 +485,7 @@ while [[ "${1:-}" == -S || "${1:-}" == -L ]]; do shift 2; done
 case "${1:-}" in
   capture-pane) [[ -f "$FAKE/hang_capture" ]] && sleep 8
                 if [[ -f "$FAKE/late_dialog" && ! -f "$FAKE/slept" ]]; then touch "$FAKE/slept"; sleep 1.7; fi
+                [[ -f "$FAKE/slow_capture" && -f "$FAKE/keys" ]] && sleep 0.3
                 if [[ -f "$FAKE/pressed" ]]; then cat "$FAKE/after"; else cat "$FAKE/before"; fi ;;
   send-keys) echo "$*" >> "$FAKE/keys"; [[ -f "$FAKE/hang_press" ]] && sleep 30
              [[ -f "$FAKE/slow_press" ]] && sleep 0.6
@@ -566,6 +567,15 @@ hrun 5
 [[ "$hrc" == 3 && "$(nkeys)" == 1 && "$hout" == *"devch: dialog still shown after the press"* ]] \
   && ok "devch: a dialog that stays after the press is reported and never pressed twice" \
   || bad "devch: dialog stays" "rc=$hrc keys=$(nkeys) out=$hout"
+
+# the key is sent and the dialog stays, and a capture is slow once the wait ends: the
+# last capture of the wait is cut off by the time the wait has left, reads as empty,
+# and must not read as "the dialog is gone". Same words as the case above.
+hreset; good_dialog > "$fake/before"; : > "$fake/never_gone"; : > "$fake/slow_capture"
+hrun 5
+[[ "$hrc" == 3 && "$(nkeys)" == 1 && "$hout" == *"devch: dialog still shown after the press"* ]] \
+  && ok "devch: a slow last capture does not turn a dialog that stays into one that went" \
+  || bad "devch: dialog stays, slow last capture" "rc=$hrc keys=$(nkeys) out=$hout"
 
 # the dialog goes but no composer appears: reported, exit 3
 hreset; good_dialog > "$fake/before"; printf '%s\n' ' starting up' > "$fake/after"
