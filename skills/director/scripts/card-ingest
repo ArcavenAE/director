@@ -624,9 +624,14 @@ def cmd_check(a):
             os.fsync(f.fileno())
         # The Desk outbox (S13): one applied line per slug, only for a batch parse put in cards.jsonl. A backfill
         # batch, or one parsed before the outbox existed, has no cards line to compare with, so it adds none.
-        if any(r.get("batch") == bname for r in read_jsonl(CARDS)[0]):
-            now_s = now()
-            append_lines(APPLIED, [{"at": now_s, "slug": s, "batch": bname, "result": r, "data_sha256": d} for s, r, d in results])
+        # An outbox that cannot be read or written is named on one line and changes nothing else: check's exit
+        # code is for the slugs alone, and the log line above is already down.
+        try:
+            if any(r.get("batch") == bname for r in read_jsonl(CARDS)[0]):
+                now_s = now()
+                append_lines(APPLIED, [{"at": now_s, "slug": s, "batch": bname, "result": r, "data_sha256": d} for s, r, d in results])
+        except (OSError, Refused) as err:
+            print(f"outbox not written: {getattr(err, 'strerror', None) or err}", file=sys.stderr)
     if bad:
         raise SystemExit(1)
 

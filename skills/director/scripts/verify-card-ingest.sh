@@ -937,6 +937,30 @@ elif ! grep -q '^NO-CARD rpt-9' "$root/out"; then bad "reconcile_reports_no_card
 elif ! grep -q '^CONFLICT rpt-1' "$root/out"; then bad "reconcile_reports_no_card_and_conflict" "no CONFLICT line for rpt-1: $(cat "$root/out")"
 else ok "reconcile_reports_no_card_and_conflict"; fi
 if [[ -f "$(DESK_CARDS)" && "$snap_c" == "$(shasum -a 256 <"$(DESK_CARDS)")" && "$snap_a" == "$(shasum -a 256 <"$(DESK_APPLIED)")" ]]; then ok "reconcile_never_repairs"; else bad "reconcile_never_repairs" "cards.jsonl or applied.jsonl is missing or changed after a reconcile"; fi
+# check's exit code is for the slugs alone: an outbox that cannot be read or written is named on one line and does not
+# change it, and the old log still gets its checked line (kinu review low1 on director#699).
+s13_state 5
+run "$two" >/dev/null 2>&1
+B="$(batch_json)"
+mkdir -p "$(DESK_APPLIED)"   # a directory where the file goes: open for append fails with EISDIR
+rc=0; "$CI" check --batch "$B" --read "$root/s13-read-ok.json" >"$root/out" 2>&1 || rc=$?
+if [[ $rc -ne 0 ]]; then bad "check_survives_an_unwritable_applied_jsonl" "exit $rc on a matching read: $(tail -3 "$root/out")"
+elif grep -q Traceback "$root/out"; then bad "check_survives_an_unwritable_applied_jsonl" "traceback: $(tail -3 "$root/out")"
+elif [[ "$(grep -c '^outbox not written: ' "$root/out")" != 1 ]]; then bad "check_survives_an_unwritable_applied_jsonl" "want one 'outbox not written: <reason>' line: $(cat "$root/out")"
+elif ! tail -1 "$LOG" | grep -q '"checked"'; then bad "check_survives_an_unwritable_applied_jsonl" "no checked line in card-ingest.jsonl"
+else ok "check_survives_an_unwritable_applied_jsonl"; fi
+rc=0; "$CI" check --batch "$B" --read "$root/s13-read-bad.json" >"$root/out" 2>&1 || rc=$?
+if [[ $rc -eq 1 ]] && grep -q '^MISMATCH rpt-2 options' "$root/out" && grep -q '^outbox not written: ' "$root/out" && ! grep -q Traceback "$root/out"; then ok "check_keeps_its_mismatch_exit_when_the_outbox_fails"
+else bad "check_keeps_its_mismatch_exit_when_the_outbox_fails" "rc=$rc: $(tail -4 "$root/out")"; fi
+s13_state 6
+run "$two" >/dev/null 2>&1
+B="$(batch_json)"
+chmod 000 "$(DESK_CARDS)"   # present and unreadable: the outbox read raises, and check must not take its exit from it
+rc=0; "$CI" check --batch "$B" --read "$root/s13-read-ok.json" >"$root/out" 2>&1 || rc=$?
+chmod 644 "$(DESK_CARDS)"
+if [[ $rc -ne 0 ]]; then bad "check_survives_an_unreadable_cards_jsonl" "exit $rc on a matching read: $(tail -3 "$root/out")"
+elif [[ "$(grep -c '^outbox not written: ' "$root/out")" != 1 ]]; then bad "check_survives_an_unreadable_cards_jsonl" "want one 'outbox not written: <reason>' line: $(cat "$root/out")"
+else ok "check_survives_an_unreadable_cards_jsonl"; fi
 export DIRECTOR_STATE="$saved_s13_state"
 BATCHDIR="$DIRECTOR_STATE/card-ingest"; LOG="$DIRECTOR_STATE/card-ingest.jsonl"
 
