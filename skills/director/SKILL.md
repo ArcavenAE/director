@@ -81,7 +81,7 @@ when the notes have accumulated. Say which mode you are in, once, at the start.
 
 ## Mode: sweep
 
-The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `freebusy`, `idle-shadow`, `sweep-firings`, `board-html`, `card-ingest`, `composer-check`, `dash-writer`, `desk-snapshot`, `director-session`, `introspect`, `nav-sync`, `page-namespace`, `relay-log`, `route-ledger`, `schedule-ack`, `shelf-row`, `standing-hook`, `unattached`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
+The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `freebusy`, `idle-shadow`, `sweep-firings`, `board-html`, `card-ingest`, `composer-check`, `dash-writer`, `desk-snapshot`, `director-session`, `introspect`, `nav-sync`, `page-namespace`, `relay-log`, `route-ledger`, `schedule-ack`, `shelf-row`, `standing-hook`, `unattached`, `never-polled`) are installed by `install.sh` into `${DIRECTOR_HOME:-$HOME/.director}/bin/`. Run them from there, and fall back to the checkout's `skills/director/scripts/<name>` only when the installed copy is missing.
 
 1. Run `${DIRECTOR_HOME:-$HOME/.director}/bin/dsi`. It writes `$DIRECTOR_STATE/sessions.json` (props) and
    `roster.md` (scenery). Defaults to `~/.director/state`, 4-day window.
@@ -144,6 +144,12 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    count line. Show its lines under `Unattached:` as printed. A `- GAP` line means it could not read something, or that another
    host is listed and cannot be read yet, or that no host list is set so only this host was read; show it, never read it as zero. It exits 0 on every reading. A line is a fact for a
    person to look at: killing the process is never this step's job.
+   Then run `${DIRECTOR_HOME:-$HOME/.director}/bin/never-polled` (read only: it sends and writes nothing). It reads
+   `director-mcp roster --json` and prints one `connected, never polled: <agent> (<instance>) catching-up for <N>m, 0 waiting`
+   line for each seat that has been catching-up for more than 10 minutes with nothing waiting: the seat connected and has not
+   called `wait_for_message`, so no doorbell fires for it, because nothing is unread. Show its lines under `Uncaptured:` as
+   printed. It prints nothing when no seat qualifies. A seat on an older shim has no `waiting` or `connected_at` and is never
+   listed. The line surfaces the seat; it does not fix it.
 4. Present, in this shape and no other:
 
 ```

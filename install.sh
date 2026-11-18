@@ -103,6 +103,8 @@ install_one "$SRC/skills/director/scripts/nav-sync" "$DIRECTOR_HOME/bin/nav-sync
 install_one "$SRC/skills/director/scripts/introspect" "$DIRECTOR_HOME/bin/introspect"
 # unattached lists agent processes on this host that no marvel owns (read-only); the sweep runs it beside introspect.
 install_one "$SRC/skills/director/scripts/unattached" "$DIRECTOR_HOME/bin/unattached"
+# never-polled lists seats that connected and never called wait_for_message (read-only); the sweep runs it after unattached.
+install_one "$SRC/skills/director/scripts/never-polled" "$DIRECTOR_HOME/bin/never-polled"
 # composer-check looks at a pane before an inject that ends in Enter; standing-hook prints the drain age before each answer.
 # SKILL.md tells the session to run both by name, so a host without them cannot follow it.
 install_one "$SRC/skills/director/scripts/composer-check" "$DIRECTOR_HOME/bin/composer-check"

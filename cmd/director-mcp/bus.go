@@ -132,6 +132,10 @@ type Bus struct {
 	// inh is the lineage state: the predecessor, the trigger and the inherited
 	// durable (localinherit.go).
 	inh inheritState
+	// catchup is the catching-up presence state (catchup.go); connectedAt is when
+	// this session connected, written to the presence row.
+	catchup     catchupState
+	connectedAt time.Time
 	// lookup is a test seam for the broker lookup of the local durable; nil in
 	// production (localrecover.go lookupLocal).
 	lookup func(ctx context.Context, durable string) error
@@ -282,7 +286,7 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 		nc.Close()
 		return nil, herr
 	}
-	b := &Bus{violations: ring, nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), pidspace: thisPidspace(), state: "idle", globalCfg: gcfg, handled: h}
+	b := &Bus{violations: ring, nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), pidspace: thisPidspace(), state: stateCatchingUp, connectedAt: time.Now(), globalCfg: gcfg, handled: h}
 	if h != nil {
 		h.streamOf = b.streamFor
 		h.onAck = b.noteTierAcked
@@ -1718,6 +1722,9 @@ func tierOf(e *Envelope, tier string) string {
 // presence on its own broker, so the global failure comes back as a warning
 // for the caller to see rather than an error that hides the local success.
 func (b *Bus) setPresence(ctx context.Context, state string) (globalWarn string, err error) {
+	if b.holdRequestedState(state) {
+		state = stateCatchingUp
+	}
 	b.stateMu.Lock()
 	b.state = state
 	b.stateMu.Unlock()
@@ -1731,7 +1738,7 @@ func (b *Bus) setPresence(ctx context.Context, state string) (globalWarn string,
 // announce writes the first presence row at connect and, when it landed, sends
 // the first bus beat so the grace before the first beat ends at once.
 func (b *Bus) announce(ctx context.Context) (globalWarn string, err error) {
-	globalWarn, err = b.setPresence(ctx, "idle")
+	globalWarn, err = b.setPresence(ctx, stateCatchingUp)
 	if err == nil {
 		b.beat.send(ctx)
 	}
@@ -1787,11 +1794,25 @@ type presenceView struct {
 	cue       string
 	cueReason string
 	durable   durableSummary
+	// connectedAt is when the session connected; waiting is the count across its
+	// sources, set only while it is catching up (catchup.go).
+	connectedAt string
+	waiting     *uint64
 }
 
 func (b *Bus) presenceView(ctx context.Context) presenceView {
 	age, tier := b.pending.oldest(time.Now())
-	v := presenceView{oldestS: int64(age / time.Second), durable: b.durableSummary()}
+	v := presenceView{oldestS: int64(age / time.Second), durable: b.durableSummary(), connectedAt: b.connectedAtText()}
+	if b.catchingUp() {
+		// Bounded like the tracker's reads (streamReadTimeout), so a silent
+		// consumer cannot stall the row. It reads consumer state and marks no
+		// tracker sample: the first sample is the heartbeat's or the cue's.
+		rctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
+		if n, ok := b.waitingNow(rctx); ok {
+			v.waiting = &n
+		}
+		cancel()
+	}
 	if b.cueState == nil {
 		return v
 	}
@@ -1830,6 +1851,10 @@ func (b *Bus) durableSummary() durableSummary {
 // fields puts the view into a presence record.
 func (v presenceView) fields(rec map[string]any) {
 	rec["oldest_pending_s"] = v.oldestS
+	rec["connected_at"] = v.connectedAt
+	if v.waiting != nil {
+		rec["waiting"] = *v.waiting
+	}
 	// Only once a durable has been lost: a healthy seat's row is unchanged, and a
 	// reader treats the fields' absence as present (or a shim older than P6).
 	if v.durable.State != "" && v.durable.State != durablePresent {
@@ -1912,6 +1937,7 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 			// A seat that has stopped polling still asks the broker whether its
 			// local durable exists, at the poll path's own rate (director#269).
 			b.inheritTick(ctx, logf)
+			b.evalCatchup(ctx)
 			if _, rerr := b.recheckLocal(ctx); rerr != nil && logf != nil {
 				logf("local durable: %v", rerr)
 			}
