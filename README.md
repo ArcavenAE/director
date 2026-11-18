@@ -347,12 +347,28 @@ prints.
 tick, so a start adds no context). `scripts/standing-hook` in the tree is a link to the real script.
 `--seen` stamps `$DIRECTOR_STATE/hook-seen`; a plain run of the hook writes nothing, so a hook wired
 through settings behaves exactly as it did. Load the tree for one session with
-`scripts/director start --plugin-dir plugin/director`. Without the flag `start` hands claude the same
-arguments as before, and nothing defaults to the tree. Installing the tree with director-install is a
-later slice. `claude plugin validate plugin/director` checks it with no model call; set
+`scripts/director start --plugin-dir plugin/director`. `claude plugin validate plugin/director` checks it with no model call; set
 `DISABLE_TELEMETRY=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `DISABLE_AUTOUPDATER=1` for it
 (measured with all three set), or it tries first-party telemetry. `skills/director/scripts/verify-plugin-hooks.sh` runs it when claude is on PATH
 and skips it otherwise; CI has no claude, so there the structural cases carry the check.
+
+**Installing the plugin.** `director-install plugin [--ref REF]` installs the tree into
+`$DIRECTOR_HOME/lib/plugin/<sha>/` and points `$DIRECTOR_HOME/lib/plugin/current` at it, and
+`director-install plugin --rollback` switches back to the previous version. A version holds the tree
+with the link's target copied (`scripts/standing-hook` is a regular file) and, beside it, the loop
+scripts that must sit next to the hook to run from inside a version: `dws`, `dbi`, `director-tick`,
+`director-profile`, `board-html` and `page-namespace`. The copies `install.sh` puts in
+`$DIRECTOR_HOME/bin` are outside every version and are never what the plugin runs, so a rollback
+restores the hook together with the tree. A check runs on the staged copy before anything is
+switched, a `current` that the installer did not make is left alone, and `director-install --status`
+gains a `plugin:` line that says `not installed` when it is.
+
+Running that install is the opt-in to the plugin as the default: once `current` exists, `director start`
+passes `--plugin-dir` at it, an explicit `--plugin-dir PATH` wins, and `--no-plugin` skips it (the two
+together are a usage error). A `current` that is not a directory, a dangling link say, is skipped with a
+`WARN:` line on stderr and the start goes ahead. Without `current`, `start` hands claude the same
+arguments as before. Once the plugin is installed, every `director start` loads the hook, and its
+SessionStart loop line adds a line of context to every session that has a tick.
 
 **Prove the launcher, then clear the old entry.** Earlier setups left a
 project-local `director-mcp` entry for the aae-orc folder in

@@ -12,6 +12,9 @@
 #   director-install skills [--ref REF]        install the director and stansfield skills and
 #                                              the director command at REF (default origin/main)
 #   director-install skills --rollback         switch the skills back to the previous install
+#   director-install plugin [--ref REF]        install the director plugin tree and the loop scripts it
+#                                              runs, in one per-version directory (default origin/main)
+#   director-install plugin --rollback         switch the plugin back to the previous install
 #   director-install --status                  what is installed and how far behind
 #   director-install -h | --help
 #
@@ -99,7 +102,7 @@ MLIB="$DIRECTOR_HOME/lib/director-mcp"
 MLINK="$BIN/director-mcp"
 
 die() { echo "director-install: $*" >&2; exit 1; }
-usage() { sed -n '5,15p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '5,18p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Create the mirror on first use; fetch it otherwise.
 sync_mirror() {
@@ -280,6 +283,128 @@ rollback_skills() {
   [[ -n "$prev" && -d "$SLIB/$prev" ]] || die "no previous skills install to roll back to"
   switch_skills "$prev"
   echo "director-install: skills rolled back -> $prev"
+}
+
+# --- the plugin, and the loop scripts it runs (standing loop S10) -------------
+# The director plugin tree (plugin/director in the repo) installs like the skills: a versioned copy made with git
+# archive under $DIRECTOR_HOME/lib/plugin/<sha>/, a check run on the staged copy before anything is switched, an
+# atomic switch of one link, $DIRECTOR_HOME/lib/plugin/current, and a --rollback. What a version holds is the
+# tree with the link's TARGET copied (scripts/standing-hook is a regular file, never a link out of the tree), and
+# beside it the loop scripts that must sit next to the hook to run from inside a version: dws, dbi,
+# director-tick, director-profile, and the two helpers dws launches by sibling path (board-html,
+# page-namespace). install.sh's copies in $DIRECTOR_HOME/bin sit outside every version; the plugin never runs
+# them, so a rollback restores the hook with the tree. `director start` loads `current` by default when it
+# exists, so running this install is the opt-in. Nothing here deletes a version.
+PLIB="$DIRECTOR_HOME/lib/plugin"
+PLINK="$PLIB/current"
+PLUGIN_LOOP_SCRIPTS="standing-hook dws dbi director-tick director-profile board-html page-namespace"
+
+# The sha the plugin link points at when this installer made it, or empty.
+current_plugin() {
+  local t
+  t="$(readlink "$PLINK" 2>/dev/null)" || return 0
+  [[ "$t" == "$PLIB"/* && "$(dirname "$t")" == "$PLIB" ]] || return 0
+  basename "$t"
+}
+
+# Anything at current that this installer did not make is left exactly as it is.
+refuse_foreign_plugin_link() {
+  [[ -e "$PLINK" || -L "$PLINK" ]] || return 0
+  [[ -n "$(current_plugin)" ]] && return 0
+  die "$PLINK was not installed by director-install; left untouched and nothing was switched. Move it aside to install the plugin from a commit."
+}
+
+switch_plugin() {
+  local sha="$1" prev tmp
+  prev="$(current_plugin)"
+  mkdir -p "$PLIB"
+  tmp="$PLIB/.current.new.$$"
+  ln -sfn "$PLIB/$sha" "$tmp"
+  # rename(2), not mv: mv -f onto a symlink that points at a directory moves the new link into that directory.
+  perl -e 'rename($ARGV[0], $ARGV[1]) or die "rename: $!\n"' "$tmp" "$PLINK"
+  if [[ -n "$prev" && "$prev" != "$sha" ]]; then
+    printf '%s\n' "$prev" > "$PLIB/.previous.new.$$"
+    mv -f "$PLIB/.previous.new.$$" "$PLIB/.previous"
+  fi
+}
+
+# What a plugin install must hold. Prints the first thing missing, if any. It runs the staged hook once, read only,
+# against an empty state directory: no claude, no network, no write outside the stage.
+plugin_check() {
+  local dir="$1" f s st
+  [[ -f "$dir/.claude-plugin/plugin.json" ]] || { echo ".claude-plugin/plugin.json is missing"; return 1; }
+  grep -Eq '"name"[[:space:]]*:[[:space:]]*"director"' "$dir/.claude-plugin/plugin.json" || { echo ".claude-plugin/plugin.json does not name the plugin director"; return 1; }
+  f="$dir/hooks/hooks.json"
+  [[ -f "$f" ]] || { echo "hooks/hooks.json is missing"; return 1; }
+  for s in UserPromptSubmit SessionStart scripts/standing-hook; do
+    grep -q "$s" "$f" || { echo "hooks/hooks.json does not name $s"; return 1; }
+  done
+  for s in $PLUGIN_LOOP_SCRIPTS; do
+    [[ -f "$dir/scripts/$s" && ! -L "$dir/scripts/$s" ]] || { echo "scripts/$s is missing or is a link"; return 1; }
+    [[ -x "$dir/scripts/$s" ]] || { echo "scripts/$s is not executable"; return 1; }
+  done
+  st="$(mktemp -d "$dir/.check-state.XXXXXX")"
+  if ! DIRECTOR_STATE="$st" "$dir/scripts/standing-hook" --loop-line >/dev/null 2>&1; then
+    rm -rf "$st"; echo "the staged hook does not run (standing-hook --loop-line)"; return 1
+  fi
+  rm -rf "$st"
+  return 0
+}
+
+install_plugin() {
+  local ref="$1" sha stage why s
+  refuse_foreign_plugin_link
+  sync_mirror
+  sha="$(resolve "$ref")"
+  if ! git -C "$MIRROR" cat-file -e "$sha:plugin/director/hooks/hooks.json" 2>/dev/null; then
+    echo "director-install: plugin check failed for $ref ($sha): plugin/director/hooks/hooks.json is missing; nothing was switched." >&2
+    exit 1
+  fi
+  mkdir -p "$PLIB"
+  if [[ ! -d "$PLIB/$sha" ]]; then
+    stage="$(mktemp -d "$PLIB/.stage.XXXXXX")"
+    trap 'rm -rf "$stage"' EXIT
+    mkdir -p "$stage/src" "$stage/tree"
+    if ! git -C "$MIRROR" archive "$sha" plugin/director skills/director/scripts 2>"$stage/archive.err" | tar -x -C "$stage/src" 2>>"$stage/archive.err"; then
+      why="$(head -c 400 "$stage/archive.err" 2>/dev/null | tr '\n' ' ')"
+      echo "director-install: plugin archive failed for $ref ($sha): ${why:-no error text from git or tar}; nothing was switched." >&2
+      exit 1
+    fi
+    # The tree with links dereferenced: the link's target is copied, not the link.
+    cp -RL "$stage/src/plugin/director/." "$stage/tree/"
+    mkdir -p "$stage/tree/scripts"
+    for s in $PLUGIN_LOOP_SCRIPTS; do
+      [[ -f "$stage/src/skills/director/scripts/$s" ]] || { echo "director-install: plugin check failed for $ref ($sha): skills/director/scripts/$s is missing; nothing was switched." >&2; exit 1; }
+      cp -p "$stage/src/skills/director/scripts/$s" "$stage/tree/scripts/$s"
+    done
+    if ! why="$(plugin_check "$stage/tree")"; then
+      echo "director-install: plugin check failed for $ref ($sha): $why; nothing was switched." >&2
+      exit 1
+    fi
+    {
+      echo "sha=$sha"
+      echo "ref=$ref"
+      echo "source=$(git -C "$MIRROR" config --get remote.origin.url)"
+      echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$stage/tree/STAMP"
+    mv "$stage/tree" "$PLIB/$sha"
+    rm -rf "$stage"
+    trap - EXIT
+    echo "director-install: checked $sha (plugin director; scripts $PLUGIN_LOOP_SCRIPTS)"
+  else
+    echo "director-install: $sha is already installed and checked"
+  fi
+  switch_plugin "$sha"
+  echo "director-install: plugin -> $sha ($ref)"
+}
+
+rollback_plugin() {
+  local prev
+  refuse_foreign_plugin_link
+  prev="$(cat "$PLIB/.previous" 2>/dev/null || true)"
+  [[ -n "$prev" && -d "$PLIB/$prev" ]] || die "no previous plugin install to roll back to"
+  switch_plugin "$prev"
+  echo "director-install: plugin rolled back -> $prev"
 }
 
 # --- director-mcp, the shim --------------------------------------------------
@@ -587,6 +712,26 @@ status() {
       echo "skills: ${ksha:0:12} installed ${kinst:-?}; lag unknown (no mirror, or main not in it)"
     fi
   fi
+  local psha pinst pbehind pnotmain pmrc
+  psha="$(current_plugin)"
+  if [[ -z "$psha" ]]; then
+    if [[ -e "$PLINK" || -L "$PLINK" ]]; then
+      echo "WARN: $PLINK was not installed by director-install; install: director-install plugin --ref origin/main"
+    else
+      echo "plugin: not installed (install: director-install plugin --ref origin/main)"
+    fi
+  else
+    pinst="$(sed -n 's/^installed_at=//p' "$PLIB/$psha/STAMP" 2>/dev/null)"
+    if [[ -d "$MIRROR" ]] && pbehind="$(git -C "$MIRROR" rev-list --count "$psha..refs/heads/main" -- plugin skills/director/scripts 2>/dev/null)"; then
+      pnotmain=""
+      pmrc=0
+      git -C "$MIRROR" merge-base --is-ancestor "$psha" refs/heads/main 2>/dev/null || pmrc=$?
+      [[ "$pmrc" == 1 ]] && pnotmain="; WARN: this sha is not on main"
+      echo "plugin: ${psha:0:12} installed ${pinst:-?}; $pbehind plugin/ and skills/director/scripts/ commits behind main$pnotmain"
+    else
+      echo "plugin: ${psha:0:12} installed ${pinst:-?}; lag unknown (no mirror, or main not in it)"
+    fi
+  fi
   local msha
   msha="$(current_mcp)"
   if [[ -n "$msha" ]]; then
@@ -658,6 +803,19 @@ case "${1:-}" in
       shift
     done
     if [[ "$action" == rollback ]]; then rollback_skills; else install_skills "$ref"; fi
+    ;;
+  plugin)
+    shift
+    ref="origin/main" action=install
+    while (($#)); do
+      case "$1" in
+        --ref) [[ $# -ge 2 ]] || die "--ref needs a value"; ref="$2"; shift ;;
+        --rollback) action=rollback ;;
+        *) die "unknown argument: $1" ;;
+      esac
+      shift
+    done
+    if [[ "$action" == rollback ]]; then rollback_plugin; else install_plugin "$ref"; fi
     ;;
   --status) status || true; exit 0 ;;
   -h|--help) usage ;;
