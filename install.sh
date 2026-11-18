@@ -134,7 +134,7 @@ if [ -L "$STATE/idea-roots.conf" ]; then
   REFUSED+=("$STATE/idea-roots.conf")
 elif [ ! -e "$STATE/idea-roots.conf" ]; then
   cp "$SRC/skills/director/idea-roots.conf" "$STATE/idea-roots.conf"
-  echo "  $STATE/idea-roots.conf (default roots, edit freely)"
+  echo "  $STATE/idea-roots.conf (no roots yet: add one path or glob per line, then run dbi)"
 fi
 echo "state root: $STATE  (operational; never committed)"
 if [ "${#REFUSED[@]}" -gt 0 ]; then
