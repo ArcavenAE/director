@@ -156,3 +156,67 @@ func TestAnOwnMessageMarkedHandledMovesTheOwnCounter(t *testing.T) {
 		t.Errorf("the own durable's acked counter = %d after its own message at sequence 1 was marked handled, want 1", got)
 	}
 }
+
+// Review of #688, Medium 1. In the handled mode a message whose id is already in
+// the ledger (a predecessor recorded it, then stopped before the ack) is acked by
+// settle at once and not returned, so the sequence is never noted as inherited
+// before that ack runs. The ack must still credit no counter of the own durable.
+func TestAnInheritedMessageAlreadyInTheLedgerDoesNotMoveTheOwnCounter(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	succ := inheritedFixture(t, ctx, true)
+
+	rec := handledEvent{
+		At: time.Now().UTC().Format(time.RFC3339), Tier: "local", Stream: succ.handled.streamOf("local"),
+		Seq: 2, MessageID: "p1", Disposition: "handled",
+	}
+	if _, err := succ.handled.ledger.record(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	var res batchResult
+	succ.drainInherited(ctx, 1, &res)
+	if len(res.Items) != 0 {
+		t.Fatalf("setup: the recorded inherited message was returned: %+v", res.Items)
+	}
+	// settle acked it on the pull; wait until the inherited durable holds nothing.
+	if !waitFor(5*time.Second, func() bool {
+		cons, _ := succ.inheritCons()
+		if cons == nil {
+			return false
+		}
+		info, err := cons.Info(ctx)
+		return err == nil && info.NumAckPending == 0 && info.NumPending == 0
+	}) {
+		t.Fatal("setup: the inherited message was not acked by the drain")
+	}
+
+	if got := ownCounter(succ); got != 0 {
+		t.Errorf("the own durable's acked counter = %d after a ledger-recorded inherited message at sequence 2 was acked, want 0", got)
+	}
+	if start, _ := succ.localRestartSeq(false); start > 1 {
+		t.Errorf("a rebuilt own durable would start at sequence %d, past the unread own mail at sequence 1", start)
+	}
+}
+
+// Review of #688, nit. An acked inherited sequence also leaves the role
+// counter alone; no role holder is needed to read it.
+func TestAnInheritedAckLeavesTheRoleCounterAlone(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	succ := inheritedFixture(t, ctx, false)
+
+	wctx, al := withAckLater(ctx)
+	var res batchResult
+	succ.drainInherited(wctx, 1, &res)
+	if len(res.Items) != 1 {
+		t.Fatalf("setup: the inherited drain gave %d items", len(res.Items))
+	}
+	al.ack(succ, t.Logf)
+	succ.localMu.Lock()
+	got := succ.roleLocal.acked
+	succ.localMu.Unlock()
+	if got != 0 {
+		t.Errorf("the role counter = %d after an inherited message was acked, want 0", got)
+	}
+}
