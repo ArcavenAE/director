@@ -63,6 +63,15 @@ It prints nothing at 0 and nothing with no loop-status.json, and `UNKNOWN (<reas
 reads ($RELAY_LOG, else the checkout's sim/notes/relay-log.md) cannot be read. It reads that one file and
 starts no subprocess.
 
+With a desk/cards.jsonl under the state directory (S13), one more line follows the relays line: batches that
+`card-ingest parse` appended to it and that desk/applied.jsonl, written by `card-ingest check`, names no line for:
+
+  card batches parsed and never checked: <n> (oldest <batch file>)
+
+It prints nothing at 0 and nothing with no cards.jsonl, and it does not need loop-status.json. A batch counts as
+checked once any applied line names it, a MISMATCH included. It prints `UNKNOWN (<reason>)` when either file
+cannot be read. It reads those two files and starts no subprocess.
+
 One more line follows, last, only when something waits:
 
   waiting: <n> Desk answers not relayed (oldest <age>, ids <ids>); <m> approved PRs not merged (oldest <age>); Desk read <age> ago
@@ -515,6 +524,53 @@ def card_line():
     return f"{CARD_PREFIX}{len(missing)} (oldest R-{min(missing)[1]})"
 
 
+BATCH_PREFIX = "card batches parsed and never checked: "
+
+
+def batch_line():
+    """The batches-parsed-and-never-checked line (S13, design section 6): batches that desk/cards.jsonl holds and
+    desk/applied.jsonl names no line for. Gated on cards.jsonl existing, silent at 0, UNKNOWN when either file
+    cannot be read. It reads two files and starts no subprocess."""
+    cards_path = os.path.join(state_dir(), "desk", "cards.jsonl")
+    if not os.path.exists(cards_path):
+        return None
+
+    def rows(path):
+        out = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                for n, l in enumerate(f, 1):
+                    if not l.strip():
+                        continue
+                    try:
+                        e = json.loads(l)
+                    except ValueError:
+                        e = None
+                    if not isinstance(e, dict):
+                        raise ValueError(f"line {n} is not a JSON object")
+                    out.append(e)
+        except FileNotFoundError:
+            return []
+        return out
+
+    try:
+        cards = rows(cards_path)
+        applied = rows(os.path.join(state_dir(), "desk", "applied.jsonl"))
+    except (OSError, UnicodeDecodeError, ValueError) as err:
+        why = getattr(err, "strerror", None) or str(err) or type(err).__name__
+        return f"{BATCH_PREFIX}UNKNOWN (desk outbox unreadable: {why})"
+    checked = {r.get("batch") for r in applied}
+    first = {}
+    for r in cards:
+        b = r.get("batch")
+        if isinstance(b, str) and b not in checked:
+            first[b] = min(first.get(b, "~"), str(r.get("at", "")))
+    if not first:
+        return None
+    oldest = min(first, key=lambda b: (first[b], b))
+    return f"{BATCH_PREFIX}{len(first)} (oldest {oldest})"
+
+
 INBOX_PREFIX = "director inbox: "
 DEFAULT_PENDING_BOUND = 600.0  # twice the cue's 300 s window (cue.go defaultPendingAgeBound)
 _GO_UNITS = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
@@ -626,6 +682,9 @@ def main():
     if line:
         print(line)
     line = card_line()
+    if line:
+        print(line)
+    line = batch_line()
     if line:
         print(line)
     line = inbox_line()
