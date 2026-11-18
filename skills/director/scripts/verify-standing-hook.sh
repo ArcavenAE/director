@@ -244,8 +244,8 @@ done
 # Read from $DIRECTOR_STATE/loop-status.json (director-tick), digest.md and workstreams.jsonl (mtimes). Every
 # clause is gated on loop-status.json existing: with no status file the output is byte-identical to a hook that
 # knows nothing of the loop, which is what every install without a tick sees. The hook stays read-only and
-# starts no new subprocess. Deferred, and not tested here: relayed asks with no card (slice 11), batches parsed
-# and never checked (slice 13), and "beat broken" (no drain record is named yet).
+# starts no new subprocess. Deferred, and not tested here: batches parsed and never checked (slice 13), and
+# "beat broken" (no drain record is named yet). The relays-with-no-card clause (slice 11) is tested at the end of this section.
 ago() { python3 -I -c 'import datetime as d,sys;print((d.datetime.now(d.timezone.utc)-d.timedelta(minutes=float(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1"; }
 touch_ago() { python3 -I -c 'import os,sys,time;t=time.time()-float(sys.argv[2])*60;os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
 saved_state="$DIRECTOR_STATE"
@@ -443,6 +443,44 @@ printf 'not json\n' >"$seen_state/loop-status.json"
 PATH="$fakes:$PATH" "$H" --loop-line >"$root/ll5.out" 2>/dev/null || true
 [[ "$(cat "$root/ll5.out")" == "loop: UNKNOWN (loop-status.json unreadable)" ]] \
   && ok "--loop-line with an unreadable status prints the UNKNOWN line, as the full hook does" || bad "--loop-line with a bad status" "$(cat "$root/ll5.out")"
+# --- S11: relays asking the operator to decide with no card (aae-orc-dysqv; director 01M7R3ECP4 R3, R4, R5) -----------
+# A relay-log entry of Kind question that lacks a **Card:** line counts. 24 h window, gated on loop-status.json, silent at 0,
+# UNKNOWN when the relay log cannot be read. Red until the clause exists.
+saved_relay="${RELAY_LOG-}"
+CARDLINE='^relays asking the operator to decide with no card in the last 24 h: '
+export DIRECTOR_STATE="$root/card-clause-state"; rm -rf "$DIRECTOR_STATE"; mkdir -p "$DIRECTOR_STATE"
+S="$DIRECTOR_STATE/loop-status.json"
+fresh_inputs
+export RELAY_LOG="$root/card-clause-relay.md"; : >"$RELAY_LOG"
+"$here/relay-log" append --to agent://x/a --kind question --text "decide this" >/dev/null     # R-1 counts
+"$here/relay-log" append --to agent://x/b --kind question --card none --text "no decision" >/dev/null 2>&1 || true   # R-2 has a Card line
+"$here/relay-log" append --to agent://x/c --kind relay --text "plain relay" >/dev/null              # R-3 is not a question
+printf '\n## R-4 (%s) -> agent://x/d\n**Kind:** question\n**Text, verbatim:**\n> old\n**Outcome:** pending\n' "$(ago 2880)" >>"$RELAY_LOG"   # R-4 is 48 h old
+status 5 "$NODUE" '[]'
+out="$(hook)"
+[[ "$(printf '%s\n' "$out" | grep "$CARDLINE")" == "relays asking the operator to decide with no card in the last 24 h: 1 (oldest R-1)" ]] \
+  && ok "hook_relays_with_no_card_counts_question_entries_without_a_card_line" \
+  || bad "hook_relays_with_no_card_counts_question_entries_without_a_card_line" "got: [$(printf '%s\n' "$out" | grep "$CARDLINE")]"
+rm -f "$S"
+! hook | grep -q "$CARDLINE" && ok "hook_relays_with_no_card_is_gated_on_loop_status" || bad "hook_relays_with_no_card_is_gated_on_loop_status" "the clause printed with no loop-status.json"
+status 5 "$NODUE" '[]'
+: >"$RELAY_LOG"; "$here/relay-log" append --to agent://x/a --kind question --card /tmp/cards/q.md --text "has a card" >/dev/null 2>&1 || true
+! hook | grep -q "$CARDLINE" && ok "hook_relays_with_no_card_is_silent_at_zero" || bad "hook_relays_with_no_card_is_silent_at_zero" "$(hook | grep "$CARDLINE")"
+export RELAY_LOG="$root/card-clause-relay-dir"; mkdir -p "$RELAY_LOG"
+hook | grep -q "${CARDLINE}UNKNOWN (" && ok "hook_relays_with_no_card_reads_unknown_when_the_log_is_unreadable" || bad "hook_relays_with_no_card_reads_unknown_when_the_log_is_unreadable" "got: [$(hook | grep "$CARDLINE")]"
+# The installed plugin form: no RELAY_LOG, and no checkout holding sim/notes/relay-log.md. A copy of the hook under a
+# scratch tree has neither, so the path is unknown, and unknown must not read as 0 (dws says "set RELAY_LOG" here too).
+mkdir -p "$root/plug/a/b/c"; cp "$H" "$root/plug/a/b/c/standing-hook"
+status 5 "$NODUE" '[]'
+nolog="$(env -u RELAY_LOG "$root/plug/a/b/c/standing-hook" 2>/dev/null | grep "$CARDLINE" || true)"
+[[ "$nolog" == "relays asking the operator to decide with no card in the last 24 h: UNKNOWN (no relay log path: set RELAY_LOG)" ]] \
+  && ok "hook_relays_with_no_card_reads_unknown_when_no_log_path_is_found" \
+  || bad "hook_relays_with_no_card_reads_unknown_when_no_log_path_is_found" "got: [$nolog]"
+rm -f "$S"
+nolog="$(env -u RELAY_LOG "$root/plug/a/b/c/standing-hook" 2>/dev/null | grep "$CARDLINE" || true)"
+[[ -z "$nolog" ]] && ok "hook_relays_with_no_card_no_log_path_is_silent_without_loop_status" || bad "hook_relays_with_no_card_no_log_path_is_silent_without_loop_status" "got: [$nolog]"
+if [[ -n "$saved_relay" ]]; then export RELAY_LOG="$saved_relay"; else unset RELAY_LOG; fi
+
 export DIRECTOR_STATE="$saved_state"
 
 echo "$pass passed, $fail failed"

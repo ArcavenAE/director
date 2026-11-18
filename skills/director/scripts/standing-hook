@@ -53,6 +53,16 @@ oldest is the earliest received. At 0 it prints nothing. When the join cannot be
 needs could not be, it prints `asks in the last 24 h with no relay or row: UNKNOWN (<reason>)`, so a missing
 log never reads as every ask unlinked. It is a diagnostic: it prompts and gates nothing.
 
+With a loop-status.json present, one more line follows the asks line (S11, design section 6): relay-log entries
+of Kind question, written in the last 24 hours, that carry no **Card:** line, which `relay-log append --card
+<path|none>` writes:
+
+  relays asking the operator to decide with no card in the last 24 h: <n> (oldest R-<n>)
+
+It prints nothing at 0 and nothing with no loop-status.json, and `UNKNOWN (<reason>)` when the relay log it
+reads ($RELAY_LOG, else the checkout's sim/notes/relay-log.md) cannot be found or read. It reads that one file and
+starts no subprocess.
+
 One more line follows, last, only when something waits:
 
   waiting: <n> Desk answers not relayed (oldest <age>, ids <ids>); <m> approved PRs not merged (oldest <age>); Desk read <age> ago
@@ -449,6 +459,62 @@ def asks_line():
     return f"{ASKS_PREFIX}{len(unlinked)} (oldest {min(unlinked)[1]})"
 
 
+CARD_PREFIX = "relays asking the operator to decide with no card in the last 24 h: "
+RELAY_HEAD = re.compile(r"^## R-([0-9]+) \(([^)]*)\) -> ")
+
+
+def relay_log_path():
+    """The relay log relay-log writes: $RELAY_LOG, else sim/notes/relay-log.md of the checkout this script is
+    symlinked into. None when neither names a file."""
+    env = os.environ.get("RELAY_LOG")
+    if env:
+        return env
+    root = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", ".."))
+    path = os.path.join(root, "sim", "notes", "relay-log.md")
+    return path if os.path.isfile(path) else None
+
+
+def card_line():
+    """The relays-with-no-card line (S11, design section 6): relay-log entries of Kind question, written in the
+    last 24 h, with no **Card:** line. Gated on loop-status.json like the other loop clauses, silent at 0, and
+    UNKNOWN when the log cannot be read. It reads one file and starts no subprocess."""
+    if not loop_status_present():
+        return None
+    path = relay_log_path()
+    if not path:
+        return f"{CARD_PREFIX}UNKNOWN (no relay log path: set RELAY_LOG)"
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except (OSError, UnicodeDecodeError) as err:
+        return f"{CARD_PREFIX}UNKNOWN (relay log unreadable: {getattr(err, 'strerror', None) or type(err).__name__})"
+    t_now = now()
+    entries, cur = [], None
+    for l in lines:
+        m = RELAY_HEAD.match(l)
+        if m:
+            cur = {"n": int(m.group(1)), "stamp": m.group(2), "kind": None, "card": False}
+            entries.append(cur)
+        elif cur is not None:
+            if l.startswith("**Kind:** "):
+                cur["kind"] = l[len("**Kind:** "):].strip()
+            elif l.startswith("**Card:** "):
+                cur["card"] = True
+    missing = []
+    for e in entries:
+        if e["kind"] != "question" or e["card"]:
+            continue
+        try:
+            age = (t_now - parse_stamp(e["stamp"])).total_seconds()
+        except (ValueError, TypeError):
+            continue
+        if 0 <= age <= ASKS_WINDOW_HOURS * 3600:
+            missing.append((parse_stamp(e["stamp"]), e["n"]))
+    if not missing:
+        return None
+    return f"{CARD_PREFIX}{len(missing)} (oldest R-{min(missing)[1]})"
+
+
 INBOX_PREFIX = "director inbox: "
 DEFAULT_PENDING_BOUND = 600.0  # twice the cue's 300 s window (cue.go defaultPendingAgeBound)
 _GO_UNITS = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
@@ -557,6 +623,9 @@ def main():
     if line:
         print(line)
     line = asks_line()
+    if line:
+        print(line)
+    line = card_line()
     if line:
         print(line)
     line = inbox_line()
