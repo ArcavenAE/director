@@ -189,5 +189,86 @@ printf '{"read_at": "2026-10-15T12:00:00Z", "open": "card-1"}' >"$SNAPFILE"
 refuses "a snapshot whose open list is not a list reads UNREAD" "UNREAD" "$DWS" set base --blocked operator --ask card-1
 cp "$root/good.json" "$SNAPFILE"
 
+# --- S14: the answer mirror (aae-orc-o8zbi; director rulings 01M7R8WQE9, A1 to A5) ------------------------------------
+# desk-snapshot write --answers keeps the answers it read, choices included, in $DIRECTOR_STATE/desk/answers.jsonl.
+# Each case runs in its own state dir so the cases above are not disturbed.
+saved_state="$DIRECTOR_STATE"
+mirror_cards="$root/m-cards.json"; mirror_answers="$root/m-answers.json"
+printf '%s' '{"card-1": {"status": "open"}, "card-5": {"status": "open"}, "card-7": {"status": "relayed"}}' >"$mirror_cards"
+printf '%s' '[{"card": "card-1", "choice": "1", "note": "go", "ready": true, "at": "2026-10-15T11:00:00.123Z"}, {"card_id": "card-5", "at": "2026-10-15T11:05:00Z"}]' >"$mirror_answers"
+fresh() { export DIRECTOR_STATE="$root/mirror-$1"; rm -rf "$DIRECTOR_STATE"; mkdir -p "$DIRECTOR_STATE"; AJ="$DIRECTOR_STATE/desk/answers.jsonl"; }
+mwrite() {  # [extra args]: the S14 fixture write at the fixed clock
+  DWS_NOW="${MNOW:-2026-10-15T12:00:00Z}" "$SNAP" write --cards "$mirror_cards" --reported 3 --answers "${MANS:-$mirror_answers}" --answers-reported "${MCOUNT:-2}" "$@"
+}
+nrows() { if [[ -f "$AJ" ]]; then wc -l <"$AJ" | tr -d ' '; else echo 0; fi; }
+
+fresh a
+mwrite >"$root/out" 2>&1 || true
+python3 - "$AJ" <<'P' && ok "answers_persisted_with_choice" || bad "answers_persisted_with_choice" "no row for card-1 with choice '1' in desk/answers.jsonl: $(cat "$root/out")"
+import json, os, sys
+assert os.path.isfile(sys.argv[1]), 'no desk/answers.jsonl was written'
+rows = [json.loads(l) for l in open(sys.argv[1])]
+assert any(r.get("card") == "card-1" and r.get("choice") == "1" for r in rows), rows
+P
+python3 - "$AJ" <<'P' && ok "answers_row_is_the_record_verbatim_plus_read_at_and_card" || bad "answers_row_is_the_record_verbatim_plus_read_at_and_card" "rows differ from the expected two"
+import json, os, sys
+assert os.path.isfile(sys.argv[1]), 'no desk/answers.jsonl was written'
+rows = [json.loads(l) for l in open(sys.argv[1])]
+want = [{"card": "card-1", "choice": "1", "note": "go", "ready": True, "at": "2026-10-15T11:00:00.123Z", "read_at": "2026-10-15T12:00:00Z"},
+        {"card_id": "card-5", "at": "2026-10-15T11:05:00Z", "read_at": "2026-10-15T12:00:00Z", "card": "card-5"}]
+assert rows == want, rows
+P
+python3 - "$AJ" <<'P' && ok "answers_no_choice_answer_is_still_a_row_without_a_choice_key" || bad "answers_no_choice_answer_is_still_a_row_without_a_choice_key"
+import json, os, sys
+assert os.path.isfile(sys.argv[1]), 'no desk/answers.jsonl was written'
+rows = [json.loads(l) for l in open(sys.argv[1])]
+r = [x for x in rows if x.get("card") == "card-5"]
+assert len(r) == 1 and "choice" not in r[0], rows
+P
+
+# A3: a second identical read adds nothing; a changed answer adds one row and leaves the first rows as they were.
+cp "$AJ" "$root/answers.before" 2>/dev/null || : >"$root/answers.before"
+MNOW="2026-10-15T13:00:00Z" mwrite >/dev/null 2>&1 || true
+[[ "$(nrows)" == 2 ]] && cmp -s "$AJ" "$root/answers.before" && ok "answers_dedup_an_unchanged_answer_adds_no_row" || bad "answers_dedup_an_unchanged_answer_adds_no_row" "rows: $(nrows), want 2 and the same bytes"
+printf '%s' '[{"card": "card-1", "choice": "2", "note": "go", "ready": true, "at": "2026-10-15T11:00:00.123Z"}, {"card_id": "card-5", "at": "2026-10-15T11:05:00Z"}]' >"$root/m-changed.json"
+MNOW="2026-10-15T14:00:00Z" MANS="$root/m-changed.json" mwrite >/dev/null 2>&1 || true
+python3 - "$AJ" "$root/answers.before" <<'P' && ok "answers_a_changed_answer_adds_one_row_and_never_rewrites" || bad "answers_a_changed_answer_adds_one_row_and_never_rewrites" "rows: $(nrows)"
+import json, os, sys
+assert os.path.isfile(sys.argv[1]), 'no desk/answers.jsonl was written'
+now = open(sys.argv[1], "rb").read()
+before = open(sys.argv[2], "rb").read()
+assert now.startswith(before) and len(before) > 0, "the first rows were rewritten or missing"
+rows = [json.loads(l) for l in now.decode().splitlines()]
+assert len(rows) == 3 and rows[2]["card"] == "card-1" and rows[2]["choice"] == "2", rows
+P
+
+# A4: no write without --answers; a refused write appends none.
+fresh b
+DWS_NOW=2026-10-15T12:00:00Z "$SNAP" write --cards "$mirror_cards" --reported 3 >/dev/null 2>&1 || true
+[[ ! -e "$DIRECTOR_STATE/desk" ]] && ok "answers_no_write_without_the_answers_flag" || bad "answers_no_write_without_the_answers_flag" "desk/ exists: $(ls "$DIRECTOR_STATE/desk")"
+fresh c
+MCOUNT=5 mwrite >"$root/out" 2>&1 && bad "answers_a_refused_write_appends_none" "the count mismatch was accepted" \
+  || { [[ "$(nrows)" == 0 ]] && ok "answers_a_refused_write_appends_none" || bad "answers_a_refused_write_appends_none" "rows: $(nrows)"; }
+
+# A5: an append that fails exits nonzero, names the file, and keeps the snapshot.
+fresh d
+mkdir -p "$DIRECTOR_STATE/desk/answers.jsonl"   # a directory where the file belongs, so the open fails
+rc=0; mwrite >"$root/out" 2>&1 || rc=$?
+if [[ $rc -eq 0 ]]; then bad "answers_a_failed_append_exits_nonzero_naming_the_file_and_keeps_the_snapshot" "exit 0: $(cat "$root/out")"
+elif ! grep -q 'answers.jsonl' "$root/out"; then bad "answers_a_failed_append_exits_nonzero_naming_the_file_and_keeps_the_snapshot" "output does not name answers.jsonl: $(cat "$root/out")"
+elif [[ ! -s "$DIRECTOR_STATE/desk-snapshot.json" ]]; then bad "answers_a_failed_append_exits_nonzero_naming_the_file_and_keeps_the_snapshot" "no snapshot kept"
+else ok "answers_a_failed_append_exits_nonzero_naming_the_file_and_keeps_the_snapshot"; fi
+
+# Guard: the snapshot and the desk-reads row are byte-identical to what the writer produced before S14 (hashes taken
+# from this fixture on origin/main 814222c2, with the fixed clock).
+fresh e
+mwrite >/dev/null 2>&1 || true
+want_snap=5e16ce8c0cafb48807c4e6e31944228c37ba28842e65642cc50a9273a64afe5c
+want_reads=0695d2b36085cf1620e31ef45ffcc4a0c499ca39ddb4cedbb89ed11926b1f9b5
+got_snap="$(shasum -a 256 <"$DIRECTOR_STATE/desk-snapshot.json" | cut -d' ' -f1)"; got_reads="$(shasum -a 256 <"$DIRECTOR_STATE/desk-reads.jsonl" | cut -d' ' -f1)"
+[[ "$got_snap" == "$want_snap" && "$got_reads" == "$want_reads" ]] \
+  && ok "answers_guard_snapshot_and_desk_reads_stay_byte_identical" || bad "answers_guard_snapshot_and_desk_reads_stay_byte_identical" "snapshot $got_snap reads $got_reads"
+export DIRECTOR_STATE="$saved_state"
+
 echo "desk-snapshot: $pass passed, $fail failed"
 [[ "$fail" == 0 ]]
