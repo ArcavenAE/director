@@ -114,7 +114,7 @@ func TestLocalSendAuditRecordNamesTheInboxStream(t *testing.T) {
 	if got := rec.Header.Get("Director-Inbox-Stream"); got != "AGENT_INBOX" {
 		t.Errorf("Director-Inbox-Stream = %q, want AGENT_INBOX", got)
 	}
-	if got, want := rec.Header.Get("Director-Inbox-Seq"), strconv.FormatUint(uint64(m["sequence"].(float64)), 10); got != want {
+	if got, want := rec.Header.Get("Director-Inbox-Seq"), strconv.FormatUint(m["sequence"].(uint64), 10); got != want {
 		t.Errorf("Director-Inbox-Seq = %q, want %s (unchanged)", got, want)
 	}
 }
