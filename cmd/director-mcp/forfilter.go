@@ -150,12 +150,12 @@ func forTokens(text string) []string {
 // forList reads the FOR text as a comma-separated list and returns its names
 // and the prose that ended the list. The first element is always names. A later
 // element is names when, with the joiners "and", "or" and "only" removed, each
-// run of words between joiners is one token that is seat-shaped (forSeat or
-// forRole) and is not a ticket id (forTicket); otherwise it is prose, and it ends
-// the list along with everything after it. A lone ticket id after a comma
-// ("FOR a-supervisor, I-578:") is therefore prose and never a name that would
-// spoil the line (aae-orc-c93bj). The names read before the prose token in the
-// same element are kept. Trailing . ; : are trimmed from each
+// run of words between joiners is one token; otherwise it is prose, and it ends
+// the list along with everything after it. A lone ticket id (forTicket, "I-578"
+// in any case) after a comma ("FOR a-supervisor, I-578:") is prose too, so it is
+// never a name that would spoil the line (aae-orc-c93bj). The names read before
+// the ticket id in the same element are kept. Any other lone token is a name,
+// and one that is not seat-shaped leaves the line ambiguous, which delivers. Trailing . ; : are trimmed from each
 // name. Seat names hold no spaces, so splitting on whitespace never cuts a name.
 // The prose words come back whole, for the this-seat scan in drops.
 func forList(text string) (names, prose []string) {
@@ -177,7 +177,7 @@ func forList(text string) (names, prose []string) {
 				isProse = true
 				break
 			}
-			if i > 0 && (forTicket.MatchString(f) || (!forSeat.MatchString(f) && !forRole.MatchString(f))) {
+			if i > 0 && forTicket.MatchString(f) {
 				names = append(names, got...)
 				isProse = true
 				break

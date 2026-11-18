@@ -79,6 +79,8 @@ func TestForFilterCommaGuardsStillDeliverWhatItCannotRead(t *testing.T) {
 		{"an unknown seat delivers", "FOR nobody-here-g1-0, I-578: body", false},
 		{"a line with no seat name delivers", "FOR : I-578 body", false},
 		{"a symbol-only first element delivers", "FOR !!!, I-578: body", false},
+		{"a lone non-seat word after a seat stays ambiguous and delivers", "FOR alpha-supervisor, Bob\nbody", false},
+		{"a lone non-seat word after a comma, colon ends it, delivers", "FOR alpha-supervisor, Bob: body", false},
 		{"this seat named in the prose delivers", "FOR e98-supervisor-g8-0, from operator-g3-0: I-578", false},
 		{"no FOR line delivers", "I-578 is routed\nbody", false},
 	}
