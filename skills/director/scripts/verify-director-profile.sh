@@ -21,6 +21,8 @@
 #    as a [[team]] key and as a rules entry;
 #  - path expansion: ~ and $DIRECTOR_STATE only, a relative path is relative to
 #    the profile file's directory;
+#  - the [loop] table: seven optional keys with their types, scheduler only "none", an unknown
+#    key refused as loop.<key>, printed as loop.<key>: value (P22, standing-keys-accepted);
 #  - the python rule: python3 older than 3.11 is refused with one line, and a
 #    newer python3.N on PATH is used instead.
 #
@@ -155,6 +157,32 @@ run -- check "$work/prof/paths.toml"
 [[ "$out" == *"rules_text: $work/prof/\$HOME/literal.md"* ]] || miss "P15 \$HOME is not expanded in the first build: $out"
 [[ "$out" == *"doc_domain: **/*.md"* && "$out" == *"doc_domain: $work/prof/*.log"* && "$out" == *"doc_domain: $work/prof/docs/**/*.md"* ]] || miss "P15 only a pattern that starts with **/ stays unjoined; *.log and docs/**/*.md join the profile directory: $out"
 [[ "$out" == *"write_domain: $home/w/*"* && "$out" == *"write_domain: $work/prof/sub/*"* ]] || miss "P15 write_domain patterns expanded: $out"
+
+# ---- P22 standing-keys-accepted: the [loop] table (standing-loop design slice 4) ----
+# A closed table, every key optional: state_dir and workspace and ticket_pattern are
+# strings, idea_roots a list of strings, tick_interval integer minutes, digest_max_age
+# integer hours, scheduler only "none" (slice 16 widens it). Printed as loop.<key>: value,
+# written as in the file (no expansion: no script reads [loop] yet, so nothing resolves it).
+wprof "$work/loop.toml" 'schema_version = 1' '[loop]' \
+  'state_dir = "/var/lib/d"' 'idea_roots = ["/r/one/*.md", "/r/two/*.md"]' 'ticket_pattern = "PROJ-[0-9]+"' \
+  'workspace = "ws1"' 'tick_interval = 15' 'scheduler = "none"' 'digest_max_age = 12'
+run -- check "$work/loop.toml"
+[[ $rc -eq 0 && "$out" == *"profile ok"* ]] || miss "P22 standing-keys-accepted: a profile with every [loop] key must pass: rc=$rc out=$out"
+for want in "loop.state_dir: /var/lib/d" "loop.idea_roots: /r/one/*.md" "loop.idea_roots: /r/two/*.md" \
+  "loop.ticket_pattern: PROJ-[0-9]+" "loop.workspace: ws1" "loop.tick_interval: 15" "loop.scheduler: none" "loop.digest_max_age: 12"; do
+  [[ "$out" == *"$want"* ]] || miss "P22 standing-keys-accepted: check must print '$want': rc=$rc out=$out"
+done
+wprof "$work/loop0.toml" 'schema_version = 1' '[loop]'
+run -- check "$work/loop0.toml"
+[[ $rc -eq 0 && "$out" != *"loop."* ]] || miss "P22 an empty [loop] table is accepted and prints nothing of its own: rc=$rc out=$out"
+refuse "P22 unknown key in [loop]" "unknown key: loop.colour" 'schema_version = 1' '[loop]' 'colour = "red"'
+refuse "P22 scheduler other than none" 'loop.scheduler must be "none"' 'schema_version = 1' '[loop]' 'scheduler = "cron"'
+refuse "P22 tick_interval must be an integer" "loop.tick_interval must be an integer" 'schema_version = 1' '[loop]' 'tick_interval = "15m"'
+refuse "P22 tick_interval is not a boolean" "loop.tick_interval must be an integer" 'schema_version = 1' '[loop]' 'tick_interval = true'
+refuse "P22 digest_max_age must be an integer" "loop.digest_max_age must be an integer" 'schema_version = 1' '[loop]' 'digest_max_age = 1.5'
+refuse "P22 idea_roots must be a list of strings" "loop.idea_roots must be a list of strings" 'schema_version = 1' '[loop]' 'idea_roots = "/r/*.md"'
+refuse "P22 workspace must be a string" "loop.workspace must be a string" 'schema_version = 1' '[loop]' 'workspace = 3'
+refuse "P22 loop must be a table" "loop must be a table" 'schema_version = 1' 'loop = 5'
 
 # ---- P20 and P21: the python rule ----
 # The script is run by a python3 whose version reads 3.9.6, through runpy, so a
