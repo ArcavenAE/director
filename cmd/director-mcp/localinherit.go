@@ -374,6 +374,9 @@ func (b *Bus) drainInherited(ctx context.Context, n int, res *batchResult) {
 	}, n)
 	for i := range items {
 		items[i].InheritedFrom = pred
+		if b.handled != nil || ackLaterFrom(ctx) != nil {
+			b.noteInheritedDelivered(items[i].Seq) // acked later by sequence alone
+		}
 	}
 	res.Items = append(res.Items, items...)
 	res.Discarded += disc

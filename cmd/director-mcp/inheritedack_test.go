@@ -51,6 +51,14 @@ func inheritedFixture(t *testing.T, ctx context.Context, handled bool) *Bus {
 	return succ
 }
 
+// inheritedHeld is how many inherited sequences still wait for their ack; an
+// acked one leaves the set, so it does not grow for the life of the session.
+func inheritedHeld(b *Bus) int {
+	b.localMu.Lock()
+	defer b.localMu.Unlock()
+	return len(b.inheritedSeqs)
+}
+
 func ownCounter(b *Bus) uint64 {
 	b.localMu.Lock()
 	defer b.localMu.Unlock()
@@ -72,6 +80,9 @@ func TestAnInheritedMessageAckedAfterTheReplyDoesNotMoveTheOwnCounter(t *testing
 	}
 	al.ack(succ, t.Logf)
 
+	if n := inheritedHeld(succ); n != 0 {
+		t.Errorf("%d inherited sequences are still held after their ack, want 0", n)
+	}
 	if got := ownCounter(succ); got != 0 {
 		t.Errorf("the own durable's acked counter = %d after an inherited message at sequence 2 was acked, want 0", got)
 	}
@@ -95,6 +106,9 @@ func TestAnInheritedMessageMarkedHandledDoesNotMoveTheOwnCounter(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if n := inheritedHeld(succ); n != 0 {
+		t.Errorf("%d inherited sequences are still held after their ack, want 0", n)
+	}
 	if got := ownCounter(succ); got != 0 {
 		t.Errorf("the own durable's acked counter = %d after an inherited message at sequence 2 was marked handled, want 0", got)
 	}
@@ -119,5 +133,26 @@ func TestAnOwnMessageAckedAfterTheReplyMovesTheOwnCounter(t *testing.T) {
 	al.ack(succ, t.Logf)
 	if got := ownCounter(succ); got != 1 {
 		t.Errorf("the own durable's acked counter = %d after its own message at sequence 1 was acked, want 1", got)
+	}
+}
+
+// The handled-mode control for the two inherited tests above: an own message
+// pulled under DIRECTOR_HANDLED=1 and marked handled still credits the own
+// counter, so a 0 after an inherited mark is the fix and not a handled mode that
+// never moves it.
+func TestAnOwnMessageMarkedHandledMovesTheOwnCounter(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	succ := inheritedFixture(t, ctx, true)
+
+	items, _, err := succ.pullLocalNoWait(ctx, 1)
+	if err != nil || len(items) != 1 || items[0].Seq != 1 {
+		t.Fatalf("setup: the own pull gave %+v (err %v), want the own message at sequence 1", items, err)
+	}
+	if _, err := succ.markHandled(ctx, "local", items[0].Env.MessageID, "handled", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := ownCounter(succ); got != 1 {
+		t.Errorf("the own durable's acked counter = %d after its own message at sequence 1 was marked handled, want 1", got)
 	}
 }

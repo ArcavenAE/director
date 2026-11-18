@@ -122,6 +122,10 @@ type Bus struct {
 	roleCons  jetstream.Consumer
 	roleLocal localState
 	roleSeqs  map[uint64]struct{}
+	// inheritedSeqs holds the stream sequences of inherited messages fetched and
+	// acked later by sequence alone; an ack of one credits no counter of this
+	// seat's own durables (director#684).
+	inheritedSeqs map[uint64]struct{}
 	// roleTurn alternates which local durable a read takes from first.
 	roleTurn atomic.Uint32
 	// restoreMu serializes the local durable restore: the poll and the heartbeat
