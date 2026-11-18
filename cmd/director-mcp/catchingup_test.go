@@ -278,3 +278,113 @@ func TestTheRosterRowCarriesConnectedAtAndWaiting(t *testing.T) {
 		t.Errorf("the roster row's connected_at = %q (err %v), want the connect time", row.ConnectedAt, err)
 	}
 }
+
+// presenceRowOf reads the session's own presence row as written.
+func presenceRowOf(t *testing.T, ctx context.Context, b *Bus) map[string]any {
+	t.Helper()
+	e, err := b.kv.Get(ctx, "presence."+b.self.Team+"."+b.self.AgentID+"."+b.instance)
+	if err != nil {
+		t.Fatalf("reading the presence row: %v", err)
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(e.Value(), &rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+// Review of #685, Medium 1. A successor whose predecessor is still live stays
+// catching-up by design (the inheritance has not started), with nothing waiting,
+// even though it polls. The row has to carry the poll fact so a sweep can tell it
+// from a seat that never polled: polled_at is absent until the first
+// wait_for_message and an RFC 3339 time after it.
+func TestThePresenceRowCarriesPolledAtOnceTheSeatHasWaited(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	provision(t, ctx, url)
+	pred := caConnect(t, ctx, url, "pred", "")
+	_ = pred
+	succ := caConnect(t, ctx, url, "succ", "pred")
+	runHeartbeat(t, ctx, succ, 40*time.Millisecond)
+
+	time.Sleep(200 * time.Millisecond)
+	if _, ok := presenceRowOf(t, ctx, succ)["polled_at"]; ok {
+		t.Fatalf("CONTROL FAILED: the row carries polled_at before any wait_for_message: %v", presenceRowOf(t, ctx, succ))
+	}
+	if _, err := toolWait(ctx, succ, json.RawMessage(`{"timeout_seconds":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(5*time.Second, func() bool {
+		s, _ := presenceRowOf(t, ctx, succ)["polled_at"].(string)
+		_, err := time.Parse(time.RFC3339, s)
+		return err == nil
+	}) {
+		t.Fatalf("after a wait_for_message the row carries no polled_at: %v", presenceRowOf(t, ctx, succ))
+	}
+	if got := presenceStateOf(t, ctx, succ); got != "catching-up" {
+		t.Errorf("setup: with the predecessor live the successor reads %q, want catching-up", got)
+	}
+}
+
+// The roster command carries polled_at as the row does.
+func TestTheRosterRowCarriesPolledAt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	seat := caConnect(t, ctx, url, "sup", "")
+	runHeartbeat(t, ctx, seat, 40*time.Millisecond)
+	if _, err := toolWait(ctx, seat, json.RawMessage(`{"timeout_seconds":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(5*time.Second, func() bool { _, ok := presenceRowOf(t, ctx, seat)["polled_at"]; return ok }) {
+		t.Fatal("setup: the presence row carries no polled_at")
+	}
+	rep, err := readRosterRows(ctx, js, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(rep.Rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r["instance"] == seat.instance {
+			if s, _ := r["polled_at"].(string); s == "" {
+				t.Errorf("the roster row has no polled_at: %v", r)
+			}
+			return
+		}
+	}
+	t.Fatalf("no roster row for %s", seat.instance)
+}
+
+// Review of #685, note. The reads the catch-up makes (the heartbeat's check and
+// the held set_presence's count) are bounded like the tracker's, so a consumer
+// whose Info never answers cannot stall them.
+func TestASilentConsumerDoesNotStallTheCatchupReads(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	provision(t, ctx, url)
+	seat := caConnect(t, ctx, url, "sup", "")
+	seat.localMu.Lock()
+	seat.consumer = silentInfoConsumer{seat.consumer}
+	seat.localMu.Unlock()
+
+	rctx, stop := context.WithTimeout(ctx, 6*time.Second)
+	defer stop()
+	start := time.Now()
+	n, ok := seat.waitingNow(rctx)
+	if el := time.Since(start); el > 2*time.Second {
+		t.Errorf("waitingNow with a silent consumer took %s, want it bounded under 2s", el)
+	}
+	if ok {
+		t.Errorf("waitingNow with a silent consumer reports %d as read, want not ok", n)
+	}
+}

@@ -24,8 +24,10 @@ root="$(mktemp -d "${TMPDIR:-/tmp}/nevpolled.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 NOW="2026-11-18T07:00:00Z"
 
-row() { # agent, state, connected_at, waiting, [fresh, default true]
-  printf '{"agent_id":"%s","team":"ops","role":"builder","instance":"01INSTANCE%s","state":"%s","connected_at":"%s","waiting":%s,"fresh":%s}' "$1" "$1" "$2" "$3" "$4" "${5:-true}"
+row() { # agent, state, connected_at, waiting, [fresh, default true], [polled_at]
+  local polled=""
+  [[ -n "${6:-}" ]] && polled=",\"polled_at\":\"$6\""
+  printf '{"agent_id":"%s","team":"ops","role":"builder","instance":"01INSTANCE%s","state":"%s","connected_at":"%s","waiting":%s,"fresh":%s%s}' "$1" "$1" "$2" "$3" "$4" "${5:-true}" "$polled"
 }
 {
   printf '{"read_at":"%s","rows":[' "$NOW"
@@ -33,6 +35,7 @@ row() { # agent, state, connected_at, waiting, [fresh, default true]
   row loaded catching-up 2026-11-18T06:40:00Z 3; printf ','
   row fresh catching-up 2026-11-18T06:55:00Z 0; printf ','
   row steady idle 2026-11-18T05:00:00Z 0; printf ','
+  row heard catching-up 2026-11-18T06:30:00Z 0 true 2026-11-18T06:58:00Z; printf ','
   row stale catching-up 2026-11-18T05:00:00Z 0 false
   printf ']}\n'
 } >"$root/roster.json"
@@ -47,6 +50,7 @@ printf '%s\n' "$out" | grep 'connected, never polled' | grep -q 'deaf' \
 printf '%s\n' "$out" | grep -q 'loaded' && bad "a seat with mail waiting is not listed" "$out" || ok "a seat with mail waiting is not listed"
 printf '%s\n' "$out" | grep -q 'fresh' && bad "a seat under 10 minutes is not listed" "$out" || ok "a seat under 10 minutes is not listed"
 printf '%s\n' "$out" | grep -q 'stale' && bad "a stale row is not listed" "$out" || ok "a stale row is not listed"
+printf '%s\n' "$out" | grep -q "(01INSTANCEheard)" && bad "a seat that has polled is not listed" "$out" || ok "a seat that has polled is not listed"
 printf '%s\n' "$out" | grep -q 'steady' && bad "an idle seat is not listed" "$out" || ok "an idle seat is not listed"
 
 set +e; out2="$("$S" --roster "$root/roster.json" --now "$NOW" 2>&1)"; set -e
@@ -55,6 +59,24 @@ set +e; out2="$("$S" --roster "$root/roster.json" --now "$NOW" 2>&1)"; set -e
 printf '{"read_at":"%s","rows":[]}\n' "$NOW" >"$root/empty.json"
 set +e; eout="$("$S" --roster "$root/empty.json" --now "$NOW" 2>&1)"; erc=$?; set -e
 [[ "$erc" == 0 && -z "$eout" ]] && ok "an empty roster prints nothing" || bad "an empty roster prints nothing" "rc=$erc out=$eout"
+
+# A roster that cannot be read is a GAP line on stdout and exit 0, never silence
+# and never an error that reads as no seats (review of #685, Low 1).
+set +e; gout="$("$S" --roster "$root/absent.json" --now "$NOW" 2>/dev/null)"; grc=$?; set -e
+[[ "$grc" == 0 ]] && ok "an unreadable roster exits 0" || bad "an unreadable roster exits 0" "rc=$grc"
+printf '%s\n' "$gout" | grep -q '^- GAP never-polled' && ok "an unreadable roster prints a GAP line" || bad "an unreadable roster prints a GAP line" "out=$gout"
+
+# The roster subprocess has a timeout: a hung director-mcp gives a GAP line, not a hang.
+cat >"$root/slow" <<'SLOW'
+#!/usr/bin/env bash
+sleep 6
+SLOW
+chmod +x "$root/slow"
+t0=$SECONDS
+set +e; tout="$(DIRECTOR_MCP_BIN="$root/slow" "$S" --now "$NOW" --timeout 1 2>/dev/null)"; trc=$?; set -e
+el=$((SECONDS - t0))
+[[ "$el" -le 4 ]] && ok "a hung roster command is cut off by --timeout" || bad "a hung roster command is cut off by --timeout" "took ${el}s"
+[[ "$trc" == 0 ]] && printf '%s\n' "$tout" | grep -q '^- GAP never-polled' && ok "a timed-out roster prints a GAP line and exits 0" || bad "a timed-out roster prints a GAP line and exits 0" "rc=$trc out=$tout"
 
 echo "never-polled: $pass passed, $fail failed"
 [[ "$fail" == 0 ]]
