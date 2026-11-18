@@ -109,10 +109,10 @@ what is due, seats whose cue is not live) and adds the digest and ledger ages to
 its waiting line when they pass 12 and 24 hours. The tick counts as stale past 90
 minutes, `DIRECTOR_TICK_MAX_MINUTES`, which is provisional until the operator
 rules a cadence, as `tick_interval` is. With no `loop-status.json` the hook prints
-what it printed before. Two clauses are not built: card batches parsed and never checked
-(after slice 13), and "beat broken", which waits for a slice to name the drain
-record it compares with `last-drain`. The third, relays asking the operator to
-decide with no card, is built in slice 11. Nothing acts on silence.
+what it printed before. One clause is not built: "beat broken", which waits for a
+slice to name the drain record it compares with `last-drain`. Relays asking the
+operator to decide with no card are built in slice 11, and card batches parsed and
+never checked in slice 13. Nothing acts on silence.
 a53a's dissent stands: when nobody types, nothing reaches the session. This
 design adds no alarm outside the hook; any alarm is for the ruling a53a already
 asks for.
@@ -292,7 +292,7 @@ Each red test is named here and written in its slice's PR; none exists yet.
 | 10 | Loop scripts inside the plugin's per-version directory | `verify-director-install.sh rollback-restores-standing-hook` (scripts sit outside every version) | Boot 0 |
 | 11 | `card-ingest template` (its Valid until is now plus 7 days from parse's clock); the relay template's "Operator decision: card file path, or none" field, after Ask and before Context; `relay-log append --card <path\|none>`, written as a `**Card:**` line after Kind (a widening of this row, ruled in scope by director 01M7R3ECP4); the hook's relayed-asks-with-no-card clause (moved here from slice 6): `relay-log` entries of Kind question in the last 24 h with no Card line, read from `$RELAY_LOG`, gated on `loop-status.json`, silent at 0, `UNKNOWN (<reason>)` when the log cannot be read, the oldest named by its R-number | `verify-card-ingest.sh template_parses_clean`, `template_valid_until_is_now_plus_7_days`, `has_operator_decision_field`; `verify-relay-log.sh` six `relay_log_card_*` cases; `verify-standing-hook.sh` four `hook_relays_with_no_card_*` cases (neither the subcommand, the field, the flag nor the clause exists) | none |
 | 12 | The role library: the shared fragment names the Card standard and its trigger | a render check that every role carrying the Desk-writes clause names the Card standard (0 match today) | 11 |
-| 13 | Desk outbox: `card-ingest parse` appends `cards.jsonl`, `check` appends `applied.jsonl`; reconcile reports | `verify-card-ingest.sh parse-appends-cards-jsonl` (no file); `verify-standing-hook.sh batch_parsed_not_checked_is_waiting` (moved here from slice 6) | none |
+| 13 | Desk outbox, additive (director 01M7R3ECP4): `card-ingest parse` also appends each log line to `desk/cards.jsonl` with a `batch` field, and `check` appends `{at, slug, batch, result, data_sha256}` per slug to `desk/applied.jsonl` (result PASS, MISMATCH or MISSING, for a batch `cards.jsonl` names); `card-ingest.jsonl` keeps every line it has. A read-only `card-ingest reconcile` prints NOT-APPLIED, NO-CARD and CONFLICT lines, repairs nothing and exits 0 on findings (a diagnostic; a gate on it needs its own written ruling). The hook's batches-parsed-and-never-checked clause (moved here from slice 6): batches in `cards.jsonl` that `applied.jsonl` does not name, gated on `desk/cards.jsonl` existing, silent at 0, `UNKNOWN (<reason>)` when either file cannot be read, the oldest named by batch file | `verify-card-ingest.sh parse-appends-cards-jsonl`, `refused_parse_adds_nothing_to_cards_jsonl`, `check_appends_applied_jsonl`, `check_records_a_mismatch_as_mismatch`; four `reconcile_*` cases beyond this row's list (director ruling 3); `verify-standing-hook.sh batch_parsed_not_checked_is_waiting` and four sibling cases (no outbox files, no subcommand, no clause) | none |
 | 14 | Answer mirror: `desk-snapshot` keeps answer choices in `answers.jsonl` | `verify-desk-snapshot.sh answers_persisted_with_choice` (choices are dropped) | none |
 | 15 | RULING (store): `director answer` and reconcile make the local log the record | `answer_without_artifact_reaches_snapshot`, `conflict_reported_not_repaired` | 13, 14 |
 | 16 | RULING (finding a53a, fix 3): `director init --schedule` prints the entry and installs it only on `--yes` | `verify-director-init.sh no-install-without-yes` | 5 |
