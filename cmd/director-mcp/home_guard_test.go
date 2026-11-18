@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,6 +75,91 @@ func TestHomeGuardKeepsTheGoCachesOffTheScratchHome(t *testing.T) {
 	for i, name := range []string{"GOMODCACHE", "GOCACHE"} {
 		if underDir(lines[i], home) {
 			t.Errorf("%s = %q is under the scratch HOME %q", name, lines[i], home)
+		}
+	}
+}
+
+// On macOS the default TMPDIR is under /var, a link to /private/var, and the
+// scratch home the guard makes has no .director directory until a test writes
+// one. A state path two levels below a directory reached through a link must
+// still read as inside it, or the guard exits 1 before the first test runs.
+func TestUnderDirReadsAPathBelowUncreatedLevelsThroughASymlinkAsInside(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(link, ".director", "state")
+	if !underDir(path, link) {
+		t.Errorf("underDir(%q, %q) = false, want true: the path sits two uncreated levels below the link", path, link)
+	}
+	if !underDir(path, real) {
+		t.Errorf("underDir(%q, %q) = false, want true: the link points at that directory", path, real)
+	}
+}
+
+// The check after the run names the leaked path whatever the tests returned,
+// so a failing run that also leaked HOME shows both causes.
+func TestFinishRunReportsALeakedHomeWhenTheTestsFailed(t *testing.T) {
+	scratch := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	var stderr bytes.Buffer
+	if code := finishRun(1, scratch, &stderr); code != 1 {
+		t.Errorf("finishRun(1, ...) = %d, want 1: a failed run stays failed", code)
+	}
+	if !strings.Contains(stderr.String(), "after the run") {
+		t.Errorf("stderr = %q, want the after-the-run guard error even though the tests failed", stderr.String())
+	}
+}
+
+// A scratch home that cannot be removed leaves files behind on the
+// developer's disk, so the run says so on stderr.
+func TestRemoveScratchReportsAFailureToRemove(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes a read-only directory's files, so nothing fails")
+	}
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	locked := filepath.Join(scratch, "locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	var stderr bytes.Buffer
+	removeScratch(scratch, &stderr)
+	if !strings.Contains(stderr.String(), scratch) {
+		t.Errorf("stderr = %q, want it to name the scratch directory %q that was not removed", stderr.String(), scratch)
+	}
+}
+
+// go keeps its config file and its GOPATH under HOME by default, so the guard
+// moving HOME would send both to the scratch directory: a go env or go install
+// run from a test would read an empty config and write into a directory the
+// guard cannot remove.
+func TestHomeGuardKeepsGoenvAndGopathOffTheScratchHome(t *testing.T) {
+	out, err := exec.Command("go", "env", "-json", "GOENV", "GOPATH").Output()
+	if err != nil {
+		t.Fatalf("go env: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("go env -json printed %q: %v", out, err)
+	}
+	home := os.Getenv("HOME")
+	for _, name := range []string{"GOENV", "GOPATH"} {
+		for _, p := range filepath.SplitList(got[name]) {
+			if underDir(p, home) {
+				t.Errorf("%s = %q is under the scratch HOME %q", name, p, home)
+			}
 		}
 	}
 }
