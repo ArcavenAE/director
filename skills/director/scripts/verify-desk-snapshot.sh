@@ -189,7 +189,7 @@ printf '{"read_at": "2026-10-15T12:00:00Z", "open": "card-1"}' >"$SNAPFILE"
 refuses "a snapshot whose open list is not a list reads UNREAD" "UNREAD" "$DWS" set base --blocked operator --ask card-1
 cp "$root/good.json" "$SNAPFILE"
 
-# --- S14: the answer mirror (aae-orc-o8zbi; director rulings 01M7R8WQE9, A1 to A5) ------------------------------------
+# --- S14: the answer mirror (aae-orc-o8zbi; director rulings A1 to A5) ------------------------------------
 # desk-snapshot write --answers keeps the answers it read, choices included, in $DIRECTOR_STATE/desk/answers.jsonl.
 # Each case runs in its own state dir so the cases above are not disturbed.
 saved_state="$DIRECTOR_STATE"
