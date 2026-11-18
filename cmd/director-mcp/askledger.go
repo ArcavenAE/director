@@ -269,12 +269,8 @@ func (l *askLedger) Ingest(rec auditRec) {
 	if e.MessageID == "" {
 		return
 	}
-	// Sends feeds the delivery check, which reads AGENT_INBOX only. A copy that
-	// names another stream (a global send's hub stream) is kept out: its
-	// sequence is the hub's, and comparing it with the local inbox would read a
-	// live send as expired unread.
-	if rec.InboxSeq > 0 && rec.InboxSubject != "" && (rec.InboxStream == "" || rec.InboxStream == "AGENT_INBOX") {
-		l.Sends[e.MessageID] = sendRec{Seq: rec.InboxSeq, Subject: rec.InboxSubject, Perf: e.Performative, At: rec.At}
+	if rec.InboxSeq > 0 && rec.InboxSubject != "" {
+		l.Sends[e.MessageID] = sendRec{Seq: rec.InboxSeq, Subject: rec.InboxSubject, Stream: rec.InboxStream, Perf: e.Performative, At: rec.At}
 	}
 	if _, dup := l.Seen[e.MessageID]; dup {
 		if ask, ok := l.threads[e.MessageID]; ok {

@@ -687,7 +687,7 @@ func (r *askReader) markExpired(ctx context.Context, now time.Time) {
 		if row.State != askSent || row.ExpiredUnread != "" || now.Sub(row.AskedAt) <= alarmAfter {
 			continue
 		}
-		if _, ok := r.ledger.Sends[row.Ask]; ok {
+		if sr, ok := r.ledger.Sends[row.Ask]; ok && inLocalInbox(sr) {
 			cand = append(cand, row)
 		}
 	}

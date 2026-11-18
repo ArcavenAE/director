@@ -1122,6 +1122,7 @@ func (b *Bus) publishGlobalOnce(ctx context.Context, e *Envelope, body []byte) (
 	}
 	// The hub's own word on where the bytes went: the stream and sequence come
 	// from its publish ack, the subject from the address the send used.
+	// The address parsed in g.publish above, so the error cannot be set here.
 	cluster, role, _ := parseGlobalAddress(e.Recipient.Address)
 	audit := b.auditMirrorStored(ctx, e, body, ack.Stream, globalSubject(cluster, role), ack.Sequence)
 	return &sendResult{Tier: "global", Stream: ack.Stream, Sequence: ack.Sequence, Audit: audit}, nil
@@ -1139,8 +1140,8 @@ func (b *Bus) auditMirror(ctx context.Context, e *Envelope, body []byte) string 
 // adds where, as Director-Inbox-Stream, Director-Inbox-Subject and
 // Director-Inbox-Seq, so the ask reader can later tell a sender whether the
 // message was read or expired unread (aae-orc-t77rr). Subject empty or seq
-// zero leaves the headers off; the stream header needs only a name. A reader
-// that does not know Director-Inbox-Stream ignores it.
+// zero leaves all three headers off: Director-Inbox-Stream is written only with
+// the subject and sequence, never alone.
 //
 // A failed publish is tried once more, for at most auditRetryBudget. Both
 // attempts carry the same Nats-Msg-Id, so a first attempt that landed and lost
