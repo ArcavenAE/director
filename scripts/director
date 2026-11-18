@@ -2,6 +2,7 @@
 # director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]
 # director env [--seat-file <path>]
 # director status
+# director doctor
 #
 # Starts a Claude Code session as the director, on purpose. The director MCP
 # server comes from config/director-mcp.json in this repo, handed to claude with
@@ -51,7 +52,7 @@ required=(DIRECTOR_AGENT_ID DIRECTOR_TEAM DIRECTOR_WORKSPACE)
 absolute_paths=(DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA)
 observer_keys=(DIRECTOR_HUB_OBSERVER_URL DIRECTOR_HUB_OBSERVER_NKEY DIRECTOR_HUB_OBSERVER_CA)
 
-usage() { printf 'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director env [--seat-file <path>]\n       director prove\n       director status\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)\n' >&2; exit 2; }
+usage() { printf 'usage: director start [--cluster <name>] [--resume <session name>] [--seat-file <path>]\n       director env [--seat-file <path>]\n       director prove\n       director status\n       director doctor\n       director hub user|settings ...   (run on the hub host; see sim/design/hub-user-lifecycle.md)\n' >&2; exit 2; }
 stop() { printf 'STOP: %s\n' "$*" >&2; exit 3; }
 
 dhome="${DIRECTOR_HOME:-$HOME/.director}"
@@ -138,6 +139,16 @@ case "${1:-}" in
     [[ -x "$hook" ]] || hook="$here/skills/director/scripts/standing-hook"
     [[ -x "$hook" ]] || stop "standing-hook not found; nothing was run"
     exec "$hook" ;;
+  doctor)
+    # Checks the standing loop: director-init --check first, then the hook wiring, the ages and the seats
+    # that are not live. Read only. The script installed beside this launcher comes first, as invoked and
+    # then beside the resolved launcher; the checkout's copy is only the fallback. It takes no argument.
+    [[ $# -eq 1 ]] || usage
+    doctor="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/director-doctor"
+    [[ -x "$doctor" ]] || doctor="$(cd "$(dirname "$src")" && pwd)/director-doctor"
+    [[ -x "$doctor" ]] || doctor="$here/skills/director/scripts/director-doctor"
+    [[ -x "$doctor" ]] || stop "director-doctor not found; nothing was run"
+    exec "$doctor" ;;
   env)
     shift
     seat_file="${DIRECTOR_HOME:-$HOME/.director}/seat.env"

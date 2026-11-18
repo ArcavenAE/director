@@ -230,6 +230,17 @@ section 8, ADR-007): last drain, Desk read, ledger, digest, tick, seats not live
 its own absence. The hook's waiting line carries the top items. Nothing becomes a
 Desk card unless the operator must decide something.
 
+Built as slice 9 (the seen-stamp row stays with slice 8). `director doctor` runs a new
+`director-doctor` script that prints `director-init --check`'s output first and unchanged, then
+its own rows, and writes nothing. The hook counts as wired when a `UserPromptSubmit` command in a
+Claude Code settings file (user level, or the `.claude` of the directory it runs in, each as
+`settings.json` and `settings.local.json`) names `standing-hook` or resolves by realpath to the
+installed one; the `hook:` row always lists the paths searched. A hook wired through a wrapper
+with another name is a known false negative. The check reads Claude Code settings files only. When
+none exists or parses, the hook is not checked and that is not a failure; a host that has a Claude
+Code settings file is checked even when another harness is in use. Exit 1: `--check` drifts, the hook is not wired, or an existing
+state directory is not writable; ages and seats only print.
+
 The hook also writes a seen-stamp each time it runs, so `doctor` can tell a hook
 that is wired but never reached from one that is not wired; on a harness other
 than Claude Code it cannot read the wiring at all. A wait that returns nothing,
