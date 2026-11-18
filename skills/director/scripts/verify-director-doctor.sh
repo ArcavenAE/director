@@ -39,7 +39,7 @@ ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 
 root="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/verify-doctor.XXXXXX")" && pwd -P)"
-trap 'rm -rf "$root"' EXIT
+trap 'chmod -R u+rwx "$root" 2>/dev/null; rm -rf "$root"' EXIT  # the write-protected state dir below must not block the cleanup
 mkdir -p "$root/tmp"
 
 fakes="$root/fakes"; mkdir -p "$fakes"; calls="$root/calls.log"; : >"$calls"
@@ -195,6 +195,20 @@ rm -rf "$root/absent-state"
 (cd "$PROJ" && env -i HOME="$H" TMPDIR="$root/tmp" PATH="$fakes:$pydir:/usr/bin:/bin" LANG=C DIRECTOR_HOME="$DH" DIRECTOR_STATE="$root/absent-state/s" CLAUDE_CONFIG_DIR="$CC" "$DH/bin/director" doctor) >"$root/nostate.out" 2>/dev/null || true
 { [[ ! -e "$root/absent-state" ]] && grep -qx '  digest: unknown' "$root/nostate.out"; } \
   && ok "a missing state directory reads unknown ages and is not created" || bad "missing state directory" "exists=$([[ -e "$root/absent-state" ]] && echo yes || echo no) out=[$(grep digest "$root/nostate.out" || true)]"
+
+# the third exit rule: an existing state directory that is not writable is drift, exit 1 (everything else
+# stays as for a clean install). Skipped as root, where a mode bit does not stop a write.
+if [[ "$(id -u)" == 0 ]]; then
+  echo "SKIP the state directory is not writable: running as root, where a mode bit does not stop a write"
+else
+  newhome nw
+  settings "$CC/settings.json" "$DH/bin/standing-hook"
+  chmod 555 "$ST"
+  run notwritable "$DH/bin/director" doctor
+  chmod 755 "$ST"
+  { [[ "$(rcof notwritable)" == 1 ]] && grep -qxF "drift: the state directory is not writable: $ST" "$root/notwritable.out" && grep -q '^hook: wired ' "$root/notwritable.out"; } \
+    && ok "an existing state directory that is not writable is drift, exit 1, and the other rows still print" || bad "unwritable state directory" "rc=$(rcof notwritable) out=[$(head -c 400 "$root/notwritable.out")]"
+fi
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
