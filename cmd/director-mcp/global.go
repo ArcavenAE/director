@@ -468,7 +468,7 @@ type globalTier struct {
 	// expiry holds the once-per-gap state of expiredUnread (expiry.go).
 	expiry expiryWatch
 
-	// forFilter drops mail whose FOR line names another team's seat; nil when
+	// forFilter drops mail whose FOR line names a seat other than this one; nil when
 	// DIRECTOR_FOR_FILTER is not 1 (forfilter.go).
 	forFilter *forFilter
 

@@ -288,7 +288,7 @@ func (f *forFilter) fresh(r map[string]any) bool {
 }
 
 // drops decides one envelope. It returns true and the FOR text only when
-// every token resolves to a seat of another team.
+// every token on the leading FOR lines resolves to a seat other than this one.
 func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 	texts := forTexts(e.Content.Data)
 	if len(texts) == 0 {
@@ -355,7 +355,7 @@ func (g *globalTier) foreign(ctx context.Context, e *Envelope) (bool, string) {
 // on: the blocking fetch (fetchOne) and the no-wait pull behind takeWaiting and
 // receiveBatch (pullNoWait). A third receive path must call it too.
 //
-// It reports true when the message was for another team's seat; the message is
+// It reports true when the message was for another seat; the message is
 // then acked (confirmed) and logged with its id, and the caller does not return
 // it. With the filter off it reports false and does nothing. A failed ack still
 // reports true, so a message proven foreign is never delivered; the broker

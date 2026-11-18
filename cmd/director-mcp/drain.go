@@ -122,7 +122,7 @@ func pullNoWait(ctx context.Context, cons jetstream.Consumer, n int, tier string
 			seq = md.Sequence.Stream
 		}
 		if drop != nil && drop(ctx, m, &e, seq) {
-			continue // for another team's seat: acked and logged, not returned
+			continue // for a seat other than this one: acked and logged, not returned
 		}
 		if h != nil {
 			// The handled mode (handled.go): hold the message ack-pending and
