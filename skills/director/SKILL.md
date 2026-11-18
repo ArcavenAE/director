@@ -149,7 +149,10 @@ The skill's scripts (`dsi`, `dsx`, `dws`, `merge-guard`, `draft-sweep`, `dbi`, `
    line for each seat that has been catching-up for more than 10 minutes with nothing waiting: the seat connected and has not
    called `wait_for_message`, so no doorbell fires for it, because nothing is unread. Show its lines under `Uncaptured:` as
    printed. It prints nothing when no seat qualifies. A seat on an older shim has no `waiting` or `connected_at` and is never
-   listed. The line surfaces the seat; it does not fix it.
+   listed, and a seat whose row carries `polled_at` is skipped: it has polled, as a successor of a live predecessor does while
+   it stays catching-up. A `- GAP never-polled: ...` line means it could not read the roster or the roster command timed out;
+   show it under `Uncaptured:` and never read it as no seat. It exits 0 on every reading, since this step reads lines, and
+   `--strict` makes a GAP exit 2 for a caller that tests the exit code. The line surfaces the seat; it does not fix it.
 4. Present, in this shape and no other:
 
 ```

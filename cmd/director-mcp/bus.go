@@ -1797,21 +1797,20 @@ type presenceView struct {
 	// connectedAt is when the session connected; waiting is the count across its
 	// sources, set only while it is catching up (catchup.go).
 	connectedAt string
+	polledAt    string
 	waiting     *uint64
 }
 
 func (b *Bus) presenceView(ctx context.Context) presenceView {
 	age, tier := b.pending.oldest(time.Now())
-	v := presenceView{oldestS: int64(age / time.Second), durable: b.durableSummary(), connectedAt: b.connectedAtText()}
+	v := presenceView{oldestS: int64(age / time.Second), durable: b.durableSummary(), connectedAt: b.connectedAtText(), polledAt: b.polledAtText()}
 	if b.catchingUp() {
-		// Bounded like the tracker's reads (streamReadTimeout), so a silent
-		// consumer cannot stall the row. It reads consumer state and marks no
-		// tracker sample: the first sample is the heartbeat's or the cue's.
-		rctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
-		if n, ok := b.waitingNow(rctx); ok {
+		// waitingNow is bounded by streamReadTimeout, so a silent consumer cannot
+		// stall the row. It reads consumer state and marks no tracker sample: the
+		// first sample is the heartbeat's or the cue's.
+		if n, ok := b.waitingNow(ctx); ok {
 			v.waiting = &n
 		}
-		cancel()
 	}
 	if b.cueState == nil {
 		return v
@@ -1852,6 +1851,9 @@ func (b *Bus) durableSummary() durableSummary {
 func (v presenceView) fields(rec map[string]any) {
 	rec["oldest_pending_s"] = v.oldestS
 	rec["connected_at"] = v.connectedAt
+	if v.polledAt != "" {
+		rec["polled_at"] = v.polledAt
+	}
 	if v.waiting != nil {
 		rec["waiting"] = *v.waiting
 	}

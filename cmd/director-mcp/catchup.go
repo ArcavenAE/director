@@ -25,7 +25,8 @@ type catchupState struct {
 	mu        sync.Mutex
 	done      bool
 	waited    bool
-	requested string // what the seat asked for while catching up
+	polledAt  time.Time // the first wait_for_message since connect; zero before it
+	requested string    // what the seat asked for while catching up
 }
 
 // catchingUp reports whether the session is still catching up.
@@ -39,7 +40,23 @@ func (b *Bus) catchingUp() bool {
 func (b *Bus) noteWaited() {
 	b.catchup.mu.Lock()
 	b.catchup.waited = true
+	if b.catchup.polledAt.IsZero() {
+		b.catchup.polledAt = time.Now()
+	}
 	b.catchup.mu.Unlock()
+}
+
+// polledAtText is when the seat first called wait_for_message, for the presence
+// row, and "" before it. A seat whose predecessor is still live stays
+// catching-up with nothing waiting while it polls, so the row carries this fact
+// for a sweep to tell it from a seat that never polled.
+func (b *Bus) polledAtText() string {
+	b.catchup.mu.Lock()
+	defer b.catchup.mu.Unlock()
+	if b.catchup.polledAt.IsZero() {
+		return ""
+	}
+	return b.catchup.polledAt.UTC().Format(time.RFC3339)
 }
 
 // holdRequestedState records the state a seat asked for while it is catching up
@@ -55,9 +72,14 @@ func (b *Bus) holdRequestedState(state string) bool {
 	return true
 }
 
-// waitingNow is the count waiting across every source this session reads. ok is
+// waitingNow is the count waiting across every source this session reads, read
+// under streamReadTimeout. ok is
 // false when a source could not be read, so a failed read never reads as zero.
 func (b *Bus) waitingNow(ctx context.Context) (n uint64, ok bool) {
+	// Bounded like the tracker's reads, so a consumer whose Info never answers
+	// cannot stall the heartbeat's check, the held set_presence or a presence write.
+	ctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
+	defer cancel()
 	rem, failed := b.remainingRead(ctx)
 	if len(failed) > 0 {
 		return 0, false
