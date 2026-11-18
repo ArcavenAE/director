@@ -308,6 +308,7 @@ n_s="$(printf '%s\n' "$out" | grep -n '^stalled ideas:' | cut -d: -f1 || true)";
 
 # digest age: over 12 hours is a waiting clause (digest_over_12h_waiting); at 11h59m it is not
 status 5 "$NODUE" '[]'
+touch_ago "$DIRECTOR_STATE/workstreams.jsonl" 5   # a fresh ledger, so only the digest can add a clause here
 touch_ago "$DIRECTOR_STATE/digest.md" 719; fresh_inputs
 ! hook | grep -q '^waiting:' && ok "a digest 11h59m old adds no clause and the waiting line stays away" || bad "digest under 12h"
 touch_ago "$DIRECTOR_STATE/digest.md" 785; fresh_inputs
