@@ -273,6 +273,14 @@ mv "$root/digest.hold" "$DIRECTOR_STATE/digest.md"; mv "$root/ledger.hold" "$DIR
 [[ "$with_files" == "$without_files" ]] && ok "no status file: a stale digest and ledger change nothing (output byte-identical)" || bad "no status file: output changed with digest.md and workstreams.jsonl present"
 ! printf '%s\n' "$with_files" | grep -Eq '^(loop:|waiting: .*(digest|ledger))' && ok "no status file: no loop line, no digest or ledger clause, no 'no tick' text" || bad "no status file printed a loop clause"
 ! printf '%s\n' "$with_files" | grep -qi 'no tick' && ok "no status file: nothing says there is no tick" || bad "no status file mentions the tick"
+# The same inputs against main's bytes. fixtures/standing-hook-no-loop-status.golden is the full output of the
+# standing-hook at main f054f5d1be24c5d16a6dded4cfa4778c8b24461c, before the loop clauses existed, on these inputs
+# (a quiet Desk, a 50-hour-old digest.md and workstreams.jsonl, no loop-status.json, no drain, dash or scan stamp),
+# made with: env -i HOME=<scratch> PATH=/opt/homebrew/bin:/usr/bin:/bin LANG=C DIRECTOR_STATE=<scratch state>
+# DWS_TEST_CLOCK=1 DWS_NOW=2026-11-18T12:00:00Z <main's skills/director/scripts>/standing-hook
+DWS_TEST_CLOCK=1 DWS_NOW=2026-11-18T12:00:00Z "$H" >"$root/no-status.out"
+cmp -s "$root/no-status.out" "$here/fixtures/standing-hook-no-loop-status.golden" \
+  && ok "no status file: the output is byte-identical to main's (golden from f054f5d1)" || bad "no status file: the output differs from main's golden"
 
 # tick age: fresh, stale, the env bound, unreadable
 status 5 "$NODUE" '[]'
