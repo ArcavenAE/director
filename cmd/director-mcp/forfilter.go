@@ -9,8 +9,9 @@ package main
 // token on the leading FOR lines (one or several, in a row at the top of the
 // body) must resolve, through the live presence rows, to a seat that is not this
 // one, and none may name this seat or its team. A sibling seat of this seat's own
-// team is another seat. A predecessor of this seat (the same id without its
-// -gN-M suffix, on this team) is this seat. Anything
+// team is another seat. A predecessor of this seat (the same id with another
+// generation and the same replica index, on this team) is this seat; a parallel
+// replica (another index) is not. Anything
 // else delivers: no FOR line, a line that does not parse, an unknown name, a
 // name on a stale row, a roster that cannot be read. A drop acks the message
 // on the seat's durable, so a wrong drop loses mail, and every doubt goes to
@@ -56,6 +57,10 @@ var (
 	forSeat   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(@[a-z0-9-]+)?$`)
 	forRole   = regexp.MustCompile(`^role://[a-z0-9-]+/[a-z0-9-]+$`)
 	forGenSfx = regexp.MustCompile(`-g[0-9]+-[0-9]+$`)
+	// forGenOnly matches the generation of an id and keeps its replica index,
+	// so a successor (g2-1 for g1-1) matches and a parallel replica (g1-1 for
+	// g1-0) does not.
+	forGenOnly = regexp.MustCompile(`-g[0-9]+(-[0-9]+)$`)
 )
 
 // forFilter holds this seat's identity and the roster read. roster is a seam;
@@ -246,11 +251,11 @@ func (f *forFilter) namesSelf(name, cluster string) bool {
 // is written without one in the fan-out), only to seats that are not this seat. It is seat-granular: a sibling seat of this seat's
 // own team is another seat. Two kinds of row are this seat and deliver: its own
 // row, and a predecessor's, a row of this team whose id differs only by its
-// -gN-M suffix, so mail for a seat reaches its successor during a shift. A name
+// generation, with the same replica index, so mail for a seat reaches its successor during a shift. A name
 // that rows of different teams answer to is a doubt and delivers, as does a
 // name no fresh row answers to.
 func (f *forFilter) otherSeat(name, cluster string, rows []map[string]any) bool {
-	own := forGenSfx.ReplaceAllString(f.agentID, "")
+	own := forGenOnly.ReplaceAllString(f.agentID, "$1")
 	found, team0 := false, ""
 	for _, r := range rows {
 		team, _ := r["team"].(string)
@@ -263,7 +268,7 @@ func (f *forFilter) otherSeat(name, cluster string, rows []map[string]any) bool 
 		if !forHas(forNames(agent, team, role), name) {
 			continue
 		}
-		if agent == f.agentID || (team == f.team && forGenSfx.ReplaceAllString(agent, "") == own) {
+		if agent == f.agentID || (team == f.team && forGenOnly.ReplaceAllString(agent, "$1") == own) {
 			return false
 		}
 		if found && team != team0 {
