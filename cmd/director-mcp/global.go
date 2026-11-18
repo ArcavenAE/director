@@ -600,14 +600,17 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 		// nothing, or a live sibling's, still leaves mail this seat should see.
 		found, perr := earlierDurableProbe(ctx, g, agentID, instance)
 		switch {
-		case perr != nil && predecessorID(agentID) != "":
+		case perr != nil && !firstGenerationNoPredecessor(agentID):
 			g.floorWhy = fmt.Sprintf("looking for earlier durables failed (%v)", perr)
 		case perr != nil:
 			// Only the probe failed: every position lookup answered nothing, and
-			// the seat names no predecessor whose unread mail a head start could
-			// drop. A replay of the whole stream is the worse trade (one seat
-			// began 1675 messages back), so start at the head, and say so: the
-			// log and the next summary carry the probe error and the count.
+			// the seat is a first generation that names no predecessor, so there
+			// is no earlier seat whose unread mail a head start could drop. A
+			// replay of the whole stream is the worse trade (one seat began 1675
+			// messages back), so start at the head, and say so: the log and the
+			// next summary carry the probe error and the count. A later
+			// generation, or an id with no generation, may be a respawn whose
+			// lineage was lost, so it keeps the replay (director's narrowing).
 			g.probeErr = perr
 			g.startAtHead(ctx, &cfg)
 			log.Printf("director-mcp: global durable for %s starts at the stream head because looking for earlier durables failed (%v): %s", agentID, perr, skippedPhrase(g.skipped, g.skippedKnown))
@@ -644,6 +647,14 @@ func (g *globalTier) startAtHead(ctx context.Context, cfg *jetstream.ConsumerCon
 	} else {
 		cfg.DeliverPolicy = jetstream.DeliverNewPolicy
 	}
+}
+
+// firstGenerationNoPredecessor reports whether the seat is generation 1 of its
+// replica and names no predecessor: the only seat for which a probe error
+// leaves nothing earlier that a head start could skip.
+func firstGenerationNoPredecessor(agentID string) bool {
+	me, ok := parseGenID(agentID)
+	return ok && me.gen == 1 && predecessorID(agentID) == ""
 }
 
 // skippedPhrase says how many earlier messages a head start did not deliver,
