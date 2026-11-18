@@ -342,7 +342,9 @@ func (b *Bus) receiveBatch(ctx context.Context, timeout time.Duration, max int) 
 
 // remaining reports how many messages are still waiting after a drain, per
 // tier, from consumer state. Best effort: a tier whose state cannot be read
-// is left out rather than guessed.
+// is left out rather than guessed. The messages the call itself holds for its
+// reply are not waiting: they are in the reply, so they are left out of the
+// count (see waitingAfter).
 func (b *Bus) remaining(ctx context.Context) map[string]uint64 {
 	rem, _ := b.remainingRead(ctx)
 	return rem
@@ -354,8 +356,12 @@ func (b *Bus) remaining(ctx context.Context) map[string]uint64 {
 // because its read failed must not look like a tier with nothing waiting.
 func (b *Bus) remainingRead(ctx context.Context) (out map[string]uint64, failed []string) {
 	out = map[string]uint64{}
+	var own map[string]uint64
+	if al := ackLaterFrom(ctx); al != nil {
+		own = al.heldByTier()
+	}
 	if info, err := b.cons().Info(ctx); err == nil {
-		out["local"] = info.NumPending + uint64(info.NumAckPending)
+		out["local"] = waitingAfter(info, own["local"])
 	} else {
 		failed = append(failed, "local")
 	}
@@ -365,13 +371,29 @@ func (b *Bus) remainingRead(ctx context.Context) (out map[string]uint64, failed 
 		b.globalMu.Unlock()
 		if g != nil {
 			if info, err := g.cons().Info(ctx); err == nil {
-				out["global"] = info.NumPending + uint64(info.NumAckPending)
+				out["global"] = waitingAfter(info, own["global"])
 			} else {
 				failed = append(failed, "global")
 			}
 		}
 	}
 	return out, failed
+}
+
+// waitingAfter is what is still waiting on a consumer: mail not yet fetched,
+// plus mail fetched and not yet acked, less the messages this call holds. In
+// the default mode a wait holds what it fetched until its reply is written
+// (ackafter.go), so the consumer counts those as ack-pending while the reply is
+// still being built; they are returned, not waiting. Mail another call holds,
+// and mail this call did not fetch, still counts. held is capped at the
+// ack-pending count, so a stale hold can never push the figure below what the
+// broker reports.
+func waitingAfter(info *jetstream.ConsumerInfo, held uint64) uint64 {
+	ackPending := uint64(info.NumAckPending)
+	if held > ackPending {
+		held = ackPending
+	}
+	return info.NumPending + ackPending - held
 }
 
 // lastDrainFile is the beat the director skill reads to see when the inbox was

@@ -77,6 +77,18 @@ func (a *ackLater) items() []drained {
 	return out
 }
 
+// heldByTier counts the messages this call holds, per tier, so a count of what
+// is waiting can leave them out: they are in this call's reply.
+func (a *ackLater) heldByTier() map[string]uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := map[string]uint64{}
+	for _, h := range a.held {
+		out[h.item.Tier]++
+	}
+	return out
+}
+
 // nak gives every held message back to the broker unread.
 func (a *ackLater) nak() int {
 	a.mu.Lock()
