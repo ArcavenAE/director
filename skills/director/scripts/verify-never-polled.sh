@@ -24,15 +24,16 @@ root="$(mktemp -d "${TMPDIR:-/tmp}/nevpolled.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 NOW="2026-11-18T07:00:00Z"
 
-row() { # agent, state, connected_at, waiting
-  printf '{"agent_id":"%s","team":"ops","role":"builder","instance":"01INSTANCE%s","state":"%s","connected_at":"%s","waiting":%s,"fresh":true}' "$1" "$1" "$2" "$3" "$4"
+row() { # agent, state, connected_at, waiting, [fresh, default true]
+  printf '{"agent_id":"%s","team":"ops","role":"builder","instance":"01INSTANCE%s","state":"%s","connected_at":"%s","waiting":%s,"fresh":%s}' "$1" "$1" "$2" "$3" "$4" "${5:-true}"
 }
 {
   printf '{"read_at":"%s","rows":[' "$NOW"
   row deaf catching-up 2026-11-18T06:49:00Z 0; printf ','
   row loaded catching-up 2026-11-18T06:40:00Z 3; printf ','
   row fresh catching-up 2026-11-18T06:55:00Z 0; printf ','
-  row steady idle 2026-11-18T05:00:00Z 0
+  row steady idle 2026-11-18T05:00:00Z 0; printf ','
+  row stale catching-up 2026-11-18T05:00:00Z 0 false
   printf ']}\n'
 } >"$root/roster.json"
 
@@ -45,6 +46,7 @@ printf '%s\n' "$out" | grep 'connected, never polled' | grep -q 'deaf' \
   && ok "the line names the deaf seat" || bad "the line names the deaf seat" "$out"
 printf '%s\n' "$out" | grep -q 'loaded' && bad "a seat with mail waiting is not listed" "$out" || ok "a seat with mail waiting is not listed"
 printf '%s\n' "$out" | grep -q 'fresh' && bad "a seat under 10 minutes is not listed" "$out" || ok "a seat under 10 minutes is not listed"
+printf '%s\n' "$out" | grep -q 'stale' && bad "a stale row is not listed" "$out" || ok "a stale row is not listed"
 printf '%s\n' "$out" | grep -q 'steady' && bad "an idle seat is not listed" "$out" || ok "an idle seat is not listed"
 
 set +e; out2="$("$S" --roster "$root/roster.json" --now "$NOW" 2>&1)"; set -e

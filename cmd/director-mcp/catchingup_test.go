@@ -221,3 +221,60 @@ func TestACatchingUpSessionCountsAsLive(t *testing.T) {
 		t.Errorf("a catching-up session's row is not live: %+v", d)
 	}
 }
+
+// A state requested while catching up is recorded and applies when the catch-up
+// ends, not lost.
+func TestARequestMadeWhileCatchingUpAppliesWhenItEnds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	provision(t, ctx, url)
+	seat := caConnect(t, ctx, url, "sup", "")
+	runHeartbeat(t, ctx, seat, 40*time.Millisecond)
+	if _, err := toolPresence(ctx, seat, json.RawMessage(`{"state":"busy"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := presenceStateOf(t, ctx, seat); got != "catching-up" {
+		t.Fatalf("setup: presence reads %q right after a busy request, want catching-up", got)
+	}
+	if _, err := toolWait(ctx, seat, json.RawMessage(`{"timeout_seconds":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(5*time.Second, func() bool { return presenceStateOf(t, ctx, seat) == "busy" }) {
+		t.Errorf("after the catch-up ended presence reads %q, want the requested busy", presenceStateOf(t, ctx, seat))
+	}
+}
+
+// The presence row carries when the session connected and, while it is
+// catching up, how many messages wait; the roster command reads both.
+func TestTheRosterRowCarriesConnectedAtAndWaiting(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	publishN(t, ctx, js, lineInbox("sup"), "o", 1, 2)
+	seat := caConnect(t, ctx, url, "sup", "")
+	rep, err := readRosterRows(ctx, js, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row *rosterRow
+	for i := range rep.Rows {
+		if rep.Rows[i].Instance == seat.instance {
+			row = &rep.Rows[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("no roster row for %s: %+v", seat.instance, rep.Rows)
+	}
+	if row.State != "catching-up" {
+		t.Errorf("the roster row's state = %q, want catching-up", row.State)
+	}
+	if row.Waiting == nil || *row.Waiting != 2 {
+		t.Errorf("the roster row's waiting = %v, want 2", row.Waiting)
+	}
+	at, err := time.Parse(time.RFC3339, row.ConnectedAt)
+	if err != nil || time.Since(at) > time.Minute || time.Since(at) < -time.Minute {
+		t.Errorf("the roster row's connected_at = %q (err %v), want the connect time", row.ConnectedAt, err)
+	}
+}
