@@ -195,5 +195,24 @@ for f in desk-snapshot.json desk-reads.jsonl dash-writer.json desk; do [[ -e "$d
 left="$(find "$d/state" -name '.loop-status*' -o -name 'loop-status.json.*' 2>/dev/null | head -1)"
 { [[ -f "$(status "$d")" ]] && [[ -z "$left" ]]; } && okay "the status is renamed into place; no temp file remains" || miss "temp file: status missing or a temp file remains ($left)"
 
+# --- a step that prints an invalid byte is still a step -----------------------------------------------------------
+# dws and dbi run from beside the tick, so a copy of the tick sits beside fakes that write a byte that is not
+# UTF-8 to stdout and stderr, once failing (exit 1) and once succeeding (exit 0). The tick must still exit 0,
+# write the status, and show the step as ok, or as a gap with a reason.
+for mode in 1 0; do
+  d="$(fresh_state "badbyte$mode")"; mkdir -p "$d/beside"; cp "$TICK" "$d/beside/director-tick" 2>/dev/null || :
+  for t in dws dbi; do
+    printf '#!/bin/sh\nprintf "\\377 bad out\\n"\nprintf "\\377 bad err\\n" >&2\nexit %s\n' "$mode" >"$d/beside/$t"
+  done
+  chmod +x "$d/beside"/* 2>/dev/null || :
+  rc=0; env -i HOME="$d/home" TMPDIR="$d/tmp" PATH="$bin:$pydir:/usr/bin:/bin" LANG=C DIRECTOR_STATE="$d/state" CALLS_LOG="$calls" TICK_NOW="$NOW" \
+    "$d/beside/director-tick" >"$d/out" 2>"$d/err" || rc=$?
+  s="$(status "$d")"
+  { [[ "$rc" == 0 ]] && [[ "$(pyq "$s" 'all(v["status"]=="ok" or (v["status"]=="gap" and len(v["reason"])>0) for v in d["steps"].values())')" == True ]] \
+    && [[ "$(pyq "$s" 'd["steps"]["desk_refresh"]["status"] in ("ok","gap")')" == True ]]; } \
+    && okay "invalid output bytes from dws and dbi (exit $mode) leave the tick at exit 0 with a status" \
+    || miss "invalid-byte: a step printing a non-UTF-8 byte (exit $mode) failed the tick or left no status (rc $rc: $(head -c 160 "$d/err" 2>/dev/null))"
+done
+
 ((fail == 0)) && { echo "ok: director-tick verified"; exit 0; }
 echo "director-tick: $fail group(s) missed"; exit 1
