@@ -81,8 +81,8 @@ tool is not installed is skipped, with that reason. A fifth step, `profile`,
 appears only when the profile is refused. When `director-profile check` refuses
 it, the step is a gap carrying the first error line, both defaults apply, and
 the tick exits 0. When the tick itself refuses a `[loop]` value that is not a
-positive integer, the gap names `loop.<key>` and that key's default applies. A
-missing profile file, or one with no `[loop]`, adds no step.
+positive integer, the gap names `loop.<key>` and that key's default applies. No
+profile file at the default path, or one with no `[loop]`, stays clean.
 
 What is due comes from the stamps the loop already keeps, never from mail:
 
@@ -103,7 +103,16 @@ It never:
 - writes the Desk;
 - merges, relays, answers a card, files a ticket, or starts a session.
 
-Its output is read on the next prompt, by the hook. Nothing acts on silence.
+Its output is read on the next prompt, by the hook. With a `loop-status.json`
+present, the hook prints one `loop:` line after the stalled-ideas line (tick age,
+what is due, seats whose cue is not live) and adds the digest and ledger ages to
+its waiting line when they pass 12 and 24 hours. The tick counts as stale past 90
+minutes, `DIRECTOR_TICK_MAX_MINUTES`, which is provisional until the operator
+rules a cadence, as `tick_interval` is. With no `loop-status.json` the hook prints
+what it printed before. Three clauses are not built: relayed asks with no card
+(after slice 11), card batches parsed and never checked (after slice 13), and
+"beat broken", which waits for a slice to name the drain record it compares with
+`last-drain`. Nothing acts on silence.
 a53a's dissent stands: when nobody types, nothing reaches the session. This
 design adds no alarm outside the hook; any alarm is for the ruling a53a already
 asks for.
@@ -246,14 +255,14 @@ Each red test is named here and written in its slice's PR; none exists yet.
 | 3 | Shim: the roster CLI carries `cue` and `cue_reason`; presence adds the unechoed-nonce count and the last-proof time | `TestRosterJSONCarriesCueReason`, `TestPresenceCountsNoncesSentWhileUnverified`, `TestPresenceCarriesCueProvedAt` (no such fields) | none |
 | 4 | Profile `[loop]` table and fresh-install defaults | `verify-director-profile.sh standing-keys-accepted` (unknown key refused); `verify-install-fresh-home.sh no-foreign-roots` (shipped roots name one install) | none (extends the built profile) |
 | 5 | `director tick` writes `loop-status.json` | `verify-director-tick.sh`: fake `tmux` and `nats` log no call, status written, dashboard untouched (no command) | 3, 4 |
-| 6 | Hook reads the status: tick age, digest and ledger age, beat broken, seats not live, relayed asks with no card, card batches parsed and never checked | `verify-standing-hook.sh` cases `beat_broken`, `digest_over_12h_waiting`, `batch_parsed_not_checked_is_waiting` (no such clauses) | 1, 5 |
+| 6 | Hook reads the status: tick age, digest and ledger age, seats not live, due items. Moved out: relayed asks with no card (after 11), card batches parsed and never checked (after 13), beat broken (until a slice names the drain record) | `verify-standing-hook.sh` case `digest_over_12h_waiting` and the loop-line cases (no such clauses); with no `loop-status.json` the output is byte-identical | 1, 5 |
 | 7 | `director status` prints the hook's text | `verify-status.sh matches-hook` (no command) | 6 |
 | 8 | Plugin `hooks.json`: `standing-hook`, a SessionStart status line, the hook's seen-stamp | `verify-plugin-hooks.sh names-standing-hook`; `verify-standing-hook.sh writes-seen-stamp` (no plugin, no stamp) | Boot 0 and the hook binding |
 | 9 | `director doctor`, extending `director-init --check` | `verify-director-doctor.sh` cases `unwired-hook-exit1`, `stale-digest-exit0`, `seat-not-live-listed` (no command); its seen-stamp row follows 8 | 3, 5 |
 | 10 | Loop scripts inside the plugin's per-version directory | `verify-director-install.sh rollback-restores-standing-hook` (scripts sit outside every version) | Boot 0 |
-| 11 | `card-ingest template`; the relay template's "Operator decision: card file path, or none" field | `verify-card-ingest.sh template_parses_clean`; `has_operator_decision_field` (neither exists) | none |
+| 11 | `card-ingest template`; the relay template's "Operator decision: card file path, or none" field | `verify-card-ingest.sh template_parses_clean`; `has_operator_decision_field` (neither exists); the hook's relayed-asks-with-no-card clause (moved here from slice 6) | none |
 | 12 | The role library: the shared fragment names the Card standard and its trigger | a render check that every role carrying the Desk-writes clause names the Card standard (0 match today) | 11 |
-| 13 | Desk outbox: `card-ingest parse` appends `cards.jsonl`, `check` appends `applied.jsonl`; reconcile reports | `verify-card-ingest.sh parse-appends-cards-jsonl` (no file) | none |
+| 13 | Desk outbox: `card-ingest parse` appends `cards.jsonl`, `check` appends `applied.jsonl`; reconcile reports | `verify-card-ingest.sh parse-appends-cards-jsonl` (no file); `verify-standing-hook.sh batch_parsed_not_checked_is_waiting` (moved here from slice 6) | none |
 | 14 | Answer mirror: `desk-snapshot` keeps answer choices in `answers.jsonl` | `verify-desk-snapshot.sh answers_persisted_with_choice` (choices are dropped) | none |
 | 15 | RULING (store): `director answer` and reconcile make the local log the record | `answer_without_artifact_reaches_snapshot`, `conflict_reported_not_repaired` | 13, 14 |
 | 16 | RULING (finding a53a, fix 3): `director init --schedule` prints the entry and installs it only on `--yes` | `verify-director-init.sh no-install-without-yes` | 5 |
