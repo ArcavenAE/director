@@ -405,7 +405,9 @@ What it settles in this design:
   marvel's `MARVEL_PREDECESSOR`, or by hand. The presence-gone trigger
   (section 3) is timing only, never a lineage source. U5, marvel setting
   `MARVEL_PREDECESSOR` on a crash repair, is now load-bearing, tracked as
-  marvel#541.
+  marvel#541. A `MARVEL_PREDECESSOR` that is not `<workspace>/<id>` is skipped
+  with a warning that names the variable and never the value, and the seat
+  still launches (director ruling, 2026-11-18, director#220 U1).
 - **B2-R2:** a seat is not live until it has taken over for its predecessor.
   For now that means its catch-up is complete, which is section 4's exit rule.
   How a handoff or shift change should finish, including keeping an eligible
