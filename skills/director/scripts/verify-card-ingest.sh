@@ -964,7 +964,7 @@ else ok "check_survives_an_unreadable_cards_jsonl"; fi
 export DIRECTOR_STATE="$saved_s13_state"
 BATCHDIR="$DIRECTOR_STATE/card-ingest"; LOG="$DIRECTOR_STATE/card-ingest.jsonl"
 
-# --- I-578 (aae-orc-htm0w, director ruling 01M7RACMMK): a card never asks the operator to approve or merge a PR ------
+# --- I-578 (aae-orc-htm0w, director readings 1 to 6): a card never asks the operator to approve or merge a PR ------
 # The heading's question is refused when it holds an approve or merge verb (any tense) and a named PR: #N,
 # owner/repo#N, a /pull/N URL, or PR, pull request or MR followed by a number. A bare number is not a PR form.
 # The refuse cases fail today (parse accepts them); the three guards pass today and must keep passing.
