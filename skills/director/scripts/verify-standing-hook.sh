@@ -384,8 +384,10 @@ else
     && ok "an unwritable state directory: same stdout, exit 0, nothing on stderr, no stamp" || bad "unwritable state directory" "rc=$rc err=[$(head -c 200 "$root/seen-ro.err")]"
 fi
 printf 'not a directory\n' >"$root/seen-file"
+# the baseline is a plain run on the same path: a file there changes what the hook reads (the asks line), not what --seen does
+DIRECTOR_STATE="$root/seen-file" clk >"$root/seen-nd0.out" 2>/dev/null || true
 rc=0; DIRECTOR_STATE="$root/seen-file" clk --seen >"$root/seen-nd.out" 2>"$root/seen-nd.err" || rc=$?
-{ [[ "$rc" == 0 && ! -s "$root/seen-nd.err" ]] && cmp -s "$root/seen-plain.out" "$root/seen-nd.out"; } \
+{ [[ "$rc" == 0 && ! -s "$root/seen-nd.err" ]] && cmp -s "$root/seen-nd0.out" "$root/seen-nd.out"; } \
   && ok "a state path that is a file: same stdout, exit 0, nothing on stderr" || bad "state path is a file" "rc=$rc err=[$(head -c 200 "$root/seen-nd.err")]"
 rm -rf "$seen_state"
 clk --seen >/dev/null 2>&1 || true
