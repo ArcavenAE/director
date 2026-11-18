@@ -50,7 +50,9 @@ func TestAGlobalSendIsNotJudgedAgainstTheLocalInbox(t *testing.T) {
 	if global.ExpiredUnread != "" {
 		t.Errorf("the global send was marked expired unread at %s by comparing hub sequence 1 with the local inbox", global.ExpiredUnread)
 	}
-	if _, ok := r.reader.ledger.Sends["m-global"]; ok {
-		t.Errorf("a send stored in GLOBAL_TO_DIRECTOR was recorded as a local inbox send")
+	// asks --id reads the same check live: it must not say a hub send expired
+	// because of the local inbox's first sequence.
+	if d := r.lookup(t, "m-global").Delivery; d == nil || d.State != deliveryUnknown {
+		t.Errorf("asks --id delivery for the global send = %+v, want %s (the check reads AGENT_INBOX only)", d, deliveryUnknown)
 	}
 }
