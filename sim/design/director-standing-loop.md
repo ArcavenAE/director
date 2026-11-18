@@ -183,9 +183,13 @@ with every tier at 0 and no failed read, writes `last-drain`, and the shim logs
 `last-drain` stays one stamp line, as `standing-hook` and its verifiers read it,
 so the reason is logged and not stored; a slice that needs it in a file states
 that shape itself. Presence gains
-two cue fields: a count of nonces sent while unverified, which tells "no mail
-since start" from "nonces sent and never echoed", and the time of the last
-proof, which gives a live cue an age.
+two cue fields, present only when the cue is on. `cue_nonces_sent` is an integer:
+the nonces sent while unverified, not counting the start-up self-test, which
+tells "no mail since start" from "nonces sent and never echoed". `cue_proved_at`
+is an RFC 3339 UTC time: when an echo last made the cue live, absent until the
+first proof, which gives a live cue an age. Both are cleared on a shim restart.
+The roster CLI passes `cue`, `cue_reason` and both fields through, each omitted
+when absent.
 
 ## 8. Slices
 
