@@ -481,6 +481,37 @@ nolog="$(env -u RELAY_LOG "$root/plug/a/b/c/standing-hook" 2>/dev/null | grep "$
 [[ -z "$nolog" ]] && ok "hook_relays_with_no_card_no_log_path_is_silent_without_loop_status" || bad "hook_relays_with_no_card_no_log_path_is_silent_without_loop_status" "got: [$nolog]"
 if [[ -n "$saved_relay" ]]; then export RELAY_LOG="$saved_relay"; else unset RELAY_LOG; fi
 
+# --- S13: card batches parsed and never checked (aae-orc-klqn1; moved here from slice 6; director 01M7R3ECP4 ruling 4) --
+# Gated on $DIRECTOR_STATE/desk/cards.jsonl existing (not on loop-status.json). A batch is waiting when cards.jsonl
+# holds a line for it and applied.jsonl holds none. One line, silent at 0, naming the oldest waiting batch by its
+# first cards line. Red until the clause exists.
+BATCHLINE='^card batches parsed and never checked: '
+export DIRECTOR_STATE="$root/batch-clause-state"; rm -rf "$DIRECTOR_STATE"; mkdir -p "$DIRECTOR_STATE/desk"
+fresh_inputs
+CJ="$DIRECTOR_STATE/desk/cards.jsonl"; AJ="$DIRECTOR_STATE/desk/applied.jsonl"
+cardline() { printf '{"at": "%s", "slug": "%s", "op": "set", "data_sha256": "aa", "batch": "%s"}\n' "$1" "$2" "$3"; }
+{ cardline "$(ago 600)" rpt-1 rpt-aaaa1111.json; cardline "$(ago 600)" rpt-2 rpt-aaaa1111.json
+  cardline "$(ago 300)" rpt-3 rpt-bbbb2222.json
+  cardline "$(ago 60)" rpt-4 rpt-cccc3333.json; } >"$CJ"
+printf '{"at": "%s", "slug": "rpt-4", "batch": "rpt-cccc3333.json", "result": "PASS", "data_sha256": "aa"}\n' "$(ago 30)" >"$AJ"
+out="$(hook)"
+[[ "$(printf '%s\n' "$out" | grep "$BATCHLINE")" == "card batches parsed and never checked: 2 (oldest rpt-aaaa1111.json)" ]] \
+  && ok "batch_parsed_not_checked_is_waiting" \
+  || bad "batch_parsed_not_checked_is_waiting" "got: [$(printf '%s\n' "$out" | grep "$BATCHLINE")]"
+printf '{"at": "%s", "slug": "rpt-1", "batch": "rpt-aaaa1111.json", "result": "MISMATCH", "data_sha256": "aa"}\n' "$(ago 20)" >>"$AJ"
+[[ "$(hook | grep "$BATCHLINE")" == "card batches parsed and never checked: 1 (oldest rpt-bbbb2222.json)" ]] \
+  && ok "batch_parsed_not_checked_counts_a_checked_batch_out_even_on_mismatch" \
+  || bad "batch_parsed_not_checked_counts_a_checked_batch_out_even_on_mismatch" "got: [$(hook | grep "$BATCHLINE")]"
+printf '{"at": "%s", "slug": "rpt-3", "batch": "rpt-bbbb2222.json", "result": "PASS", "data_sha256": "aa"}\n' "$(ago 10)" >>"$AJ"
+! hook | grep -q "$BATCHLINE" && ok "batch_parsed_not_checked_is_silent_at_zero" || bad "batch_parsed_not_checked_is_silent_at_zero" "$(hook | grep "$BATCHLINE")"
+: >"$AJ"
+cardline "$(ago 5)" rpt-5 rpt-dddd4444.json >"$CJ"
+mv "$CJ" "$CJ.off"
+! hook | grep -q "$BATCHLINE" && ok "batch_parsed_not_checked_is_gated_on_cards_jsonl" || bad "batch_parsed_not_checked_is_gated_on_cards_jsonl" "the clause printed with no cards.jsonl"
+mv "$CJ.off" "$CJ"
+printf 'not json\n' >"$CJ"
+hook | grep -q "${BATCHLINE}UNKNOWN (" && ok "batch_parsed_not_checked_reads_unknown_when_cards_jsonl_is_unreadable" || bad "batch_parsed_not_checked_reads_unknown_when_cards_jsonl_is_unreadable" "got: [$(hook | grep "$BATCHLINE")]"
+
 export DIRECTOR_STATE="$saved_state"
 
 echo "$pass passed, $fail failed"

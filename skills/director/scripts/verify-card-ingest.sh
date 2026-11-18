@@ -823,5 +823,146 @@ assert "card file path, or none" in lines[dec], "the field does not say 'card fi
 P
 then ok "has_operator_decision_field"; else bad "has_operator_decision_field" "relay-template.md has no Operator decision field between Ask and Context"; fi
 
+# --- S13: the Desk outbox (aae-orc-klqn1; design section 6; director 01M7R3ECP4 rulings 1 to 3) -------------------------
+# Red until the outbox exists. Ruling 1: additive. parse also appends one line per card to $DIRECTOR_STATE/desk/cards.jsonl
+# and check appends one line per slug to desk/applied.jsonl; card-ingest.jsonl keeps every line it has today.
+# Ruling 2: an applied line is {at, slug, batch, result, data_sha256}, result PASS, MISMATCH or MISSING, data_sha256
+# the one the cards line carries. Ruling 3: `card-ingest reconcile` is read-only and never repairs; its own cases here
+# go beyond row 13. Each case runs in its own state directory so none depends on another's files.
+s13_state() {  # N: a fresh state dir with the Desk read, parse and check pointed at it
+  export DIRECTOR_STATE="$root/s13-$1"; mkdir -p "$DIRECTOR_STATE"
+  BATCHDIR="$DIRECTOR_STATE/card-ingest"; LOG="$DIRECTOR_STATE/card-ingest.jsonl"
+  write_snapshot
+}
+DESK_CARDS() { echo "$DIRECTOR_STATE/desk/cards.jsonl"; }
+DESK_APPLIED() { echo "$DIRECTOR_STATE/desk/applied.jsonl"; }
+saved_s13_state="$DIRECTOR_STATE"
+
+# parse appends one cards.jsonl line per card, and leaves the old log as it was
+s13_state 1
+if ! run "$two" >"$root/out" 2>"$root/err"; then bad "parse-appends-cards-jsonl" "parse refused the control file: $(cat "$root/err")"
+elif [[ ! -f "$(DESK_CARDS)" ]]; then bad "parse-appends-cards-jsonl" "no $(DESK_CARDS) after a parse that wrote batch $(basename "$(batch_json)")"
+elif python3 - "$(DESK_CARDS)" "$(batch_json)" "$LOG" <<'P'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+batch = json.load(open(sys.argv[2]))
+log = [json.loads(l) for l in open(sys.argv[3]) if l.strip()]
+slugs = [w["doc_id"] for w in batch["writes"]]
+assert [r.get("slug") for r in rows] == slugs, "cards.jsonl slugs %r, want %r" % ([r.get("slug") for r in rows], slugs)
+for r in rows:
+    for k in ("at", "slug", "op", "data_sha256", "batch"):
+        assert k in r, "cards.jsonl line lacks %r: %r" % (k, r)
+    assert r["batch"] == sys.argv[2].rsplit("/", 1)[-1], "batch %r is not the batch file's name" % r["batch"]
+assert len(log) == len(slugs), "card-ingest.jsonl has %d lines, want %d (it must keep today's lines)" % (len(log), len(slugs))
+assert [l["data_sha256"] for l in log] == [r["data_sha256"] for r in rows], "the log and cards.jsonl disagree on data_sha256"
+P
+then ok "parse-appends-cards-jsonl"; else bad "parse-appends-cards-jsonl" "cards.jsonl does not match the batch"; fi
+
+# a refused parse adds nothing to cards.jsonl
+s13_state 2
+run "$two" >/dev/null 2>&1 || true
+n_before="$(wc -l <"$(DESK_CARDS)" 2>/dev/null | tr -d ' ' || true)"
+bad_card="$root/s13-refused.md"; sub "$bad_card" "**Recommendation.** Option 2." "**Recommendation.** Option 9."
+DWS_NOW="2026-10-19T12:30:00Z" "$CI" parse "$bad_card" --area a --owner o --prefix zzz >/dev/null 2>&1 || true
+n_after="$(wc -l <"$(DESK_CARDS)" 2>/dev/null | tr -d ' ' || true)"
+if [[ ! -f "$(DESK_CARDS)" ]]; then bad "refused_parse_adds_nothing_to_cards_jsonl" "no cards.jsonl even after the accepted parse"
+elif [[ "$n_before" == "$n_after" ]]; then ok "refused_parse_adds_nothing_to_cards_jsonl"
+else bad "refused_parse_adds_nothing_to_cards_jsonl" "cards.jsonl went from $n_before to $n_after lines"; fi
+
+# check appends one applied line per slug, with the result and the sha the cards line carries
+s13_state 3
+run "$two" >/dev/null 2>&1
+B="$(batch_json)"
+python3 - "$B" "$root/s13-read-ok.json" "$root/s13-read-bad.json" <<'P'
+import json, sys
+w = json.load(open(sys.argv[1]))["writes"]
+good = [{"id": x["doc_id"], "data": dict(x["data"])} for x in w]
+json.dump(good, open(sys.argv[2], "w"))
+bad = json.loads(json.dumps(good)); bad[1]["data"]["options"][0]["text"] += " changed"
+json.dump(bad, open(sys.argv[3], "w"))
+P
+"$CI" check --batch "$B" --read "$root/s13-read-ok.json" >/dev/null 2>&1 || true
+if [[ ! -f "$(DESK_APPLIED)" ]]; then bad "check_appends_applied_jsonl" "no $(DESK_APPLIED) after a passing check"
+elif python3 - "$(DESK_APPLIED)" "$(DESK_CARDS)" "$B" <<'P'
+import json, sys
+app = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+cards = {json.loads(l)["slug"]: json.loads(l) for l in open(sys.argv[2]) if l.strip()}
+batch = sys.argv[3].rsplit("/", 1)[-1]
+assert [a.get("slug") for a in app] == ["rpt-1", "rpt-2"], "applied slugs %r" % [a.get("slug") for a in app]
+for a in app:
+    for k in ("at", "slug", "batch", "result", "data_sha256"):
+        assert k in a, "applied line lacks %r: %r" % (k, a)
+    assert a["result"] == "PASS", "result %r, want PASS" % a["result"]
+    assert a["batch"] == batch, "batch %r, want %r" % (a["batch"], batch)
+    assert a["data_sha256"] == cards[a["slug"]]["data_sha256"], "%s: applied sha differs from the cards line" % a["slug"]
+P
+then ok "check_appends_applied_jsonl"; else bad "check_appends_applied_jsonl" "applied.jsonl does not match the batch and the cards lines"; fi
+# a mismatching read is recorded as MISMATCH for that slug only; the old log still gets its checked line
+"$CI" check --batch "$B" --read "$root/s13-read-bad.json" >/dev/null 2>&1 || true
+if [[ -f "$(DESK_APPLIED)" ]] && python3 - "$(DESK_APPLIED)" <<'P'
+import json, sys
+app = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+assert len(app) == 4, "want 4 applied lines after two checks, got %d" % len(app)
+assert [(a["slug"], a["result"]) for a in app[2:]] == [("rpt-1", "PASS"), ("rpt-2", "MISMATCH")], [(a["slug"], a["result"]) for a in app[2:]]
+P
+then ok "check_records_a_mismatch_as_mismatch"; else bad "check_records_a_mismatch_as_mismatch" "applied.jsonl lacks the rpt-2 MISMATCH line"; fi
+
+# reconcile (ruling 3, beyond row 13): read-only; reports a card with no applied line, an applied line with no
+# card, and a sha conflict; never repairs.
+s13_state 4
+run "$two" >/dev/null 2>&1
+rc=0; "$CI" reconcile >"$root/out" 2>"$root/err" || rc=$?
+if [[ $rc -ne 0 ]]; then bad "reconcile_reports_a_card_with_no_applied_line" "reconcile exited $rc: $(cat "$root/err")"
+elif ! grep -q '^NOT-APPLIED rpt-1' "$root/out" || ! grep -q '^NOT-APPLIED rpt-2' "$root/out"; then bad "reconcile_reports_a_card_with_no_applied_line" "output: $(cat "$root/out")"
+else ok "reconcile_reports_a_card_with_no_applied_line"; fi
+# a clean pair reports nothing
+B="$(batch_json)"
+python3 - "$B" "$root/s13-read-4.json" <<'P'
+import json, sys
+w = json.load(open(sys.argv[1]))["writes"]
+json.dump([{"id": x["doc_id"], "data": dict(x["data"])} for x in w], open(sys.argv[2], "w"))
+P
+"$CI" check --batch "$B" --read "$root/s13-read-4.json" >/dev/null 2>&1 || true
+rc=0; "$CI" reconcile >"$root/out" 2>"$root/err" || rc=$?
+if [[ $rc -ne 0 ]]; then bad "reconcile_is_silent_on_a_clean_outbox" "reconcile exited $rc: $(cat "$root/err")"
+elif grep -qE '^(NOT-APPLIED|NO-CARD|CONFLICT) ' "$root/out"; then bad "reconcile_is_silent_on_a_clean_outbox" "reported: $(cat "$root/out")"
+else ok "reconcile_is_silent_on_a_clean_outbox"; fi
+# an applied line for a slug no cards line holds, and one whose sha differs, are reported and left in place
+printf '%s\n' '{"at": "2026-10-19T12:00:00Z", "slug": "rpt-9", "batch": "none.json", "result": "PASS", "data_sha256": "00"}' >>"$(DESK_APPLIED)" 2>/dev/null || true
+printf '%s\n' '{"at": "2026-10-19T12:00:00Z", "slug": "rpt-1", "batch": "x.json", "result": "PASS", "data_sha256": "ff"}' >>"$(DESK_APPLIED)" 2>/dev/null || true
+snap_c="$(shasum -a 256 <"$(DESK_CARDS)" 2>/dev/null || true)"; snap_a="$(shasum -a 256 <"$(DESK_APPLIED)" 2>/dev/null || true)"
+rc=0; "$CI" reconcile >"$root/out" 2>"$root/err" || rc=$?
+if [[ $rc -ne 0 ]]; then bad "reconcile_reports_no_card_and_conflict" "reconcile exited $rc: $(cat "$root/err")"
+elif ! grep -q '^NO-CARD rpt-9' "$root/out"; then bad "reconcile_reports_no_card_and_conflict" "no NO-CARD line for rpt-9: $(cat "$root/out")"
+elif ! grep -q '^CONFLICT rpt-1' "$root/out"; then bad "reconcile_reports_no_card_and_conflict" "no CONFLICT line for rpt-1: $(cat "$root/out")"
+else ok "reconcile_reports_no_card_and_conflict"; fi
+if [[ -f "$(DESK_CARDS)" && "$snap_c" == "$(shasum -a 256 <"$(DESK_CARDS)")" && "$snap_a" == "$(shasum -a 256 <"$(DESK_APPLIED)")" ]]; then ok "reconcile_never_repairs"; else bad "reconcile_never_repairs" "cards.jsonl or applied.jsonl is missing or changed after a reconcile"; fi
+# check's exit code is for the slugs alone: an outbox that cannot be read or written is named on one line and does not
+# change it, and the old log still gets its checked line (kinu review low1 on director#699).
+s13_state 5
+run "$two" >/dev/null 2>&1
+B="$(batch_json)"
+mkdir -p "$(DESK_APPLIED)"   # a directory where the file goes: open for append fails with EISDIR
+rc=0; "$CI" check --batch "$B" --read "$root/s13-read-ok.json" >"$root/out" 2>&1 || rc=$?
+if [[ $rc -ne 0 ]]; then bad "check_survives_an_unwritable_applied_jsonl" "exit $rc on a matching read: $(tail -3 "$root/out")"
+elif grep -q Traceback "$root/out"; then bad "check_survives_an_unwritable_applied_jsonl" "traceback: $(tail -3 "$root/out")"
+elif [[ "$(grep -c '^outbox not written: ' "$root/out")" != 1 ]]; then bad "check_survives_an_unwritable_applied_jsonl" "want one 'outbox not written: <reason>' line: $(cat "$root/out")"
+elif ! tail -1 "$LOG" | grep -q '"checked"'; then bad "check_survives_an_unwritable_applied_jsonl" "no checked line in card-ingest.jsonl"
+else ok "check_survives_an_unwritable_applied_jsonl"; fi
+rc=0; "$CI" check --batch "$B" --read "$root/s13-read-bad.json" >"$root/out" 2>&1 || rc=$?
+if [[ $rc -eq 1 ]] && grep -q '^MISMATCH rpt-2 options' "$root/out" && grep -q '^outbox not written: ' "$root/out" && ! grep -q Traceback "$root/out"; then ok "check_keeps_its_mismatch_exit_when_the_outbox_fails"
+else bad "check_keeps_its_mismatch_exit_when_the_outbox_fails" "rc=$rc: $(tail -4 "$root/out")"; fi
+s13_state 6
+run "$two" >/dev/null 2>&1
+B="$(batch_json)"
+chmod 000 "$(DESK_CARDS)"   # present and unreadable: the outbox read raises, and check must not take its exit from it
+rc=0; "$CI" check --batch "$B" --read "$root/s13-read-ok.json" >"$root/out" 2>&1 || rc=$?
+chmod 644 "$(DESK_CARDS)"
+if [[ $rc -ne 0 ]]; then bad "check_survives_an_unreadable_cards_jsonl" "exit $rc on a matching read: $(tail -3 "$root/out")"
+elif [[ "$(grep -c '^outbox not written: ' "$root/out")" != 1 ]]; then bad "check_survives_an_unreadable_cards_jsonl" "want one 'outbox not written: <reason>' line: $(cat "$root/out")"
+else ok "check_survives_an_unreadable_cards_jsonl"; fi
+export DIRECTOR_STATE="$saved_s13_state"
+BATCHDIR="$DIRECTOR_STATE/card-ingest"; LOG="$DIRECTOR_STATE/card-ingest.jsonl"
+
 echo "card-ingest: $pass passed, $fail failed"
 [[ "$fail" == 0 ]]

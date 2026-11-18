@@ -23,6 +23,16 @@ Design: sim/design/card-ingest.md (issue #320). A script cannot write the Desk
       slug the read does not hold), appends a "checked" line to the log, and exits
       nonzero on any mismatch or missing slug.
 
+  The Desk outbox (S13). Under $DIRECTOR_STATE/desk/, append-only, written under the same flock: `parse` also
+  appends each log line to cards.jsonl with a "batch" field (the batch file's name), and `check` appends one line
+  per slug to applied.jsonl, {at, slug, batch, result (PASS, MISMATCH or MISSING), data_sha256}, for a batch
+  that cards.jsonl names. card-ingest.jsonl keeps every line it had.
+
+  card-ingest reconcile
+      Reads cards.jsonl and applied.jsonl and prints NOT-APPLIED <slug> (a card no applied line names),
+      NO-CARD <slug> (an applied slug no card holds) and CONFLICT <slug> (an applied sha no card line carries).
+      It writes nothing and repairs nothing, and exits 0 on findings: it is a diagnostic, not a gate.
+
   card-ingest template
       Prints one minimal valid card to stdout and writes nothing. Replace its example text with the
       real question; `card-ingest parse` accepts it as printed. Its Valid until date is seven days
@@ -58,6 +68,8 @@ SNAPSHOT = os.path.join(STATE, "desk-snapshot.json")
 BATCHDIR = os.path.join(STATE, "card-ingest")
 LOG = os.path.join(STATE, "card-ingest.jsonl")
 LOCK = os.path.join(STATE, "card-ingest.lock")
+CARDS = os.path.join(STATE, "desk", "cards.jsonl")      # the Desk outbox (S13): one line per card parse wrote
+APPLIED = os.path.join(STATE, "desk", "applied.jsonl")  # one line per slug per check: what the renderer held
 THRESHOLD_HOURS = 24  # THRESHOLD_HOURS["desk snapshot"] in dws
 
 CONTENT_FIELDS = ("title", "question", "context", "options", "rec", "rec_key", "expiry", "source", "kind", "intake")
@@ -378,6 +390,16 @@ def check_card(card, pre, kind_default_source, a, snap, logseen, today):
     return [], {"slug": slug, "num": num, "data": data}, notes
 
 
+def append_lines(path, rows):
+    """Append one JSON line per row, flushed and synced. The caller holds the lock."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:
+        for e in rows:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
 def atomic_write(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".card-ingest.")
@@ -463,17 +485,22 @@ def cmd_parse(a):
     with open(LOCK, "a") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         atomic_write(path, batch)
+        size = os.path.getsize(LOG) if os.path.exists(LOG) else 0
+        csize = os.path.getsize(CARDS) if os.path.exists(CARDS) else None
         try:
-            size = os.path.getsize(LOG) if os.path.exists(LOG) else 0
-            with open(LOG, "a") as f:
-                for e in lines:
-                    f.write(json.dumps(e, ensure_ascii=False) + "\n")
-                f.flush()
-                os.fsync(f.fileno())
+            append_lines(LOG, lines)
+            # The Desk outbox (S13): the same lines, each naming its batch file, so a later reader can join
+            # a card to the check that read it back. card-ingest.jsonl keeps every line it had.
+            append_lines(CARDS, [dict(e, batch=os.path.basename(path)) for e in lines])
         except OSError as err:
             # The batch and its log lines go together: no batch is left without them, and
             # no line of a partial append is left without its batch.
-            for undo in (lambda: os.unlink(path), lambda: os.truncate(LOG, size)):
+            def undo_cards():
+                if csize is None:
+                    os.unlink(CARDS)
+                else:
+                    os.truncate(CARDS, csize)
+            for undo in (lambda: os.unlink(path), lambda: os.truncate(LOG, size), undo_cards):
                 try:
                     undo()
                 except OSError:
@@ -566,12 +593,15 @@ def cmd_check(a):
         if isinstance(v, dict):
             docs[k] = v.get("data") if isinstance(v.get("data"), dict) else v
     bad = 0
+    results = []  # (slug, result, data_sha256) for desk/applied.jsonl
     for w in batch["writes"]:
         slug = w["doc_id"]
         doc = docs.get(slug)
+        dsha = hashlib.sha256(json.dumps(w["data"], sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         if doc is None:
             print(f"MISSING {slug}")
             bad += 1
+            results.append((slug, "MISSING", dsha))
             continue
         # an update carries the content fields it writes (a backfill writes two of them)
         fields = [f for f in CONTENT_FIELDS if f in w["data"]] if w["op"] == "update" else sorted(w["data"])
@@ -580,17 +610,87 @@ def cmd_check(a):
             bad += 1
             for fl in diffs:
                 print(f"MISMATCH {slug} {fl}")
+            results.append((slug, "MISMATCH", dsha))
         else:
             print(f"PASS {slug}")
+            results.append((slug, "PASS", dsha))
     os.makedirs(STATE, exist_ok=True)
+    bname = os.path.basename(a.batch)
     with open(LOCK, "a") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         with open(LOG, "a") as f:
-            f.write(json.dumps({"at": now(), "checked": True, "batch": os.path.basename(a.batch), "slugs": [w["doc_id"] for w in batch["writes"]], "failed": bad}) + "\n")
+            f.write(json.dumps({"at": now(), "checked": True, "batch": bname, "slugs": [w["doc_id"] for w in batch["writes"]], "failed": bad}) + "\n")
             f.flush()
             os.fsync(f.fileno())
+        # The Desk outbox (S13): one applied line per slug, only for a batch parse put in cards.jsonl. A backfill
+        # batch, or one parsed before the outbox existed, has no cards line to compare with, so it adds none.
+        # An outbox that cannot be read or written is named on one line and changes nothing else: check's exit
+        # code is for the slugs alone, and the log line above is already down.
+        try:
+            if any(r.get("batch") == bname for r in read_jsonl(CARDS)[0]):
+                now_s = now()
+                append_lines(APPLIED, [{"at": now_s, "slug": s, "batch": bname, "result": r, "data_sha256": d} for s, r, d in results])
+        except (OSError, Refused) as err:
+            print(f"outbox not written: {getattr(err, 'strerror', None) or err}", file=sys.stderr)
     if bad:
         raise SystemExit(1)
+
+
+def read_jsonl(path):
+    """(rows, bad_line_numbers) of the JSON objects in path; a missing file is no rows."""
+    rows, bad = [], []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for n, l in enumerate(f, 1):
+                if not l.strip():
+                    continue
+                try:
+                    e = json.loads(l)
+                except ValueError:
+                    e = None
+                if isinstance(e, dict):
+                    rows.append(e)
+                else:
+                    bad.append(n)
+    except FileNotFoundError:
+        pass
+    except (OSError, UnicodeDecodeError) as err:
+        raise Refused(f"cannot read {path}: {getattr(err, 'strerror', None) or type(err).__name__}")
+    return rows, bad
+
+
+def cmd_reconcile(a):
+    """Read desk/cards.jsonl and desk/applied.jsonl and report, never repair (S13, director ruling 3). Exit 0 on
+    findings: it is a diagnostic, and a gate on it would need its own written ruling."""
+    cards, cbad = read_jsonl(CARDS)
+    applied, abad = read_jsonl(APPLIED)
+    for name, nums in (("cards.jsonl", cbad), ("applied.jsonl", abad)):
+        for n in nums:
+            print(f"UNREADABLE {name} line {n}")
+    cards_by_slug, applied_pairs = {}, set()
+    for r in cards:
+        cards_by_slug.setdefault(r.get("slug"), []).append(r)
+    for r in applied:
+        applied_pairs.add((r.get("slug"), r.get("batch")))
+    seen = set()
+    for r in cards:
+        key = (r.get("slug"), r.get("batch"))
+        if key not in applied_pairs and key not in seen:
+            print(f"NOT-APPLIED {r.get('slug')} (batch {r.get('batch')})")
+        seen.add(key)
+    flagged = set()
+    for r in applied:
+        slug = r.get("slug")
+        held = cards_by_slug.get(slug)
+        if not held:
+            if ("NO-CARD", slug) not in flagged:
+                print(f"NO-CARD {slug} (batch {r.get('batch')})")
+                flagged.add(("NO-CARD", slug))
+        elif r.get("data_sha256") not in {c.get("data_sha256") for c in held}:
+            if ("CONFLICT", slug, r.get("data_sha256")) not in flagged:
+                print(f"CONFLICT {slug} (applied sha differs from every cards line; batch {r.get('batch')})")
+                flagged.add(("CONFLICT", slug, r.get("data_sha256")))
+    print(f"card-ingest: reconcile read {len(cards)} cards lines and {len(applied)} applied lines; nothing was changed")
 
 
 TEMPLATE_DAYS = 7
@@ -639,6 +739,8 @@ def main(argv):
     c.add_argument("--batch", required=True)
     c.add_argument("--read", required=True)
     c.set_defaults(fn=cmd_check)
+    r = sub.add_parser("reconcile")
+    r.set_defaults(fn=cmd_reconcile)
     a = p.parse_args(argv)
     try:
         a.fn(a)
