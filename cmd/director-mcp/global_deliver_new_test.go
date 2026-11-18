@@ -150,8 +150,10 @@ func TestBrokerSuccessorOfADurableThatAckedNothingReplays(t *testing.T) {
 	}
 }
 
-// When the seat's earlier durables cannot be looked up at all, the seat keeps
-// the replay: a head start could drop a predecessor's unread mail.
+// When the seat's earlier durables cannot be looked up at all and the seat has a
+// predecessor, the seat keeps the replay: a head start could drop the
+// predecessor's unread mail. A seat with no predecessor starts at the head
+// (TestGlobalDurableProbeErrorFreshSeatStartsAtHead).
 func TestBrokerFailedLookupKeepsTheReplay(t *testing.T) {
 	prev := earlierDurableProbe
 	earlierDurableProbe = func(context.Context, *globalTier, string, string) (bool, error) {
@@ -164,7 +166,7 @@ func TestBrokerFailedLookupKeepsTheReplay(t *testing.T) {
 	nc, _ := provision(t, ctx, url)
 	gjs, _ := jetstream.NewWithDomain(nc, "global")
 	gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
-	t.Setenv("MARVEL_PREDECESSOR", "")
+	t.Setenv("MARVEL_PREDECESSOR", "ws1/lookup-g0-0")
 	pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "may be a predecessor's unread mail")
 	b, err := connect(ctx, url, freshSeat("lookup-g1-0"), gcfg)
 	if err != nil {

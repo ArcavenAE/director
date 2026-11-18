@@ -1,13 +1,17 @@
 package main
 
 // The FOR filter. A hub stream is shared, so a seat's global inbox can hold
-// mail whose first line says it is meant for another team's seat ("FOR
+// mail whose first line says it is meant for another seat ("FOR
 // alpha-supervisor"). With DIRECTOR_FOR_FILTER=1 the shim acks and logs such a
 // message instead of handing it to the model. The default is off.
 //
 // The rule drops only when it can prove the mail is for someone else: every
-// token on the FOR line must resolve, through the live presence rows, to a
-// seat of a different team, and none may name this seat or its team. Anything
+// token on the leading FOR lines (one or several, in a row at the top of the
+// body) must resolve, through the live presence rows, to a seat that is not this
+// one, and none may name this seat or its team. A sibling seat of this seat's own
+// team is another seat. A predecessor of this seat (the same id with another
+// generation and the same replica index, on this team) is this seat; a parallel
+// replica (another index) is not. Anything
 // else delivers: no FOR line, a line that does not parse, an unknown name, a
 // name on a stale row, a roster that cannot be read. A drop acks the message
 // on the seat's durable, so a wrong drop loses mail, and every doubt goes to
@@ -53,6 +57,10 @@ var (
 	forSeat   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(@[a-z0-9-]+)?$`)
 	forRole   = regexp.MustCompile(`^role://[a-z0-9-]+/[a-z0-9-]+$`)
 	forGenSfx = regexp.MustCompile(`-g[0-9]+-[0-9]+$`)
+	// forGenOnly matches the generation of an id and keeps its replica index,
+	// so a successor (g2-1 for g1-1) matches and a parallel replica (g1-1 for
+	// g1-0) does not.
+	forGenOnly = regexp.MustCompile(`-g[0-9]+(-[0-9]+)$`)
 )
 
 // forFilter holds this seat's identity and the roster read. roster is a seam;
@@ -71,6 +79,23 @@ type forFilter struct {
 	note func(format string, args ...any)
 }
 
+// newForFilter builds the filter for one session: its identity from self, the
+// cluster from the global config, and the roster read it is handed. bus.go
+// builds the production filter here, so a test can build the same one.
+//
+// The role is the session's own (DIRECTOR_ROLE), which is what its presence row
+// carries. The global role is only the address class, and every research
+// supervisor holds it as "supervisor", so using it would make a research seat
+// answer to <team>-supervisor, the team supervisor's own alias. A session with
+// no local role falls back to the global role, as before.
+func newForFilter(self Sender, gcfg globalConfig, roster func(ctx context.Context) ([]map[string]any, error)) *forFilter {
+	role := self.Role
+	if role == "" {
+		role = gcfg.Role
+	}
+	return &forFilter{agentID: self.AgentID, team: self.Team, role: role, cluster: gcfg.Cluster, now: time.Now, logf: log.Printf, roster: roster}
+}
+
 // forFilterStatus is the one line printed when the global tier attaches, so a
 // seat whose filter is on but drops nothing can be told from one where it is
 // off. It carries the team the filter compares against and never the value of
@@ -85,28 +110,31 @@ func forFilterStatus(env, team, cluster, role string) string {
 	return "director-mcp: for-filter off (DIRECTOR_FOR_FILTER is set but not 1)"
 }
 
-// forText returns the text after FOR on the first non-blank line of data, and
-// whether that line is a FOR line. The match is anchored and ignores case. The
-// text ends at the first ".", ";" or ":" that is followed by whitespace or the
-// end of the line, so prose after the names is not read as names, while a
-// role:// name and a dotted seat name stay whole.
-func forText(data string) (string, bool) {
+// forTexts returns the text after FOR on each leading FOR line of data. Blank
+// lines before the first FOR line are skipped; the list ends at the first line
+// that is not a FOR line, blank lines included, so a FOR line after other text
+// is never read. The match is anchored and ignores case. Each line's text ends
+// at the first ".", ";" or ":" that is followed by whitespace or the end of the
+// line, so prose after the names is not read as names, while a role:// name and
+// a dotted seat name stay whole. No FOR line gives nil.
+func forTexts(data string) []string {
+	var out []string
 	for _, line := range strings.Split(data, "\n") {
 		line = strings.TrimRight(line, "\r")
-		if strings.TrimSpace(line) == "" {
+		if len(out) == 0 && strings.TrimSpace(line) == "" {
 			continue
 		}
 		m := forLine.FindStringSubmatch(line)
 		if m == nil {
-			return "", false
+			break
 		}
 		text := m[1]
 		if loc := forEnd.FindStringIndex(text); loc != nil {
 			text = text[:loc[0]]
 		}
-		return text, true
+		out = append(out, text)
 	}
-	return "", false
+	return out
 }
 
 // forTokens reads the FOR text as a comma-separated list and returns its names.
@@ -218,29 +246,35 @@ func (f *forFilter) namesSelf(name, cluster string) bool {
 	return name == f.team || forHas(forNames(f.agentID, f.team, f.role), name)
 }
 
-// otherTeamSeat reports whether a token resolves, through fresh presence
-// rows, to a seat of a different team, with no matching row on this seat's
-// team.
-func (f *forFilter) otherTeamSeat(name, cluster string, rows []map[string]any) bool {
-	found := false
+// otherSeat reports whether a token resolves, through fresh presence rows on
+// the cluster it names (any cluster when it names none, as a remote seat's name
+// is written without one in the fan-out), only to seats that are not this seat. It is seat-granular: a sibling seat of this seat's
+// own team is another seat. Two kinds of row are this seat and deliver: its own
+// row, and a predecessor's, a row of this team whose id differs only by its
+// generation, with the same replica index, so mail for a seat reaches its successor during a shift. A name
+// that rows of different teams answer to is a doubt and delivers, as does a
+// name no fresh row answers to.
+func (f *forFilter) otherSeat(name, cluster string, rows []map[string]any) bool {
+	own := forGenOnly.ReplaceAllString(f.agentID, "$1")
+	found, team0 := false, ""
 	for _, r := range rows {
 		team, _ := r["team"].(string)
 		agent, _ := r["agent_id"].(string)
 		role, _ := r["role"].(string)
 		rc, _ := r["cluster"].(string)
-		if team == "" || agent == "" || !f.fresh(r) {
-			continue
-		}
-		if cluster != "" && rc != cluster {
+		if team == "" || agent == "" || !f.fresh(r) || (cluster != "" && rc != cluster) {
 			continue
 		}
 		if !forHas(forNames(agent, team, role), name) {
 			continue
 		}
-		if team == f.team {
+		if agent == f.agentID || (team == f.team && forGenOnly.ReplaceAllString(agent, "$1") == own) {
 			return false
 		}
-		found = true
+		if found && team != team0 {
+			return false
+		}
+		found, team0 = true, team
 	}
 	return found
 }
@@ -256,11 +290,17 @@ func (f *forFilter) fresh(r map[string]any) bool {
 // drops decides one envelope. It returns true and the FOR text only when
 // every token resolves to a seat of another team.
 func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
-	text, ok := forText(e.Content.Data)
-	if !ok {
+	texts := forTexts(e.Content.Data)
+	if len(texts) == 0 {
 		return false, ""
 	}
-	toks, prose := forList(text)
+	var toks, prose []string
+	for _, tx := range texts {
+		n, p := forList(tx)
+		toks = append(toks, n...)
+		prose = append(prose, p...)
+	}
+	text := strings.Join(texts, ", ")
 	if len(toks) == 0 {
 		return false, ""
 	}
@@ -291,7 +331,7 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 	})
 	for _, t := range toks {
 		name, cluster := forSplit(t)
-		if !f.otherTeamSeat(name, cluster, rows) {
+		if !f.otherSeat(name, cluster, rows) {
 			return false, ""
 		}
 	}

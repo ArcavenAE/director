@@ -500,6 +500,7 @@ type globalTier struct {
 	// sequence when it was read, and skippedKnown is false when the credential
 	// could not read it (the durable then starts at the head by policy).
 	freshHead    bool
+	probeErr     error // set when the head start was taken because the earlier-durable probe errored
 	skipped      uint64
 	firstSeq     uint64
 	headSeq      uint64
@@ -599,20 +600,22 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 		// nothing, or a live sibling's, still leaves mail this seat should see.
 		found, perr := earlierDurableProbe(ctx, g, agentID, instance)
 		switch {
-		case perr != nil:
+		case perr != nil && !firstGenerationNoPredecessor(agentID):
 			g.floorWhy = fmt.Sprintf("looking for earlier durables failed (%v)", perr)
+		case perr != nil:
+			// Only the probe failed: every position lookup answered nothing, and
+			// the seat is a first generation that names no predecessor, so there
+			// is no earlier seat whose unread mail a head start could drop. A
+			// replay of the whole stream is the worse trade (one seat began 1675
+			// messages back), so start at the head, and say so: the log and the
+			// next summary carry the probe error and the count. A later
+			// generation, or an id with no generation, may be a respawn whose
+			// lineage was lost, so it keeps the replay (director's narrowing).
+			g.probeErr = perr
+			g.startAtHead(ctx, &cfg)
+			log.Printf("director-mcp: global durable for %s starts at the stream head because looking for earlier durables failed (%v): %s", agentID, perr, skippedPhrase(g.skipped, g.skippedKnown))
 		case !found:
-			g.freshHead = true
-			g.skipped, g.firstSeq, g.headSeq, g.skippedKnown = g.headPoint(ctx)
-			afterHeadRead()
-			if g.skippedKnown {
-				// Start where the count stopped, so a message published after
-				// the read is delivered, never skipped.
-				cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
-				cfg.OptStartSeq = g.headSeq + 1
-			} else {
-				cfg.DeliverPolicy = jetstream.DeliverNewPolicy
-			}
+			g.startAtHead(ctx, &cfg)
 		}
 	}
 	cons, err := g.js.CreateOrUpdateConsumer(ctx, g.cfg.streamName(), cfg)
@@ -629,6 +632,38 @@ func (g *globalTier) ensureConsumer(ctx context.Context, agentID, instance strin
 	g.checked = time.Now()
 	g.mu.Unlock()
 	return nil
+}
+
+// startAtHead reads the stream head once and points cfg at it, noting on g what
+// was skipped. A message published after the read is delivered, never skipped.
+func (g *globalTier) startAtHead(ctx context.Context, cfg *jetstream.ConsumerConfig) {
+	g.freshHead = true
+	g.skipped, g.firstSeq, g.headSeq, g.skippedKnown = g.headPoint(ctx)
+	afterHeadRead()
+	if g.skippedKnown {
+		// Start where the count stopped.
+		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+		cfg.OptStartSeq = g.headSeq + 1
+	} else {
+		cfg.DeliverPolicy = jetstream.DeliverNewPolicy
+	}
+}
+
+// firstGenerationNoPredecessor reports whether the seat is generation 1 of its
+// replica and names no predecessor: the only seat for which a probe error
+// leaves nothing earlier that a head start could skip.
+func firstGenerationNoPredecessor(agentID string) bool {
+	me, ok := parseGenID(agentID)
+	return ok && me.gen == 1 && predecessorID(agentID) == ""
+}
+
+// skippedPhrase says how many earlier messages a head start did not deliver,
+// UNKNOWN when the credential could not count them, never 0.
+func skippedPhrase(n uint64, known bool) string {
+	if !known {
+		return "an UNKNOWN number of earlier messages were not delivered"
+	}
+	return fmt.Sprintf("%d earlier message(s) were not delivered", n)
 }
 
 // floorSource says where a resumed position came from, for the start note.

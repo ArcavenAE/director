@@ -59,7 +59,7 @@ func TestForFilterDecisions(t *testing.T) {
 		{"this seat's role uri delivers", "FOR role://ops/supervisor", false},
 		{"this seat on this cluster delivers", "FOR operator@c1", false},
 		{"this team delivers", "FOR ops", false},
-		{"a team-mate delivers", "FOR ops-builder", false},
+		{"a sibling seat of this team drops", "FOR ops-builder", true},
 		{"no FOR delivers", "hello there", false},
 		{"empty delivers", "", false},
 		{"FOR on line 2 delivers", "hello\nFOR alpha-supervisor", false},

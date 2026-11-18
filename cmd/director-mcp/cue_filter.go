@@ -109,3 +109,25 @@ func leaveOutDropped(ctx context.Context, c tierCounts) uint64 {
 	}
 	return c.global - drops
 }
+
+// leaveOutForeign returns the listed global messages without the ones the filter
+// will drop, and how many it left out. Every list of the global tier's waiting
+// mail that a seat reads (inbox_summary, the class-aware cue) goes through it,
+// so none shows or wakes for mail the next drain drops. With the filter off, or
+// for a message that does not decode, nothing is left out. The decision is
+// g.foreign, the one dropForeign and the cue's count act on.
+func (g *globalTier) leaveOutForeign(ctx context.Context, items []summaryItem) ([]summaryItem, int) {
+	if g == nil || g.forFilter == nil {
+		return items, 0
+	}
+	kept := make([]summaryItem, 0, len(items))
+	for _, it := range items {
+		if it.Env != nil {
+			if drop, _ := g.foreign(ctx, it.Env); drop {
+				continue
+			}
+		}
+		kept = append(kept, it)
+	}
+	return kept, len(items) - len(kept)
+}
