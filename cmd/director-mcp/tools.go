@@ -362,6 +362,9 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		out["stream"] = res.Stream
 		out["sequence"] = res.Sequence
 	}
+	if res.Audit != "" {
+		out["audit"] = res.Audit
+	}
 	if res.NoConsumer {
 		out["cold"] = "no consumer filters this subject yet: the message is stored and stays unread until a seat's durable filters it"
 	}
