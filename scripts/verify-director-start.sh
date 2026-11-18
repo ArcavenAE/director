@@ -98,6 +98,39 @@ check "--plugin-dir with no value is a usage error, exit 2, and claude is not ru
 rc=0; run_start start --plugin-dir "$root/no-such-plugin" >"$root/stdout" 2>&1 || rc=$?
 check "a --plugin-dir that is not a directory stops, exit 3, names the path, and claude is not run" bash -c "[[ $rc == 3 && ! -e '$root/out' ]] && grep -q '^STOP: .*$root/no-such-plugin' '$root/stdout'"
 
+# ---- the installed plugin as the default (standing loop S10; director's S10 ruling a) --------------------
+# `director-install plugin` makes $DIRECTOR_HOME/lib/plugin/current; running it is the opt-in. With that link a
+# directory, `start` passes --plugin-dir at it (the link's own path, not its target). An explicit --plugin-dir
+# wins and --no-plugin skips the default; the two together are contradictory and a usage error. A current that
+# is not a directory (a dangling link, a file) is skipped with a WARN on stderr and claude gets main's
+# arguments: a broken optional component never stops a start. With no current, nothing changes.
+cur="$home/.director/lib/plugin/current"; mkdir -p "$home/.director/lib/plugin"
+MAIN_ARGS="ARGS: [--mcp-config] [$cfg] [-n] [director]"
+rm -f "$root/out"; run_start start >"$root/stdout" 2>&1 || true
+check "no current: claude gets main's arguments byte for byte" test "$(sed -n 1p "$root/out" 2>/dev/null)" = "$MAIN_ARGS"
+mkdir -p "$root/plugver"; ln -s "$root/plugver" "$cur"
+rm -f "$root/out"; run_start start >"$root/stdout" 2>&1 || true
+check "current present: --plugin-dir is passed at current's own path, after the rest" test "$(sed -n 1p "$root/out" 2>/dev/null)" = "$MAIN_ARGS [--plugin-dir] [$cur]"
+rm -f "$root/out"; run_start start --resume my-director >"$root/stdout" 2>&1 || true
+check "current present, with --resume: the pair follows the resume arguments" test "$(sed -n 1p "$root/out" 2>/dev/null)" = "ARGS: [--mcp-config] [$cfg] [--resume] [my-director] [--plugin-dir] [$cur]"
+rm -f "$root/out"; run_start start --plugin-dir "$plugdir" >"$root/stdout" 2>&1 || true
+check "current present, explicit --plugin-dir: the explicit one wins and appears once" test "$(sed -n 1p "$root/out" 2>/dev/null)" = "$MAIN_ARGS [--plugin-dir] [$plugdir]"
+rm -f "$root/out"; run_start start --no-plugin >"$root/stdout" 2>&1 || true
+check "current present, --no-plugin: claude gets main's arguments" test "$(sed -n 1p "$root/out" 2>/dev/null)" = "$MAIN_ARGS"
+rm -f "$root/out"; rc=0; run_start start --no-plugin --plugin-dir "$plugdir" >"$root/stdout" 2>&1 || rc=$?
+check "--no-plugin with --plugin-dir is a usage error, exit 2, and claude is not run" bash -c "[[ $rc == 2 && ! -e '$root/out' ]] && head -c 6 '$root/stdout' | grep -q usage"
+rm -f "$cur"; ln -s "$root/no-such-version" "$cur"
+rm -f "$root/out"; rc=0; run_start start >"$root/stdout" 2>&1 || rc=$?
+check "a dangling current is skipped: claude gets main's arguments, the start succeeds" bash -c "[[ $rc == 0 && \"\$(sed -n 1p '$root/out' 2>/dev/null)\" == '$MAIN_ARGS' ]]"
+check "a dangling current says so on stderr, naming the path" grep -q "^WARN: .*$cur" "$root/stdout"
+rm -f "$cur"; printf 'not a directory\n' >"$cur"
+rm -f "$root/out"; rc=0; run_start start >"$root/stdout" 2>&1 || rc=$?
+check "a current that is a file is skipped the same way" bash -c "[[ $rc == 0 && \"\$(sed -n 1p '$root/out' 2>/dev/null)\" == '$MAIN_ARGS' ]] && grep -q '^WARN: .*$cur' '$root/stdout'"
+rm -f "$cur"
+rm -f "$root/out"; run_start start --no-plugin >"$root/stdout" 2>&1 || true
+check "--no-plugin with no current is a no-op: main's arguments" test "$(sed -n 1p "$root/out" 2>/dev/null)" = "$MAIN_ARGS"
+rm -rf "$home/.director/lib"
+
 # no seat file and no flags: stop, name the missing keys, never run claude
 rm -f "$root/out" "$home/.director/seat.env"
 if run_start start >"$root/stdout" 2>&1; then bad "a missing seat file stops the launcher" "exit 0"; else ok "a missing seat file stops the launcher"; fi
