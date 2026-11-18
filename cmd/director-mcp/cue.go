@@ -174,6 +174,8 @@ type cue struct {
 	selfNext      time.Time // when an unechoed self-test is sent again
 	selfAt        time.Time
 	valid         map[string]time.Time // nonces sent while unverified, with expiry
+	noncesSent    uint64               // nonces real cues carried while unverified; the self-test is not counted
+	provedAt      time.Time            // when an echo last made the cue live; zero until the first proof
 	openWaits     int
 	lastSeen      uint64
 	lastCueAt     time.Time
@@ -296,7 +298,17 @@ func (c *cue) ack(n string) {
 
 func (c *cue) promote() {
 	c.state, c.reason = cueStateLive, ""
+	c.provedAt = c.now()
 	c.valid = map[string]time.Time{}
+}
+
+// proof is what presence carries beside the state: how many nonces real cues
+// sent while unverified, and when an echo last made the cue live (the zero
+// time until then). Both are in memory, so a restart clears them.
+func (c *cue) proof() (sent uint64, provedAt time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.noncesSent, c.provedAt
 }
 
 // answered is any wait_for_message or inbox_summary call: it settles the
@@ -461,6 +473,7 @@ func (c *cue) params(m *cueMeta, count uint64, now time.Time) map[string]any {
 		}
 		n := c.nonce()
 		c.valid[n] = now.Add(c.cfg.Window)
+		c.noncesSent++
 		meta["nonce"] = n
 		content += cueAckAsk
 	}
