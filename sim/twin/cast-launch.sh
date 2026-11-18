@@ -163,10 +163,17 @@ fi
 # alone, and does not parse instance names to guess one. The workspace part is
 # dropped here, the same way MARVEL_ROLE becomes DIRECTOR_ROLE. Unset or empty
 # adds nothing, which is today's behavior. MARVEL_PREDECESSOR itself reaches the
-# shim by inheritance, so it is left alone.
+# shim by inheritance, so it is left alone. A value that is not "<workspace>/<id>"
+# is skipped with a warning, never refused (director ruling on #220 U1): lineage is
+# optional, so a bad link must not stop the seat. The warning names the variable and
+# the reason and never the value.
 pred_env=""
-if [[ -n "${MARVEL_PREDECESSOR:-}" && "$MARVEL_PREDECESSOR" =~ ^[A-Za-z0-9_-]+/([a-z][a-z0-9]*(-[a-z0-9]+)*)$ ]]; then
-  pred_env=",\"DIRECTOR_PREDECESSOR\":\"${BASH_REMATCH[1]}\""
+if [[ -n "${MARVEL_PREDECESSOR:-}" ]]; then
+  if [[ "$MARVEL_PREDECESSOR" =~ ^[A-Za-z0-9_-]+/([a-z][a-z0-9]*(-[a-z0-9]+)*)$ ]]; then
+    pred_env=",\"DIRECTOR_PREDECESSOR\":\"${BASH_REMATCH[1]}\""
+  else
+    echo "cast-launch: WARNING: MARVEL_PREDECESSOR is not <workspace>/<agent id> (the id must match the closed class, R-76), so no DIRECTOR_PREDECESSOR is set and this seat casts without lineage" >&2
+  fi
 fi
 # The global tier (R-86, R-94; design brief 8, sim/design/global-bus-tier.md).
 # Off unless the operator sets DIRECTOR_GLOBAL_DOMAIN and DIRECTOR_CLUSTER on
