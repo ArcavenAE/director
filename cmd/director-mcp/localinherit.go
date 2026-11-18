@@ -323,14 +323,15 @@ func (b *Bus) endInherit(ctx context.Context, why string, logf func(string, ...a
 	durable, pred := b.inh.durable, b.inh.pred
 	b.inh.ended, b.inh.cons = why, nil
 	b.inh.mu.Unlock()
+	// The note goes first: a reader that sees the durable gone has the reason.
+	b.resumedMu.Lock()
+	b.resumed = append(b.resumed, fmt.Sprintf("the inherited mail of predecessor %s ended: %s", pred, why))
+	b.resumedMu.Unlock()
 	if durable != "" {
 		if err := b.js.DeleteConsumer(ctx, "AGENT_INBOX", durable); err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) && logf != nil {
 			logf("inherit: deleting %s failed: %v", durable, err)
 		}
 	}
-	b.resumedMu.Lock()
-	b.resumed = append(b.resumed, fmt.Sprintf("the inherited mail of predecessor %s ended: %s", pred, why))
-	b.resumedMu.Unlock()
 }
 
 // drainInherited takes up to n waiting messages from the inherited durable into

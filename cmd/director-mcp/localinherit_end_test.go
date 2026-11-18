@@ -333,7 +333,7 @@ func TestALiveDurableOfThePredecessorIdSetsNoFloor(t *testing.T) {
 	lineReadAck(t, ctx, a, 2)
 	lineExit(t, ctx, a)
 	b := lineConnect(t, ctx, url, "pred", "", "") // a second instance of the id, live
-	lineReadAck(t, ctx, b, 2) // it resumed after the departed floor, so 2 remain
+	lineReadAck(t, ctx, b, 2)                     // it resumed after the departed floor, so 2 remain
 
 	floor := func(live func(string) bool) uint64 {
 		f, _, err := subjectFloor(ctx, js, "AGENT_INBOX", "mcp_pred_", lineInbox("pred"), live)
