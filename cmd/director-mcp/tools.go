@@ -453,11 +453,47 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if a.Max > 1 {
 		return toolWaitBatch(ctx, bus, a)
 	}
-	res, err := bus.receiveTiered(ctx, time.Duration(a.TimeoutSeconds)*time.Second)
-	if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
-		return nil, err
+	var (
+		res       pollResult
+		err       error
+		inherited string
+		localWarn string
+	)
+	// A successor looks at its own waiting mail, then at the predecessor's, before
+	// it blocks: with a long timeout the inherited mail is handed over at once,
+	// one message per call, and not one per timeout.
+	if ic, _ := bus.inheritCons(); ic != nil {
+		if w := bus.ownWaiting(ctx, &res); w != nil {
+			res.Env, res.Tier, res.Seq = w.Env, w.Tier, w.Seq
+		} else if it, warn := bus.inheritedOne(ctx); it != nil {
+			res.Env, res.Tier, res.Seq, inherited = it.Env, it.Tier, it.Seq, it.InheritedFrom
+		} else {
+			localWarn = warn
+		}
+	}
+	if res.Env == nil {
+		warn := res.GlobalWarn
+		res, err = bus.receiveTiered(ctx, time.Duration(a.TimeoutSeconds)*time.Second)
+		res.GlobalWarn = joinWarn(warn, res.GlobalWarn)
+		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
+			return nil, err
+		}
+		// Inherited mail that arrived while the poll blocked.
+		if res.Env == nil {
+			if it, warn := bus.inheritedOne(ctx); it != nil {
+				res.Env, res.Tier, res.Seq, inherited = it.Env, it.Tier, it.Seq, it.InheritedFrom
+			} else {
+				localWarn = joinWarn(localWarn, warn)
+			}
+		}
 	}
 	out := map[string]any{"message": res.Env}
+	if inherited != "" {
+		out["inherited_from"] = inherited
+	}
+	if localWarn != "" {
+		out["local_warning"] = localWarn
+	}
 	if res.Env == nil {
 		out["note"] = "no message within the window; this is silence, not failure"
 		if e := bus.expiredUnread(ctx); e != "" {
@@ -502,10 +538,14 @@ func returnedResult(ctx context.Context, bus *Bus, a waitArgs, items []drained) 
 			"returned": len(items), "returned_note": note, "remaining": rem,
 		}
 	}
-	return map[string]any{
+	out := map[string]any{
 		"message": items[0].Env, "tier": items[0].Tier,
 		"returned": true, "returned_note": note,
 	}
+	if items[0].InheritedFrom != "" {
+		out["inherited_from"] = items[0].InheritedFrom
+	}
+	return out
 }
 
 // toolWaitBatch is wait_for_message with max > 1. The single form keeps its
@@ -603,6 +643,9 @@ func toolSummary(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error
 	}
 	if res.GlobalWarn != "" {
 		out["global_warning"] = res.GlobalWarn
+	}
+	if res.LocalWarn != "" {
+		out["local_warning"] = res.LocalWarn
 	}
 	if n := bus.presenceNotices(); len(n) > 0 {
 		out["presence_notice"] = n
