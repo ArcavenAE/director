@@ -144,11 +144,20 @@ def stamp(path):
     d = os.path.dirname(path)
     os.makedirs(d, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".stamp.")
-    with os.fdopen(fd, "w") as f:
-        f.write(now().strftime(FMT) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(now().strftime(FMT) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        # a failed write must not leave its temp file behind: --seen swallows the error, so a leftover
+        # would be added on every prompt. The error still propagates, so beat fails loudly as it always did.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def beat():
