@@ -60,7 +60,7 @@ of Kind question, written in the last 24 hours, that carry no **Card:** line, wh
   relays asking the operator to decide with no card in the last 24 h: <n> (oldest R-<n>)
 
 It prints nothing at 0 and nothing with no loop-status.json, and `UNKNOWN (<reason>)` when the relay log it
-reads ($RELAY_LOG, else the checkout's sim/notes/relay-log.md) cannot be read. It reads that one file and
+reads ($RELAY_LOG, else the checkout's sim/notes/relay-log.md) cannot be found or read. It reads that one file and
 starts no subprocess.
 
 One more line follows, last, only when something waits:
@@ -482,7 +482,7 @@ def card_line():
         return None
     path = relay_log_path()
     if not path:
-        return None
+        return f"{CARD_PREFIX}UNKNOWN (no relay log path: set RELAY_LOG)"
     try:
         with open(path, encoding="utf-8") as f:
             lines = f.read().splitlines()

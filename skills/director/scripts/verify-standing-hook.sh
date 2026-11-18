@@ -468,6 +468,17 @@ status 5 "$NODUE" '[]'
 ! hook | grep -q "$CARDLINE" && ok "hook_relays_with_no_card_is_silent_at_zero" || bad "hook_relays_with_no_card_is_silent_at_zero" "$(hook | grep "$CARDLINE")"
 export RELAY_LOG="$root/card-clause-relay-dir"; mkdir -p "$RELAY_LOG"
 hook | grep -q "${CARDLINE}UNKNOWN (" && ok "hook_relays_with_no_card_reads_unknown_when_the_log_is_unreadable" || bad "hook_relays_with_no_card_reads_unknown_when_the_log_is_unreadable" "got: [$(hook | grep "$CARDLINE")]"
+# The installed plugin form: no RELAY_LOG, and no checkout holding sim/notes/relay-log.md. A copy of the hook under a
+# scratch tree has neither, so the path is unknown, and unknown must not read as 0 (dws says "set RELAY_LOG" here too).
+mkdir -p "$root/plug/a/b/c"; cp "$H" "$root/plug/a/b/c/standing-hook"
+status 5 "$NODUE" '[]'
+nolog="$(env -u RELAY_LOG "$root/plug/a/b/c/standing-hook" 2>/dev/null | grep "$CARDLINE" || true)"
+[[ "$nolog" == "relays asking the operator to decide with no card in the last 24 h: UNKNOWN (no relay log path: set RELAY_LOG)" ]] \
+  && ok "hook_relays_with_no_card_reads_unknown_when_no_log_path_is_found" \
+  || bad "hook_relays_with_no_card_reads_unknown_when_no_log_path_is_found" "got: [$nolog]"
+rm -f "$S"
+nolog="$(env -u RELAY_LOG "$root/plug/a/b/c/standing-hook" 2>/dev/null | grep "$CARDLINE" || true)"
+[[ -z "$nolog" ]] && ok "hook_relays_with_no_card_no_log_path_is_silent_without_loop_status" || bad "hook_relays_with_no_card_no_log_path_is_silent_without_loop_status" "got: [$nolog]"
 if [[ -n "$saved_relay" ]]; then export RELAY_LOG="$saved_relay"; else unset RELAY_LOG; fi
 
 export DIRECTOR_STATE="$saved_state"
