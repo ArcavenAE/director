@@ -1,6 +1,6 @@
 id: elem-denial-reads-as-timeout
 type: element
-confidence: frontier
+confidence: bedrock
 title: "A broker denial of a JetStream publish reaches the caller as a timeout, so the shim must name it"
 tags: [director, delivery, permissions, errors]
 content: |
@@ -51,6 +51,16 @@ content: |
     changes only the shim.
   - #313 names as separate, with no owner, a log-reader pattern for the old
     timeout text.
+
+  ## Promotion
+
+  Moved from frontier to bedrock 2026-11-18 (I-532 harvest; operator ruling
+  d1117b-1, option 1, 2026-11-17). That ruling is the promotion the first
+  paragraph said waits on the operator. The evidence was re-read at director
+  main bcfb0f8: `cmd/director-mcp/violations.go` and
+  `publish_violation_test.go` exist, `bus.go:1083` and `global.go:1190` wrap a
+  failed publish with the violation for its subject, and director#313 is
+  merged. The text above is left as written and records the 2026-11-06 state.
 edges:
   - target: finding-008-leaf-fabric-probe
     type: derives
