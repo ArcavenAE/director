@@ -57,6 +57,9 @@ var (
 	forSeat   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(@[a-z0-9-]+)?$`)
 	forRole   = regexp.MustCompile(`^role://[a-z0-9-]+/[a-z0-9-]+$`)
 	forGenSfx = regexp.MustCompile(`-g[0-9]+-[0-9]+$`)
+	// forTicket is an intake id as written in prose ("I-578"), in any case. A
+	// lowercase one is seat-shaped, so it is named here instead of left to forSeat.
+	forTicket = regexp.MustCompile(`(?i)^i-[0-9]+$`)
 	// forGenOnly matches the generation of an id and keeps its replica index,
 	// so a successor (g2-1 for g1-1) matches and a parallel replica (g1-1 for
 	// g1-0) does not.
@@ -147,8 +150,12 @@ func forTokens(text string) []string {
 // forList reads the FOR text as a comma-separated list and returns its names
 // and the prose that ended the list. The first element is always names. A later
 // element is names when, with the joiners "and", "or" and "only" removed, each
-// run of words between joiners is one token; otherwise it is prose, and it ends
-// the list along with everything after it. Trailing . ; : are trimmed from each
+// run of words between joiners is one token that is seat-shaped (forSeat or
+// forRole) and is not a ticket id (forTicket); otherwise it is prose, and it ends
+// the list along with everything after it. A lone ticket id after a comma
+// ("FOR a-supervisor, I-578:") is therefore prose and never a name that would
+// spoil the line (aae-orc-c93bj). The names read before the prose token in the
+// same element are kept. Trailing . ; : are trimmed from each
 // name. Seat names hold no spaces, so splitting on whitespace never cuts a name.
 // The prose words come back whole, for the this-seat scan in drops.
 func forList(text string) (names, prose []string) {
@@ -167,6 +174,11 @@ func forList(text string) (names, prose []string) {
 			}
 			run++
 			if i > 0 && run > 1 {
+				isProse = true
+				break
+			}
+			if i > 0 && (forTicket.MatchString(f) || (!forSeat.MatchString(f) && !forRole.MatchString(f))) {
+				names = append(names, got...)
 				isProse = true
 				break
 			}

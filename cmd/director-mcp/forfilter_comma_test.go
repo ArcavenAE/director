@@ -26,6 +26,7 @@ func TestForFilterDropsALeakedCommaLine(t *testing.T) {
 		{"ticket id after the comma, colon ends it", "FOR e98-ent-supervisor-g1-0, I-578: the route record is written\nbody"},
 		{"ticket id after the comma, full stop ends it", "FOR cue-ent-supervisor-g1-0, I-578. The route record is written\nbody"},
 		{"ticket id after the comma, no end mark", "FOR e98-ent-supervisor-g1-0, I-578\nbody"},
+		{"lowercase ticket id after the comma", "FOR e98-ent-supervisor-g1-0, i-578: the route record is written\nbody"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -40,6 +41,8 @@ func TestForFilterDropsALeakedCommaLine(t *testing.T) {
 func TestForTokensStopsBeforeATicketIdOrFrom(t *testing.T) {
 	cases := []struct{ name, text, want string }{
 		{"ticket id", "e98-ent-supervisor-g1-0, I-578", "e98-ent-supervisor-g1-0"},
+		{"lowercase ticket id", "e98-ent-supervisor-g1-0, i-578", "e98-ent-supervisor-g1-0"},
+		{"seat before the ticket id in the same element is kept", "e98-supervisor-g8-0, beta-supervisor and I-578", "e98-supervisor-g8-0|beta-supervisor"},
 		{"from and the sender", "e98-supervisor-g8-0, from product-supervisor-g2-0", "e98-supervisor-g8-0"},
 	}
 	for _, c := range cases {
