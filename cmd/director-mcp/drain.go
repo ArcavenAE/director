@@ -848,6 +848,15 @@ func (b *Bus) summarizeInbox(ctx context.Context, limit int) (summaryResult, err
 				res.GlobalWarn = fmt.Sprintf("global inbox summary failed: %v", gerr)
 			}
 			res.GlobalWarn = joinWarn(res.GlobalWarn, g.takeNotice())
+			// Leave out what the filter will drop on the next drain. Count
+			// the worst case against the messages the durable no longer
+			// counts first (acked above the floor), as the cue's count does.
+			gitems, left := g.leaveOutForeign(ctx, gitems)
+			if m := min(left, gmaybe); m > 0 {
+				gmaybe -= m
+				left -= m
+			}
+			gexp -= min(uint64(left), gexp)
 			res.Expected["global"], res.Read["global"] = gexp, len(gitems)
 			if gmaybe > 0 {
 				res.MaybeConsumed["global"] = gmaybe

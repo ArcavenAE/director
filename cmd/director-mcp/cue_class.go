@@ -216,6 +216,7 @@ func (s busCueSource) waiting(ctx context.Context) ([]summaryItem, error) {
 		if gerr != nil {
 			return nil, gerr
 		}
+		gitems, _ = g.leaveOutForeign(ctx, gitems)
 		items = append(items, gitems...)
 	}
 	return items, nil
