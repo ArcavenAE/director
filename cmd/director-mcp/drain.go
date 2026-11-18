@@ -421,12 +421,27 @@ func drainedClean(rem map[string]uint64) bool {
 // target, as standing-hook does, so a reader never sees a half-written line.
 // Any other return leaves the file alone, and so does a tier whose read failed. A write failure is logged and never
 // fails the wait: the mail was already taken, and the manual beat still works.
-func beatLastDrain(rem map[string]uint64, failed []string, now time.Time) {
+func beatLastDrain(rem map[string]uint64, failed []string, now time.Time) bool {
 	if len(failed) > 0 || !drainedClean(rem) {
-		return
+		return false
 	}
 	if err := writeLastDrain(now); err != nil {
 		log.Printf("director-mcp: last-drain not written: %v", err)
+		return false
+	}
+	return true
+}
+
+// beatSilence records a drain for a wait that returned nothing. With every tier
+// at 0 and no failed read, the inbox is empty at this moment, which is what
+// last-drain means; a tier that cannot be read, or mail still waiting, writes
+// nothing, exactly as for a batch. The reason is logged and not stored:
+// last-drain stays one stamp line, which standing-hook and its verifiers read
+// (sim/design/director-standing-loop.md section 7).
+func beatSilence(ctx context.Context, b *Bus, now time.Time) {
+	rem, failed := b.remainingRead(ctx)
+	if beatLastDrain(rem, failed, now) {
+		log.Printf("director-mcp: last-drain written, ended: silence")
 	}
 }
 
