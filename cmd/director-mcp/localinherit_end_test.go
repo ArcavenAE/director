@@ -258,3 +258,161 @@ func TestOnlyADurableThatFiltersTheSubjectSetsItsFloor(t *testing.T) {
 		t.Errorf("a wildcard counted as containing a subject: floor %d, found %v", f, found)
 	}
 }
+
+// A wait that is already blocking when the inheritance starts still returns the
+// inherited mail before it gives up: the durable did not exist when the call
+// began, so the one look after the poll is what delivers it.
+func TestAWaitThatBeganBeforeTheInheritanceReturnsTheInheritedMail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	pred := lineConnect(t, ctx, url, "pred", "", "")
+	publishN(t, ctx, js, lineInbox("pred"), "p", 1, 3)
+	lineExit(t, ctx, pred)
+
+	succ := lineConnect(t, ctx, url, "succ", "", "pred")
+	runHeartbeat(t, ctx, succ, 40*time.Millisecond)
+	if d := inheritDurables(t, ctx, js, "succ"); len(d) != 0 {
+		t.Fatalf("CONTROL FAILED: the inheritance had started before the wait: %v", d)
+	}
+	res, err := succ.receiveBatch(ctx, 2*time.Second, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lineIDs(lineItems(t, res)); got != "p1,p2,p3" {
+		t.Errorf("the wait that began before the inheritance returned %q, want p1,p2,p3", got)
+	}
+}
+
+// Reading inherited mail must not move the position the seat's own durable
+// rebuilds from: the sequences are the predecessor's, not the seat's own acks.
+func TestReadingInheritedMailDoesNotMoveTheOwnRebuildPosition(t *testing.T) {
+	old := durableCheckEvery
+	durableCheckEvery = 0
+	defer func() { durableCheckEvery = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	pred := lineConnect(t, ctx, url, "pred", "", "")
+	succ := lineConnect(t, ctx, url, "succ", "", "pred")
+	publishN(t, ctx, js, lineInbox("succ"), "s", 1, 1) // sequence 1, the seat's own
+	publishN(t, ctx, js, lineInbox("pred"), "p", 1, 3) // sequences 2 to 4
+	lineExit(t, ctx, pred)
+	runHeartbeat(t, ctx, succ, 40*time.Millisecond)
+	if !waitFor(5*time.Second, func() bool { return len(inheritDurables(t, ctx, js, "succ")) == 1 }) {
+		t.Fatal("nothing inherited")
+	}
+	var res batchResult
+	succ.drainInherited(ctx, 10, &res) // the inherited mail only, the own s1 left unread
+	if len(res.Items) != 3 {
+		t.Fatalf("setup: read %d inherited messages, want 3", len(res.Items))
+	}
+	if err := js.DeleteConsumer(ctx, "AGENT_INBOX", "mcp_succ_"+succ.instance); err != nil {
+		t.Fatal(err)
+	}
+	got, err := succ.receiveBatch(ctx, 5*time.Second, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := lineIDs(lineItems(t, got)); !strings.Contains(ids, "s1") {
+		t.Errorf("after the own durable was rebuilt the seat's own unread s1 was skipped: got %q", ids)
+	}
+}
+
+// A live durable of the predecessor's id is a sibling's position, not a floor to
+// take (the rule seatAckFloor already applies): it is skipped by its instance.
+func TestALiveDurableOfThePredecessorIdSetsNoFloor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	a := lineConnect(t, ctx, url, "pred", "", "")
+	publishN(t, ctx, js, lineInbox("pred"), "p", 1, 4)
+	lineReadAck(t, ctx, a, 2)
+	lineExit(t, ctx, a)
+	b := lineConnect(t, ctx, url, "pred", "", "") // a second instance of the id, live
+	lineReadAck(t, ctx, b, 2) // it resumed after the departed floor, so 2 remain
+
+	floor := func(live func(string) bool) uint64 {
+		f, _, err := subjectFloor(ctx, js, "AGENT_INBOX", "mcp_pred_", lineInbox("pred"), live)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	if f := floor(nil); f != 4 {
+		t.Fatalf("CONTROL FAILED: with nothing skipped the floor is %d, want 4", f)
+	}
+	if f := floor(func(inst string) bool { return inst == b.instance }); f != 2 {
+		t.Errorf("floor with the live instance skipped = %d, want 2 (the departed instance's)", f)
+	}
+}
+
+// Mail fetched and not yet acked is still the inherited durable's: it has not
+// drained, and must not be deleted out from under a held message.
+func TestAnInheritedDurableHoldingUnackedMailHasNotDrained(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	pred := lineConnect(t, ctx, url, "pred", "", "")
+	publishN(t, ctx, js, lineInbox("pred"), "p", 1, 2)
+	lineExit(t, ctx, pred)
+
+	succ := lineConnect(t, ctx, url, "succ", "", "pred")
+	runHeartbeat(t, ctx, succ, 40*time.Millisecond)
+	if !waitFor(5*time.Second, func() bool { return len(inheritDurables(t, ctx, js, "succ")) == 1 }) {
+		t.Fatal("nothing inherited")
+	}
+	cons, _ := succ.inheritCons()
+	batch, err := cons.FetchNoWait(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var held []interface{ Ack() error }
+	for m := range batch.Messages() {
+		held = append(held, m)
+	}
+	if len(held) != 2 {
+		t.Fatalf("setup: fetched %d, want 2", len(held))
+	}
+	if succ.inheritDrained(ctx) {
+		t.Error("a durable holding 2 unacked messages reads as drained")
+	}
+	time.Sleep(400 * time.Millisecond)
+	if d := inheritDurables(t, ctx, js, "succ"); len(d) != 1 {
+		t.Errorf("the inherited durable was deleted while it held unacked mail: %v", d)
+	}
+	for _, m := range held {
+		if err := m.Ack(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !waitFor(5*time.Second, func() bool { return succ.inheritDrained(ctx) }) {
+		t.Error("after the acks the durable still reads as not drained")
+	}
+}
+
+// A predecessor whose durable exists but acked nothing: read from the start of
+// what the stream holds, and the note says that and not "left no durable".
+func TestAPredecessorThatAckedNothingIsInheritedFromTheStreamStart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	pred := lineConnect(t, ctx, url, "pred", "", "")
+	publishN(t, ctx, js, lineInbox("pred"), "p", 1, 2)
+	lineExit(t, ctx, pred)
+
+	succ := lineConnect(t, ctx, url, "succ", "", "pred")
+	runHeartbeat(t, ctx, succ, 40*time.Millisecond)
+	if !waitFor(5*time.Second, func() bool { return len(inheritDurables(t, ctx, js, "succ")) == 1 }) {
+		t.Fatal("nothing inherited")
+	}
+	notes := strings.Join(succ.takeResumed(), "\n")
+	if !strings.Contains(notes, "acked nothing") || strings.Contains(notes, "left no durable") {
+		t.Errorf("the note for a predecessor that acked nothing reads %q", notes)
+	}
+}
