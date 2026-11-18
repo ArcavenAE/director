@@ -115,6 +115,9 @@ type Bus struct {
 	// (localrecover.go), and the cue watcher reads it on another goroutine.
 	localMu sync.Mutex
 	local   localState
+	// restoreMu serializes the local durable restore: the poll and the heartbeat
+	// can both find the durable gone, and only one should rebuild it (localrecover.go).
+	restoreMu sync.Mutex
 	// dh counts the local durable's rebuilds (durablehealth.go).
 	dh durableHealth
 	// lookup is a test seam for the broker lookup of the local durable; nil in
@@ -1817,6 +1820,11 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 			b.stateMu.Lock()
 			s := b.state
 			b.stateMu.Unlock()
+			// A seat that has stopped polling still asks the broker whether its
+			// local durable exists, at the poll path's own rate (director#269).
+			if _, rerr := b.recheckLocal(ctx); rerr != nil && logf != nil {
+				logf("local durable: %v", rerr)
+			}
 			// The cue watcher samples the pending counts every poll; without
 			// it the beat does, so every row's age is at most a beat stale.
 			if b.cueSampling == nil || !b.cueSampling() {
