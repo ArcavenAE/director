@@ -174,6 +174,12 @@ func TestAnInheritedMessageAlreadyInTheLedgerDoesNotMoveTheOwnCounter(t *testing
 		t.Fatal(err)
 	}
 
+	// The consumer handle is taken before the drain: the heartbeat's own drain
+	// check can end the inheritance and nil inheritCons while this test waits.
+	cons, _ := succ.inheritCons()
+	if cons == nil {
+		t.Fatal("setup: no inherited consumer")
+	}
 	var res batchResult
 	succ.drainInherited(ctx, 1, &res)
 	if len(res.Items) != 0 {
@@ -181,10 +187,6 @@ func TestAnInheritedMessageAlreadyInTheLedgerDoesNotMoveTheOwnCounter(t *testing
 	}
 	// settle acked it on the pull; wait until the inherited durable holds nothing.
 	if !waitFor(5*time.Second, func() bool {
-		cons, _ := succ.inheritCons()
-		if cons == nil {
-			return false
-		}
 		info, err := cons.Info(ctx)
 		return err == nil && info.NumAckPending == 0 && info.NumPending == 0
 	}) {
