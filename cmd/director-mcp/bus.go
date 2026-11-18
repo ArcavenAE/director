@@ -1090,7 +1090,7 @@ func (b *Bus) publishSend(ctx context.Context, e *Envelope, wsHint string) (*sen
 			return nil, atStage("publish", err)
 		}
 	}
-	res.Audit = b.auditMirrorStored(ctx, e, body, subject, res.Sequence)
+	res.Audit = b.auditMirrorStored(ctx, e, body, res.Stream, subject, res.Sequence)
 	return res, nil
 }
 
@@ -1120,7 +1120,11 @@ func (b *Bus) publishGlobalOnce(ctx context.Context, e *Envelope, body []byte) (
 	if err != nil {
 		return nil, atStage("global", err)
 	}
-	return &sendResult{Tier: "global", Stream: ack.Stream, Sequence: ack.Sequence, Audit: b.auditMirror(ctx, e, body)}, nil
+	// The hub's own word on where the bytes went: the stream and sequence come
+	// from its publish ack, the subject from the address the send used.
+	cluster, role, _ := parseGlobalAddress(e.Recipient.Address)
+	audit := b.auditMirrorStored(ctx, e, body, ack.Stream, globalSubject(cluster, role), ack.Sequence)
+	return &sendResult{Tier: "global", Stream: ack.Stream, Sequence: ack.Sequence, Audit: audit}, nil
 }
 
 // auditMirror puts a copy on the append-only local stream (section 2.3). A
@@ -1128,21 +1132,26 @@ func (b *Bus) publishGlobalOnce(ctx context.Context, e *Envelope, body []byte) (
 // accepted, so the outcome is returned for the caller to report, never raised:
 // "" when recorded, "not recorded: <error>" when the retry failed too.
 func (b *Bus) auditMirror(ctx context.Context, e *Envelope, body []byte) string {
-	return b.auditMirrorStored(ctx, e, body, "", 0)
+	return b.auditMirrorStored(ctx, e, body, "", "", 0)
 }
 
-// auditMirrorStored is auditMirror for a local send the inbox stream stored: it
-// adds where, as Director-Inbox-Subject and Director-Inbox-Seq, so the ask
-// reader can later tell a sender whether the message was read or expired
-// unread (aae-orc-t77rr). Subject empty or seq zero leaves the headers off.
+// auditMirrorStored is auditMirror for a send a stream stored, local or hub: it
+// adds where, as Director-Inbox-Stream, Director-Inbox-Subject and
+// Director-Inbox-Seq, so the ask reader can later tell a sender whether the
+// message was read or expired unread (aae-orc-t77rr). Subject empty or seq
+// zero leaves the headers off; the stream header needs only a name. A reader
+// that does not know Director-Inbox-Stream ignores it.
 //
 // A failed publish is tried once more, for at most auditRetryBudget. Both
 // attempts carry the same Nats-Msg-Id, so a first attempt that landed and lost
 // its ack stores once.
-func (b *Bus) auditMirrorStored(ctx context.Context, e *Envelope, body []byte, subject string, seq uint64) string {
+func (b *Bus) auditMirrorStored(ctx context.Context, e *Envelope, body []byte, stream, subject string, seq uint64) string {
 	amsg := &nats.Msg{Subject: "agent.audit", Data: body, Header: nats.Header{}}
 	amsg.Header.Set(jetstream.MsgIDHeader, e.MessageID)
 	if subject != "" && seq > 0 {
+		if stream != "" {
+			amsg.Header.Set("Director-Inbox-Stream", stream)
+		}
 		amsg.Header.Set("Director-Inbox-Subject", subject)
 		amsg.Header.Set("Director-Inbox-Seq", strconv.FormatUint(seq, 10))
 	}
