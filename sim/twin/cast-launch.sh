@@ -157,6 +157,17 @@ export DIRECTOR_ROLE="${DIRECTOR_ROLE:-$MARVEL_ROLE}"
 if [[ ! "$DIRECTOR_ROLE" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo "cast-launch: refusing role '$DIRECTOR_ROLE'; the class is [A-Za-z0-9_-] (R-76), never rewritten" >&2; exit 1
 fi
+# The seat's lineage (B2-R1, sim/design/asks-die-unread.md section 3). marvel
+# sets MARVEL_PREDECESSOR to "<workspace>/<id>" for a seat a shift, a wake or a
+# crash repair started; the shim reads an optional DIRECTOR_PREDECESSOR, the id
+# alone, and does not parse instance names to guess one. The workspace part is
+# dropped here, the same way MARVEL_ROLE becomes DIRECTOR_ROLE. Unset or empty
+# adds nothing, which is today's behavior. MARVEL_PREDECESSOR itself reaches the
+# shim by inheritance, so it is left alone.
+pred_env=""
+if [[ -n "${MARVEL_PREDECESSOR:-}" && "$MARVEL_PREDECESSOR" =~ ^[A-Za-z0-9_-]+/([a-z][a-z0-9]*(-[a-z0-9]+)*)$ ]]; then
+  pred_env=",\"DIRECTOR_PREDECESSOR\":\"${BASH_REMATCH[1]}\""
+fi
 # The global tier (R-86, R-94; design brief 8, sim/design/global-bus-tier.md).
 # Off unless the operator sets DIRECTOR_GLOBAL_DOMAIN and DIRECTOR_CLUSTER on
 # the marvel daemon. That is a per-DAEMON switch, and the tier is a per-ROLE
@@ -297,8 +308,8 @@ if [[ "$GROLE" == supervisor && -n "$GLOBAL_ADDR" ]]; then
   startup_note="After the ruling 84 echo, as a startup duty: send one reach test to $reach, note whether an ack came back and how long it took, and report both to global://director. It is a check, not a gate: route as usual whatever it shows (director#180)."
 fi
 
-mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_ROLE":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"%s%s}}}}' \
-  "$SHIM_BIN" "$DIRECTOR_AGENT_ID" "$DIRECTOR_ROLE" "$DIRECTOR_TEAM" "$DIRECTOR_WORKSPACE" "$NATS_URL" "$global_env" "$cue_env")"
+mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_ROLE":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"%s%s%s}}}}' \
+  "$SHIM_BIN" "$DIRECTOR_AGENT_ID" "$DIRECTOR_ROLE" "$DIRECTOR_TEAM" "$DIRECTOR_WORKSPACE" "$NATS_URL" "$global_env" "$cue_env" "$pred_env")"
 
 cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_ROLE in team $DIRECTOR_TEAM, address agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID."
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
