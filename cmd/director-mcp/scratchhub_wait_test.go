@@ -25,13 +25,15 @@ import (
 
 const (
 	scratchHubInnerEnv = "SCRATCH_HUB_WAIT_INNER"
-	// failMarker is written by the fake server to its log, so its presence in the failure output
-	// proves the log was read. Nothing else in the package prints it.
-	failMarker = "FAKE_SCRATCH_SERVER_BOOM_7f3a"
+	// logMarker is written by the fake server only to the file named by -l, so its presence in the
+	// failure output proves the log file was read. errMarker goes only to stderr and is not asserted:
+	// a fix that also relays stderr must not be able to pass the log assertion by doing so.
+	logMarker = "FAKE_SCRATCH_SERVER_LOG_7f3a"
+	errMarker = "FAKE_SCRATCH_SERVER_ERR_7f3a"
 )
 
-// writeFailingServer makes a fake nats-server in dir: it appends failMarker to the file named by
-// -l when given, writes it to stderr, and exits 3 without ever listening.
+// writeFailingServer makes a fake nats-server in dir: it appends logMarker to the file named by
+// -l when given, writes errMarker to stderr, and exits 3 without ever listening.
 func writeFailingServer(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "nats-server")
@@ -43,8 +45,8 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-if [ -n "$log" ]; then echo "` + failMarker + `: cannot start" >> "$log"; fi
-echo "` + failMarker + `: cannot start" >&2
+if [ -n "$log" ]; then echo "` + logMarker + `: cannot start" >> "$log"; fi
+echo "` + errMarker + `: cannot start" >&2
 exit 3
 `
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
@@ -68,8 +70,9 @@ func runInner(t *testing.T, name string) (out string, failed bool) {
 	return string(b), err != nil
 }
 
-// checkFailureNamesServer asserts the output of an inner run that failed its start.
-func checkFailureNamesServer(t *testing.T, out string, failed bool) {
+// checkFailureNamesServer asserts the output of an inner run that failed its start: the server's log
+// line, the log's path (wantLogPath is a substring of it) and the server's exit state.
+func checkFailureNamesServer(t *testing.T, out string, failed bool, wantLogPath string) {
 	t.Helper()
 	if !failed {
 		t.Fatalf("the inner run passed; a server that exits at once must fail the start:\n%s", out)
@@ -77,8 +80,11 @@ func checkFailureNamesServer(t *testing.T, out string, failed bool) {
 	if !strings.Contains(out, "--- FAIL: TestScratchHubStartFailureInner") {
 		t.Fatalf("the inner run failed, but not in its own test:\n%s", out)
 	}
-	if !strings.Contains(out, failMarker) {
-		t.Errorf("the failure output does not carry the server's log line %q:\n%s", failMarker, out)
+	if !strings.Contains(out, logMarker) {
+		t.Errorf("the failure output does not carry the server's log line %q:\n%s", logMarker, out)
+	}
+	if !strings.Contains(out, wantLogPath) {
+		t.Errorf("the failure output does not name the server's log file (%q):\n%s", wantLogPath, out)
 	}
 	if !strings.Contains(out, "exit status 3") {
 		t.Errorf("the failure output does not carry the server's exit state (\"exit status 3\"):\n%s", out)
@@ -89,7 +95,7 @@ func checkFailureNamesServer(t *testing.T, out string, failed bool) {
 
 func TestScratchHubStartFailureNamesTheServerLogAndExit(t *testing.T) {
 	out, failed := runInner(t, "TestScratchHubStartFailureInnerHubScratch")
-	checkFailureNamesServer(t, out, failed)
+	checkFailureNamesServer(t, out, failed, "nats-server.log") // the file name the inner test gives h.logfile
 }
 
 func TestScratchHubStartFailureInnerHubScratch(t *testing.T) {
@@ -119,7 +125,7 @@ func TestScratchHubStartFailureInnerHubScratch(t *testing.T) {
 
 func TestObserverHubStartFailureNamesTheServerLogAndExit(t *testing.T) {
 	out, failed := runInner(t, "TestScratchHubStartFailureInnerObserver")
-	checkFailureNamesServer(t, out, failed)
+	checkFailureNamesServer(t, out, failed, ".log") // the observer hub chooses its own log file; any .log path will do
 }
 
 func TestScratchHubStartFailureInnerObserver(t *testing.T) {
