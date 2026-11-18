@@ -27,7 +27,7 @@ bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 hook() { "$H" "$@" | sed 1d; }
 
 root="$(mktemp -d)"
-trap 'rm -rf "$root"' EXIT
+trap 'chmod -R u+rwx "$root" 2>/dev/null; rm -rf "$root"' EXIT  # the write-protected state dir below must not block cleanup
 export DIRECTOR_STATE="$root/state"
 export HOME="$root/home"; mkdir -p "$HOME"
 
@@ -343,6 +343,89 @@ PATH="$fakes:$PATH" "$H" >/dev/null
 after="$(cd "$DIRECTOR_STATE" && find . -type f -exec shasum -a 256 {} + | sort | shasum -a 256)"
 [[ "$before" == "$after" ]] && ok "the hook writes none of the loop inputs" || bad "the hook wrote a loop input"
 [[ ! -s "$root/loopcalls" ]] && ok "the hook calls no tmux, nats or gh" || bad "the hook called a pane, bus or GitHub tool" "$(cat "$root/loopcalls")"
+export DIRECTOR_STATE="$saved_state"
+
+# --- the seen-stamp and the loop line (standing loop S8; director's S8 rulings on aae-orc-rtz9w) ---------------------
+# `standing-hook --seen` stamps $DIRECTOR_STATE/hook-seen (one RFC 3339 UTC line, written by rename like last-drain)
+# and is the only way it is written: a plain run writes nothing, which every existing install's wiring relies on.
+# A stamp that cannot be written is silent: same stdout, same exit, nothing on stderr. `--loop-line` prints only the
+# loop line (nothing when there is no loop-status.json), for the plugin's SessionStart. The two flags combine in
+# either order, and SessionStart passes both. Any other argument shape is the usage error it is today.
+seen_state="$root/seen-state"; rm -rf "$seen_state"; mkdir -p "$seen_state"
+export DIRECTOR_STATE="$seen_state"
+clk() { env DWS_TEST_CLOCK=1 DWS_NOW=2026-11-18T12:00:00Z "$H" "$@"; }
+clk >"$root/seen-plain.out" 2>"$root/seen-plain.err"
+[[ -z "$(ls -A "$seen_state")" ]] && ok "writes-seen-stamp: a plain run writes nothing into the state directory" || bad "a plain run wrote into the state directory" "$(ls -A "$seen_state")"
+
+t0="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+rc=0; clk --seen >"$root/seen-flag.out" 2>"$root/seen-flag.err" || rc=$?
+t1="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+[[ "$rc" == 0 && ! -s "$root/seen-flag.err" ]] && ok "--seen exits 0 and says nothing on stderr" || bad "--seen exit or stderr" "rc=$rc err=[$(head -c 200 "$root/seen-flag.err")]"
+cmp -s "$root/seen-plain.out" "$root/seen-flag.out" && ok "--seen prints exactly the plain run's bytes" || bad "--seen changed the output"
+st="$(cat "$seen_state/hook-seen" 2>/dev/null || true)"
+{ [[ "$st" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ ! "$st" < "$t0" && ! "$st" > "$t1" ]] && [[ "$(wc -l <"$seen_state/hook-seen" | tr -d ' ')" == 1 ]]; } \
+  && ok "--seen stamps hook-seen: one RFC 3339 UTC line from the clock" || bad "hook-seen shape" "[$st] between $t0 and $t1"
+[[ "$(ls -A "$seen_state")" == "hook-seen" ]] && ok "--seen leaves no temp file behind" || bad "--seen left extra files" "$(ls -A "$seen_state" | tr '\n' ' ')"
+ln "$seen_state/hook-seen" "$root/seen-hold" 2>/dev/null || true; sleep 1
+clk --seen >/dev/null 2>&1 || true
+{ [[ -e "$root/seen-hold" && "$(cat "$root/seen-hold")" == "$st" ]] && [[ "$(cat "$seen_state/hook-seen" 2>/dev/null)" != "$st" ]]; } \
+  && ok "the stamp is replaced by rename (an old hard link keeps the old bytes)" || bad "hook-seen was rewritten in place"
+rm -f "$root/seen-hold"
+
+# a stamp that cannot be written changes nothing the caller sees
+rm -rf "$seen_state"; mkdir -p "$seen_state"
+if [[ "$(id -u)" == 0 ]]; then
+  skip_msg="the unwritable state directory case: running as root, where a mode bit does not stop a write"; echo "SKIP $skip_msg"
+else
+  chmod 555 "$seen_state"
+  rc=0; clk --seen >"$root/seen-ro.out" 2>"$root/seen-ro.err" || rc=$?
+  chmod 755 "$seen_state"
+  { [[ "$rc" == 0 && ! -s "$root/seen-ro.err" ]] && cmp -s "$root/seen-plain.out" "$root/seen-ro.out" && [[ -z "$(ls -A "$seen_state")" ]]; } \
+    && ok "an unwritable state directory: same stdout, exit 0, nothing on stderr, no stamp" || bad "unwritable state directory" "rc=$rc err=[$(head -c 200 "$root/seen-ro.err")]"
+fi
+printf 'not a directory\n' >"$root/seen-file"
+rc=0; DIRECTOR_STATE="$root/seen-file" clk --seen >"$root/seen-nd.out" 2>"$root/seen-nd.err" || rc=$?
+{ [[ "$rc" == 0 && ! -s "$root/seen-nd.err" ]] && cmp -s "$root/seen-plain.out" "$root/seen-nd.out"; } \
+  && ok "a state path that is a file: same stdout, exit 0, nothing on stderr" || bad "state path is a file" "rc=$rc err=[$(head -c 200 "$root/seen-nd.err")]"
+rm -rf "$seen_state"
+clk --seen >/dev/null 2>&1 || true
+[[ -s "$seen_state/hook-seen" ]] && ok "--seen creates a missing state directory, as beat does" || bad "--seen with no state directory"
+
+# other argument shapes stay usage errors and write nothing
+rm -rf "$seen_state"; mkdir -p "$seen_state"
+for args in "beat --seen" "--seen beat" "scan-beat --seen" "--bogus" "--seen --bogus" "--loop-line --bogus"; do
+  read -ra argv <<<"$args"
+  rc=0; clk "${argv[@]}" >"$root/seen-u.out" 2>"$root/seen-u.err" || rc=$?
+  { [[ "$rc" != 0 && ! -s "$root/seen-u.out" && "$(head -c 6 "$root/seen-u.err")" == "usage:" && -z "$(ls -A "$seen_state")" ]]; } \
+    && ok "'$args' is a usage error and writes nothing" || bad "'$args' is not a clean usage error" "rc=$rc out=[$(head -c 100 "$root/seen-u.out")] files=[$(ls -A "$seen_state" | tr '\n' ' ')]"
+done
+
+# --loop-line: only the loop line
+fakes="$root/seenfakes"; mkdir -p "$fakes"; : >"$root/seencalls"
+for t in tmux nats nats-server gh dbi; do printf '#!/bin/sh\necho "%s $*" >>"%s"\n' "$t" "$root/seencalls" >"$fakes/$t"; chmod +x "$fakes/$t"; done
+status_at() { printf '{"schema": 1, "ran_at": "%s", "steps": {}, "due": {"drain": true, "desk_read": false, "dashboard": false}, "seats": []}\n' "$(ago "$1")" >"$seen_state/loop-status.json"; }
+status_at 5
+rc=0; PATH="$fakes:$PATH" "$H" --loop-line >"$root/ll.out" 2>"$root/ll.err" || rc=$?
+{ [[ "$rc" == 0 && ! -s "$root/ll.err" ]] && [[ "$(cat "$root/ll.out")" == "loop: tick 5m ago; due: drain" ]]; } \
+  && ok "--loop-line prints only the loop line" || bad "--loop-line output" "rc=$rc out=[$(cat "$root/ll.out")]"
+[[ ! -e "$seen_state/hook-seen" ]] && ok "--loop-line alone writes no stamp" || bad "--loop-line alone wrote a stamp"
+[[ ! -s "$root/seencalls" ]] && ok "--loop-line starts no tmux, nats, gh or dbi" || bad "--loop-line called a tool" "$(cat "$root/seencalls")"
+rm -f "$seen_state/hook-seen"
+PATH="$fakes:$PATH" "$H" --loop-line --seen >"$root/ll1.out" 2>/dev/null || true; rm -f "$seen_state/hook-seen"
+PATH="$fakes:$PATH" "$H" --seen --loop-line >"$root/ll2.out" 2>/dev/null || true
+{ cmp -s "$root/ll1.out" "$root/ll.out" && cmp -s "$root/ll2.out" "$root/ll.out" && [[ -s "$seen_state/hook-seen" ]]; } \
+  && ok "--loop-line and --seen combine in either order: the loop line only, and the stamp" || bad "--loop-line with --seen"
+rm -f "$seen_state/loop-status.json" "$seen_state/hook-seen"
+rc=0; PATH="$fakes:$PATH" "$H" --loop-line >"$root/ll3.out" 2>"$root/ll3.err" || rc=$?
+{ [[ "$rc" == 0 && ! -s "$root/ll3.out" && ! -s "$root/ll3.err" ]]; } \
+  && ok "--loop-line with no loop-status.json prints nothing, so a session start adds no context" || bad "--loop-line with no status" "out=[$(head -c 100 "$root/ll3.out")]"
+rc=0; PATH="$fakes:$PATH" "$H" --loop-line --seen >"$root/ll4.out" 2>/dev/null || rc=$?
+{ [[ "$rc" == 0 && ! -s "$root/ll4.out" && -s "$seen_state/hook-seen" ]]; } \
+  && ok "--loop-line --seen with no status prints nothing and still stamps" || bad "--loop-line --seen with no status"
+printf 'not json\n' >"$seen_state/loop-status.json"
+PATH="$fakes:$PATH" "$H" --loop-line >"$root/ll5.out" 2>/dev/null || true
+[[ "$(cat "$root/ll5.out")" == "loop: UNKNOWN (loop-status.json unreadable)" ]] \
+  && ok "--loop-line with an unreadable status prints the UNKNOWN line, as the full hook does" || bad "--loop-line with a bad status" "$(cat "$root/ll5.out")"
 export DIRECTOR_STATE="$saved_state"
 
 echo "$pass passed, $fail failed"
