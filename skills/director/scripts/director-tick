@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""director-tick: one pass of the standing loop's read-and-compute steps.
+
+S5 of sim/design/director-standing-loop.md (section 2, "The tick"). One script, one pass,
+idempotent: two runs on unchanged inputs differ only in ran_at. It writes
+$DIRECTOR_STATE/loop-status.json (default $HOME/.director/state):
+
+  {"schema": 1, "ran_at": "<UTC>",
+   "steps": {"<step>": {"status": "ok|skipped|gap", "reason": "<text unless ok>"}},
+   "due": {"drain": bool, "desk_read": bool, "dashboard": bool},
+   "seats": [{"id", "cue", "cue_reason"}]}
+
+Steps, in order: desk_refresh (dws refresh --local), waiting_write (dws waiting write),
+stalled_ideas (dbi --json), presence (director-mcp roster --json). A step that fails is a gap
+carrying the first line of its error and never fails the tick; a step whose tool is not
+installed beside this script, or not on PATH, is skipped with that reason. A "profile" step
+appears only when a [loop] value is refused.
+
+Due, against the stamps the loop already keeps and never against mail:
+  drain      last-drain absent or older than tick_interval minutes (default 30, provisional
+             until the operator rules a cadence);
+  desk_read  desk-reads.jsonl absent or its mtime older than 24 hours (the bound dws applies
+             to an operator block, rule K13);
+  dashboard  dash-writer.json last_run absent or older than digest_max_age hours (default 12).
+tick_interval and digest_max_age come from the profile's [loop] table (director-profile
+check); each must be a positive integer, otherwise the default applies and the profile step
+is a gap. Both fall back to the defaults when the profile has no [loop].
+
+It never types into a pane, sends or acks anything on the bus, writes the Desk, runs the
+dashboard writer, merges, relays, answers a card, files a ticket or starts a session. The
+roster read is a read. TICK_NOW (RFC 3339 UTC) replaces the clock, for the verifier.
+"""
+import datetime
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+DEFAULT_TICK_MINUTES = 30
+DESK_READ_HOURS = 24
+DEFAULT_DIGEST_HOURS = 12
+CALL_TIMEOUT = 120
+HERE = os.path.dirname(os.path.realpath(__file__))
+
+
+def state_dir():
+    return os.environ.get("DIRECTOR_STATE") or os.path.join(os.path.expanduser("~"), ".director", "state")
+
+
+def parse_utc(text):
+    try:
+        return datetime.datetime.strptime(text.strip(), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except (ValueError, AttributeError):
+        return None
+
+
+def clock():
+    fixed = parse_utc(os.environ.get("TICK_NOW", "")) if os.environ.get("TICK_NOW") else None
+    return fixed or datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+
+
+def first_line(text):
+    for line in (text or "").splitlines():
+        if line.strip():
+            return line.strip()[:300]
+    return ""
+
+
+def run(argv):
+    """(rc, stdout, stderr); rc None when the program could not start or ran out of time."""
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=CALL_TIMEOUT, stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        return None, "", "not found"
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return None, "", "%s: %s" % (type(e).__name__, e)
+    return p.returncode, p.stdout, p.stderr
+
+
+def sibling(name):
+    path = os.path.join(HERE, name)
+    return path if os.access(path, os.X_OK) else None
+
+
+def run_step(steps, name, tool, args):
+    exe = sibling(tool)
+    if exe is None:
+        steps[name] = {"status": "skipped", "reason": "%s is not installed beside director-tick" % tool}
+        return None
+    rc, out, err = run([exe] + args)
+    if rc == 0:
+        steps[name] = {"status": "ok"}
+        return out
+    steps[name] = {"status": "gap", "reason": first_line(err) or first_line(out) or "%s %s failed (exit %s)" % (tool, " ".join(args), rc)}
+    return None
+
+
+def read_loop_values(steps):
+    """tick_interval minutes and digest_max_age hours from [loop], else the defaults.
+    A refused value is recorded by record_profile_gap and its default applies."""
+    minutes, hours = DEFAULT_TICK_MINUTES, DEFAULT_DIGEST_HOURS
+    exe = sibling("director-profile")
+    if exe is None:
+        return minutes, hours
+    rc, out, err = run([exe, "check"])
+    if rc != 0:
+        record_profile_gap(steps, "profile not read: %s" % (first_line(err) or "director-profile check failed (exit %s)" % rc))
+        return minutes, hours
+    seen = {}
+    for line in out.splitlines():
+        for key in ("tick_interval", "digest_max_age"):
+            if line.startswith("loop.%s:" % key):
+                seen[key] = line.split(":", 1)[1].strip()
+    for key, default in (("tick_interval", minutes), ("digest_max_age", hours)):
+        if key not in seen:
+            continue
+        try:
+            n = int(seen[key])
+        except ValueError:
+            n = 0
+        if n < 1:
+            record_profile_gap(steps, "loop.%s must be a positive integer (got %s); the default %s applies" % (key, seen[key], default))
+        elif key == "tick_interval":
+            minutes = n
+        else:
+            hours = n
+    return minutes, hours
+
+
+def record_profile_gap(steps, reason):
+    """The one place a refused [loop] value lands, kept apart so it can move."""
+    prior = steps.get("profile", {}).get("reason")
+    steps["profile"] = {"status": "gap", "reason": "; ".join(r for r in (prior, reason) if r)}
+
+
+def older_than(stamp, now, seconds):
+    return stamp is None or (now - stamp).total_seconds() > seconds
+
+
+def due_flags(state, now, minutes, hours):
+    drain = None
+    try:
+        with open(os.path.join(state, "last-drain"), encoding="utf-8") as f:
+            drain = parse_utc(f.readline())
+    except OSError:
+        pass
+    desk = None
+    try:
+        desk = datetime.datetime.fromtimestamp(os.stat(os.path.join(state, "desk-reads.jsonl")).st_mtime, datetime.timezone.utc)
+    except OSError:
+        pass
+    dash = None
+    try:
+        with open(os.path.join(state, "dash-writer.json"), encoding="utf-8") as f:
+            dash = parse_utc(json.load(f).get("last_run", ""))
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {
+        "drain": older_than(drain, now, minutes * 60),
+        "desk_read": older_than(desk, now, DESK_READ_HOURS * 3600),
+        "dashboard": older_than(dash, now, hours * 3600),
+    }
+
+
+def read_seats(steps):
+    exe = shutil.which("director-mcp")
+    if exe is None:
+        steps["presence"] = {"status": "skipped", "reason": "director-mcp is not on PATH"}
+        return []
+    rc, out, err = run([exe, "roster", "--json"])
+    if rc != 0:
+        steps["presence"] = {"status": "gap", "reason": first_line(err) or "director-mcp roster --json failed (exit %s)" % rc}
+        return []
+    try:
+        rows = json.loads(out)["rows"]
+        seats = [{"id": r.get("agent_id", ""), "cue": r.get("cue", ""), "cue_reason": r.get("cue_reason", "")} for r in rows]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        steps["presence"] = {"status": "gap", "reason": "the roster output is not the expected JSON"}
+        return []
+    steps["presence"] = {"status": "ok"}
+    return seats
+
+
+def write_status(state, doc):
+    os.makedirs(state, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=state, prefix=".loop-status.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=1, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, os.path.join(state, "loop-status.json"))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def main():
+    state = state_dir()
+    now = clock()
+    steps = {}
+    minutes, hours = read_loop_values(steps)
+    run_step(steps, "desk_refresh", "dws", ["refresh", "--local"])
+    run_step(steps, "waiting_write", "dws", ["waiting", "write"])
+    run_step(steps, "stalled_ideas", "dbi", ["--json"])
+    seats = read_seats(steps)
+    doc = {
+        "schema": 1,
+        "ran_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "steps": steps,
+        "due": due_flags(state, now, minutes, hours),
+        "seats": seats,
+    }
+    write_status(state, doc)
+    gaps = sum(1 for s in steps.values() if s["status"] == "gap")
+    print("director-tick: %d steps, %d gaps, due: %s -> %s" % (
+        len(steps), gaps, ", ".join(k for k, v in doc["due"].items() if v) or "nothing",
+        os.path.join(state, "loop-status.json")))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

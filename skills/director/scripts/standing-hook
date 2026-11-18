@@ -68,6 +68,18 @@ default 10m, twice the cue's window. It runs whatever the cue state. Under the b
 read fails, times out or is not a report it prints `director inbox: UNKNOWN (<reason>)`; with no director-mcp at
 all it prints nothing. It is a diagnostic: it prompts and gates nothing.
 
+When director-tick has written $DIRECTOR_STATE/loop-status.json, one more line follows the stalled-ideas line:
+
+  loop: tick <age> ago[ (stale, over <N>m)]; due: <drain, desk_read, dashboard | nothing>[; seats not live: <id> (<reason>), ...]
+
+The tick is stale past DIRECTOR_TICK_MAX_MINUTES (default 90, provisional until the operator rules a cadence).
+Only a present cue that is not "live" lists a seat; three are shown, then "+n more". A status that does not
+parse, or has no ran_at, prints `loop: UNKNOWN (loop-status.json unreadable)`. With the status file present,
+the waiting line also gets "digest <age> old" when digest.md was last written over 12 hours ago and
+"ledger <age> old" for workstreams.jsonl over 24 hours, before the Desk-read clause; a missing file adds
+nothing. With no loop-status.json none of this appears and the output is what it was before: no install
+without a tick sees a new line. Read-only, no new subprocess.
+
 The hook never types into a pane and never writes to the hub. It reads the hub in one place only, the unread
 report above, which is a read-only call; everything else it reads is a file: the heartbeat,
 the dash and scan stamps, and the two inputs above. The waiting line widens the contract the earlier
@@ -271,10 +283,89 @@ def waiting_line():
             except (KeyError, TypeError, ValueError):
                 pass
         clauses.append(f"{len(waiting_prs)} approved PRs not merged (oldest {age_text(max(ages)) if ages else 'unknown'})")
+    clauses.extend(loop_waiting_clauses(t_now))
     if not clauses:
         return None
     clauses.append(f"Desk read {age_text(read_age)} ago")
     return "waiting: " + "; ".join(clauses)
+
+
+LOOP_STATUS = "loop-status.json"
+DEFAULT_TICK_MAX_MINUTES = 90.0  # three times the provisional 30 minute tick_interval, until the operator rules a cadence
+DIGEST_MAX_HOURS = 12            # the digest_max_age default
+LEDGER_MAX_HOURS = 24            # the DIRECTOR_WAITING_MAX_HOURS convention
+SEATS_SHOWN = 3
+
+
+def loop_status_present():
+    """Every loop clause is gated on this: with no loop-status.json the hook prints what it always did."""
+    return os.path.exists(os.path.join(state_dir(), LOOP_STATUS))
+
+
+def tick_max_minutes():
+    """Minutes before a tick reads stale: DIRECTOR_TICK_MAX_MINUTES (provisional), else 90. A value that is
+    not finite and above 0 is the default, as the other bounds here."""
+    try:
+        v = float(os.environ.get("DIRECTOR_TICK_MAX_MINUTES", ""))
+    except ValueError:
+        return DEFAULT_TICK_MAX_MINUTES
+    return v if math.isfinite(v) and v > 0 else DEFAULT_TICK_MAX_MINUTES
+
+
+def loop_line():
+    """The line for what the tick wrote, or None when there is no loop-status.json. The tick's own output,
+    read as a file: when it ran, what is due for a session, and which seats' cues are not live."""
+    if not loop_status_present():
+        return None
+    try:
+        with open(os.path.join(state_dir(), LOOP_STATUS), encoding="utf-8") as f:
+            doc = json.load(f)
+        ran = parse_stamp(doc["ran_at"])
+        due, seats = doc["due"], doc["seats"]
+        if not isinstance(due, dict) or not isinstance(seats, list):
+            raise ValueError("not a loop status")
+    except (OSError, ValueError, KeyError, TypeError):
+        return "loop: UNKNOWN (loop-status.json unreadable)"
+    age = (now() - ran).total_seconds()
+    if age < 0:
+        return f"loop: UNKNOWN (loop-status.json is stamped in the future ({doc['ran_at']}))"
+    bound = tick_max_minutes()
+    stale = f" (stale, over {bound:g}m)" if age > bound * 60 else ""
+    owed = [k for k in ("drain", "desk_read", "dashboard") if due.get(k) is True]
+    ago = f"{int(age // 60)}m" if age < 7200 else age_text(age)  # minutes up to two hours, then hours
+    line = f"loop: tick {ago} ago{stale}; due: {', '.join(owed) or 'nothing'}"
+    dead = []
+    for seat in seats:
+        if not isinstance(seat, dict) or not isinstance(seat.get("id"), str):
+            continue
+        cue = seat.get("cue")
+        if not isinstance(cue, str) or cue in ("", "live"):
+            continue
+        reason = seat.get("cue_reason")
+        dead.append(f"{seat['id']} ({reason})" if isinstance(reason, str) and reason else seat["id"])
+    if dead:
+        shown = dead[:SEATS_SHOWN]
+        if len(dead) > SEATS_SHOWN:
+            shown.append(f"+{len(dead) - SEATS_SHOWN} more")
+        line += "; seats not live: " + ", ".join(shown)
+    return line
+
+
+def loop_waiting_clauses(t_now):
+    """Waiting clauses from the digest and the work ledger, by file age, only with a loop-status.json. A missing
+    file adds nothing (the digest is not on the tick yet); an age in the future adds nothing."""
+    if not loop_status_present():
+        return []
+    out = []
+    for name, label, hours in (("digest.md", "digest", DIGEST_MAX_HOURS), ("workstreams.jsonl", "ledger", LEDGER_MAX_HOURS)):
+        try:
+            mtime = os.stat(os.path.join(state_dir(), name)).st_mtime
+        except OSError:
+            continue
+        age = t_now.timestamp() - mtime
+        if age > hours * 3600:
+            out.append(f"{label} {age_text(age)} old")
+    return out
 
 
 ASKS_WINDOW_HOURS = 24
@@ -421,6 +512,9 @@ def main():
     print(CHECKLIST)
     print(dash_line())
     print(scan_line())
+    line = loop_line()
+    if line:
+        print(line)
     line = asks_line()
     if line:
         print(line)

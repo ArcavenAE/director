@@ -239,5 +239,111 @@ for v in inf -inf nan 0 -1 1e999 abc ""; do
   printf '%s\n' "$out" | grep -q '^asks in the last 24 h with no relay or row: 1 (oldest I-1)$' && ok "timeout '$v' still counts the unlinked ask" || bad "timeout '$v' loses the asks line"
 done
 
+
+# --- the loop status (standing loop S6): what the tick wrote, read on the next prompt ------------------------------
+# Read from $DIRECTOR_STATE/loop-status.json (director-tick), digest.md and workstreams.jsonl (mtimes). Every
+# clause is gated on loop-status.json existing: with no status file the output is byte-identical to a hook that
+# knows nothing of the loop, which is what every install without a tick sees. The hook stays read-only and
+# starts no new subprocess. Deferred, and not tested here: relayed asks with no card (slice 11), batches parsed
+# and never checked (slice 13), and "beat broken" (no drain record is named yet).
+ago() { python3 -I -c 'import datetime as d,sys;print((d.datetime.now(d.timezone.utc)-d.timedelta(minutes=float(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1"; }
+touch_ago() { python3 -I -c 'import os,sys,time;t=time.time()-float(sys.argv[2])*60;os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
+saved_state="$DIRECTOR_STATE"
+export DIRECTOR_STATE="$root/loop-state"; rm -rf "$DIRECTOR_STATE"; mkdir -p "$DIRECTOR_STATE"
+S="$DIRECTOR_STATE/loop-status.json"
+fresh_inputs() { # a quiet Desk: nothing waits, so only a loop clause can make the waiting line print
+  local nz; nz="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"read_at": "%s", "answered_not_relayed": []}\n' "$nz" >"$DIRECTOR_STATE/desk-reads.jsonl"
+  printf '{"written_at": "%s", "checked": 0, "approved_not_merged": []}\n' "$nz" >"$DIRECTOR_STATE/waiting-prs.json"
+}
+status() { # status RAN_AT_MINUTES_AGO DUE_JSON SEATS_JSON
+  printf '{"schema": 1, "ran_at": "%s", "steps": {}, "due": %s, "seats": %s}\n' "$(ago "$1")" "$2" "$3" >"$S"
+}
+NODUE='{"drain": false, "desk_read": false, "dashboard": false}'
+loopline() { hook | grep '^loop: ' || true; }
+fresh_inputs
+
+# no status file: stale digest and ledger change nothing, and no loop line appears
+printf 'digest\n' >"$DIRECTOR_STATE/digest.md"; touch_ago "$DIRECTOR_STATE/digest.md" 3000
+printf '{}\n' >"$DIRECTOR_STATE/workstreams.jsonl"; touch_ago "$DIRECTOR_STATE/workstreams.jsonl" 3000
+with_files="$(DWS_TEST_CLOCK=1 DWS_NOW=2026-11-18T12:00:00Z hook)"
+mv "$DIRECTOR_STATE/digest.md" "$root/digest.hold"; mv "$DIRECTOR_STATE/workstreams.jsonl" "$root/ledger.hold"
+without_files="$(DWS_TEST_CLOCK=1 DWS_NOW=2026-11-18T12:00:00Z hook)"
+mv "$root/digest.hold" "$DIRECTOR_STATE/digest.md"; mv "$root/ledger.hold" "$DIRECTOR_STATE/workstreams.jsonl"
+[[ "$with_files" == "$without_files" ]] && ok "no status file: a stale digest and ledger change nothing (output byte-identical)" || bad "no status file: output changed with digest.md and workstreams.jsonl present"
+! printf '%s\n' "$with_files" | grep -Eq '^(loop:|waiting: .*(digest|ledger))' && ok "no status file: no loop line, no digest or ledger clause, no 'no tick' text" || bad "no status file printed a loop clause"
+! printf '%s\n' "$with_files" | grep -qi 'no tick' && ok "no status file: nothing says there is no tick" || bad "no status file mentions the tick"
+# The same inputs against main's bytes. fixtures/standing-hook-no-loop-status.golden is the full output of the
+# standing-hook at main f054f5d1be24c5d16a6dded4cfa4778c8b24461c, before the loop clauses existed, on these inputs
+# (a quiet Desk, a 50-hour-old digest.md and workstreams.jsonl, no loop-status.json, no drain, dash or scan stamp),
+# made with: env -i HOME=<scratch> PATH=/opt/homebrew/bin:/usr/bin:/bin LANG=C DIRECTOR_STATE=<scratch state>
+# DWS_TEST_CLOCK=1 DWS_NOW=2026-11-18T12:00:00Z <main's skills/director/scripts>/standing-hook
+DWS_TEST_CLOCK=1 DWS_NOW=2026-11-18T12:00:00Z "$H" >"$root/no-status.out"
+cmp -s "$root/no-status.out" "$here/fixtures/standing-hook-no-loop-status.golden" \
+  && ok "no status file: the output is byte-identical to main's (golden from f054f5d1)" || bad "no status file: the output differs from main's golden"
+
+# tick age: fresh, stale, the env bound, unreadable
+status 5 "$NODUE" '[]'
+[[ "$(loopline)" == "loop: tick 5m ago; due: nothing" ]] && ok "a fresh status prints the tick age and nothing due" || bad "fresh loop line" "$(loopline)"
+status 89 "$NODUE" '[]'
+[[ "$(loopline)" == "loop: tick 89m ago; due: nothing" ]] && ok "89 minutes is still fresh (the bound is 90)" || bad "89m loop line" "$(loopline)"
+status 150 "$NODUE" '[]'
+[[ "$(loopline)" == "loop: tick 2h ago (stale, over 90m); due: nothing" ]] && ok "past 90 minutes the tick is stale" || bad "stale loop line" "$(loopline)"
+status 15 "$NODUE" '[]'
+[[ "$(DIRECTOR_TICK_MAX_MINUTES=10 hook | grep '^loop: ')" == "loop: tick 15m ago (stale, over 10m); due: nothing" ]] && ok "DIRECTOR_TICK_MAX_MINUTES moves the bound" || bad "env tick bound"
+printf 'not json\n' >"$S"
+[[ "$(loopline)" == "loop: UNKNOWN (loop-status.json unreadable)" ]] && ok "a status that does not parse reads UNKNOWN" || bad "unreadable status" "$(loopline)"
+printf '{"schema": 1, "steps": {}, "due": {}, "seats": []}\n' >"$S"
+[[ "$(loopline)" == "loop: UNKNOWN (loop-status.json unreadable)" ]] && ok "a status with no ran_at reads UNKNOWN" || bad "no ran_at" "$(loopline)"
+
+# due flags, in the order drain, desk_read, dashboard
+status 5 '{"drain": true, "desk_read": false, "dashboard": true}' '[]'
+[[ "$(loopline)" == "loop: tick 5m ago; due: drain, dashboard" ]] && ok "due names the flags that are true, in order" || bad "due flags" "$(loopline)"
+status 5 '{"drain": true, "desk_read": true, "dashboard": true}' '[]'
+[[ "$(loopline)" == "loop: tick 5m ago; due: drain, desk_read, dashboard" ]] && ok "all three due" || bad "all due" "$(loopline)"
+
+# seats not live: only a present cue that is not live; the cap is three
+status 5 "$NODUE" '[{"id":"a1","cue":"live","cue_reason":""},{"id":"b2","cue":"unverified","cue_reason":"no nonce echo after self-test"},{"id":"c3","cue":"","cue_reason":""}]'
+[[ "$(loopline)" == "loop: tick 5m ago; due: nothing; seats not live: b2 (no nonce echo after self-test)" ]] && ok "a live seat and one with no cue are not listed; an unverified one is, with its reason" || bad "seats not live" "$(loopline)"
+status 5 "$NODUE" '[{"id":"s1","cue":"unverified","cue_reason":"r1"},{"id":"s2","cue":"unverified"},{"id":"s3","cue":"failed","cue_reason":"r3"},{"id":"s4","cue":"unverified"},{"id":"s5","cue":"unverified"}]'
+[[ "$(loopline)" == "loop: tick 5m ago; due: nothing; seats not live: s1 (r1), s2, s3 (r3), +2 more" ]] && ok "more than three seats not live: three, then +n more" || bad "seat cap" "$(loopline)"
+
+# placement: the loop line sits right after the stalled-ideas line; the waiting line stays last
+status 5 "$NODUE" '[]'
+out="$(hook)"
+n_s="$(printf '%s\n' "$out" | grep -n '^stalled ideas:' | cut -d: -f1 || true)"; n_l="$(printf '%s\n' "$out" | grep -n '^loop: ' | cut -d: -f1 || true)"
+[[ -n "$n_s" && "$n_l" == $((n_s + 1)) ]] && ok "the loop line follows the stalled-ideas line" || bad "loop line placement" "$n_s $n_l"
+
+# digest age: over 12 hours is a waiting clause (digest_over_12h_waiting); at 11h59m it is not
+status 5 "$NODUE" '[]'
+touch_ago "$DIRECTOR_STATE/workstreams.jsonl" 5   # a fresh ledger, so only the digest can add a clause here
+touch_ago "$DIRECTOR_STATE/digest.md" 719; fresh_inputs
+! hook | grep -q '^waiting:' && ok "a digest 11h59m old adds no clause and the waiting line stays away" || bad "digest under 12h"
+touch_ago "$DIRECTOR_STATE/digest.md" 785; fresh_inputs
+[[ "$(hook | grep '^waiting:')" == "waiting: digest 13h old; Desk read 0m ago" ]] && ok "digest_over_12h_waiting: a digest over 12 hours old is a waiting clause" || bad "digest_over_12h_waiting" "$(hook | grep '^waiting:')"
+rm -f "$DIRECTOR_STATE/digest.md"; fresh_inputs
+! hook | grep -q '^waiting:' && ok "a missing digest.md adds no clause (the digest is not on the tick yet)" || bad "missing digest"
+
+# ledger age: over 24 hours is a waiting clause, after the digest clause and before the Desk read
+touch_ago "$DIRECTOR_STATE/workstreams.jsonl" 1500; fresh_inputs
+[[ "$(hook | grep '^waiting:')" == "waiting: ledger 25h old; Desk read 0m ago" ]] && ok "a ledger over 24 hours old is a waiting clause" || bad "ledger clause" "$(hook | grep '^waiting:')"
+touch_ago "$DIRECTOR_STATE/workstreams.jsonl" 1380; fresh_inputs
+! hook | grep -q '^waiting:' && ok "a ledger 23h old adds no clause" || bad "ledger under 24h"
+printf 'digest\n' >"$DIRECTOR_STATE/digest.md"; touch_ago "$DIRECTOR_STATE/digest.md" 785
+touch_ago "$DIRECTOR_STATE/workstreams.jsonl" 1500; fresh_inputs
+[[ "$(hook | grep '^waiting:')" == "waiting: digest 13h old; ledger 25h old; Desk read 0m ago" ]] && ok "both clauses, digest first, then the ledger, then the Desk read" || bad "both clauses" "$(hook | grep '^waiting:')"
+[[ "$(hook | tail -n 1)" == "waiting: "* ]] && ok "the waiting line stays last" || bad "waiting not last"
+
+# read only, and no new subprocess: the state tree is unchanged, and a tmux, nats or gh on PATH is never called
+fakes="$root/loopfakes"; mkdir -p "$fakes"; : >"$root/loopcalls"
+for t in tmux nats nats-server gh; do printf '#!/bin/sh\necho "%s $*" >>"%s"\n' "$t" "$root/loopcalls" >"$fakes/$t"; chmod +x "$fakes/$t"; done
+status 5 '{"drain": true, "desk_read": false, "dashboard": false}' '[{"id":"b2","cue":"unverified"}]'
+before="$(cd "$DIRECTOR_STATE" && find . -type f -exec shasum -a 256 {} + | sort | shasum -a 256)"
+PATH="$fakes:$PATH" "$H" >/dev/null
+after="$(cd "$DIRECTOR_STATE" && find . -type f -exec shasum -a 256 {} + | sort | shasum -a 256)"
+[[ "$before" == "$after" ]] && ok "the hook writes none of the loop inputs" || bad "the hook wrote a loop input"
+[[ ! -s "$root/loopcalls" ]] && ok "the hook calls no tmux, nats or gh" || bad "the hook called a pane, bus or GitHub tool" "$(cat "$root/loopcalls")"
+export DIRECTOR_STATE="$saved_state"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

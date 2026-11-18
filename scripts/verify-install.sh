@@ -125,6 +125,13 @@ for n in dsi dsx dws merge-guard relay-log desk-snapshot draft-sweep card-ingest
 done
 # draft-sweep (5yupe) is installed for the sweep to call; it needs no checkout beside it.
 [[ -f "$cp_home/director/bin/draft-sweep" && ! -L "$cp_home/director/bin/draft-sweep" && -x "$cp_home/director/bin/draft-sweep" ]] && ok "copy install puts a real executable draft-sweep in the bin home" || bad "copy install puts a real executable draft-sweep in the bin home"
+# director-tick (standing loop S5) is installed beside dws, dbi and director-profile, which it runs from beside itself.
+[[ -x "$clean/director/bin/director-tick" ]] && ok "install puts director-tick in the bin home, executable" || bad "install puts director-tick in the bin home, executable"
+[[ -x "$clean/director/bin/director-tick" && -x "$clean/director/bin/dws" && -x "$clean/director/bin/dbi" && -x "$clean/director/bin/director-profile" ]] \
+  && ok "director-tick sits beside dws, dbi and director-profile" || bad "director-tick sits beside dws, dbi and director-profile"
+[[ -f "$cp_home/director/bin/director-tick" && ! -L "$cp_home/director/bin/director-tick" && -x "$cp_home/director/bin/director-tick" ]] \
+  && ok "copy install puts a real executable director-tick in the bin home" || bad "copy install puts a real executable director-tick in the bin home"
+
 set +e
 "$cp_home/director/bin/merge-guard" >"$cp_home/mg" 2>&1; rc=$?
 [[ $rc -eq 2 ]] && grep -q "merge-guard" "$cp_home/mg" && ok "installed merge-guard runs from the bin home and prints usage" || bad "installed merge-guard runs from the bin home and prints usage" "rc=$rc"

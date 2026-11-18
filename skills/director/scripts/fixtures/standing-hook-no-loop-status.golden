@@ -1,0 +1,8 @@
+now 06:00 CST
+drain age: unknown, no drain recorded (run `standing-hook beat` after a drain)
+Before you answer:
+1. Drained, and answered Desk cards and page picks read, since my last answer? If not, do them first.
+2. Does this answer or relay touch a standing ruling, or claim authority? Quote the ruling.
+3. Where does this text land, and does that file or seat own it?
+dash last applied: unknown, no batch recorded (sweep step 5 runs `dash-writer`, then `dash-writer ack`)
+stalled ideas: unknown, no scan recorded (the sweep runs `dbi --json`, then `standing-hook scan-beat`)

@@ -93,6 +93,8 @@ install_one "$SRC/skills/director/scripts/sweep-firings" "$DIRECTOR_HOME/bin/swe
 # dash-writer, the operations dashboard's writer step (ghxv2): the sweep's tick runs it from the bin home.
 install_one "$SRC/skills/director/scripts/dash-writer" "$DIRECTOR_HOME/bin/dash-writer"
 # dws is installed above; dash-writer reads it from beside itself.
+# director-tick (standing loop S5) runs dws, dbi and director-profile from beside itself, all installed here.
+install_one "$SRC/skills/director/scripts/director-tick" "$DIRECTOR_HOME/bin/director-tick"
 # shelf-row builds Reply Shelf rows (reply-shelf design): the session runs it by name when it relays an answer.
 install_one "$SRC/skills/director/scripts/shelf-row" "$DIRECTOR_HOME/bin/shelf-row"
 # nav-sync reports which exported pages carry a stale menu (shelf-nav-sync): the sweep runs it by name after a page export.
