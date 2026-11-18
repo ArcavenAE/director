@@ -50,7 +50,8 @@ goes to a script on a schedule (SOUL section 9); the hook only reminds.
 | 7 answer QUERYs, act on MERGE RECOMMENDED | session | judgment; `merge-guard` stays the check before the act |
 
 The tick also runs `dws waiting write` and the stalled-ideas scan (`dbi`), which
-the hook must never run.
+the hook must never run, and it reads presence for per-seat cue state. None of
+these consumes mail.
 
 ## 2. The tick
 
@@ -61,6 +62,39 @@ Amendment 1). marvel is optional (aae-orc ADR-005).
 It writes `$DIRECTOR_STATE/loop-status.json`: when it ran, one entry per step
 (ok, skipped, or a gap with its reason), what is due for a session (drain, Desk
 read, dashboard), and per-seat cue state read from presence (section 5).
+
+The script is `skills/director/scripts/director-tick`. The file is written to a
+temporary name and renamed, with this shape:
+
+```
+{"schema": 1, "ran_at": "<UTC>",
+ "steps": {"<step>": {"status": "ok|skipped|gap", "reason": "<text unless ok>"}},
+ "due": {"drain": bool, "desk_read": bool, "dashboard": bool},
+ "seats": [{"id": "...", "cue": "...", "cue_reason": "..."}]}
+```
+
+The steps, in order: `desk_refresh` (`dws refresh --local`), `waiting_write`
+(`dws waiting write`), `stalled_ideas` (`dbi --json`) and `presence`
+(`director-mcp roster --json`, whose rows give `seats`). A step that fails is a
+gap carrying the first line of its error, and never fails the tick. A step whose
+tool is not installed is skipped, with that reason. A fifth step, `profile`,
+appears only when the profile is refused. When `director-profile check` refuses
+it, the step is a gap carrying the first error line, both defaults apply, and
+the tick exits 0. When the tick itself refuses a `[loop]` value that is not a
+positive integer, the gap names `loop.<key>` and that key's default applies. A
+missing profile file, or one with no `[loop]`, adds no step.
+
+What is due comes from the stamps the loop already keeps, never from mail:
+
+- `drain`: `last-drain` is absent or older than `tick_interval` minutes;
+- `desk_read`: `desk-reads.jsonl` is absent or last written more than 24 hours
+  ago, the bound `dws` applies before it accepts an operator block;
+- `dashboard`: `last_run` in `dash-writer.json` is absent or older than
+  `digest_max_age` hours (12 by default).
+
+`tick_interval` defaults to 30 minutes when the profile has no `[loop]`. That is
+provisional, until the operator rules a cadence. Both values come from `[loop]`
+and must be positive integers.
 
 It never:
 
