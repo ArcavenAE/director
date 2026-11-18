@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,7 +37,7 @@ func runGuarded(m *testing.M) int {
 		fmt.Fprintf(os.Stderr, "director-mcp tests: no scratch home: %v\n", err)
 		return 1
 	}
-	defer os.RemoveAll(scratch)
+	defer removeScratch(scratch, os.Stderr)
 	pinGoCaches()
 	os.Setenv("HOME", scratch)
 	os.Setenv("DIRECTOR_STATE", filepath.Join(scratch, ".director", "state"))
@@ -44,14 +45,23 @@ func runGuarded(m *testing.M) int {
 		fmt.Fprintf(os.Stderr, "director-mcp tests: %v\n", err)
 		return 1
 	}
-	code := m.Run()
-	// A test that set HOME or DIRECTOR_STATE with os.Setenv and did not restore it
-	// would let later tests reach the real home, so the run fails.
+	return finishRun(m.Run(), scratch, os.Stderr)
+}
+
+// finishRun checks the guard after the tests ran and returns the exit code. A
+// test that set HOME or DIRECTOR_STATE with os.Setenv and did not restore it
+// would let later tests reach the real home, so the run fails.
+func finishRun(code int, scratch string, stderr io.Writer) int {
 	if err := homeGuardHolds(scratch); err != nil && code == 0 {
-		fmt.Fprintf(os.Stderr, "director-mcp tests: after the run, %v\n", err)
+		fmt.Fprintf(stderr, "director-mcp tests: after the run, %v\n", err)
 		return 1
 	}
 	return code
+}
+
+// removeScratch removes the scratch home the run made.
+func removeScratch(scratch string, stderr io.Writer) {
+	os.RemoveAll(scratch)
 }
 
 // pinGoCaches sets GOMODCACHE and GOCACHE to where go finds them now, before HOME
