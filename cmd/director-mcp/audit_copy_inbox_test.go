@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -116,5 +118,51 @@ func TestLocalSendAuditRecordNamesTheInboxStream(t *testing.T) {
 	}
 	if got, want := rec.Header.Get("Director-Inbox-Seq"), strconv.FormatUint(m["sequence"].(uint64), 10); got != want {
 		t.Errorf("Director-Inbox-Seq = %q, want %s (unchanged)", got, want)
+	}
+}
+
+// The plan's second test for this slice: the ask reader must still ingest an
+// audit record that carries Director-Inbox-Stream, and one that does not (the
+// old shape). It reads only -Seq and -Subject, so this holds at b97d1ec already
+// and is a pin, not a red test; the unknown header is what this slice adds.
+func TestAskReaderIgnoresAnUnknownInboxStreamHeader(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provisionAudit(t, ctx, url)
+
+	pub := func(e Envelope, headers map[string]string) {
+		t.Helper()
+		body, _ := json.Marshal(e)
+		m := &nats.Msg{Subject: "agent.audit", Data: body, Header: nats.Header{}}
+		m.Header.Set(jetstream.MsgIDHeader, e.MessageID)
+		for k, v := range headers {
+			m.Header.Set(k, v)
+		}
+		if _, err := js.PublishMsg(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pub(envFor("m-new", "REQUEST", "sup-1", "agent://ops/builder-1", "x"), map[string]string{
+		"Director-Inbox-Stream":  "GLOBAL_TO_DIRECTOR",
+		"Director-Inbox-Subject": "global.director.inbox",
+		"Director-Inbox-Seq":     "7",
+	})
+	pub(envFor("m-old", "REQUEST", "sup-1", "agent://ops/builder-1", "y"), map[string]string{
+		"Director-Inbox-Subject": "agent.ops.builder-1.inbox",
+		"Director-Inbox-Seq":     "3",
+	})
+
+	r := newAskReader(js, askReaderCfg{Broker: "local", File: filepath.Join(t.TempDir(), "a.json")})
+	if err := r.Pass(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"m-new", "m-old"} {
+		if r.ledger.Rows[id] == nil {
+			t.Errorf("row %s was not ingested; rows = %v", id, r.ledger.Rows)
+		}
+	}
+	if len(r.NotRead) != 0 {
+		t.Errorf("the pass left records unread: %v", r.NotRead)
 	}
 }
