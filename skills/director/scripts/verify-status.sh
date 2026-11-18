@@ -130,6 +130,14 @@ cap ihook-copy "$quiet" "$DH/bin/standing-hook"
 cap istatus-copy "$quiet" "$DH/bin/director" status
 same ihook-copy istatus-copy && [[ -s "$root/ihook-copy.out" ]] && ok "matches-hook: the installed launcher (copy install, no checkout beside it) prints the installed hook's bytes" || bad "matches-hook: copy install" "rc=$(cat "$root/istatus-copy.rc") err=[$(head -c 160 "$root/istatus-copy.err")]"
 
+# a copy install reached through the user's own link (for example ~/.local/bin/director pointing at the installed
+# copy): the hook beside the resolved launcher is found, so the output and exit code are the same as by its own path
+mkdir -p "$root/userbin"; ln -s "$copyh/director/bin/director" "$root/userbin/director"
+cap istatus-copy-link "$quiet" "$root/userbin/director" status
+same ihook-copy istatus-copy-link && [[ -s "$root/ihook-copy.out" ]] \
+  && ok "a copy install run through a user's link prints the hook's bytes and exit code (the hook beside the resolved launcher)" \
+  || bad "copy install through a user's link" "rc=$(cat "$root/istatus-copy-link.rc") err=[$(head -c 160 "$root/istatus-copy-link.err")]"
+
 # the installed standing-hook comes first, and its exit code is the launcher's
 DH="$linkh/director"; rm -f "$DH/bin/standing-hook"
 printf '#!/bin/sh\necho "installed hook"\necho "to stderr" >&2\nexit 7\n' >"$DH/bin/standing-hook"; chmod +x "$DH/bin/standing-hook"
