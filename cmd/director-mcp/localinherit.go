@@ -334,6 +334,33 @@ func (b *Bus) endInherit(ctx context.Context, why string, logf func(string, ...a
 	}
 }
 
+// inheritedOne takes one waiting inherited message without blocking, for the
+// single-message wait. A failure is returned as a warning, never as an error: the
+// seat's own wait goes on.
+func (b *Bus) inheritedOne(ctx context.Context) (*drained, string) {
+	var res batchResult
+	b.drainInherited(ctx, 1, &res)
+	if len(res.Items) == 0 {
+		return nil, res.LocalWarn
+	}
+	return &res.Items[0], res.LocalWarn
+}
+
+// ownWaiting takes one message of the seat's own that is already waiting,
+// without blocking: local first, then the global tier when it is attached.
+func (b *Bus) ownWaiting(ctx context.Context, res *pollResult) *drained {
+	if b.globalCfg != nil {
+		var notices string
+		w := b.takeWaiting(ctx, res, &notices)
+		res.GlobalWarn = joinWarn(res.GlobalWarn, notices)
+		return w
+	}
+	if items, _, _ := b.pullLocalNoWait(ctx, 1); len(items) > 0 {
+		return &items[0]
+	}
+	return nil
+}
+
 // drainInherited takes up to n waiting messages from the inherited durable into
 // res, each marked with the predecessor. It never fails the call: the seat's own
 // mail is already in hand, so a failure here becomes a warning.
