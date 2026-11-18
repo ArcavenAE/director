@@ -78,5 +78,11 @@ el=$((SECONDS - t0))
 [[ "$el" -le 4 ]] && ok "a hung roster command is cut off by --timeout" || bad "a hung roster command is cut off by --timeout" "took ${el}s"
 [[ "$trc" == 0 ]] && printf '%s\n' "$tout" | grep -q '^- GAP never-polled' && ok "a timed-out roster prints a GAP line and exits 0" || bad "a timed-out roster prints a GAP line and exits 0" "rc=$trc out=$tout"
 
+# --strict keeps a nonzero exit for a caller that tests it: the same GAP line, exit 2.
+set +e; sout="$("$S" --roster "$root/absent.json" --now "$NOW" --strict 2>/dev/null)"; src=$?; set -e
+[[ "$src" == 2 ]] && printf '%s\n' "$sout" | grep -q '^- GAP never-polled' && ok "--strict makes a GAP exit 2 with the same line" || bad "--strict makes a GAP exit 2 with the same line" "rc=$src out=$sout"
+set +e; "$S" --roster "$root/empty.json" --now "$NOW" --strict >/dev/null 2>&1; crc=$?; set -e
+[[ "$crc" == 0 ]] && ok "--strict exits 0 on a readable roster" || bad "--strict exits 0 on a readable roster" "rc=$crc"
+
 echo "never-polled: $pass passed, $fail failed"
 [[ "$fail" == 0 ]]
