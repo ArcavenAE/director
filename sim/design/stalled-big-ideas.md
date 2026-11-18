@@ -70,18 +70,9 @@ Uncaptured: <one line each, or "none">
 ## 3. The rule
 
 **A big idea** is a research or design artifact in one of the roots listed
-in `$DIRECTOR_STATE/idea-roots.conf`, one path or glob per line. The default
-file the builder ships:
-
-```
-~/work/aae-orc/_kos/ideas/*.md
-~/work/aae-orc/_kos/probes/*.md
-~/work/aae-orc/*/_kos/ideas/*.md
-~/work/aae-orc/*/_kos/probes/*.md
-~/work/aae-orc/*/sim/design/*.md
-~/work/aae-orc/*/docs/design/*.md
-~/work/aae-orc/docs/design/*.md
-```
+in `$DIRECTOR_STATE/idea-roots.conf`, one path or glob per line. The file
+the install ships is comment-only: it names no roots, because a root is a
+path on one machine, and the operator adds one path or glob per line.
 
 Never `run/`, `forks/` or `contrib/` (the three-tier taxonomy: fleet recipes
 do not read them), and never a worktree directory (`*-wt-*`). An idea is
