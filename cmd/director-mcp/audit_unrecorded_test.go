@@ -87,7 +87,12 @@ func TestASendWhoseAuditPublishFailsOnceIsRecordedByTheRetry(t *testing.T) {
 	created := make(chan error, 1)
 	go func() {
 		for inboxCountOrZero(ctx, js) < 1 {
-			time.Sleep(time.Millisecond)
+			select {
+			case <-ctx.Done():
+				created <- ctx.Err()
+				return
+			case <-time.After(time.Millisecond):
+			}
 		}
 		time.Sleep(600 * time.Millisecond)
 		_, err := js.CreateStream(ctx, jetstream.StreamConfig{Name: "AGENT_AUDIT", Subjects: []string{"agent.audit"}})
@@ -112,5 +117,34 @@ func TestASendWhoseAuditPublishFailsOnceIsRecordedByTheRetry(t *testing.T) {
 	}
 	if got := auditCount(t, ctx, s); got != 1 {
 		t.Errorf("audit holds %d records, want 1: the retry should have stored the copy once", got)
+	}
+}
+
+// A retry of the audit publish reuses the envelope's Nats-Msg-Id, so a first
+// attempt that landed and lost its ack leaves one record, not two. This holds
+// at 5180c3e already (the id is set in auditMirrorStored), so it is a pin and
+// passes before the fix.
+func TestAuditRetryStoresOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	audit := createAudit(t, ctx, js)
+	bus := liveSeatNoCleanup(t, ctx, url, Sender{AgentID: "sup", Workspace: "w", Team: "t"})
+
+	raw, _ := json.Marshal(map[string]any{"to": "agent://t/a", "performative": "INFORM", "text": "hi"})
+	e, _, err := buildSendEnvelope(bus.self, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(e)
+	if got := bus.auditMirror(ctx, e, body); got != "" {
+		t.Fatalf("first mirror = %q, want recorded", got)
+	}
+	if got := bus.auditMirror(ctx, e, body); got != "" {
+		t.Fatalf("second mirror = %q, want recorded", got)
+	}
+	if got := auditCount(t, ctx, audit); got != 1 {
+		t.Errorf("audit holds %d records after two publishes of one message id, want 1", got)
 	}
 }
