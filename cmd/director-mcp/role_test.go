@@ -144,10 +144,18 @@ func TestBrokerRoleMailIsNotReplayedAfterReconnect(t *testing.T) {
 	if err := sendRole(ctx, sender, "agent://ops/rev-1", "a1", "aae-orc"); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"r1", "a1"} {
-		if e, _, err := h1.receive(ctx, 3*time.Second); err != nil || e == nil || e.MessageID != want {
-			t.Fatalf("first holder got %v, %v; want %s", e, err, want)
+	// Two durables, one per subject: a single receive takes them in turn, so the
+	// pair arrives in either order (receiveBatch orders by sequence).
+	seen := map[string]bool{}
+	for range 2 {
+		e, _, err := h1.receive(ctx, 3*time.Second)
+		if err != nil || e == nil {
+			t.Fatalf("first holder got %v, %v; want r1 and a1", e, err)
 		}
+		seen[e.MessageID] = true
+	}
+	if !seen["r1"] || !seen["a1"] {
+		t.Fatalf("first holder read %v; want r1 and a1", seen)
 	}
 	h1.close()
 	if err := sendRole(ctx, sender, "role://ops/reviewer", "r2", "aae-orc"); err != nil {
@@ -168,9 +176,11 @@ func TestBrokerRoleMailIsNotReplayedAfterReconnect(t *testing.T) {
 	}
 }
 
-// A seat that takes a role it did not hold before reads from the start: the
-// departed durable read only the agent inbox, so its position says nothing
-// about the role inbox. A replay, never a skip.
+// A seat that takes a role it did not hold before reads the role inbox from the
+// start: the departed durable read only the agent inbox, so its position says
+// nothing about the role inbox. A replay, never a skip. The agent inbox keeps
+// its own floor (director#220: one durable per subject), so a1, which this seat
+// already read, is not replayed.
 func TestBrokerTakingARoleDoesNotInheritTheAgentOnlyFloor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -210,7 +220,7 @@ func TestBrokerTakingARoleDoesNotInheritTheAgentOnlyFloor(t *testing.T) {
 		}
 		got = append(got, e.MessageID)
 	}
-	if strings.Join(got, ",") != "r1,a1" {
-		t.Errorf("session that took the role read %v, want [r1 a1] (r1 was never read by this seat)", got)
+	if strings.Join(got, ",") != "r1" {
+		t.Errorf("session that took the role read %v, want [r1] (r1 was never read by this seat; a1 was)", got)
 	}
 }

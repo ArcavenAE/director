@@ -37,11 +37,81 @@ func (b *Bus) cons() jetstream.Consumer {
 	return b.consumer
 }
 
+// consOf returns the own-subject consumer, or the role-subject one when role is
+// true (nil for a seat with no role).
+func (b *Bus) consOf(role bool) jetstream.Consumer {
+	if role {
+		b.localMu.Lock()
+		defer b.localMu.Unlock()
+		return b.roleCons
+	}
+	return b.cons()
+}
+
+// localConsumers lists every local consumer this session reads: its own
+// subject's, then its role subject's when it holds a role. Every read that sums
+// or peeks the local mail goes through it, so a role holder's two durables read
+// as one source (director#220).
+func (b *Bus) localConsumers() []jetstream.Consumer {
+	b.localMu.Lock()
+	defer b.localMu.Unlock()
+	out := []jetstream.Consumer{b.consumer}
+	if b.roleCons != nil {
+		out = append(out, b.roleCons)
+	}
+	return out
+}
+
+// stateOf is the rebuild state of one local durable. The caller holds localMu.
+func (b *Bus) stateOf(role bool) *localState {
+	if role {
+		return &b.roleLocal
+	}
+	return &b.local
+}
+
+// durableOf is the durable's name: the own one, or the same with "-role".
+func (b *Bus) durableOf(role bool) string {
+	d := "mcp_" + b.self.AgentID + "_" + b.instance
+	if role {
+		d += "-role"
+	}
+	return d
+}
+
+// noteRoleDelivered records the stream sequence of a role-subject message that
+// was fetched and not yet acked. The ack is noted later by sequence alone (the
+// reply path and the handled mode carry no subject), and this tells noteLocalAcked
+// which durable's acked counter the sequence belongs to: the two durables'
+// sequences interleave, so one shared maximum would make a rebuilt own durable
+// skip own mail below a role sequence.
+func (b *Bus) noteRoleDelivered(seq uint64) {
+	b.localMu.Lock()
+	if b.roleSeqs == nil {
+		b.roleSeqs = map[uint64]struct{}{}
+	}
+	b.roleSeqs[seq] = struct{}{}
+	b.localMu.Unlock()
+}
+
 // noteLocalAcked records an acked local stream sequence.
 func (b *Bus) noteLocalAcked(seq uint64) {
 	b.localMu.Lock()
-	if seq > b.local.acked {
-		b.local.acked = seq
+	_, isRole := b.roleSeqs[seq]
+	delete(b.roleSeqs, seq)
+	st := b.stateOf(isRole)
+	if seq > st.acked {
+		st.acked = seq
+	}
+	b.localMu.Unlock()
+}
+
+// noteAckedOn records an ack made at the fetch itself, where the durable is known.
+func (b *Bus) noteAckedOn(role bool, seq uint64) {
+	b.localMu.Lock()
+	st := b.stateOf(role)
+	if seq > st.acked {
+		st.acked = seq
 	}
 	b.localMu.Unlock()
 }
@@ -54,14 +124,16 @@ func (b *Bus) noteLocalAcked(seq uint64) {
 // order, so the start is the lowest held sequence when that is lower: the new
 // durable redelivers it, the handled state replaces its dead ack handle, and
 // mark_handled still acks it.
-func (b *Bus) localRestartSeq() (start uint64, acked uint64) {
+func (b *Bus) localRestartSeq(role bool) (start uint64, acked uint64) {
 	b.localMu.Lock()
-	acked = b.local.acked
+	acked = b.stateOf(role).acked
 	b.localMu.Unlock()
 	if acked > 0 {
 		start = acked + 1
 	}
-	if b.handled != nil {
+	// lowestPending is per tier, so it speaks for the own durable only; the role
+	// durable's handled-mode rebuild resumes after its acks (a stated limit).
+	if b.handled != nil && !role {
 		if low := b.handled.lowestPending("local"); low > 0 && (start == 0 || low < start) {
 			start = low
 		}
@@ -75,23 +147,31 @@ func (b *Bus) localRestartSeq() (start uint64, acked uint64) {
 // rebuilt, so the caller retries. Any other answer, including a broker that
 // cannot be asked, returns false and the caller reports the original error.
 func (b *Bus) recoverLocal(ctx context.Context, cause error) (bool, error) {
+	return b.recoverLocalOn(ctx, false, cause)
+}
+
+func (b *Bus) recoverLocalOn(ctx context.Context, role bool, cause error) (bool, error) {
 	if !possiblyLost(cause) {
 		return false, nil
 	}
-	return b.restoreLocal(ctx)
+	return b.restoreDurable(ctx, role)
 }
 
 // recheckLocal is recoverLocal for an empty pull: a pull on a durable the
 // broker no longer has can look like an empty inbox, so an empty pull asks, at
 // most once per durableCheckEvery.
 func (b *Bus) recheckLocal(ctx context.Context) (bool, error) {
+	return b.recheckLocalOn(ctx, false)
+}
+
+func (b *Bus) recheckLocalOn(ctx context.Context, role bool) (bool, error) {
 	b.localMu.Lock()
-	due := time.Since(b.local.checked) >= durableCheckEvery
+	due := time.Since(b.stateOf(role).checked) >= durableCheckEvery
 	b.localMu.Unlock()
 	if !due {
 		return false, nil
 	}
-	return b.restoreLocal(ctx)
+	return b.restoreDurable(ctx, role)
 }
 
 // lookupLocal asks the broker whether the durable exists. b.lookup replaces the
@@ -105,20 +185,25 @@ func (b *Bus) lookupLocal(ctx context.Context, durable string) error {
 }
 
 func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
+	return b.restoreDurable(ctx, false)
+}
+
+// restoreDurable rebuilds the own-subject durable, or the role-subject one.
+func (b *Bus) restoreDurable(ctx context.Context, role bool) (bool, error) {
 	if b.js == nil {
 		return false, nil // no broker context to ask (a bus built around a fake consumer)
 	}
-	durable := "mcp_" + b.self.AgentID + "_" + b.instance
+	durable := b.durableOf(role)
 	// The poll and the heartbeat can both get here for one loss. One rebuilds;
 	// the other waits, and when the durable came back while it waited it reports
 	// that, so its caller retries on the new durable.
 	b.localMu.Lock()
-	seen := b.local.rebuilds
+	seen := b.stateOf(role).rebuilds
 	b.localMu.Unlock()
 	b.restoreMu.Lock()
 	defer b.restoreMu.Unlock()
 	b.localMu.Lock()
-	rebuiltMeanwhile := b.local.rebuilds != seen
+	rebuiltMeanwhile := b.stateOf(role).rebuilds != seen
 	b.localMu.Unlock()
 	if rebuiltMeanwhile {
 		return true, nil
@@ -127,7 +212,7 @@ func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 	// that cannot answer is not asked again on every empty poll. (The global
 	// tier's restore, global.go, does the same.)
 	b.localMu.Lock()
-	b.local.checked = time.Now()
+	b.stateOf(role).checked = time.Now()
 	b.localMu.Unlock()
 	err := b.lookupLocal(ctx, durable)
 	if err == nil {
@@ -143,9 +228,9 @@ func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 		}
 		return false, nil
 	}
-	start, acked := b.localRestartSeq()
+	start, acked := b.localRestartSeq(role)
 	b.localMu.Lock()
-	cfg := b.local.cfg
+	cfg := b.stateOf(role).cfg
 	b.localMu.Unlock()
 	if start > 0 {
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
@@ -168,9 +253,14 @@ func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 		msg += " from the start of the inbox, because this session had acked nothing on it and attached with no seat floor"
 	}
 	b.localMu.Lock()
-	b.consumer = cons
-	b.local.checked = time.Now()
-	b.local.rebuilds++
+	if role {
+		b.roleCons = cons
+	} else {
+		b.consumer = cons
+	}
+	st := b.stateOf(role)
+	st.checked = time.Now()
+	st.rebuilds++
 	b.localMu.Unlock()
 	b.resumedMu.Lock()
 	b.resumed = append(b.resumed, msg)
@@ -178,21 +268,51 @@ func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// pullLocalNoWait is pullNoWait on the local durable with the same one-time
+// pullLocalNoWait is pullNoWait on the local durables with the same one-time
 // recreate the global tier's drainNoWait has, and it records the sequences it
-// acked so a rebuild knows where to resume.
+// acked so a rebuild knows where to resume. A role holder has two durables: it
+// takes from them in alternating order, so a backlog on one subject cannot
+// starve the other.
 func (b *Bus) pullLocalNoWait(ctx context.Context, n int) ([]drained, int, error) {
+	if b.consOf(true) == nil {
+		return b.pullLocalOn(ctx, false, n)
+	}
+	order := []bool{false, true}
+	if b.roleTurn.Add(1)%2 == 0 {
+		order = []bool{true, false}
+	}
+	var (
+		out      []drained
+		disc     int
+		firstErr error
+	)
+	for _, role := range order {
+		if len(out) >= n {
+			break
+		}
+		items, d, err := b.pullLocalOn(ctx, role, n-len(out))
+		out = append(out, items...)
+		disc += d
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return out, disc, firstErr
+}
+
+// pullLocalOn is one durable's no-wait pull, own-subject or role-subject.
+func (b *Bus) pullLocalOn(ctx context.Context, role bool, n int) ([]drained, int, error) {
 	rebuilt := false
 	for {
-		out, disc, err := pullNoWait(ctx, b.cons(), n, "local", b.handled, nil)
+		out, disc, err := pullNoWait(ctx, b.consOf(role), n, "local", b.handled, nil)
 		if !rebuilt && len(out) == 0 && disc == 0 {
 			rebuilt = true
 			var ok bool
 			var rerr error
 			if err != nil {
-				ok, rerr = b.recoverLocal(ctx, err)
+				ok, rerr = b.recoverLocalOn(ctx, role, err)
 			} else {
-				ok, rerr = b.recheckLocal(ctx)
+				ok, rerr = b.recheckLocalOn(ctx, role)
 			}
 			if rerr != nil {
 				return nil, 0, rerr
@@ -204,8 +324,13 @@ func (b *Bus) pullLocalNoWait(ctx context.Context, n int) ([]drained, int, error
 		if b.handled == nil && ackLaterFrom(ctx) == nil {
 			for _, it := range out {
 				if !it.AckUnconfirmed {
-					b.noteLocalAcked(it.Seq)
+					b.noteAckedOn(role, it.Seq)
 				}
+			}
+		} else if role {
+			// Acked later, by sequence alone: say which durable it came from.
+			for _, it := range out {
+				b.noteRoleDelivered(it.Seq)
 			}
 		}
 		return out, disc, err

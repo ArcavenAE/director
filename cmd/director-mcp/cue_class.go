@@ -203,7 +203,7 @@ func (c *cue) takeWake() *cueMeta {
 
 // waiting reads the waiting messages of both tiers without acking.
 func (s busCueSource) waiting(ctx context.Context) ([]summaryItem, error) {
-	items, _, _, err := peekWaiting(ctx, s.b.js, s.b.cons(), "local", cueWaitingLimit)
+	items, _, _, err := s.b.peekLocalSources(ctx, cueWaitingLimit)
 	if err != nil {
 		return nil, err
 	}

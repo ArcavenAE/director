@@ -381,3 +381,95 @@ func (b *Bus) drainInherited(ctx context.Context, n int, res *batchResult) {
 		res.LocalWarn = joinWarn(res.LocalWarn, fmt.Sprintf("inherited inbox drain stopped early: %v", err))
 	}
 }
+
+// anySeatDurable parses a seat durable's name for its instance without knowing
+// the agent id: it is `mcp_<id>_<ULID>` with an optional -role or -inherit
+// suffix, so the ULID is the 26 characters at the right, preceded by `_`.
+func anySeatDurable(name string) (string, bool) {
+	rest, ok := strings.CutPrefix(name, "mcp_")
+	if !ok {
+		return "", false
+	}
+	for _, suf := range []string{"-role", "-inherit"} {
+		if r, cut := strings.CutSuffix(rest, suf); cut {
+			rest = r
+			break
+		}
+	}
+	if len(rest) < 27 || rest[len(rest)-27] != '_' {
+		return "", false
+	}
+	inst := rest[len(rest)-26:]
+	for _, c := range inst {
+		if !strings.ContainsRune("0123456789ABCDEFGHJKMNPQRSTVWXYZ", c) {
+			return "", false
+		}
+	}
+	return inst, true
+}
+
+// roleSubjectFloor is the highest ack floor among every seat durable of any id,
+// live or departed, whose filter set contains the role subject: the sequence at
+// or below which some holder of the role acked everything it reads. A new
+// holder starts after it, so mail a holder already read is not replayed. found
+// is false when no durable ever filtered the subject, so the first holder reads
+// everything the stream holds.
+func roleSubjectFloor(ctx context.Context, js jetstream.JetStream, stream, subject string) (floor uint64, found bool, err error) {
+	st, err := js.Stream(ctx, stream)
+	if err != nil {
+		return 0, false, err
+	}
+	lister := st.ListConsumers(ctx)
+	for info := range lister.Info() {
+		if _, ok := anySeatDurable(info.Name); !ok || !containsSubject(filterSubjects(info.Config), subject) {
+			continue
+		}
+		found = true
+		if info.AckFloor.Stream > floor {
+			floor = info.AckFloor.Stream
+		}
+	}
+	return floor, found, lister.Err()
+}
+
+// ownSubjectFloor is the floor a restarting seat's own-subject durable starts
+// after. The base is subjectFloor: the highest floor among this id's departed
+// durables that read the subject. A seat that read its role subject too moved
+// on past that: its role durable's floor is further along, and a departed
+// combined durable (own and role subjects in one) carried a single floor for both.
+// So the base is raised to the highest floor of any of this id's departed
+// durables, but only when no message on the own subject sits between the two,
+// so no unread own mail is skipped. The check is the stream's next message on
+// the subject after the base.
+func ownSubjectFloor(ctx context.Context, js jetstream.JetStream, stream, prefix, subject string, live func(instance string) bool) (uint64, error) {
+	st, err := js.Stream(ctx, stream)
+	if err != nil {
+		return 0, err
+	}
+	var base, reach uint64
+	lister := st.ListConsumers(ctx)
+	for info := range lister.Info() {
+		inst, ok := seatDurableInstance(info.Name, prefix)
+		if !ok || (live != nil && live(inst)) {
+			continue
+		}
+		reach = max(reach, info.AckFloor.Stream)
+		if containsSubject(filterSubjects(info.Config), subject) {
+			base = max(base, info.AckFloor.Stream)
+		}
+	}
+	if err := lister.Err(); err != nil {
+		return base, err
+	}
+	if reach <= base {
+		return base, nil
+	}
+	next, err := st.GetMsg(ctx, base+1, jetstream.WithGetMsgSubject(subject))
+	if err != nil && !errors.Is(err, jetstream.ErrMsgNotFound) {
+		return base, err
+	}
+	if err == nil && next.Sequence <= reach {
+		return base, nil // own mail sits in the gap: it is unread, so start at the base
+	}
+	return reach, nil
+}

@@ -353,8 +353,11 @@ type unreadDurable struct {
 	// --older-than does not hide it.
 	OverBound bool `json:"over_bound,omitempty"`
 
-	created    time.Time
-	pendingIDs map[string]bool
+	created time.Time
+	// roleDurable marks a row read from a `-role` durable, which mergeRoleDurables
+	// folds into its seat's own-subject row.
+	roleDurable bool
+	pendingIDs  map[string]bool
 }
 
 // unreadEvidence is what reclassed a durable-idle row: the pending message ids
@@ -545,6 +548,7 @@ func readUnread(ctx context.Context, js jetstream.JetStream, now time.Time) (unr
 		return strings.TrimPrefix(name, "mcp_"), true
 	}
 	readDurables(ctx, stream, local, presence, true, now, &r)
+	mergeRoleDurables(&r)
 	addMissingDurables(presence, &r)
 	classify(ctx, []jetstream.Stream{stream}, now, &r)
 	sortDurables(&r)
@@ -577,6 +581,10 @@ func durableRow(info *jetstream.ConsumerInfo, rest string, presence map[string]u
 		d.AgentID, d.Instance = rest[:i], rest[i+1:]
 	} else {
 		d.AgentID = rest
+	}
+	// A role holder's second durable, `<instance>-role`, is the same session.
+	if inst, cut := strings.CutSuffix(d.Instance, "-role"); cut {
+		d.Instance, d.roleDurable = inst, true
 	}
 	d.Team, d.Role = teamAndRole(d.AgentID, d.Filters)
 	if p, ok := presence[d.AgentID+"."+d.Instance]; ok {
@@ -645,6 +653,56 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 	if err := lister.Err(); err != nil {
 		r.Warnings = append(r.Warnings, "consumer listing incomplete: "+err.Error())
 	}
+}
+
+// mergeRoleDurables folds each `-role` durable's row into the row of the same
+// seat and instance, so a role holder is one row as it was when one durable read
+// both subjects: pending and ack-pending add, the filters join, the oldest
+// unread is the older of the two, and the state is the more urgent of the two
+// (durable-idle over behind over reading). A role durable with no own-subject
+// row beside it (the own one is gone) stays as its own row.
+func mergeRoleDurables(r *unreadReport) {
+	rank := func(s string) int {
+		switch s {
+		case stateDurableIdle:
+			return 2
+		case stateBehind:
+			return 1
+		}
+		return 0
+	}
+	own := map[string]int{}
+	for i, d := range r.Durables {
+		if !d.roleDurable {
+			own[d.AgentID+"."+d.Instance] = i
+		}
+	}
+	folded := map[int]bool{}
+	for j, d := range r.Durables {
+		i, ok := own[d.AgentID+"."+d.Instance]
+		if !d.roleDurable || !ok {
+			continue
+		}
+		folded[j] = true
+		o := &r.Durables[i]
+		o.Pending += d.Pending
+		o.AckPending += d.AckPending
+		o.Filters = append(append([]string(nil), o.Filters...), d.Filters...)
+		if d.OldestSeq != 0 && (o.OldestSeq == 0 || d.OldestSeq < o.OldestSeq) {
+			o.OldestSeq, o.OldestAt, o.OldestAgeSeconds = d.OldestSeq, d.OldestAt, d.OldestAgeSeconds
+		}
+		if rank(d.State) > rank(o.State) {
+			o.State, o.pendingIDs = d.State, d.pendingIDs
+		}
+		o.Team, o.Role = teamAndRole(o.AgentID, o.Filters)
+	}
+	merged := make([]unreadDurable, 0, len(r.Durables))
+	for j, d := range r.Durables {
+		if !folded[j] {
+			merged = append(merged, d)
+		}
+	}
+	r.Durables = merged
 }
 
 // addMissingDurables adds a row, durable_state missing, for each seat whose
