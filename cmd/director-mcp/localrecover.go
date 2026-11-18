@@ -24,6 +24,9 @@ type localState struct {
 	cfg     jetstream.ConsumerConfig // without a start sequence
 	acked   uint64
 	checked time.Time
+	// rebuilds counts completed rebuilds, so a restore that waited for another
+	// one can tell the durable was rebuilt while it waited.
+	rebuilds uint64
 }
 
 // cons returns the current local consumer. A rebuild replaces it, so readers on
@@ -106,6 +109,20 @@ func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 		return false, nil // no broker context to ask (a bus built around a fake consumer)
 	}
 	durable := "mcp_" + b.self.AgentID + "_" + b.instance
+	// The poll and the heartbeat can both get here for one loss. One rebuilds;
+	// the other waits, and when the durable came back while it waited it reports
+	// that, so its caller retries on the new durable.
+	b.localMu.Lock()
+	seen := b.local.rebuilds
+	b.localMu.Unlock()
+	b.restoreMu.Lock()
+	defer b.restoreMu.Unlock()
+	b.localMu.Lock()
+	rebuiltMeanwhile := b.local.rebuilds != seen
+	b.localMu.Unlock()
+	if rebuiltMeanwhile {
+		return true, nil
+	}
 	// The window starts when the broker is asked, whatever it answers: a broker
 	// that cannot answer is not asked again on every empty poll. (The global
 	// tier's restore, global.go, does the same.)
@@ -114,9 +131,16 @@ func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 	b.localMu.Unlock()
 	err := b.lookupLocal(ctx, durable)
 	if err == nil {
+		b.dh.lookupAnswered()
 		return false, nil
 	}
 	if !errors.Is(err, jetstream.ErrConsumerNotFound) {
+		// The broker did not answer (no responders, a timeout): say so in
+		// presence, rebuild nothing, and fail nothing. A canceled call is the
+		// caller leaving, not a broker that is silent.
+		if ctx.Err() == nil {
+			b.dh.lookupUnanswered(err)
+		}
 		return false, nil
 	}
 	start, acked := b.localRestartSeq()
@@ -146,6 +170,7 @@ func (b *Bus) restoreLocal(ctx context.Context) (bool, error) {
 	b.localMu.Lock()
 	b.consumer = cons
 	b.local.checked = time.Now()
+	b.local.rebuilds++
 	b.localMu.Unlock()
 	b.resumedMu.Lock()
 	b.resumed = append(b.resumed, msg)
