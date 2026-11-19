@@ -1585,8 +1585,8 @@ director#89/#90 arcavenai-authored.*
 *Source: RULED. Cross-refs R-02 (authority is explicit).*
 
 **R-148 (RULED) · director never merges on a draft GATE, and keeps a drafts lane.**
-(Amended, RULED 2026-10-06 and 2026-11-19.) "Non-author" in R-147 and the merge guard means a reviewer role that did
-not write the change; the same GitHub identity qualifies. Operator ruling 2026-09-26, adopting the draft-first PR flow for the employer
+(Amended, RULED 2026-10-06 and 2026-11-19.) "Non-author" in R-147 means a reviewer role that did
+not write the change, and the same GitHub identity qualifies; the merge guard's non-author approval is from a GitHub identity other than the author's. Operator ruling 2026-09-26, adopting the draft-first PR flow for the employer
 org's shared repos. Builders open drafts; the GATE line carries a stage (draft or
 ready); the author marks ready once an arcaven or arcavenai review, from a
 reviewer or architect seat, has passed or recommended the PR at its current
