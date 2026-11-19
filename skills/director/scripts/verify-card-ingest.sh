@@ -964,5 +964,28 @@ else ok "check_survives_an_unreadable_cards_jsonl"; fi
 export DIRECTOR_STATE="$saved_s13_state"
 BATCHDIR="$DIRECTOR_STATE/card-ingest"; LOG="$DIRECTOR_STATE/card-ingest.jsonl"
 
+# --- I-578 (aae-orc-htm0w, director readings 1 to 6): a card never asks the operator to approve or merge a PR ------
+# The heading's question is refused when it holds an approve or merge verb (any tense) and a named PR: #N,
+# owner/repo#N, a /pull/N URL, or PR, pull request or MR followed by a number. A bare number is not a PR form.
+# The refuse cases fail today (parse accepts them); the three guards pass today and must keep passing.
+Q0='Should the nightly report run at 06:00 or 07:00?'
+sub "$root/np1.md" "$Q0" 'Do you approve #407?'
+refuses "refuses_question_asking_to_approve_a_hash_ref" "$root/np1.md" "approve or merge"
+sub "$root/np2.md" "$Q0" 'Will you merge ArcavenAE/director#407?'
+refuses "refuses_question_asking_to_merge_an_owner_repo_ref" "$root/np2.md" "approve or merge"
+sub "$root/np3.md" "$Q0" 'Do you approve https://github.com/ArcavenAE/director/pull/407?'
+refuses "refuses_question_asking_to_approve_a_pr_url" "$root/np3.md" "approve or merge"
+sub "$root/np4.md" "$Q0" 'Should the operator approve PR 407?'
+refuses "refuses_question_asking_to_approve_pr_word_number" "$root/np4.md" "approve or merge"
+sub "$root/np5.md" "$Q0" 'Should #407 be merged?'
+refuses "refuses_question_with_a_passive_merged_ref" "$root/np5.md" "approve or merge"
+sub "$root/np6.md" "$Q0" 'Should we approve the 07:00 schedule?'
+accepts "accepts_approve_without_a_pr_ref" "$root/np6.md"
+sub "$root/np7.md" "$Q0" 'Should the nightly report wait for #407 to land?'
+accepts "accepts_pr_ref_without_approve_or_merge" "$root/np7.md"
+sub "$root/np8.md" "$Q0" 'Should we merge the two report schedules into one?'
+accepts "accepts_merge_word_that_is_not_about_a_pr" "$root/np8.md"
+clean_state
+
 echo "card-ingest: $pass passed, $fail failed"
 [[ "$fail" == 0 ]]
