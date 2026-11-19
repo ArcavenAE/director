@@ -346,6 +346,9 @@ LEDGER_MAX_HOURS = 24            # the DIRECTOR_WAITING_MAX_HOURS convention
 SEATS_SHOWN = 3
 
 
+DRAIN_LOG_LINE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) ended=(?:batch|silence) stamp=(?:written|failed)$")
+
+
 def loop_status_present():
     """Every loop clause is gated on this: with no loop-status.json the hook prints what it always did."""
     return os.path.exists(os.path.join(state_dir(), LOOP_STATUS))
@@ -481,6 +484,47 @@ def relay_log_path():
     root = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", ".."))
     path = os.path.join(root, "sim", "notes", "relay-log.md")
     return path if os.path.isfile(path) else None
+
+
+def beat_line():
+    """The beat-broken line (design section 4, slice 20): the newest line of drain.log, written by the shim on each
+    drain it stamps, is later than last-drain, or last-drain is missing or unreadable while the log has a line. A
+    failed stamp leaves last-drain older than its line, so it reads broken with no flag of its own. Gated on
+    loop-status.json like the other loop clauses, silent with no drain.log or when the line is not later, UNKNOWN
+    when the log cannot be read or its newest line does not parse. It reads the last 4 KB of one file."""
+    if not loop_status_present():
+        return None
+    path = os.path.join(state_dir(), "drain.log")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 4096))
+            tail = f.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as err:
+        return f"beat: UNKNOWN (drain log unreadable: {getattr(err, 'strerror', None) or type(err).__name__})"
+    lines = [l for l in tail.splitlines() if l.strip()]
+    if not lines:
+        return None
+    m = DRAIN_LOG_LINE.match(lines[-1])
+    if not m:
+        return "beat: UNKNOWN (drain log newest line does not parse)"
+    logged = m.group(1)
+    try:
+        t_log = parse_stamp(logged)
+    except ValueError:
+        return "beat: UNKNOWN (drain log newest line does not parse)"
+    try:
+        with open(state_file()) as f:
+            raw = f.read().strip()
+        t_stamp = parse_stamp(raw)
+    except (OSError, ValueError):
+        return f"beat broken: a drain was logged at {logged} but last-drain reads UNKNOWN"
+    if t_log > t_stamp:
+        return f"beat broken: a drain was logged at {logged} but last-drain reads {raw}"
+    return None
 
 
 def card_line():
@@ -679,6 +723,9 @@ def main():
     if line:
         print(line)
     line = asks_line()
+    if line:
+        print(line)
+    line = beat_line()
     if line:
         print(line)
     line = card_line()
