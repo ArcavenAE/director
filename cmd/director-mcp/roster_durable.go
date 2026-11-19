@@ -205,8 +205,10 @@ func checkDurable(ctx context.Context, js jetstream.JetStream, stream, durable s
 		if info := cons.CachedInfo(); info != nil {
 			// Mail a seat fetched and has not acked is held, not unread: it
 			// is reported under its own field. The cue's count (pending.go)
-			// still counts both, and is not changed by this.
-			row["unread"] = info.NumPending
+			// still counts both, and is not changed by this. unread is what the seat
+			// reports it will be handed (unread_deliverable.go) and unread_raw is the broker's own count.
+			row["unread_raw"] = info.NumPending
+			row["unread"], row["unread_source"] = unreadFor(row, stream, info.NumPending, uint64(info.NumAckPending))
 			row["ack_pending"] = uint64(info.NumAckPending)
 		}
 	}

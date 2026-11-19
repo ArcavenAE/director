@@ -284,9 +284,39 @@ func (b *Bus) pendingTiers(ctx context.Context) (tierCounts, error) {
 	if g == nil {
 		return c, nil
 	}
-	gi, err := b.readTier(ctx, "global", g.js, g.cfg.streamName(), g.cons())
+	var gdel uint64
+	gset := false
+	filtered := g.forFilter != nil
+	gi, err := b.readTierWith(ctx, "global", g.js, g.cfg.streamName(), g.cons(), func(info *jetstream.ConsumerInfo, s *pendingSample) {
+		// Mail the FOR filter will drop is not mail the seat will be handed, so the
+		// tracker does not age it and the presence row does not count it.
+		raw := info.NumPending + uint64(info.NumAckPending)
+		gdel, gset = leaveOutDropped(ctx, tierCounts{global: raw, g: g, ginfo: info}), true
+		if gdel >= raw {
+			return
+		}
+		dropped := raw - gdel
+		s.unread = gdel
+		s.ackPending = min(s.ackPending, gdel)
+		if s.haveTotal {
+			// T counts every message on the subject, dropped ones too. Take off the dropped ones
+			// acked so far and those still waiting, so a dropped arrival is no arrival.
+			adj := uint64(max(g.forDrops.Load(), 0)) + dropped
+			if s.total >= adj {
+				s.total -= adj
+			} else {
+				s.total = 0
+			}
+		}
+	})
 	if err != nil {
 		return tierCounts{}, err
+	}
+	if !gset {
+		gdel = gi.NumPending + uint64(gi.NumAckPending)
+	}
+	if filtered {
+		b.deliverable.set(c.local, gdel)
 	}
 	c.global = gi.NumPending + uint64(gi.NumAckPending)
 	c.g, c.ginfo = g, gi
@@ -360,6 +390,13 @@ var streamReadTimeout = 500 * time.Millisecond
 // all under streamReadTimeout. A consumer Info that fails or passes the bound
 // marks the tier unverified and is returned as the error.
 func (b *Bus) readTier(ctx context.Context, tier string, js jetstream.JetStream, stream string, cons jetstream.Consumer) (*jetstream.ConsumerInfo, error) {
+	return b.readTierWith(ctx, tier, js, stream, cons, nil)
+}
+
+// readTierWith is readTier with an optional adjust that edits the sample before
+// the tracker takes it, for a tier whose count holds mail the seat will not be
+// handed.
+func (b *Bus) readTierWith(ctx context.Context, tier string, js jetstream.JetStream, stream string, cons jetstream.Consumer, adjust func(*jetstream.ConsumerInfo, *pendingSample)) (*jetstream.ConsumerInfo, error) {
 	at := time.Now()
 	rctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
 	defer cancel()
@@ -368,7 +405,11 @@ func (b *Bus) readTier(ctx context.Context, tier string, js jetstream.JetStream,
 		b.pending.mark(tier, pendingSample{at: at, failed: err.Error()})
 		return nil, err
 	}
-	b.pending.mark(tier, sampleOf(rctx, js, stream, info, at))
+	sample := sampleOf(rctx, js, stream, info, at)
+	if adjust != nil && sample.failed == "" {
+		adjust(info, &sample)
+	}
+	b.pending.mark(tier, sample)
 	return info, nil
 }
 

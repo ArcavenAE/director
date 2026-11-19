@@ -108,6 +108,9 @@ type Bus struct {
 	// pending is the age of the oldest waiting message, from sampled counts
 	// (pending.go).
 	pending pendingTracker
+	// deliverable is what the seat will be handed, per tier, from the last pending read with the global FOR
+	// filter attached (unread_deliverable.go); it is not set without one.
+	deliverable deliverableState
 	// handled is the handled-mode state (K4); nil keeps ack-on-read.
 	handled *handledState
 	// watch is the presence watch (presencewatch_shim.go); nil when off.
@@ -1813,6 +1816,8 @@ type presenceView struct {
 	cue       string
 	cueReason string
 	durable   durableSummary
+	// deliverable is what the seat will be handed (unread_deliverable.go); nil when no FOR filter is attached.
+	deliverable *deliverableCounts
 	// connectedAt is when the session connected; waiting is the count across its
 	// sources, set only while it is catching up (catchup.go).
 	connectedAt string
@@ -1823,6 +1828,7 @@ type presenceView struct {
 func (b *Bus) presenceView(ctx context.Context) presenceView {
 	age, tier := b.pending.oldest(time.Now())
 	v := presenceView{oldestS: int64(age / time.Second), durable: b.durableSummary(), connectedAt: b.connectedAtText(), polledAt: b.polledAtText()}
+	v.deliverable = b.deliverableNow(ctx)
 	if b.catchingUp() {
 		// waitingNow is bounded by streamReadTimeout, so a silent consumer cannot
 		// stall the row. It reads consumer state and marks no tracker sample: the
@@ -1869,6 +1875,7 @@ func (b *Bus) durableSummary() durableSummary {
 // fields puts the view into a presence record.
 func (v presenceView) fields(rec map[string]any) {
 	rec["oldest_pending_s"] = v.oldestS
+	v.deliverable.fields(rec)
 	rec["connected_at"] = v.connectedAt
 	if v.polledAt != "" {
 		rec["polled_at"] = v.polledAt
