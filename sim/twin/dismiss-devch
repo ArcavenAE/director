@@ -142,9 +142,11 @@ class Pane:
         return max(0.1, min(self.call_timeout, self.until - time.monotonic()))
 
     def capture(self):
+        # None when the capture timed out or failed: the screen is then unknown,
+        # which is not the same as a screen with no dialog on it.
         rc, out, _ = run_bounded(["tmux", *self.tmux_args, "capture-pane", "-p", "-t", self.pane],
                                  self.limit())
-        return out if rc == 0 else ""
+        return out if rc == 0 else None
 
     def press(self, key):
         # The one press runs under its own bound, not what the wait before it has
@@ -198,7 +200,7 @@ def main():
     pane.until = start + deadline
     last = ""
     while True:
-        text = pane.capture()
+        text = pane.capture() or ""
         last = text or last
         kind, detail = classify(text)
         if kind == "mismatch":
@@ -225,8 +227,9 @@ def main():
     still_shown = True
     while True:
         text = pane.capture()
-        still_shown = classify(text)[0] != "other" or TITLE in text
-        if not still_shown and pane.composer_empty(checker):
+        if text is not None:  # an unknown capture keeps the last real verdict
+            still_shown = classify(text)[0] != "other" or TITLE in text
+        if text is not None and not still_shown and pane.composer_empty(checker):
             say("devch: dismissed, composer reached")
             return 0
         if time.monotonic() - start >= after:
