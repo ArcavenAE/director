@@ -3566,6 +3566,15 @@ def cmd_report(a):
             out_una.append({"ask_id": ask_id, "ref": ref})
             now_una[ask_id] = {"ref": ref}
         data = json.dumps({"rows": now_rows, "unaccounted": now_una}, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        # The report is written and flushed before the baseline moves, so a write that fails leaves the
+        # old baseline and the next run prints the same rows again. A repeat is the safe failure.
+        if a.json:
+            text = json.dumps({"rows": out_rows, "unaccounted": out_una, "torn": torn}, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+        else:
+            text = "".join(f"{x['tier']} {printable(x['slug'])}  {printable(x['stage'])}  blocked: {printable(x['blocked'])}\n" for x in out_rows)
+            text += "".join(f"unaccounted {x['ask_id']} ref={printable(x['ref'])}\n" for x in out_una)
+        sys.stdout.write(text)
+        sys.stdout.flush()
         fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".report-seen.tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -3579,15 +3588,7 @@ def cmd_report(a):
             except OSError:
                 pass
             raise
-    if a.json:
-        json.dump({"rows": out_rows, "unaccounted": out_una, "torn": torn}, sys.stdout, indent=2, ensure_ascii=False, sort_keys=True)
-        print()
-        return
-    for x in out_rows:
-        print(f"{x['tier']} {printable(x['slug'])}  {printable(x['stage'])}  blocked: {printable(x['blocked'])}")
-    for x in out_una:
-        print(f"unaccounted {x['ask_id']} ref={printable(x['ref'])}")
-    if torn:
+    if torn and not a.json:
         print(f"dws: {torn} unreadable line(s) in {LEDGER} skipped", file=sys.stderr)
 
 
