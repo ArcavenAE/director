@@ -1585,16 +1585,20 @@ director#89/#90 arcavenai-authored.*
 *Source: RULED. Cross-refs R-02 (authority is explicit).*
 
 **R-148 (RULED) · director never merges on a draft GATE, and keeps a drafts lane.**
-(Amended, RULED 2026-10-06.) "Non-author" below means a reviewer role that did
+(Amended, RULED 2026-10-06 and 2026-11-19.) "Non-author" in R-147 and the merge guard means a reviewer role that did
 not write the change; the same GitHub identity qualifies. Operator ruling 2026-09-26, adopting the draft-first PR flow for the employer
 org's shared repos. Builders open drafts; the GATE line carries a stage (draft or
-ready); the author marks ready only after a non-author GitHub review. Director
+ready); the author marks ready once an arcaven or arcavenai review, from a
+reviewer or architect seat, has passed or recommended the PR at its current
+head; a passing COMMENT counts, and a non-author GitHub approval is not
+needed to mark ready. Director
 treats a draft GATE as not merge-ready, keeps a board lane for in-scope drafts,
 and runs a sweep that lists drafts unreviewed for 24 hours and fleet PRs merged
 with zero reviews. The sweep is diagnostic: it never promotes, merges or closes.
 *Earned by: six PRs on the product merged unreviewed by an admin teammate (a later three
 the same way); the draft-first study (four-round party, 2026-09-26).*
 *Amendment: operator ruling 2026-10-06, Q1, "Q1 yes a reviewer qualifies"; the meaning above is director's mapping of that answer.*
+*Amendment: operator ruling 2026-11-19, on when a draft is marked ready: "You can mark them Ready for Review as soon as our arcaven/arcavenai review has recommended them/approved them/passes them; it does NOT need a non-author to approve, we just have to be happy with them. Other humans and agents will not even read it until after it's out of draft". The merge rules (R-147, the merge guard's non-author approval) are unchanged.*
 *Source: RULED. Cross-refs R-147, ADR-007 (automation boundary).*
 
 **R-149 (OBSERVED) · director reads a seat's composer state before acting on
