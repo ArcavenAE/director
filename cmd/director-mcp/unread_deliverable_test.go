@@ -68,6 +68,10 @@ func TestPresenceRowCarriesUnreadDeliverable(t *testing.T) {
 	if got != float64(1) {
 		t.Errorf("unread_deliverable = %v, want 1 (plain1; drop1 is dropped)", got)
 	}
+	rec := presenceRecordOf(t, r)
+	if rec["unread_deliverable_global"] != float64(1) || rec["unread_deliverable_local"] != float64(0) {
+		t.Errorf("per tier = global %v, local %v, want 1 and 0", rec["unread_deliverable_global"], rec["unread_deliverable_local"])
+	}
 }
 
 // A seat with no global filter has nothing to leave out, so the field is absent
@@ -107,7 +111,7 @@ func TestRosterUnreadPrefersTheSeatsDeliverableCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := presenceRecordOf(t, r)
-	rec["unread_deliverable"] = 0
+	rec["unread_deliverable_local"] = 0
 	putPresence(t, r.ctx, r.bus, "presence."+r.bus.self.Team+"."+r.bus.self.AgentID+"."+r.bus.instance, rec)
 	row := rosterRowOf(t, r, "operator")
 	if row["unread"] != uint64(0) {
@@ -137,5 +141,32 @@ func TestRosterUnreadKeepsTheBrokerCountForAnOldShim(t *testing.T) {
 	}
 	if row["unread_source"] != "broker-raw" {
 		t.Errorf("unread_source = %v, want broker-raw", row["unread_source"])
+	}
+}
+
+// The roster takes the seat's figure for the row's own tier, less what the seat
+// holds, never above the broker's count; without a figure it keeps the broker's.
+func TestUnreadForTakesTheSeatsFigureForTheRowsTier(t *testing.T) {
+	cases := []struct {
+		name   string
+		row    map[string]any
+		stream string
+		raw    uint64
+		held   uint64
+		want   uint64
+		src    string
+	}{
+		{"local row, seat says 0", map[string]any{"unread_deliverable_local": float64(0)}, "AGENT_INBOX", 3, 0, 0, "seat"},
+		{"global row, seat says 1 of 5", map[string]any{"unread_deliverable_global": float64(1)}, "GLOBAL_TO_C1", 5, 0, 1, "seat"},
+		{"the other tier's figure is not used", map[string]any{"unread_deliverable_local": float64(0)}, "GLOBAL_TO_C1", 5, 0, 5, "broker-raw"},
+		{"held mail comes off the seat's figure", map[string]any{"unread_deliverable_global": float64(3)}, "GLOBAL_TO_C1", 5, 2, 1, "seat"},
+		{"never above the broker's count", map[string]any{"unread_deliverable_local": float64(9)}, "AGENT_INBOX", 2, 0, 2, "seat"},
+		{"no figure", map[string]any{}, "AGENT_INBOX", 4, 1, 4, "broker-raw"},
+	}
+	for _, c := range cases {
+		got, src := unreadFor(c.row, c.stream, c.raw, c.held)
+		if got != c.want || src != c.src {
+			t.Errorf("%s: unreadFor = %d, %q; want %d, %q", c.name, got, src, c.want, c.src)
+		}
 	}
 }
