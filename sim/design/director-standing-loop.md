@@ -109,8 +109,8 @@ what is due, seats whose cue is not live) and adds the digest and ledger ages to
 its waiting line when they pass 12 and 24 hours. The tick counts as stale past 90
 minutes, `DIRECTOR_TICK_MAX_MINUTES`, which is provisional until the operator
 rules a cadence, as `tick_interval` is. With no `loop-status.json` the hook prints
-what it printed before. One clause is not built: "beat broken", which waits for a
-slice to name the drain record it compares with `last-drain`. Relays asking the
+what it printed before. One clause is not built: "beat broken", which compares the
+drain log of section 4 (slice 20) with `last-drain`. Relays asking the
 operator to decide with no card are built in slice 11, and card batches parsed and
 never checked in slice 13. Nothing acts on silence.
 a53a's dissent stands: when nobody types, nothing reaches the session. This
@@ -189,6 +189,48 @@ empty wait is handled per section 7. Every age the loop prints reads fresh,
 stale, or UNKNOWN with a reason, plus "beat broken" when a drain was logged
 after the stamp, so a broken beat no longer looks like an idle director.
 
+The drain log (slice 20). Director ruled the shape (ruling Q1 of this slice): an
+append-only log beside `last-drain`, one line per completed drain, written by
+the shim on the same path that writes `last-drain`.
+
+- Path: `drain.log` in the state directory, so `$DIRECTOR_STATE/drain.log`, default
+  `$HOME/.director/state/drain.log`. The shim resolves it with the function that
+  resolves `last-drain`, and the hook with `state_dir()`, so the two files never
+  sit in different places.
+- Line: `<time> ended=<batch|silence> stamp=<written|failed>`, space separated,
+  one line, newline ended. `time` is the RFC 3339 UTC stamp `last-drain` carries
+  (`2006-01-02T15:04:05Z`), taken from the same clock reading as the stamp.
+  `ended` is how the wait returned: `batch` for a wait that returned mail with
+  every tier at 0 after it, `silence` for the empty wait of section 7. `stamp` is
+  what happened to `last-drain` on that drain: `written`, or `failed` when the
+  temp write or the rename returned an error.
+- When: a line is appended exactly when the shim reaches the point where it
+  writes `last-drain`, which is the condition `beatLastDrain` already tests (no
+  failed tier read, every tier at 0). A wait that returns mail with some left
+  waiting writes no stamp and no line, so a normal busy drain never reads as broken.
+  The stamp is written first and the line second, so the line carries the
+  stamp's result.
+- Write: one `O_APPEND` write of the whole line, mode 0600, directory created as
+  `last-drain` does it. A failure to append is logged and never fails the wait,
+  as for the stamp. The file is never rewritten, truncated or rotated by the shim;
+  at one line per drain (about 45 bytes) a silent wait every 2 minutes adds under
+  35 KB a day. Rotation is not in this slice.
+- Reader rule, in the hook: read the last line only (the final 4 KB of the file
+  is enough). The beat is broken when the line's `time` is later than the
+  `last-drain` stamp, or when `last-drain` is missing or unreadable while the log
+  has a line. The clause reads
+  `beat broken: a drain was logged at <time> but last-drain reads <stamp or UNKNOWN>`.
+  When there is no `drain.log`, or the last line has the same time as the stamp or
+  an earlier one, the hook prints nothing for it. A `drain.log` the hook cannot
+  read or whose last line does not parse reads
+  `beat: UNKNOWN (drain log <reason>)`, never a guess. As with the other loop
+  clauses, nothing prints when `loop-status.json` is absent, so that output stays
+  byte-identical.
+- What it does not catch: a drain that never reached the shim's beat (a crashed
+  shim, or a session that does not drain) leaves no line, which is the idle case
+  the age already reports. A manual `standing-hook beat` newer than the log
+  clears the clause, as it should.
+
 ## 5. The cue proves itself on real mail
 
 The cue self-test is an MCP channel notice the shim sends its own client, not a
@@ -262,8 +304,8 @@ unchanged. On a harness other than Claude Code it cannot read the wiring at all.
 with every tier at 0 and no failed read, writes `last-drain`, and the shim logs
 `ended: silence`: an empty inbox at that moment is what the beat means.
 `last-drain` stays one stamp line, as `standing-hook` and its verifiers read it,
-so the reason is logged and not stored; a slice that needs it in a file states
-that shape itself. Presence gains
+so the reason is logged and not stored in it; the drain log of section 4
+(slice 20) is where each drain is recorded as a line. Presence gains
 two cue fields, present only when the cue is on. `cue_nonces_sent` is an integer:
 the nonces sent while unverified, not counting the start-up self-test, which
 tells "no mail since start" from "nonces sent and never echoed". `cue_proved_at`
@@ -285,7 +327,7 @@ Each red test is named here and written in its slice's PR; none exists yet.
 | 3 | Shim: the roster CLI carries `cue` and `cue_reason`; presence adds the unechoed-nonce count and the last-proof time | `TestRosterJSONCarriesCueReason`, `TestPresenceCountsNoncesSentWhileUnverified`, `TestPresenceCarriesCueProvedAt` (no such fields) | none |
 | 4 | Profile `[loop]` table and fresh-install defaults | `verify-director-profile.sh standing-keys-accepted` (unknown key refused); `verify-install-fresh-home.sh no-foreign-roots` (shipped roots name one install) | none (extends the built profile) |
 | 5 | `director tick` writes `loop-status.json` | `verify-director-tick.sh`: fake `tmux` and `nats` log no call, status written, dashboard untouched (no command) | 3, 4 |
-| 6 | Hook reads the status: tick age, digest and ledger age, seats not live, due items. Moved out: relayed asks with no card (after 11), card batches parsed and never checked (after 13), beat broken (until a slice names the drain record) | `verify-standing-hook.sh` case `digest_over_12h_waiting` and the loop-line cases (no such clauses); with no `loop-status.json` the output is byte-identical | 1, 5 |
+| 6 | Hook reads the status: tick age, digest and ledger age, seats not live, due items. Moved out: relayed asks with no card (after 11), card batches parsed and never checked (after 13), beat broken (after 20) | `verify-standing-hook.sh` case `digest_over_12h_waiting` and the loop-line cases (no such clauses); with no `loop-status.json` the output is byte-identical | 1, 5 |
 | 7 | `director status` prints the hook's text | `verify-status.sh matches-hook` (no command) | 6 |
 | 8 | Plugin `hooks.json`: `standing-hook`, a SessionStart status line, the hook's seen-stamp | `verify-plugin-hooks.sh names-standing-hook`; `verify-standing-hook.sh writes-seen-stamp` (no plugin, no stamp) | Boot 0 and the hook binding |
 | 9 | `director doctor`, extending `director-init --check` | `verify-director-doctor.sh` cases `unwired-hook-exit1`, `stale-digest-exit0`, `seat-not-live-listed` (no command); its seen-stamp row follows 8 | 3, 5 |
@@ -299,6 +341,7 @@ Each red test is named here and written in its slice's PR; none exists yet.
 | 17 | RULING (digest): the tick writes the digest | `verify-dws-digest.sh runs-with-no-session` | 5 |
 | 18 | `verify-cue-live.sh`, host-run against a real client, a release check and not CI | the script itself (absent) | 3 |
 | 19 | SKILL.md: each standing step names its runner (session, tick, hook) and where its output lands | a doc check that steps 1 to 7 each name a runner (all are the session's today) | 5, 6 |
+| 20 | Drain log and beat broken: the shim appends `drain.log` on each drain it stamps (section 4); the hook says "beat broken" when the newest line is later than `last-drain` | a Go test that a stamped drain appends one `<time> ended=<batch\|silence> stamp=<written\|failed>` line and a stamp failure still appends `stamp=failed` (no `drain.log` today); `verify-standing-hook.sh` case `beat_broken` (no such clause), with no `drain.log` the output is byte-identical | 1, 2, 6 |
 
 Proposed as flat tickets with these blocks edges and no umbrella. None is filed;
 they are filed after the operator reviews this design.
