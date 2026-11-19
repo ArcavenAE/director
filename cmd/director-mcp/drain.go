@@ -432,6 +432,11 @@ func waitingAfter(info *jetstream.ConsumerInfo, held uint64) uint64 {
 // and format as `standing-hook beat`.
 const lastDrainFile = "last-drain"
 
+// drainLogFile is the append-only record beside last-drain: one line per drain
+// the shim stamps, "<time> ended=<batch|silence> stamp=<written|failed>". The
+// hook says the beat is broken when its newest line is later than last-drain.
+const drainLogFile = "drain.log"
+
 // drainedClean reports whether a remaining map says nothing is waiting. A map
 // with no tier in it is a failed read, not an empty inbox, so it is not clean.
 // Every tier the shim could read must be 0.
@@ -453,14 +458,27 @@ func drainedClean(rem map[string]uint64) bool {
 // Any other return leaves the file alone, and so does a tier whose read failed. A write failure is logged and never
 // fails the wait: the mail was already taken, and the manual beat still works.
 func beatLastDrain(rem map[string]uint64, failed []string, now time.Time) bool {
+	return beatDrained(rem, failed, now, "batch")
+}
+
+// beatDrained is beatLastDrain with the way the wait ended, "batch" or
+// "silence", which the drain log records. The stamp is written first and the
+// log line second, so the line carries the stamp's result
+// (sim/design/director-standing-loop.md section 4).
+func beatDrained(rem map[string]uint64, failed []string, now time.Time, ended string) bool {
 	if len(failed) > 0 || !drainedClean(rem) {
 		return false
 	}
-	if err := writeLastDrain(now); err != nil {
+	err := writeLastDrain(now)
+	result := "written"
+	if err != nil {
 		log.Printf("director-mcp: last-drain not written: %v", err)
-		return false
+		result = "failed"
 	}
-	return true
+	if lerr := appendDrainLog(now, ended, result); lerr != nil {
+		log.Printf("director-mcp: drain.log not appended: %v", lerr)
+	}
+	return err == nil
 }
 
 // beatSilence records a drain for a wait that returned nothing. With every tier
@@ -471,7 +489,7 @@ func beatLastDrain(rem map[string]uint64, failed []string, now time.Time) bool {
 // (sim/design/director-standing-loop.md section 7).
 func beatSilence(ctx context.Context, b *Bus, now time.Time) {
 	rem, failed := b.remainingRead(ctx)
-	if beatLastDrain(rem, failed, now) {
+	if beatDrained(rem, failed, now, "silence") {
 		log.Printf("director-mcp: last-drain written, ended: silence")
 	}
 }
@@ -505,6 +523,28 @@ func writeLastDrain(now time.Time) error {
 		return err
 	}
 	return nil
+}
+
+// appendDrainLog adds one line to drain.log with a single O_APPEND write. The
+// file is never rewritten or rotated here.
+func appendDrainLog(now time.Time, ended, stamp string) error {
+	dir, err := stateDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, drainLogFile), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	line := now.UTC().Format("2006-01-02T15:04:05Z") + " ended=" + ended + " stamp=" + stamp + "\n"
+	_, werr := f.WriteString(line)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	return werr
 }
 
 // ---- unread summary ----
