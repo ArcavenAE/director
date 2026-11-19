@@ -16,6 +16,15 @@ import (
 // read error, or a line the filter cannot place, is delivered by dropForeign,
 // so the cue counts it too. The count is the cue's own source, busCueSource.
 
+// setCuePeekLimit sets the cue's peek bound for one test, so the boundary tests
+// need not publish a thousand messages.
+func setCuePeekLimit(t *testing.T, n int) {
+	t.Helper()
+	prev := cueFilterPeekMax
+	cueFilterPeekMax = n
+	t.Cleanup(func() { cueFilterPeekMax = prev })
+}
+
 func cueCountOf(t *testing.T, r *pipeRig) uint64 {
 	t.Helper()
 	n, err := busCueSource{r.bus}.count(r.ctx)
@@ -152,6 +161,7 @@ func TestCueCountKeepsAnUnackedMessageBehindWhichAnAckedDropSits(t *testing.T) {
 // waits, so it cannot tell which listed messages are still waiting. That is a
 // doubt, and a doubt cues: the count is the durable's own, with nothing left out.
 func TestCueCountIsTheDurablesCountWhenThePeekReturnsItsFullLimit(t *testing.T) {
+	setCuePeekLimit(t, summaryDefault)
 	r, _ := forPathRig(t)
 	sub := r.bus.global.cfg.inboxSubject()
 	for i := 0; i < summaryDefault; i++ {
@@ -167,6 +177,7 @@ func TestCueCountIsTheDurablesCountWhenThePeekReturnsItsFullLimit(t *testing.T) 
 // listed would take the acked drops off a count that includes mail past the
 // limit, and the cue would read one too few.
 func TestCueCountKeepsUnackedMailWhenAckedDropsFillThePeek(t *testing.T) {
+	setCuePeekLimit(t, summaryDefault)
 	r, _ := forPathRig(t)
 	sub := r.bus.global.cfg.inboxSubject()
 	pubEnv(t, r.ctx, r.gjs, sub, "plain0", "INFORM", "no FOR line")

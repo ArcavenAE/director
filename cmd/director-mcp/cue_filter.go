@@ -27,8 +27,14 @@ import (
 // result is reused while the durable's position (waiting count, ack floor and
 // delivered sequence) is unchanged, for at most cueFilterReuse. An uncached
 // peek also reads the roster once for each listed message with a well-formed FOR
-// line that names no seat here, up to summaryDefault (200) reads. A message with
+// line that names no seat here, up to cueFilterPeekMax (1000) reads. A message with
 // no FOR line, an ambiguous one, or one that names this seat, reads no roster.
+
+// cueFilterPeekMax is how many waiting messages the cue's peek reads. It is above
+// any inbox a seat holds in practice, so a dropped-only inbox of a few hundred
+// is counted in full; past it the count falls back to the durable's own number.
+// A var so a test can set the bound small.
+var cueFilterPeekMax = 1000
 
 // cueFilterReuse bounds how long one peek's result is reused for an unchanged
 // durable position. The roster the filter reads can change with no change to
@@ -74,34 +80,44 @@ func leaveOutDropped(ctx context.Context, c tierCounts) uint64 {
 	if !ok {
 		pctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
 		defer cancel()
-		items, _, maybeConsumed, err := peekWaiting(pctx, g.js, g.cons(), "global", summaryDefault)
+		items, _, maybeConsumed, err := peekWaiting(pctx, g.js, g.cons(), "global", cueFilterPeekMax)
 		if err != nil {
 			return c.global // a doubt: count it all, and read again next poll
 		}
-		if len(items) >= summaryDefault {
-			// The peek returned its whole limit, so it may have stopped before
-			// the end of what waits. That is a doubt, and a doubt cues: count
-			// the durable's own number and cache it as no drops.
+		if len(items) >= cueFilterPeekMax {
+			// The peek returned its whole limit (cueFilterPeekMax, well above any
+			// inbox a seat holds), so it may have stopped before the end of what
+			// waits. That is a doubt, and a doubt cues: count the durable's own
+			// number and cache it as no drops.
 			g.cueDrop.put(key, now, 0)
 			return c.global
 		}
+		// A message above the consumer's delivered sequence has not been handed out,
+		// so it is certainly still waiting: a drop there counts for sure. Only a
+		// message at or below it may have been acked above the floor, and
+		// maybeConsumed, the listed messages the durable no longer counts, can only
+		// be among those. Take the worst case over that uncertain set alone, so
+		// the count is never too low and a dropped message that is plainly still
+		// waiting is no longer cancelled by an unrelated acked one.
+		var certain, uncertain uint64
 		for _, it := range items {
 			if it.Env == nil {
 				continue // does not decode: delivered, so counted
 			}
 			if drop, _ := g.foreign(pctx, it.Env); drop {
-				drops++
+				if it.Seq > c.ginfo.Delivered.Stream {
+					certain++
+				} else {
+					uncertain++
+				}
 			}
 		}
-		// A message the filter dropped earlier is acked, but it can still sit
-		// above the ack floor and be listed. maybeConsumed is how many listed
-		// messages the durable no longer counts; take the worst case, that they
-		// are the droppable ones, so this never counts too few.
-		if drops > uint64(maybeConsumed) {
-			drops -= uint64(maybeConsumed)
+		if uncertain > uint64(maybeConsumed) {
+			uncertain -= uint64(maybeConsumed)
 		} else {
-			drops = 0
+			uncertain = 0
 		}
+		drops = certain + uncertain
 		g.cueDrop.put(key, now, drops)
 	}
 	if drops >= c.global {
