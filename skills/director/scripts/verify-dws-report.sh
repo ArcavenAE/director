@@ -106,5 +106,21 @@ rep "$root/t7"
 "$DWS" report --help >"$root/h" 2>&1 || true
 grep -qi 'derived' "$root/h" && grep -q 'blocked' "$root/h" && ok "--help says the tier is derived from blocked" || bad "--help names the derivation" "$(cat "$root/h")"
 
+# --- a report that cannot be delivered is not a report that was made --------------------------------------
+# The baseline is written only after the output is written and flushed. Here stdout is a pipe whose
+# read end is already closed, so the write fails; the next run must print the row it never delivered.
+"$DWS" open wk3 --title w3 --owner director --stage building --blocked operator --ask c1 >/dev/null
+python3 - "$DWS" >"$root/pipe-out" 2>&1 <<'PY' || true
+import os, subprocess, sys
+r, w = os.pipe()
+os.close(r)
+p = subprocess.run([sys.argv[1], "report"], stdout=w, stderr=subprocess.DEVNULL)
+print("child rc", p.returncode)
+PY
+rep "$root/t8"
+grep -Eq '^WAKE wk3( |$)' "$root/t8" && ok "a report whose output could not be written does not mark its rows as seen" || bad "undelivered row is printed on the next run" "$(cat "$root/pipe-out") / $(cat "$root/t8")"
+rep "$root/t9"
+[[ $rc == 0 && ! -s "$root/t9" ]] && ok "the row is printed once the output was delivered, and not again" || bad "delivered row not repeated" "$(cat "$root/t9")"
+
 echo "dws report: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
