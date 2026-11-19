@@ -23,7 +23,10 @@ var earlierDurableProbe = func(ctx context.Context, g *globalTier, agentID, self
 			return false
 		}
 		i := strings.LastIndexByte(rest, '_')
-		if i <= 0 || i == len(rest)-1 || rest[i+1:] == self {
+		// A seat holding a role also has mcp_<agent>_<instance>-role (durableOf), so
+		// the "-role" suffix comes off before the instance compare: neither of this
+		// seat's own durables is an earlier one.
+		if i <= 0 || i == len(rest)-1 || strings.TrimSuffix(rest[i+1:], "-role") == self {
 			return false
 		}
 		agent := rest[:i]
