@@ -512,6 +512,52 @@ mv "$CJ.off" "$CJ"
 printf 'not json\n' >"$CJ"
 hook | grep -q "${BATCHLINE}UNKNOWN (" && ok "batch_parsed_not_checked_reads_unknown_when_cards_jsonl_is_unreadable" || bad "batch_parsed_not_checked_reads_unknown_when_cards_jsonl_is_unreadable" "got: [$(hook | grep "$BATCHLINE")]"
 
+# --- S6 beat broken (aae-orc-qh6m1; sim/design/director-standing-loop.md section 4, slice 20) ------------------------
+# drain.log sits beside last-drain; the newest line later than the stamp reads broken (a failed stamp leaves last-drain
+# older than the line, so it needs no flag of its own). Gated on loop-status.json, silent when drain.log is absent or its
+# newest line is not later, UNKNOWN when the log cannot be read. Red until the clause exists.
+BEATLINE='^beat broken: '
+UNKLINE='^beat: UNKNOWN (drain log '
+export DIRECTOR_STATE="$root/beat-clause-state"; mkdir -p "$DIRECTOR_STATE"
+S="$DIRECTOR_STATE/loop-status.json"
+fresh_inputs
+DL="$DIRECTOR_STATE/drain.log"; LD="$DIRECTOR_STATE/last-drain"
+status 5 "$NODUE" '[]'
+t_old="$(ago 30)"; t_new="$(ago 5)"
+printf '%s\n' "$t_old" >"$LD"; printf '%s ended=batch stamp=written\n' "$t_new" >"$DL"
+[[ "$(hook | grep "$BEATLINE")" == "beat broken: a drain was logged at $t_new but last-drain reads $t_old" ]] \
+  && ok "beat_broken_when_the_newest_log_line_is_later_than_the_stamp" \
+  || bad "beat_broken_when_the_newest_log_line_is_later_than_the_stamp" "got: [$(hook | grep "$BEATLINE")]"
+printf '%s\n' "$(ago 200)" >"$LD"; printf '%s ended=silence stamp=failed\n' "$t_new" >"$DL"
+[[ "$(hook | grep "$BEATLINE")" == "beat broken: a drain was logged at $t_new but last-drain reads $(cat "$LD")" ]] \
+  && ok "beat_broken_after_a_failed_stamp_leaves_last_drain_older_than_the_line" \
+  || bad "beat_broken_after_a_failed_stamp_leaves_last_drain_older_than_the_line" "got: [$(hook | grep "$BEATLINE")]"
+mv "$LD" "$LD.off"
+[[ "$(hook | grep "$BEATLINE")" == "beat broken: a drain was logged at $t_new but last-drain reads UNKNOWN" ]] \
+  && ok "beat_broken_when_last_drain_is_missing_and_the_log_has_a_line" \
+  || bad "beat_broken_when_last_drain_is_missing_and_the_log_has_a_line" "got: [$(hook | grep "$BEATLINE")]"
+printf 'garbage\n' >"$LD"
+[[ "$(hook | grep "$BEATLINE")" == "beat broken: a drain was logged at $t_new but last-drain reads UNKNOWN" ]] \
+  && ok "beat_broken_when_last_drain_is_unreadable_and_the_log_has_a_line" \
+  || bad "beat_broken_when_last_drain_is_unreadable_and_the_log_has_a_line" "got: [$(hook | grep "$BEATLINE")]"
+# Guards: these pass before the clause exists and must keep passing.
+printf '%s\n' "$t_new" >"$LD"
+! hook | grep -q "$BEATLINE" && ok "beat_broken_is_silent_when_the_line_time_equals_the_stamp" || bad "beat_broken_is_silent_when_the_line_time_equals_the_stamp" "$(hook | grep "$BEATLINE")"
+printf '%s\n' "$(ago 1)" >"$LD"
+! hook | grep -q "$BEATLINE" && ok "beat_broken_is_silent_when_the_stamp_is_later_than_the_line" || bad "beat_broken_is_silent_when_the_stamp_is_later_than_the_line" "$(hook | grep "$BEATLINE")"
+printf '%s ended=batch stamp=failed\n%s ended=batch stamp=written\n' "$t_old" "$t_new" >"$DL"; printf '%s\n' "$t_new" >"$LD"
+! hook | grep -q "$BEATLINE" && ok "beat_broken_reads_only_the_newest_line" || bad "beat_broken_reads_only_the_newest_line" "$(hook | grep "$BEATLINE")"
+mv "$DL" "$DL.off"; printf '%s\n' "$t_old" >"$LD"
+! hook | grep -q "$BEATLINE" && ok "beat_broken_is_silent_with_no_drain_log" || bad "beat_broken_is_silent_with_no_drain_log" "$(hook | grep "$BEATLINE")"
+mv "$DL.off" "$DL"; printf '%s ended=batch stamp=written\n' "$t_new" >"$DL"
+mv "$S" "$S.off"
+! hook | grep -q "$BEATLINE" && ok "beat_broken_is_gated_on_loop_status" || bad "beat_broken_is_gated_on_loop_status" "the clause printed with no loop-status.json"
+status 5 "$NODUE" '[]'
+printf 'not a log line\n' >"$DL"
+hook | grep -q "${UNKLINE}" && ok "beat_broken_reads_unknown_when_the_newest_line_does_not_parse" || bad "beat_broken_reads_unknown_when_the_newest_line_does_not_parse" "got: [$(hook | grep '^beat')]"
+mv "$DL" "$DL.off"; mkdir "$DL"
+hook | grep -q "${UNKLINE}" && ok "beat_broken_reads_unknown_when_the_log_is_unreadable" || bad "beat_broken_reads_unknown_when_the_log_is_unreadable" "got: [$(hook | grep '^beat')]"
+
 export DIRECTOR_STATE="$saved_state"
 
 echo "$pass passed, $fail failed"
