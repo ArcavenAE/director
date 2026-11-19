@@ -15,6 +15,9 @@ import (
 // an earlier one. A found durable means the new global durable does not start at
 // the head, so every role-holding seat replayed the retained stream on its first
 // start.
+//
+// The suite stubs earlierDurableProbe in main_test.go, so these tests call the real
+// probe (realEarlierDurableProbe).
 
 func TestProbeOwnRoleDurableIsNotEarlier(t *testing.T) {
 	shortFloorList(t)
@@ -40,7 +43,7 @@ func TestProbeOwnRoleDurableIsNotEarlier(t *testing.T) {
 			t.Fatalf("local durable %s is missing from %v", want, names)
 		}
 	}
-	found, perr := earlierDurableProbe(ctx, g, self.AgentID, b.instance)
+	found, perr := realEarlierDurableProbe(ctx, g, self.AgentID, b.instance)
 	if perr != nil {
 		t.Fatalf("probe error: %v", perr)
 	}
@@ -68,7 +71,7 @@ func TestProbeEarlierInstanceDurableIsStillEarlier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found, perr := earlierDurableProbe(ctx, g, self.AgentID, b.instance)
+	found, perr := realEarlierDurableProbe(ctx, g, self.AgentID, b.instance)
 	if perr != nil || !found {
 		t.Errorf("probe = %v, %v; an earlier instance's durable must count", found, perr)
 	}
