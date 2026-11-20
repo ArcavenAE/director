@@ -1941,6 +1941,9 @@ func (b *Bus) writePresenceView(ctx context.Context, state string, view presence
 	if b.self.Role != "" {
 		rec["role"] = b.self.Role
 	}
+	if b.self.StandsIn != "" {
+		rec["stands_in_for"] = b.self.StandsIn
+	}
 	// The age of the oldest waiting message on every row, and the P1 cue
 	// state beside presence (channel-cue.md 3.3) only on a seat that opted in,
 	// so director can list seats whose cue is not live or that are stalled.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,13 @@ func resolveSeatEnv() (seatEnv, error) {
 	if se.self.Team == "" || se.self.Workspace == "" {
 		return se, errors.New(seatTeamRefusal)
 	}
+	// A mirror seat's stand-in team (standsin.go). A value that cannot be used is
+	// logged with its reason and ignored; it never refuses the launch.
+	standsIn, why := parseStandsInFor(os.Getenv("DIRECTOR_STANDS_IN_FOR"), se.self.Team)
+	if why != "" {
+		log.Print(why)
+	}
+	se.self.StandsIn = standsIn
 	if os.Getenv("DIRECTOR_NATS_CREDS") != "" {
 		return se, nil
 	}

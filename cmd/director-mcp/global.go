@@ -1108,6 +1108,9 @@ func (g *globalTier) writePresenceWith(ctx context.Context, self Sender, instanc
 	if v := os.Getenv("DIRECTOR_PRESENCE_LOST_AFTER"); v != "" {
 		rec["lost_after"] = v
 	}
+	if self.StandsIn != "" {
+		rec["stands_in_for"] = self.StandsIn
+	}
 	if extra != nil {
 		extra(rec)
 	}

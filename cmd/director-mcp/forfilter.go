@@ -73,10 +73,12 @@ type forFilter struct {
 	team    string
 	role    string
 	cluster string
-	roster  func(ctx context.Context) ([]map[string]any, error)
-	now     func() time.Time
-	logf    func(format string, args ...any)
-	first   sync.Once
+	// standsIn is the team this seat stands in for (standsin.go); empty when unset.
+	standsIn string
+	roster   func(ctx context.Context) ([]map[string]any, error)
+	now      func() time.Time
+	logf     func(format string, args ...any)
+	first    sync.Once
 	// note receives the one first-decision line; nil means the standard log.
 	// It is separate from logf so a test that counts drop lines still sees one.
 	note func(format string, args ...any)
@@ -96,7 +98,7 @@ func newForFilter(self Sender, gcfg globalConfig, roster func(ctx context.Contex
 	if role == "" {
 		role = gcfg.Role
 	}
-	return &forFilter{agentID: self.AgentID, team: self.Team, role: role, cluster: gcfg.Cluster, now: time.Now, logf: log.Printf, roster: roster}
+	return &forFilter{agentID: self.AgentID, team: self.Team, role: role, standsIn: self.StandsIn, cluster: gcfg.Cluster, now: time.Now, logf: log.Printf, roster: roster}
 }
 
 // forFilterStatus is the one line printed when the global tier attaches, so a
@@ -255,6 +257,9 @@ func (f *forFilter) namesSelf(name, cluster string) bool {
 	if cluster != "" && cluster != f.cluster {
 		return false
 	}
+	if f.standsIn != "" && f.role != "" && (name == f.standsIn+"-"+f.role || name == "role://"+f.standsIn+"/"+f.role) {
+		return true // the stood-in team's name for this seat's own role (standsin.go)
+	}
 	return name == f.team || forHas(forNames(f.agentID, f.team, f.role), name)
 }
 
@@ -281,6 +286,11 @@ func (f *forFilter) otherSeat(name, cluster string, rows []map[string]any) bool 
 			continue
 		}
 		if agent == f.agentID || (team == f.team && forGenOnly.ReplaceAllString(agent, "$1") == own) {
+			return false
+		}
+		// A seat of the team this one stands in for, in this seat's own role, is
+		// this seat's to answer (standsin.go).
+		if f.standsIn != "" && team == f.standsIn && role == f.role {
 			return false
 		}
 		if found && team != team0 {
