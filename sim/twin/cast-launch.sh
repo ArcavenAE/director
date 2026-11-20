@@ -367,6 +367,11 @@ if [[ -n "$cue_how" ]]; then
   cue_env=',"DIRECTOR_CUE":"1"'
   cue_args=(--dangerously-load-development-channels server:director)
   cue_note=", channel cue ON ($cue_how)"
+else
+  # The shim turns the cue on when DIRECTOR_CUE is unset, so a seat launched
+  # without the channel must be told 0 outright, or it is cued on a channel it
+  # never bound (director#719). The launcher decides once; the shim follows.
+  cue_env=',"DIRECTOR_CUE":"0"'
 fi
 
 # A supervisor-type cast with no global address on a host whose broker IS

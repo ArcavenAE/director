@@ -78,11 +78,11 @@ changes.
 | `DIRECTOR_HANDLED` | `1` turns the handled mode on; anything else leaves ack-on-read as it is |
 | `DIRECTOR_STATE` | the seat's state directory, default `~/.director/state`; holds `handled.jsonl`, its lock, and `thresholds.json` |
 
-The channel cue (#166). Off unless `DIRECTOR_CUE=1`, and per process.
+The channel cue (#166). On when `DIRECTOR_CUE` is unset and off for any value other than `1`, per process. The launcher sets it to `1` when it binds the channel and `0` when it does not, so the two agree.
 
 | Variable | Meaning |
 |---|---|
-| `DIRECTOR_CUE` | `1` makes the shim send its Claude Code a `notifications/claude/channel` notice when mail arrives (arrivals close together fold into one), so an idle seat is woken; anything else leaves the shim unchanged. It needs `--dangerously-load-development-channels server:director` on the `claude` command line, and that flag brings a one-time startup prompt that needs a person (`docs/getting-started.md`, section 4). A seat without the cue reads mail only when it polls |
+| `DIRECTOR_CUE` | `1` makes the shim send its Claude Code a `notifications/claude/channel` notice when mail arrives (arrivals close together fold into one), so an idle seat is woken; an unset variable does too, and any other value turns it off. It needs `--dangerously-load-development-channels server:director` on the `claude` command line, and that flag brings a one-time startup prompt that needs a person (`docs/getting-started.md`, section 4). A seat without the cue reads mail only when it polls |
 
 The presence watch. Off unless `DIRECTOR_PRESENCE_WATCH` is `1` and the seat holds the
 global director role; with it on the shim offers `cancel_held` and holds some global
