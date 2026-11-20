@@ -1,0 +1,50 @@
+id: question-director-idle-wait-spend
+type: question
+confidence: frontier
+title: "Is a daily, zero-token tally of idle-wait hours per session worth adding, and does the supervisor rule's uncapped re-wait need a cap?"
+tags: [director, bus-wait, idle, cost, detection]
+content: |
+  Placed 2026-11-20 from finding-director-3vlc. Filed in frontier. No
+  design is proposed; the options come after review and the operator
+  rules on them.
+
+  ## The question
+
+  A seat that ends every turn on a bus wait, and waits while no mail
+  comes, spent about 55 requests an hour on kinu. Before 2026-11-11 that
+  was about 14% of the host's cache-read. Since the 110 s wait and the
+  cue rulings it is down about 92%, to about $15 a day. No instrument
+  names such a seat within a day. Two things remain open:
+
+  - Is a daily, after-the-fact tally worth adding? It would count
+    consecutive idle-wait hours per session, using requests per wait that
+    brought mail and non-wait tool calls per hour. It would run in a
+    script that already reads transcripts and spend no model tokens.
+    Weigh it against doing nothing: about $15 a day now, against about
+    $84 to $94 for a fully idle seat-day nobody notices (measured: about
+    $36 to $40 a seat-day, from 10.1 idle hours a seat-day on average
+    over an 11-day span).
+  - The supervisor rule calls the wait again on an empty return, with no
+    cap. Does it need one, as other roles end idle after five empty waits?
+
+  ## How it would be answered
+
+  Re-run the scan in finding-director-3vlc over a later window. Compare
+  idle-wait hours and their cost with the 2026-11-11 to 11-19 baseline.
+  For each option, state its standing token cost per day, its expected
+  saving (base rate times the cost of one idle run before it is named)
+  and its break-even against doing nothing.
+edges:
+  - target: finding-director-3vlc-idle-seats-pay-for-empty-bus-waits
+    type: derives
+  - target: question-idle-seat-receive-latency
+    type: supports
+    note: "the finding's contrast case, seats that do not wake, is the opposite failure to the one this question asks about"
+provenance:
+  created_by: agent
+  session: 2026-11-20 idle-wait spend probe
+  created_at: "2026-11-20"
+  notes: >
+    Placed from finding-director-3vlc. Every figure is drawn from that
+    finding, which read session transcript structure and one other
+    host's relayed counts.
