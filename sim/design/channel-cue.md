@@ -203,7 +203,7 @@ The fields are a diagnostic. They change neither whether nor where a send goes,
 and a result with none of them says nothing about the cue: the recipient has no
 presence row, its row carries no `cue` field (its cue is off in its own config,
 or its shim predates the field), or the send was not to a local `agent://`
-address. When a recipient has several live rows, the newest by `ts` is read.
+address. When a recipient has several live rows, the newest by `ts` is read. Rows are read only from the workspace the send went to, as the send resolved it, so a recipient live in two workspaces reports the cue of the one the message was sent to.
 The cue warning has its own key because `warning` already carries a failed
 relay-log write. The age is the row's own, so it can be up to one beat old.
 
