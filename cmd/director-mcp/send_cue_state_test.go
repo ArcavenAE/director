@@ -139,3 +139,58 @@ func TestSendResultKeepsTheCueWarningOffTheWarningKey(t *testing.T) {
 		t.Errorf("a stalled recipient needs a recipient_warning")
 	}
 }
+
+// sendToWorkspace sends with an explicit workspace hint and cold: true, so a
+// mailbox with no live consumer can be addressed.
+func (f *cueSendFixture) sendToWorkspace(ws string) map[string]any {
+	f.t.Helper()
+	raw, _ := json.Marshal(map[string]any{"to": "agent://ops/rcpt", "performative": "INFORM", "text": "hello", "workspace": ws, "cold": true})
+	res, err := toolSend(f.ctx, f.sender, raw)
+	if err != nil {
+		f.t.Fatalf("send to %s: %v", ws, err)
+	}
+	out, ok := res.(map[string]any)
+	if !ok {
+		f.t.Fatalf("send result is %T, want a map", res)
+	}
+	return out
+}
+
+// A recipient live in two workspaces has one presence row in each. The send is
+// built for one workspace, so its result reads that workspace's row and never
+// the other session's, whichever row is newer (director#725 review, F1).
+func TestSendResultReadsOnlyTheRowOfTheWorkspaceTheSendWentTo(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		liveTS, stalledTS time.Duration
+	}{
+		{"the stalled row is newer", -30 * time.Second, -5 * time.Second},
+		{"the live row is newer", -5 * time.Second, -30 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCueSendFixture(t)
+			now := time.Now().UTC()
+			f.recipientRow("01INSTLIVE", map[string]any{
+				"workspace": "ws-live", "cue": "live", "ts": now.Add(tc.liveTS).Format(time.RFC3339),
+			})
+			f.recipientRow("01INSTSTALL", map[string]any{
+				"workspace": "ws-stalled", "cue": "stalled", "cue_reason": "no drain", "oldest_pending_s": 900,
+				"ts": now.Add(tc.stalledTS).Format(time.RFC3339),
+			})
+			stalled := f.sendToWorkspace("ws-stalled")
+			if stalled["recipient_cue"] != "stalled" {
+				t.Errorf("send to ws-stalled: recipient_cue = %v, want stalled", stalled["recipient_cue"])
+			}
+			if w, _ := stalled["recipient_warning"].(string); !strings.Contains(w, "stalled") {
+				t.Errorf("send to ws-stalled: recipient_warning = %q, want a warning that names stalled", w)
+			}
+			live := f.sendToWorkspace("ws-live")
+			if live["recipient_cue"] != "live" {
+				t.Errorf("send to ws-live: recipient_cue = %v, want live", live["recipient_cue"])
+			}
+			if w, ok := live["recipient_warning"]; ok {
+				t.Errorf("send to ws-live: recipient_warning = %v, want none for a live cue", w)
+			}
+		})
+	}
+}
