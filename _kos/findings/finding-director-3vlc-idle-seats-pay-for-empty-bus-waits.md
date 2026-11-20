@@ -8,7 +8,7 @@
 
 ## 0. The sentence
 
-**The "runaway loop" that prompted this probe was an idle seat behaving as designed. Its role told it to end every turn on a bus wait. Each empty wait cost about two requests, so a seat with nothing to do averaged about 55 requests an hour. Before 2026-11-11 this idle pattern took about 14% of the host's cache-read, and about 12% over the whole period measured (the table in section 2). Since the rulings of 2026-11-11 it is down about 92%, so it is no longer a large cost. What is still missing is any instrument that names an idle seat within a day.**
+**The "runaway loop" that prompted this probe was an idle seat behaving as designed. Its role told it to end every turn on a bus wait. Each empty wait cost about two requests, so a seat with nothing to do averaged about 55 requests an hour while idle. Before 2026-11-11 this idle pattern took about 14% of the host's cache-read, and about 12% over the whole period measured (the table in section 2). Since the rulings of 2026-11-11 it is down about 92%, so it is no longer a large cost. What is still missing is any instrument that names an idle seat within a day.**
 
 ## 1. The problem
 
