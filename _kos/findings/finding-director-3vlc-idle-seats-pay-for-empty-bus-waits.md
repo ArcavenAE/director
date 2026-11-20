@@ -8,7 +8,7 @@
 
 ## 0. The sentence
 
-**The "runaway loop" that prompted this probe was an idle seat behaving as designed. Its role told it to end every turn on a bus wait. Each empty wait cost about two requests, so a seat with nothing to do spent about 55 requests an hour, around the clock, for days. Before 2026-11-11 this idle pattern took about 14% of the host's cache-read, and about 12% over the whole period measured (the table in section 2). Since the rulings of 2026-11-11 it is down about 92%, so it is no longer a large cost. What is still missing is any instrument that names an idle seat within a day.**
+**The "runaway loop" that prompted this probe was an idle seat behaving as designed. Its role told it to end every turn on a bus wait. Each empty wait cost about two requests, so a seat with nothing to do averaged about 55 requests an hour. Before 2026-11-11 this idle pattern took about 14% of the host's cache-read, and about 12% over the whole period measured (the table in section 2). Since the rulings of 2026-11-11 it is down about 92%, so it is no longer a large cost. What is still missing is any instrument that names an idle seat within a day.**
 
 ## 1. The problem
 
@@ -18,7 +18,7 @@ The case behind the ask appears first in a dispatch brief as "a hand-started ses
 
 - One session, in a project directory of another orchestrator, matches it in the recorded window, with 54 to 56 requests an hour from 21Z to 01Z. Each of those hours has about 28 waits, all empty, about 27 of them moved to the background, no mail and no other tool call. It read 14.6M to 18.1M cache-read an hour, about 100M per 6 hours.
 - That session was a marvel seat, not a hand-started one. The marvel daemon log records it as cast on 2026-09-26 and deleted on 2026-11-05. So the brief's "hand-started" was wrong. Its rate and its 6-hour total match this seat's measured hours.
-- It and a sibling seat idled this way from the start of the data (2026-10-25) until both were deleted. Together that was 223 idle hours and 3.55B cache-read. The deletion came 3.5 days after the report.
+- It and a sibling seat idled on and off from the start of the data (2026-10-25) until both were deleted. Together that was 223 idle hours and 3.55B cache-read. The deletion came 3.5 days after the report.
 
 ## 2. What separates an idle loop from a busy seat
 
@@ -67,7 +67,7 @@ Kinu, from transcript structure:
 |---|---|---|
 | A role rule that ends every turn on a wait, with no cap on empty returns (the supervisor rule's "call it again and keep a count") | The relayed seat names that rule as its reason for waiting again. The idle hours are supervisor and architect seats. | The count feeds an idle-planner query, not a stop. Roles that end idle after a capped number of empty waits (this probe's own seat: five, about 10 minutes) show 1 to 2 idle hours in the window. |
 | A 120 s wait moved to the background, costing two requests per cycle | 14,502 of the 20,129 empty waits in the idle hours were backgrounded. 55.7 requests an hour is about two requests per 2-minute cycle. | The 110 s ruling removed the background step. After it, the idle requests per day fell 88%. |
-| A seat left running with no work and no owner | The matched seat sat without work, idle on and off over an 11-day span (runs of up to 41 hours), until it was deleted. | This is about seat lifecycle, not the bus. marvel saw the seat as running and healthy throughout. |
+| A seat left running with no work and no owner | The matched seat sat without work, idle on and off over an 11-day span (the longest idle run in the data was 41 hours), until it was deleted. | This is about seat lifecycle, not the bus. marvel saw the seat as running and healthy throughout. |
 | A cue that does not wake, so the seat falls back to blocking waits | On 2026-11-18 and again on 2026-11-20 at 00:37Z, this probe's own seat's `inbox_summary` reported its cue as unverified ("no nonce echo after self-test"). | Not measured per seat. The contrast case (below) is the opposite failure. |
 | A cue storm, or mail that never comes | Not seen: the idle hours show 0.23 waits with mail per hour. | |
 | A restart that loses its state | Not seen in this data. | |
@@ -91,4 +91,4 @@ The matched seat was found by a hand-run inventory about 8 days after the start 
 
 **question-director-idle-wait-spend:** Now that idle-wait spend is down to about $15 a day on kinu, is a daily, after-the-fact tally of consecutive idle-wait hours per session worth adding? It would count requests per waits that brought mail and non-wait tools per hour, run in a script that already reads transcripts, and spend no model tokens. And does the supervisor rule's uncapped re-wait need a cap like the other roles have?
 
-Options are not designed here; they come after this finding is reviewed. Each option will state its standing token cost per day (target zero), its expected saving (base rate times the cost of one idle run before it is named) and its break-even against doing nothing. On this data, doing nothing now costs about $15 a day. An idle seat of the matched kind, idle on and off across an 11-day span before anyone saw it (there was no continuous week; the longest run was 41 hours), cost about $84 to $94 for each fully idle 24-hour seat-day (about 1,335 requests a day). The measured rate is lower: the two matched seats idled 223 hours in an 11-day span (2026-10-25 to their deletion on 2026-11-05), which is 223 / 2 / 11 = about 10.1 idle hours per seat-day on average, and at 55.7 requests an hour and $0.063 to $0.070 a request that is about $36 to $40 a seat-day.
+Options are not designed here; they come after this finding is reviewed. Each option will state its standing token cost per day (target zero), its expected saving (base rate times the cost of one idle run before it is named) and its break-even against doing nothing. On this data, doing nothing now costs about $15 a day. An idle seat of the matched kind, idle on and off across an 11-day span before anyone saw it (there was no continuous week; the longest idle run in the data was 41 hours), cost about $84 to $94 for each fully idle 24-hour seat-day (about 1,335 requests a day). The measured rate is lower: the two matched seats idled 223 hours in an 11-day span (2026-10-25 to their deletion on 2026-11-05), which is 223 / 2 / 11 = about 10.1 idle hours per seat-day on average, and at 55.7 requests an hour and $0.063 to $0.070 a request that is about $36 to $40 a seat-day.
