@@ -94,9 +94,13 @@ fi
 # The seat's settings file is marvel's projected policy (the last --settings in
 # "$@"), or an empty object when there is none, written to
 # $CAST_CLEAN_ROOM_DIR/cast-settings.json and passed as the last --settings. No
-# backend overlay is applied and no Bedrock key is looked up: this mode reads and
-# creates no credential and no login. How a fresh config directory signs in is
-# not decided here.
+# backend overlay is applied: an overlay is a settings file, so it can carry more
+# than backend env, and it is operator state. Sign-in is the Bedrock key block
+# below, unchanged (the operator's ruling for clean-room sign-in: "use bedrock"):
+# with CLAUDE_CODE_USE_BEDROCK=1 the seat signs in through the host's own key,
+# brokered by item name, with no login and no copied credential, and nothing is
+# read from the operator's config directory. This mode reads or creates no other
+# credential.
 CR_DIR="${CAST_CLEAN_ROOM_DIR:-}"
 CR_SETTINGS=""
 cr_fail() { echo "cast-launch: CAST_CLEAN_ROOM_DIR: $1; not starting the harness" >&2; exit 1; }
@@ -484,9 +488,6 @@ fi
 # verify script tests a copy of this file with that one path substituted. The spawn
 # line carries the item's name (bedrock_note), never its value.
 bedrock_prog=cast-launch
-# The clean-room mode looks up no key: this block is its own, word for word as in
-# claude-bedrock-launch, and is skipped as a whole.
-if [[ -z "$CR_DIR" ]]; then
 bedrock_note=""
 # xtrace is suspended around the block and restored after it, so a launcher run
 # under bash -x or SHELLOPTS=xtrace never traces the key value.
@@ -510,9 +511,6 @@ if [[ "${CLAUDE_CODE_USE_BEDROCK:-}" == 1 ]]; then
 fi
 if [[ "$bedrock_xtrace" == 1 ]]; then set -x; fi
 unset bedrock_xtrace
-else
-  bedrock_note=""
-fi
 
 # Resolve the per-role overlay just before exec. Missing file: no change
 # (default behavior). Malformed JSON: crash non-zero, matching the bus
@@ -578,7 +576,7 @@ if [[ -n "$cue_how" ]]; then
 fi
 
 if [[ -n "$CR_DIR" ]]; then
-  echo "cast-launch: $MARVEL_SESSION -> role/$WROLE CLEAN ROOM, no director shim, CLAUDE_CONFIG_DIR $CR_DIR, cwd $TWIN_CWD" >&2
+  echo "cast-launch: $MARVEL_SESSION -> role/$WROLE CLEAN ROOM, no director shim, CLAUDE_CONFIG_DIR $CR_DIR, cwd $TWIN_CWD$bedrock_note" >&2
 else
 echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD$cue_note$devch_note$bedrock_note" >&2
 fi
