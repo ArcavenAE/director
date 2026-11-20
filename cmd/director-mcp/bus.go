@@ -641,14 +641,16 @@ func (b *Bus) broadcastSubject(workspace, team string) string {
 // mailbox with no live presence). A recipient no live session would consume,
 // or one live in more than one workspace, is refused here before publish
 // rather than sent to a subject nobody filters (R-09). wsHint is ignored for
-// broadcast, whose address already carries the workspace.
-func (b *Bus) resolveSubject(ctx context.Context, addr, wsHint string) (subject string, durable bool, err error) {
+// broadcast, whose address already carries the workspace. It also returns the
+// workspace the subject was built from, so a caller reads the same one the
+// send used and never resolves it a second time (director#725).
+func (b *Bus) resolveSubjectWS(ctx context.Context, addr, wsHint string) (subject, workspace string, durable bool, err error) {
 	switch {
 	case strings.HasPrefix(addr, "agent://"):
 		rest := strings.TrimPrefix(addr, "agent://")
 		team, id, ok := strings.Cut(rest, "/")
 		if !ok {
-			return "", false, errors.New("agent address must be agent://{team}/{id}")
+			return "", "", false, errors.New("agent address must be agent://{team}/{id}")
 		}
 		// The send target is validated too (director#3): a "." or "*" in a
 		// target id would add subject tokens or a wildcard, so it is refused
@@ -656,27 +658,27 @@ func (b *Bus) resolveSubject(ctx context.Context, addr, wsHint string) (subject 
 		// runs before any workspace resolution, so a wildcard target is refused
 		// whether or not the roster has a match.
 		if err := validToken("agent team", team); err != nil {
-			return "", false, err
+			return "", "", false, err
 		}
 		if err := validToken("agent id", id); err != nil {
-			return "", false, err
+			return "", "", false, err
 		}
 		ws, err := b.subjectWorkspace(ctx, wsHint, "presence."+team+"."+id+".", addr)
 		if err != nil {
-			return "", false, err
+			return "", "", false, err
 		}
-		return b.inboxSubject(ws, team, id), true, nil
+		return b.inboxSubject(ws, team, id), ws, true, nil
 	case strings.HasPrefix(addr, "role://"):
 		rest := strings.TrimPrefix(addr, "role://")
 		team, role, ok := strings.Cut(rest, "/")
 		if !ok {
-			return "", false, errors.New("role address must be role://{team}/{role}")
+			return "", "", false, errors.New("role address must be role://{team}/{role}")
 		}
 		if err := validToken("role team", team); err != nil {
-			return "", false, err
+			return "", "", false, err
 		}
 		if err := validToken("role", role); err != nil {
-			return "", false, err
+			return "", "", false, err
 		}
 		// A role has no id in the presence key, so the workspace is resolved
 		// over the team's live members that hold the role (the presence
@@ -688,14 +690,14 @@ func (b *Bus) resolveSubject(ctx context.Context, addr, wsHint string) (subject 
 		if ws == "" {
 			resolved, err := b.resolveRoleWorkspace(ctx, team, role, addr)
 			if err != nil {
-				return "", false, err
+				return "", "", false, err
 			}
 			ws = resolved
 		}
 		if err := validToken("recipient workspace", ws); err != nil {
-			return "", false, err
+			return "", "", false, err
 		}
-		return b.roleSubject(ws, team, role), true, nil
+		return b.roleSubject(ws, team, role), ws, true, nil
 	case strings.HasPrefix(addr, "broadcast://"):
 		rest := strings.TrimPrefix(addr, "broadcast://")
 		ws, team, _ := strings.Cut(rest, "/") // broadcast://{ws}[/{team}]
@@ -704,16 +706,22 @@ func (b *Bus) resolveSubject(ctx context.Context, addr, wsHint string) (subject 
 		// builder ignored the address's workspace, the same defect class R-92
 		// fixes for directed sends.
 		if err := validToken("broadcast workspace", ws); err != nil {
-			return "", false, err
+			return "", "", false, err
 		}
 		if team != "" {
 			if err := validToken("broadcast team", team); err != nil {
-				return "", false, err
+				return "", "", false, err
 			}
 		}
-		return b.broadcastSubject(ws, team), false, nil
+		return b.broadcastSubject(ws, team), ws, false, nil
 	}
-	return "", false, errors.New("unroutable address: " + addr)
+	return "", "", false, errors.New("unroutable address: " + addr)
+}
+
+// resolveSubject is resolveSubjectWS without the workspace.
+func (b *Bus) resolveSubject(ctx context.Context, addr, wsHint string) (subject string, durable bool, err error) {
+	subject, _, durable, err = b.resolveSubjectWS(ctx, addr, wsHint)
+	return subject, durable, err
 }
 
 // subjectWorkspace picks the workspace a directed subject is built from. An
@@ -1013,9 +1021,12 @@ func noPresenceErr(addr, prefix string, scan presenceScan) error {
 // (R-08); a stream sequence is the transport's word that the bytes are
 // stored, not the recipient's word that they were read.
 type sendResult struct {
-	Tier     string
-	Stream   string
-	Sequence uint64
+	Tier string
+	// Workspace is the workspace the subject was built from (empty at the
+	// global tier). The recipient's cue is read from that workspace's row.
+	Workspace string
+	Stream    string
+	Sequence  uint64
 	// NoConsumer is set on a cold send (cold: true) whose subject no durable
 	// consumer on AGENT_INBOX filters: the bytes are stored, and nobody reads
 	// them until a seat's durable comes to filter that subject.
@@ -1132,11 +1143,11 @@ func (b *Bus) publishSend(ctx context.Context, e *Envelope, wsHint string) (*sen
 	if isGlobalAddress(e.Recipient.Address) {
 		return b.publishGlobal(ctx, e, body)
 	}
-	subject, durable, err := b.resolveSubject(ctx, e.Recipient.Address, wsHint)
+	subject, ws, durable, err := b.resolveSubjectWS(ctx, e.Recipient.Address, wsHint)
 	if err != nil {
 		return nil, atStage("resolve", err)
 	}
-	res := &sendResult{Tier: "local"}
+	res := &sendResult{Tier: "local", Workspace: ws}
 	// A hinted agent:// or role:// send skips the roster, so nothing has shown
 	// that anyone reads its subject. Refuse it unless a durable consumer filters
 	// the subject with that exact filter, or the sender said cold: true (mail for a seat that has not

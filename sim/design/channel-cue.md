@@ -185,6 +185,28 @@ this dialog seen (the key is not yet identified; C-0 finds it). Until then
 the self-test reports such a seat as `cue: unverified`, which is the
 visible form of the problem.
 
+### 3.7 What the sender sees (director#719)
+
+A send used to say only "accepted for delivery", so a seat whose cue would not
+wake it missed an ask and the sender never knew. The result of `send_message`
+to an `agent://` recipient now adds what the recipient's own presence row says,
+read once after the send is accepted:
+
+| field | meaning |
+|---|---|
+| `recipient_cue` | the recipient's cue state from its presence row: `live`, `unverified`, `stalled` or `off` |
+| `recipient_cue_reason` | the row's `cue_reason`, when it has one |
+| `recipient_oldest_pending_s` | the age in seconds of the recipient's oldest unread message, as the row reports it, before this message |
+| `recipient_warning` | one line, only for `off`, `unverified` and `stalled`: the cue will not wake the seat, so this message may sit unread until it polls |
+
+The fields are a diagnostic. They change neither whether nor where a send goes,
+and a result with none of them says nothing about the cue: the recipient has no
+presence row, its row carries no `cue` field (its cue is off in its own config,
+or its shim predates the field), or the send was not to a local `agent://`
+address. When a recipient has several live rows, the newest by `ts` is read. Rows are read only from the workspace the send went to, as the send resolved it, so a recipient live in two workspaces reports the cue of the one the message was sent to.
+The cue warning has its own key because `warning` already carries a failed
+relay-log write. The age is the row's own, so it can be up to one beat old.
+
 ## 4. Measured before rollout beyond one seat (C-0)
 
 On one opted-in wrapped seat, recorded as pass or fail per line:
