@@ -10,17 +10,25 @@ content: |
   ## The question
 
   The oldest open asks stopped after the work. Before 2026-11-10 the ask
-  register recorded no close event and the relay log no answer kind, so
-  done work could not be recorded as done. Four things remain open:
+  register recorded no close event and the relay log no answer kind (the
+  code for both merged on 2026-11-09), so done work could not be recorded
+  as done. After 2026-11-10, 199 of 293
+  asks closed before the triage, at a median of half an hour. Five things
+  remain open:
 
-  - Since 2026-11-10, where do asks stop? Is it the same place as before
-    (residual parts, replies with no forward edge, refusals with no owner),
-    or somewhere new?
+  - Of the asks that still stay open after 2026-11-10, the commonest stop
+    is a Desk ruling the operator has not yet made (8 of 24 sampled). Is
+    that a queue the operator wants to see as a queue, or a stop that
+    belongs to the ask?
+  - When the operator rules on the Desk, what carries the ruling back to
+    the ask? Some rulings were made and never relayed; a re-sync on
+    2026-11-20 found seven made on 2026-11-13.
   - When the operator answers an earlier question, should that reply open
-    a new ask, or attach to the one it answers? Nearly half of the oldest
-    open asks (70 of 150) are reply-shaped.
+    a new ask, or attach to the one it answers? 174 of 399 open asks are
+    reply-shaped.
   - When most of an ask is done and one part is open, what is the ask's
-    state, and who owns the open part?
+    state, and who owns the open part? 24 of 86 sampled open asks are such
+    residual parts.
   - How long do accepted asks wait unread on idle seats, and how many move
     only when a supervisor rings? One supervisor's log for 2026-11-19
     shows about 15 such rings in four hours, with waits of 15 to 50 minutes.
@@ -28,6 +36,20 @@ content: |
   ## How it would be answered
 
   Re-run the trace in finding-director-s540 over asks received after
-  2026-11-10, once the open-ask triage reaches them. Read the Reply Shelf
-  and the bus answers as well as the files, and compare the stop points
-  with the pre-2026-11-10 sample.
+  2026-11-20, once enough have aged. Read the Reply Shelf and the bus
+  answers as well as the files. Compare the stop points with the two
+  periods measured in the finding.
+edges:
+  - target: finding-director-s540-ask-life-stops-after-the-work
+    type: derives
+  - target: question-idle-seat-receive-latency
+    type: supports
+    note: "its fourth item, how long accepted asks wait unread on idle seats, is that question measured from the ask's side"
+provenance:
+  created_by: agent
+  session: 2026-11-20 old-asks probe, team arcaven architect seat
+  created_at: "2026-11-20"
+  notes: >
+    Placed from finding-director-s540. Every count is drawn from that
+    finding, which read the ask register, the relay log, the dws ledger,
+    the Desk snapshot, board.md, bd and a Reply Shelf export on 2026-11-20.
