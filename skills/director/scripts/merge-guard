@@ -140,7 +140,7 @@ field() { jq -r --arg f "$1" 'if has($f) then .[$f] | tostring else "__missing__
 
 view() {
   read_json "gh pr view" pr view "$num" -R "$repo" \
-    --json state,isDraft,mergeStateStatus,baseRefName,headRefName,headRefOid,statusCheckRollup,author,commits,reviews,labels
+    --json state,isDraft,mergeStateStatus,baseRefName,headRefName,headRefOid,statusCheckRollup,author,reviews,labels
 }
 
 view
@@ -236,12 +236,17 @@ nchecks="$(jq '.statusCheckRollup | length' <<<"$json")"
 # A reviewer's latest review on ANY commit counts: a change request on earlier
 # code stands until that reviewer re-reviews or it is dismissed, as GitHub
 # keeps it. A missing field is a failed read, not a pass.
-jq -e '(.reviews | type == "array") and (.commits | type == "array")' >/dev/null <<<"$json" \
-  || stop "the view has no reviews or commits list; cannot tell whether the head is approved"
+jq -e '.reviews | type == "array"' >/dev/null <<<"$json" \
+  || stop "the view has no reviews list; cannot tell whether the head is approved"
 author="$(jq -r '.author.login // empty' <<<"$json")"
 [[ -n "$author" ]] || stop "the view has no author; cannot tell an approval from a self-approval"
-head_at="$(jq -r --arg h "$head_sha" '[.commits[] | select(.oid == $h)] | last | .committedDate // empty' <<<"$json")"
-[[ -n "$head_at" ]] || stop "the head commit $head_sha is not in the view's commit list; cannot date it"
+# The head is dated by reading the commit itself. The view's commit list is
+# capped at 100, so on a longer PR the head is missing from it.
+view_json="$json"   # read_json overwrites $json; the PR view is needed below
+read_json "gh api (head commit)" api "repos/$repo/commits/$head_sha"
+head_at="$(jq -r '.commit.committer.date // empty' <<<"$json")"
+json="$view_json"
+[[ -n "$head_at" ]] || stop "the head commit read has no committer date; cannot date $head_sha"
 # Latest non-comment review per reviewer, on any commit, from anyone but the author.
 latest="$(jq -c --arg a "$author" '
   [.reviews[]
