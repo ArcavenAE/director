@@ -530,6 +530,35 @@ for refuse in "used:not empty" "../cr/x:absolute" ".claude:the operator's" ".cla
   fi
 done
 
+# The settings file is never written through a symlink, and a settings file left by
+# an earlier dry run is reused.
+mkdir -p "$root/cr/sym1"; printf 'VICTIM\n' > "$root/cr/victim"
+ln -s "$root/cr/victim" "$root/cr/sym1/cast-settings.json"
+if cr_cast sym1; then
+  bad "clean-room: a cast-settings.json that is a symlink was allowed" "victim: $(cat "$root/cr/victim")"
+else
+  grep -q "CAST_CLEAN_ROOM_DIR" "$root/out/stderr" && [[ ! -e "$root/out/claude.args" ]] \
+    && ok "clean-room: a cast-settings.json that is a symlink is refused and nothing launches" \
+    || bad "clean-room: symlink refusal" "$(cat "$root/out/stderr")"
+  [[ "$(cat "$root/cr/victim")" == VICTIM ]] \
+    && ok "clean-room: the file the symlink points at was not written" \
+    || bad "clean-room: the symlink target was written" "$(cat "$root/cr/victim")"
+fi
+if cr_cast seat2; then
+  ok "clean-room: a directory holding only the earlier dry run's settings file is reused"
+else
+  bad "clean-room: reuse after a dry run" "$(cat "$root/out/stderr")"
+fi
+# marvel's control variables stay out of the seat: the socket, the heartbeat token
+# file and any other MARVEL_* the daemon passes down.
+if cr_cast seat5 MARVEL_SOCKET="$root/marvel.sock" MARVEL_HEARTBEAT_TOKEN_FILE="$root/hb.token" MARVEL_SEAT_URI=marvel://x/y MARVEL_WORKDIR="$root"; then
+  ! grep -q '^MARVEL_' "$root/out/claude.env" \
+    && ok "clean-room: claude inherits no MARVEL_* variable (socket, heartbeat token file, seat uri, workdir)" \
+    || bad "clean-room: MARVEL_* leaked" "$(grep '^MARVEL_' "$root/out/claude.env")"
+else
+  bad "clean-room cast with MARVEL_* set" "$(cat "$root/out/stderr")"
+fi
+
 # --- C-5: the channel cue is opt-in per seat (sim/design/channel-cue.md) -------
 # Operator rulings 2026-10-01: the development-channels flag is adopted per
 # seat. Only DIRECTOR_CUE=1, the value the shim itself honors, turns it on.
