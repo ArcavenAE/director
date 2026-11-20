@@ -357,7 +357,7 @@ fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseR
 expect_stop "a label with no name: STOP" "label"
 fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[]}' > "$fx/view.json"
 excl org/repo "acu.update" > "$fx/rulings.jsonl"
-expect_stop "labels read as an empty list but the view is otherwise unreadable: STOP, never a pass" "head commit"
+expect_stop "labels read as an empty list but no review approves the head: STOP, never a pass" "no approval"
 
 # An unreadable exclusion record stops, and stops before gh is asked anything.
 fixture; LABELS="bug" view OPEN false CLEAN > "$fx/view.json"; { excl org/repo x; echo '{"kind":"exclusion","repo":"org/repo"'; } > "$fx/rulings.jsonl"
