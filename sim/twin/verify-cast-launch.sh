@@ -632,14 +632,15 @@ fi
 # --- C-5: the channel cue is opt-in per seat (sim/design/channel-cue.md) -------
 # Operator rulings 2026-10-01: the development-channels flag is adopted per
 # seat. Only DIRECTOR_CUE=1, the value the shim itself honors, turns it on.
-# Unset, the launch line must be exactly today's.
+# Unset, the launch line is today's plus an explicit DIRECTOR_CUE=0 for the
+# shim, which would otherwise turn the cue on for a channel nobody bound.
 today_head="$(printf '%s\n' -n verify-builder-0 --strict-mcp-config --mcp-config \
-  "{\"mcpServers\":{\"director\":{\"command\":\"$root/bin/director-mcp\",\"env\":{\"DIRECTOR_AGENT_ID\":\"verify-builder-0\",\"DIRECTOR_ROLE\":\"builder\",\"DIRECTOR_TEAM\":\"fleet\",\"DIRECTOR_WORKSPACE\":\"verifyws\",\"NATS_URL\":\"nats://127.0.0.1:4222\"}}}}" \
+  "{\"mcpServers\":{\"director\":{\"command\":\"$root/bin/director-mcp\",\"env\":{\"DIRECTOR_AGENT_ID\":\"verify-builder-0\",\"DIRECTOR_ROLE\":\"builder\",\"DIRECTOR_TEAM\":\"fleet\",\"DIRECTOR_WORKSPACE\":\"verifyws\",\"NATS_URL\":\"nats://127.0.0.1:4222\",\"DIRECTOR_CUE\":\"0\"}}}}" \
   --append-system-prompt)"
 if cast builder; then
   [[ "$(head -6 "$root/out/claude.args")" == "$today_head" ]] \
-    && ok "cue unset: the launch line is today's, byte for byte" \
-    || bad "cue unset: the launch line is today's, byte for byte" "$(head -6 "$root/out/claude.args")"
+    && ok "cue unset: the launch line is today's plus DIRECTOR_CUE=0, byte for byte" \
+    || bad "cue unset: the launch line is today's plus DIRECTOR_CUE=0, byte for byte" "$(head -6 "$root/out/claude.args")"
   grep -q -- "--dangerously-load-development-channels" "$root/out/claude.args" \
     && bad "cue unset: no development-channels flag" || ok "cue unset: no development-channels flag"
   grep -qi "channel cue" "$root/out/stderr" \
@@ -663,7 +664,7 @@ else
 fi
 for v in 0 true yes; do
   if cast builder DIRECTOR_CUE="$v"; then
-    if has_mcp DIRECTOR_CUE || grep -q -- "--dangerously-load-development-channels" "$root/out/claude.args"; then
+    if ! in_mcp DIRECTOR_CUE 0 || grep -q -- "--dangerously-load-development-channels" "$root/out/claude.args"; then
       bad "cue=$v: only the value 1 opts in"
     else
       ok "cue=$v: only the value 1 opts in"
@@ -936,7 +937,7 @@ for role in supervisor research-supervisor; do
   fi
 done
 if cast supervisor DIRECTOR_CUE=0; then
-  no_cue_flag && ! has_mcp DIRECTOR_CUE \
+  no_cue_flag && in_mcp DIRECTOR_CUE 0 \
     && ok "supervisor, DIRECTOR_CUE=0: no channel flag, the opt-out wins" \
     || bad "supervisor, DIRECTOR_CUE=0: no channel flag, the opt-out wins" "$(tail -4 "$root/out/claude.args")"
   grep -qi "channel cue" "$root/out/stderr" \
