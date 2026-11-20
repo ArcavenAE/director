@@ -82,7 +82,7 @@ The channel cue (#166). On when `DIRECTOR_CUE` is unset and off for any value ot
 
 | Variable | Meaning |
 |---|---|
-| `DIRECTOR_CUE` | `1` makes the shim send its Claude Code a `notifications/claude/channel` notice when mail arrives (arrivals close together fold into one), so an idle seat is woken; anything else leaves the shim unchanged. It needs `--dangerously-load-development-channels server:director` on the `claude` command line, and that flag brings a one-time startup prompt that needs a person (`docs/getting-started.md`, section 4). A seat without the cue reads mail only when it polls |
+| `DIRECTOR_CUE` | `1` makes the shim send its Claude Code a `notifications/claude/channel` notice when mail arrives (arrivals close together fold into one), so an idle seat is woken; unset also turns it on, and any other value leaves the shim unchanged. It needs `--dangerously-load-development-channels server:director` on the `claude` command line, and that flag brings a one-time startup prompt that needs a person (`docs/getting-started.md`, section 4). A seat without the cue reads mail only when it polls |
 
 The presence watch. Off unless `DIRECTOR_PRESENCE_WATCH` is `1` and the seat holds the
 global director role; with it on the shim offers `cancel_held` and holds some global
