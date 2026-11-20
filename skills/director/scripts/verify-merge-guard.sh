@@ -28,7 +28,8 @@ mkdir -p "$root/bin"
 
 # The gh stub. `gh pr view` replays view.<call>.json (or view.json) with exit
 # code view.rc; `gh pr list` replays list.json with list.rc. Stderr text comes
-# from <verb>.err. `gh api` (the check suites at the head) replays suites.json
+# from <verb>.err. `gh api` (the check suites at the head) replays suites.json,
+# and `gh api` of the head commit replays commit.json with commit.rc;
 # with suites.rc; each call also appends its arguments to <verb>.args. `gh repo view` (the default branch) replays repo.json with repo.rc. Each call is counted, so a retry is observable.
 cat > "$root/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -37,7 +38,8 @@ case "$1 $2" in
   "pr view") verb=view ;;
   "pr list") verb=list ;;
   "repo view") verb=repo ;;
-  api\ *) verb=suites ;;
+  api\ *check-suites*) verb=suites ;;
+  api\ *) verb=commit ;; # the head commit read, repos/<r>/commits/<sha>
   *) echo "gh stub: unexpected call: $*" >&2; exit 97 ;;
 esac
 n=$(( $(cat "$fx/$verb.calls" 2>/dev/null || echo 0) + 1 ))
@@ -81,6 +83,7 @@ suites() { # created_at... (none: no suite)
 fixture() {
   n=$((n+1)); fx="$root/fx$n"; mkdir -p "$fx"; echo '[]' > "$fx/list.json"
   suites 2026-09-28T10:00:05Z > "$fx/suites.json"
+  printf '{"commit":{"committer":{"date":"%s"}}}\n' "$HEAD_AT" > "$fx/commit.json"
   echo '{"defaultBranchRef":{"name":"main"}}' > "$fx/repo.json"
   : > "$fx/rulings.jsonl" # a present, empty rulings file: no exclusions declared
   mkdir -p "$fx/state"; : > "$fx/state/workstreams.jsonl" # a present, empty ledger: no row waits on a decision
@@ -245,6 +248,20 @@ expect_stop "a check-suite read with no list: STOP" "check_suites"
 fixture; view OPEN false CLEAN > "$fx/view.json"
 echo '{"total_count":101,"check_suites":[{"created_at":"2026-09-28T10:00:05Z"}]}' > "$fx/suites.json"
 expect_stop "a paged check-suite read: STOP" "paged"
+# The view's commit list is capped at 100, so on a longer PR the head is missing
+# from it. The head is dated from its own commit read, never from the view's list.
+fixture; view OPEN false CLEAN | jq -c '.commits = [range(100) | {oid: ("c\(.)"), committedDate: "2026-09-27T09:00:00Z"}]' > "$fx/view.json"
+expect_proceed "a PR with more than 100 commits, head absent from the view's capped list: PROCEED"
+grep -q "repos/org/repo/commits/abc1234def5678$" "$fx/commit.args" 2>/dev/null \
+  && ok "the head is dated by reading the head commit itself" \
+  || bad "the head commit read" "args: $(cat "$fx/commit.args" 2>/dev/null)"
+fixture; view OPEN false CLEAN | jq -c '.commits[-1].committedDate = "2026-09-29T00:00:00Z"' > "$fx/view.json"
+expect_proceed "the head's date comes from the commit read, not the view's list: PROCEED"
+fixture; view OPEN false CLEAN > "$fx/view.json"; echo 1 > "$fx/commit.rc"
+echo "Get https://api.github.com/repos/org/repo/commits/abc1234def5678: i/o timeout" > "$fx/commit.err"
+expect_stop "the head commit read times out: STOP" "i/o timeout"
+fixture; view OPEN false CLEAN > "$fx/view.json"; echo '{"message":"Not Found"}' > "$fx/commit.json"
+expect_stop "a head commit read with no committer date: STOP" "committer date"
 fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[]}' > "$fx/view.json"
 expect_stop "the head commit is not in the view's commit list: STOP" "head commit"
 fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[{"oid":"abc1234def5678","committedDate":"2026-09-28T10:00:00Z"}],"labels":[]}' > "$fx/view.json"
