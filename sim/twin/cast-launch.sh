@@ -335,16 +335,19 @@ else
   GLOBAL_ADDR=""
 fi
 
-# The channel cue (sim/design/channel-cue.md, C-5): DIRECTOR_CUE=1 in the
-# role's environment tells the shim to cue and loads the director server as a
-# development channel. Only the value 1 does, as in the shim.
+# The channel cue (sim/design/channel-cue.md, C-5). The shim turns the cue on
+# when DIRECTOR_CUE is unset, and only the value 1 keeps it on when set. So the
+# launcher always tells it: DIRECTOR_CUE=1 in the shim's env with the director
+# server loaded as a development channel, and DIRECTOR_CUE=0 without the
+# channel, so the shim's answer and the channel flag cannot disagree
+# (director#719).
 # It was opt-in per seat by the operator's ruling of 2026-10-01. The operator's
 # ruling of 2026-11-05 replaces that for supervisor casts: a supervisor
 # (GROLE=supervisor, so research-supervisors too) gets the cue when DIRECTOR_CUE
 # is unset and the launch is not headless. A SET value always wins, so
 # DIRECTOR_CUE=0, or a set-but-empty value, keeps it off for a seat that opts
-# out. Director casts and every other role are unchanged: unset, the launch line
-# is exactly what it was before.
+# out. Director casts and every other role are unchanged in what they bind:
+# unset, they load no channel and carry DIRECTOR_CUE=0.
 # The value can be inherited from the shell that started the tmux server, not
 # only set in the role's manifest, so a cue that is on is named in the spawn
 # line below, and says which way it came on. The flag goes last: a bare -- in a

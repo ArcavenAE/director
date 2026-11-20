@@ -629,11 +629,13 @@ else
   bad "clean-room cast with NATS_* set" "$(cat "$root/out/stderr")"
 fi
 
-# --- C-5: the channel cue is opt-in per seat (sim/design/channel-cue.md) -------
+# --- C-5: the channel cue (sim/design/channel-cue.md) --------------------------
 # Operator rulings 2026-10-01: the development-channels flag is adopted per
-# seat. Only DIRECTOR_CUE=1, the value the shim itself honors, turns it on.
-# Unset, the launch line is today's plus an explicit DIRECTOR_CUE=0 for the
-# shim, which would otherwise turn the cue on for a channel nobody bound.
+# seat. The shim turns the cue on when DIRECTOR_CUE is unset and keeps it on
+# only for the value 1, so the launcher passes DIRECTOR_CUE=1 with the channel
+# flag and DIRECTOR_CUE=0 without it. Unset, the launch line is today's plus an
+# explicit DIRECTOR_CUE=0 for the shim, which would otherwise turn the cue on
+# for a channel nobody bound.
 today_head="$(printf '%s\n' -n verify-builder-0 --strict-mcp-config --mcp-config \
   "{\"mcpServers\":{\"director\":{\"command\":\"$root/bin/director-mcp\",\"env\":{\"DIRECTOR_AGENT_ID\":\"verify-builder-0\",\"DIRECTOR_ROLE\":\"builder\",\"DIRECTOR_TEAM\":\"fleet\",\"DIRECTOR_WORKSPACE\":\"verifyws\",\"NATS_URL\":\"nats://127.0.0.1:4222\",\"DIRECTOR_CUE\":\"0\"}}}}" \
   --append-system-prompt)"
