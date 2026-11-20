@@ -447,6 +447,128 @@ for utrole in usher-track-2-builder usher-track-3-builder; do
   fi
 done
 
+# --- clean-room mode: a per-seat config directory, no shim, a settings dry run ---
+# wardrobe finding-wardrobe-keku items 1, 3 and 4. CAST_CLEAN_ROOM_DIR names a
+# fresh per-seat CLAUDE_CONFIG_DIR outside the operator's; the seat gets no
+# director shim and no bus; CAST_CLEAN_ROOM_DRY_RUN=1 writes and prints the seat's
+# settings file and launches nothing. Sign-in is out of scope: the mode neither
+# reads nor creates a credential. The default mode is covered by every case above.
+crp="$(cd -P "$root" && pwd -P)"
+mkdir -p "$root/cr"
+cr_cast() { # dir name under $root/cr, then extra KEY=VALUE pairs
+  local d="$1"; shift
+  cast builder CAST_SCOPE="CR-SCOPE-MARK only" CAST_CLEAN_ROOM_DIR="$root/cr/$d" "$@"
+}
+if cr_cast seat1; then
+  grep -q "stub slice for builder" "$root/out/claude.args" \
+    && ok "clean-room: the cast still slices the role" \
+    || bad "clean-room: slices the role" "$(cat "$root/out/claude.args")"
+  in_env CLAUDE_CONFIG_DIR "$crp/cr/seat1" claude.env \
+    && ok "clean-room: claude runs with CLAUDE_CONFIG_DIR set to the given path" \
+    || bad "clean-room: CLAUDE_CONFIG_DIR" "$(grep '^CLAUDE_CONFIG_DIR' "$root/out/claude.env" || echo unset)"
+  ! grep -q "director-mcp" "$root/out/claude.args" && grep -q '{"mcpServers":{}}' "$root/out/claude.args" \
+    && ok "clean-room: claude is handed no director shim, only an empty strict MCP config" \
+    || bad "clean-room: no shim" "$(cat "$root/out/claude.args")"
+  [[ ! -e "$root/out/preflight.env" ]] \
+    && ok "clean-room: the bus pre-flight never ran" \
+    || bad "clean-room: the shim pre-flight ran"
+  ! grep -q -e '^DIRECTOR_' -e '^NATS_URL=' -e '^RELAY_LOG=' "$root/out/claude.env" \
+    && ok "clean-room: claude inherits no DIRECTOR_*, NATS_URL or RELAY_LOG" \
+    || bad "clean-room: bus variables leaked" "$(grep -e '^DIRECTOR_' -e '^NATS_URL=' -e '^RELAY_LOG=' "$root/out/claude.env")"
+  ! grep -q -e 'dangerously-load-development-channels' "$root/out/claude.args" \
+    && ok "clean-room: no development-channel cue (it needs the shim)" \
+    || bad "clean-room: the channel cue was passed"
+  [[ -f "$root/cr/seat1/cast-settings.json" && "$(grep -A1 -x -e '--settings' "$root/out/claude.args" | tail -1)" == "$crp/cr/seat1/cast-settings.json" ]] \
+    && ok "clean-room: the seat's settings file is written in its config directory and passed as --settings" \
+    || bad "clean-room: settings file" "$(cat "$root/out/claude.args")"
+else
+  bad "clean-room cast" "$(cat "$root/out/stderr")"
+fi
+printf '%s\n' '{"autoMemoryEnabled":false}' > "$root/policy.json"
+launch_args=(--settings "$root/policy.json")
+[[ -e "$root/out/slice.args" ]] && mv "$root/out/slice.args" "$root/out/slice.args.earlier"
+if cr_cast seat2 CAST_CLEAN_ROOM_DRY_RUN=1; then
+  [[ ! -e "$root/out/claude.args" ]] && ok "clean-room dry run: claude was not launched" \
+    || bad "clean-room dry run: claude was launched"
+  [[ ! -e "$root/out/slice.args" ]] && ok "clean-room dry run: nothing was sliced and no spawn line was written" \
+    || bad "clean-room dry run: the role was sliced"
+  [[ "$(cat "$root/cr/seat2/cast-settings.json")" == '{"autoMemoryEnabled":false}' ]] \
+    && ok "clean-room dry run: the settings file carries marvel's policy" \
+    || bad "clean-room dry run: settings content" "$(cat "$root/cr/seat2/cast-settings.json" 2>&1)"
+  grep -q '"autoMemoryEnabled":false' "$root/out/stdout" && grep -q "$crp/cr/seat2/cast-settings.json" "$root/out/stdout" \
+    && ok "clean-room dry run: the path and the settings are printed" \
+    || bad "clean-room dry run: output" "$(cat "$root/out/stdout")"
+else
+  bad "clean-room dry run" "$(cat "$root/out/stderr")"
+fi
+launch_args=()
+if cr_cast seat3 CAST_CLEAN_ROOM_DRY_RUN=1; then
+  [[ "$(cat "$root/cr/seat3/cast-settings.json")" == '{}' ]] \
+    && ok "clean-room dry run: with no policy the settings file is an empty object" \
+    || bad "clean-room dry run: empty settings" "$(cat "$root/cr/seat3/cast-settings.json" 2>&1)"
+else
+  bad "clean-room dry run without a policy" "$(cat "$root/out/stderr")"
+fi
+if cast builder CAST_SCOPE="CR-SCOPE-MARK only" CAST_CLEAN_ROOM_DRY_RUN=1; then
+  bad "clean-room: a dry run without a config directory was allowed"
+else
+  grep -q "CAST_CLEAN_ROOM_DIR" "$root/out/stderr" \
+    && ok "clean-room: a dry run needs CAST_CLEAN_ROOM_DIR" \
+    || bad "clean-room: dry-run refusal text" "$(cat "$root/out/stderr")"
+fi
+mkdir -p "$root/cr/used" && : > "$root/cr/used/other"
+for refuse in "used:not empty" "../cr/x:absolute" ".claude:the operator's" ".claude/sub:the operator's"; do
+  d="${refuse%%:*}"; why="${refuse#*:}"
+  case "$d" in used|../cr/x) dir="$root/cr/$d";; *) dir="$root/$d";; esac
+  [[ "$d" == "../cr/x" ]] && dir="cr/x"
+  if cast builder CAST_SCOPE="CR-SCOPE-MARK only" CAST_CLEAN_ROOM_DIR="$dir"; then
+    bad "clean-room: a config directory that is $why was allowed"
+  else
+    grep -q "CAST_CLEAN_ROOM_DIR" "$root/out/stderr" && [[ ! -e "$root/out/claude.args" ]] \
+      && ok "clean-room: a config directory that is $why is refused and nothing launches" \
+      || bad "clean-room: refusal for $why" "$(cat "$root/out/stderr")"
+  fi
+done
+
+# The settings file is never written through a symlink, and a settings file left by
+# an earlier dry run is reused.
+mkdir -p "$root/cr/sym1"; printf 'VICTIM\n' > "$root/cr/victim"
+ln -s "$root/cr/victim" "$root/cr/sym1/cast-settings.json"
+if cr_cast sym1; then
+  bad "clean-room: a cast-settings.json that is a symlink was allowed" "victim: $(cat "$root/cr/victim")"
+else
+  grep -q "CAST_CLEAN_ROOM_DIR" "$root/out/stderr" && [[ ! -e "$root/out/claude.args" ]] \
+    && ok "clean-room: a cast-settings.json that is a symlink is refused and nothing launches" \
+    || bad "clean-room: symlink refusal" "$(cat "$root/out/stderr")"
+  [[ "$(cat "$root/cr/victim")" == VICTIM ]] \
+    && ok "clean-room: the file the symlink points at was not written" \
+    || bad "clean-room: the symlink target was written" "$(cat "$root/cr/victim")"
+fi
+if cr_cast seat2; then
+  ok "clean-room: a directory holding only the earlier dry run's settings file is reused"
+else
+  bad "clean-room: reuse after a dry run" "$(cat "$root/out/stderr")"
+fi
+# marvel's control variables stay out of the seat: the socket, the heartbeat token
+# file and any other MARVEL_* the daemon passes down.
+if cr_cast seat5 MARVEL_SOCKET="$root/marvel.sock" MARVEL_HEARTBEAT_TOKEN_FILE="$root/hb.token" MARVEL_SEAT_URI=marvel://x/y MARVEL_WORKDIR="$root"; then
+  ! grep -q '^MARVEL_' "$root/out/claude.env" \
+    && ok "clean-room: claude inherits no MARVEL_* variable (socket, heartbeat token file, seat uri, workdir)" \
+    || bad "clean-room: MARVEL_* leaked" "$(grep '^MARVEL_' "$root/out/claude.env")"
+else
+  bad "clean-room cast with MARVEL_* set" "$(cat "$root/out/stderr")"
+fi
+
+# No NATS_* variable reaches the seat: a credentials file path or a password file
+# path is a way to the bus, not only the url.
+if cr_cast seat6 NATS_URL=nats://127.0.0.1:1 NATS_CREDS="$root/nats.creds" NATS_PASS_FILE="$root/nats.pass"; then
+  ! grep -q '^NATS_' "$root/out/claude.env" \
+    && ok "clean-room: claude inherits no NATS_* variable (url, creds file, password file)" \
+    || bad "clean-room: NATS_* leaked" "$(grep -o '^NATS_[A-Z_]*' "$root/out/claude.env" | tr '\n' ' ')"
+else
+  bad "clean-room cast with NATS_* set" "$(cat "$root/out/stderr")"
+fi
+
 # --- C-5: the channel cue is opt-in per seat (sim/design/channel-cue.md) -------
 # Operator rulings 2026-10-01: the development-channels flag is adopted per
 # seat. Only DIRECTOR_CUE=1, the value the shim itself honors, turns it on.
@@ -1203,6 +1325,31 @@ for mode in "bash -x" "SHELLOPTS=xtrace"; do
     fi
   done
 done
+
+# The clean-room mode keeps this key block (the operator's ruling for clean-room
+# sign-in: a fresh config directory signs in through the host's own Bedrock key,
+# with no login and no copied credential). With Bedrock on the lookup runs and the
+# key reaches claude; with it off, no lookup runs and no key is set.
+if cr_cast bd1 "${BEDROCK_ON[@]}"; then
+  in_env AWS_BEARER_TOKEN_BEDROCK "$CANARY" claude.env \
+    && ok "clean-room bedrock: the keychain value reaches claude's environment" \
+    || bad "clean-room bedrock: key not exported to claude" "$(grep -c '^AWS_BEARER' "$root/out/claude.env")"
+  [[ -z "$(leaks)" ]] \
+    && ok "clean-room bedrock: no key value in argv, stdout or stderr" \
+    || bad "clean-room bedrock: key value leaked" "$(leaks)"
+  in_env CLAUDE_CONFIG_DIR "$crp/cr/bd1" claude.env \
+    && ok "clean-room bedrock: the seat still runs in its own config directory" \
+    || bad "clean-room bedrock: config directory"
+else
+  bad "clean-room bedrock cast" "$(cat "$root/out/stderr")"
+fi
+if cr_cast bd2; then
+  has_env AWS_BEARER_TOKEN_BEDROCK claude.env \
+    && bad "clean-room bedrock off: a key reached the session" \
+    || ok "clean-room bedrock off: no key is read or exported"
+else
+  bad "clean-room cast with Bedrock off" "$(cat "$root/out/stderr")"
+fi
 
 # Off unless CLAUDE_CODE_USE_BEDROCK is exactly 1: no lookup, no variable.
 if cast builder CLAUDE_BEDROCK_KEY_ITEM=bedrock-key; then
