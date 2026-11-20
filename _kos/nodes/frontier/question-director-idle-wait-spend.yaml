@@ -21,7 +21,9 @@ content: |
     brought mail and non-wait tool calls per hour. It would run in a
     script that already reads transcripts and spend no model tokens.
     Weigh it against doing nothing: about $15 a day now, against about
-    $84 to $94 a day for one idle seat nobody notices.
+    $84 to $94 for a fully idle seat-day nobody notices (measured: about
+    $36 to $40 a seat-day, from 10.1 idle hours a seat-day on average
+    over an 11-day span).
   - The supervisor rule calls the wait again on an empty return, with no
     cap. Does it need one, as other roles end idle after five empty waits?
 
@@ -32,3 +34,17 @@ content: |
   For each option, state its standing token cost per day, its expected
   saving (base rate times the cost of one idle run before it is named)
   and its break-even against doing nothing.
+edges:
+  - target: finding-director-3vlc-idle-seats-pay-for-empty-bus-waits
+    type: derives
+  - target: question-idle-seat-receive-latency
+    type: supports
+    note: "the finding's contrast case, seats that do not wake, is the opposite failure to the one this question asks about"
+provenance:
+  created_by: agent
+  session: 2026-11-20 idle-wait spend probe
+  created_at: "2026-11-20"
+  notes: >
+    Placed from finding-director-3vlc. Every figure is drawn from that
+    finding, which read session transcript structure and one other
+    host's relayed counts.
