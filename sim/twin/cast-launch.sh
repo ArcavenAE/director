@@ -63,6 +63,7 @@ case "$MARVEL_ROLE" in
   infra-builder)     WROLE=builder; SCOPE="the infra checkout and its MCP, as named in the private seat file; production is read-only";;
   scoped-builder)    WROLE=builder; SCOPE="";;
   usher-track-2-builder|usher-track-3-builder) WROLE=builder; SCOPE="";;
+  test-architect-b)  WROLE=test-architect; SCOPE="";;
   claude-reviewer)   WROLE=reviewer; SCOPE="";;
   daily-sweep)       WROLE=worker; SCOPE="";;
   musthaq-pr-watch)  WROLE=worker; SCOPE="";;
