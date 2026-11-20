@@ -17,8 +17,8 @@ content: |
     (residual parts, replies with no forward edge, refusals with no owner),
     or somewhere new?
   - When the operator answers an earlier question, should that reply open
-    a new ask, or attach to the one it answers? Half of the oldest open
-    asks are reply-shaped.
+    a new ask, or attach to the one it answers? Nearly half of the oldest
+    open asks (70 of 150) are reply-shaped.
   - When most of an ask is done and one part is open, what is the ask's
     state, and who owns the open part?
   - How long do accepted asks wait unread on idle seats, and how many move

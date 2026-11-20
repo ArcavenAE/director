@@ -70,7 +70,7 @@ predate the record the candidate needs.
 | Director got the answer but never closed it | 13 done asks open until the triage | The close event did not exist until 2026-11-10 and was not backfilled. |
 | The answer reached the operator only in scrollback | not testable for the sample; see section 4 | The answer kind starts 2026-11-10. The Reply Shelf held 8 rows before the triage, all read by the operator within 2 to 89 minutes, then got no new row for four days. |
 | The ask id did not travel with the work | 6 of 41 | No relay tagged with the id; the structured intake field starts 2026-10-28 19:23Z. The cross-host case (the register lives on one host) is not seen in this sample. |
-| The ask was a reply with no forward edge | 76 of 150 | Reply-shaped by a text heuristic: the text opens with a numbered item, yes, no, a quote, or "Operator". Covers all 5 dropped, 22 of 36 in flight, 12 of 20 superseded. |
+| The ask was a reply with no forward edge | 70 of 150 | Reply-shaped by a text heuristic: after leading space, the text opens with a number followed by a space, period, colon or parenthesis, the word yes, no or Operator, or a straight or curly quote, case-insensitive (Python `re.match(r"""^\s*(\d+[ .:)]\|yes\b\|no\b\|operator\b\|["'\u201c\u2018])""", text, re.I)`). Covers 4 of 5 dropped, 19 of 36 in flight, 10 of 20 superseded. |
 | Director's compaction dropped a pending item | not testable | No register records it. 1 drop (director owed an answer) is consistent with it. |
 | A bd task closed without the ask | 0 | Only 4 of 41 asks appear in bd at all. |
 | A seat restarted and lost the thread | 1 consistent | The routed-but-never-received case. |
