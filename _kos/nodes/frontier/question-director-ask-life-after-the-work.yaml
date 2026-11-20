@@ -1,0 +1,33 @@
+id: question-director-ask-life-after-the-work
+type: question
+confidence: frontier
+title: "Where do operator asks stop now that the answer and close records exist, and is a multi-part ask one item or several?"
+tags: [director, asks, lifecycle, registers]
+content: |
+  Placed 2026-11-20 from finding-director-s540. Filed in frontier; no
+  design is proposed, and the operator rules on what comes next.
+
+  ## The question
+
+  The oldest open asks stopped after the work. Before 2026-11-10 the ask
+  register recorded no close event and the relay log no answer kind, so
+  done work could not be recorded as done. Four things remain open:
+
+  - Since 2026-11-10, where do asks stop? Is it the same place as before
+    (residual parts, replies with no forward edge, refusals with no owner),
+    or somewhere new?
+  - When the operator answers an earlier question, should that reply open
+    a new ask, or attach to the one it answers? Half of the oldest open
+    asks are reply-shaped.
+  - When most of an ask is done and one part is open, what is the ask's
+    state, and who owns the open part?
+  - How long do accepted asks wait unread on idle seats, and how many move
+    only when a supervisor rings? One supervisor's log for 2026-11-19
+    shows about 15 such rings in four hours, with waits of 15 to 50 minutes.
+
+  ## How it would be answered
+
+  Re-run the trace in finding-director-s540 over asks received after
+  2026-11-10, once the open-ask triage reaches them. Read the Reply Shelf
+  and the bus answers as well as the files, and compare the stop points
+  with the pre-2026-11-10 sample.
