@@ -18,6 +18,7 @@ type Sender struct {
 	Instance  string `json:"instance,omitempty"` // the shim process's ULID, the suffix of its durable; informational, self-asserted
 	Principal any    `json:"principal"`          // RESERVED, null in Phase 0
 	Team      string `json:"-"`                  // in-process routing only; not an envelope field (team lives on recipient)
+	StandsIn  string `json:"-"`                  // DIRECTOR_STANDS_IN_FOR after validation; in-process only (standsin.go)
 }
 
 type Recipient struct {

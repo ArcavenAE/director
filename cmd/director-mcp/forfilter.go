@@ -73,10 +73,12 @@ type forFilter struct {
 	team    string
 	role    string
 	cluster string
-	roster  func(ctx context.Context) ([]map[string]any, error)
-	now     func() time.Time
-	logf    func(format string, args ...any)
-	first   sync.Once
+	// standsIn is the team this seat stands in for (standsin.go); empty when unset.
+	standsIn string
+	roster   func(ctx context.Context) ([]map[string]any, error)
+	now      func() time.Time
+	logf     func(format string, args ...any)
+	first    sync.Once
 	// note receives the one first-decision line; nil means the standard log.
 	// It is separate from logf so a test that counts drop lines still sees one.
 	note func(format string, args ...any)
