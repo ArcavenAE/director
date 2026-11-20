@@ -62,6 +62,7 @@ case "$MARVEL_ROLE" in
   sideshow-builder)  WROLE=builder; SCOPE="sideshow and sideshow-packs";;
   infra-builder)     WROLE=builder; SCOPE="the infra checkout and its MCP, as named in the private seat file; production is read-only";;
   scoped-builder)    WROLE=builder; SCOPE="";;
+  usher-track-2-builder|usher-track-3-builder) WROLE=builder; SCOPE="";;
   claude-reviewer)   WROLE=reviewer; SCOPE="";;
   daily-sweep)       WROLE=worker; SCOPE="";;
   musthaq-pr-watch)  WROLE=worker; SCOPE="";;
@@ -69,10 +70,11 @@ case "$MARVEL_ROLE" in
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
 esac
 [[ -n "${CAST_SCOPE:-}" ]] && SCOPE="$CAST_SCOPE"
-# scoped-builder carries no scope text of its own, so it needs CAST_SCOPE; a
-# cast without one would be an unscoped builder, which is refused.
-if [[ "$MARVEL_ROLE" == scoped-builder && -z "$SCOPE" ]]; then
-  echo "cast-launch: role scoped-builder needs CAST_SCOPE (its scope comes only from the private seat file); set CAST_SCOPE and cast again" >&2
+# scoped-builder and the usher track builders carry no scope text of their own,
+# so they need CAST_SCOPE; a cast without one would be an unscoped builder,
+# which is refused.
+if [[ ( "$MARVEL_ROLE" == scoped-builder || "$MARVEL_ROLE" == usher-track-2-builder || "$MARVEL_ROLE" == usher-track-3-builder ) && -z "$SCOPE" ]]; then
+  echo "cast-launch: role $MARVEL_ROLE needs CAST_SCOPE (its scope comes only from the private seat file); set CAST_SCOPE and cast again" >&2
   exit 1
 fi
 # Identities that compose with a role (sole_fit at proposal): director and envoy.
