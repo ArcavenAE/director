@@ -447,6 +447,18 @@ for utrole in usher-track-2-builder usher-track-3-builder; do
   fi
 done
 
+# --- test-architect-b: the usher manifest's second test-architect seat -----------
+# marvel refuses replicas 2 on a role with a max-age arm, so usher gets a second
+# test-architect seat as its own manifest role. It has no wardrobe role of its own,
+# so without a row it would slice a role named test-architect-b, which does not exist.
+if cast test-architect-b; then
+  grep -q "stub slice for test-architect$" "$root/out/claude.args" \
+    && ok "test-architect-b: slices the test-architect role" \
+    || bad "test-architect-b: slices the test-architect role" "$(cat "$root/out/claude.args")"
+else
+  bad "test-architect-b cast" "$(cat "$root/out/stderr")"
+fi
+
 # --- C-5: the channel cue is opt-in per seat (sim/design/channel-cue.md) -------
 # Operator rulings 2026-10-01: the development-channels flag is adopted per
 # seat. Only DIRECTOR_CUE=1, the value the shim itself honors, turns it on.
