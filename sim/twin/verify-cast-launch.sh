@@ -529,15 +529,6 @@ for refuse in "used:not empty" "../cr/x:absolute" ".claude:the operator's" ".cla
       || bad "clean-room: refusal for $why" "$(cat "$root/out/stderr")"
   fi
 done
-# The mode reads no credential: a Bedrock cast whose keychain item cannot exist
-# would stop the default launcher at the lookup, and must not here.
-if cr_cast seat4 CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_BEDROCK_KEY_ITEM=cr-no-such-item; then
-  ! grep -q "Bedrock key" "$root/out/stderr" \
-    && ok "clean-room: no keychain lookup, so no credential is read" \
-    || bad "clean-room: a Bedrock key was read" "$(cat "$root/out/stderr")"
-else
-  bad "clean-room: a Bedrock environment stopped the mode at a lookup" "$(cat "$root/out/stderr")"
-fi
 
 # --- C-5: the channel cue is opt-in per seat (sim/design/channel-cue.md) -------
 # Operator rulings 2026-10-01: the development-channels flag is adopted per
@@ -1295,6 +1286,31 @@ for mode in "bash -x" "SHELLOPTS=xtrace"; do
     fi
   done
 done
+
+# The clean-room mode keeps this key block (the operator's ruling for clean-room
+# sign-in: a fresh config directory signs in through the host's own Bedrock key,
+# with no login and no copied credential). With Bedrock on the lookup runs and the
+# key reaches claude; with it off, no lookup runs and no key is set.
+if cr_cast bd1 "${BEDROCK_ON[@]}"; then
+  in_env AWS_BEARER_TOKEN_BEDROCK "$CANARY" claude.env \
+    && ok "clean-room bedrock: the keychain value reaches claude's environment" \
+    || bad "clean-room bedrock: key not exported to claude" "$(grep -c '^AWS_BEARER' "$root/out/claude.env")"
+  [[ -z "$(leaks)" ]] \
+    && ok "clean-room bedrock: no key value in argv, stdout or stderr" \
+    || bad "clean-room bedrock: key value leaked" "$(leaks)"
+  in_env CLAUDE_CONFIG_DIR "$crp/cr/bd1" claude.env \
+    && ok "clean-room bedrock: the seat still runs in its own config directory" \
+    || bad "clean-room bedrock: config directory"
+else
+  bad "clean-room bedrock cast" "$(cat "$root/out/stderr")"
+fi
+if cr_cast bd2; then
+  has_env AWS_BEARER_TOKEN_BEDROCK claude.env \
+    && bad "clean-room bedrock off: a key reached the session" \
+    || ok "clean-room bedrock off: no key is read or exported"
+else
+  bad "clean-room cast with Bedrock off" "$(cat "$root/out/stderr")"
+fi
 
 # Off unless CLAUDE_CODE_USE_BEDROCK is exactly 1: no lookup, no variable.
 if cast builder CLAUDE_BEDROCK_KEY_ITEM=bedrock-key; then
