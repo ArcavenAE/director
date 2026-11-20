@@ -559,6 +559,16 @@ else
   bad "clean-room cast with MARVEL_* set" "$(cat "$root/out/stderr")"
 fi
 
+# No NATS_* variable reaches the seat: a credentials file path or a password file
+# path is a way to the bus, not only the url.
+if cr_cast seat6 NATS_URL=nats://127.0.0.1:1 NATS_CREDS="$root/nats.creds" NATS_PASS_FILE="$root/nats.pass"; then
+  ! grep -q '^NATS_' "$root/out/claude.env" \
+    && ok "clean-room: claude inherits no NATS_* variable (url, creds file, password file)" \
+    || bad "clean-room: NATS_* leaked" "$(grep -o '^NATS_[A-Z_]*' "$root/out/claude.env" | tr '\n' ' ')"
+else
+  bad "clean-room cast with NATS_* set" "$(cat "$root/out/stderr")"
+fi
+
 # --- C-5: the channel cue is opt-in per seat (sim/design/channel-cue.md) -------
 # Operator rulings 2026-10-01: the development-channels flag is adopted per
 # seat. Only DIRECTOR_CUE=1, the value the shim itself honors, turns it on.
