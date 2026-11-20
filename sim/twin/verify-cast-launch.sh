@@ -486,6 +486,7 @@ else
 fi
 printf '%s\n' '{"autoMemoryEnabled":false}' > "$root/policy.json"
 launch_args=(--settings "$root/policy.json")
+[[ -e "$root/out/slice.args" ]] && mv "$root/out/slice.args" "$root/out/slice.args.earlier"
 if cr_cast seat2 CAST_CLEAN_ROOM_DRY_RUN=1; then
   [[ ! -e "$root/out/claude.args" ]] && ok "clean-room dry run: claude was not launched" \
     || bad "clean-room dry run: claude was launched"
