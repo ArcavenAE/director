@@ -31,7 +31,7 @@ Each session-hour was put in one of four classes. All hours with at least 10 req
 
 | class | session-hours | requests/hour | waits that brought mail/hour | other tools/hour | requests per waits that brought mail | share of cache-read |
 |---|---|---|---|---|---|---|
-| coordinating | 2,529 | 86.0 | 24.37 | 52.8 | 3.5 | 70.3% |
+| coordinating | 2,432 | 86.9 | 25.29 | 54.0 | 3.4 | 70.3% |
 | working | 1,996 | 30.7 | 2.40 | 28.4 | 12.8 | 15.2% |
 | idle-wait | 658 | 55.7 | 0.23 | 1.6 | 244 | 11.9% |
 
@@ -39,10 +39,10 @@ Each session-hour was put in one of four classes. All hours with at least 10 req
 
 Requests per hour alone does not separate the classes: a coordinating seat runs faster than an idle one. Two measures do, by about two orders of magnitude:
 
-- **requests per waits that brought mail:** 244 for idle against 3.5 for coordinating;
-- **non-wait tool calls per hour:** 1.6 for idle against 52.8 for coordinating.
+- **requests per waits that brought mail:** 244 for idle against 3.4 for coordinating;
+- **non-wait tool calls per hour:** 1.6 for idle against 54.0 for coordinating.
 
-Of the idle hours' 19,317 waits, 19,058 returned empty. A third useful signal is the run length: the number of consecutive idle-wait hours in a session.
+Of the idle hours' 20,398 waits, 20,129 returned empty. A third useful signal is the run length: the number of consecutive idle-wait hours in a session.
 
 ## 3. Base rate and cost
 
@@ -66,7 +66,7 @@ Kinu, from transcript structure:
 | candidate | evidence for | evidence against or open |
 |---|---|---|
 | A role rule that ends every turn on a wait, with no cap on empty returns (the supervisor rule's "call it again and keep a count") | The relayed seat names that rule as its reason for waiting again. The idle hours are supervisor and architect seats. | The count feeds an idle-planner query, not a stop. Roles that end idle after a capped number of empty waits (this probe's own seat: five, about 10 minutes) show 1 to 2 idle hours in the window. |
-| A 120 s wait moved to the background, costing two requests per cycle | 14,492 of the 19,058 empty waits in the idle hours were backgrounded. 55.7 requests an hour is about two requests per 2-minute cycle. | The 110 s ruling removed the background step. After it, the idle requests per day fell 88%. |
+| A 120 s wait moved to the background, costing two requests per cycle | 14,502 of the 20,129 empty waits in the idle hours were backgrounded. 55.7 requests an hour is about two requests per 2-minute cycle. | The 110 s ruling removed the background step. After it, the idle requests per day fell 88%. |
 | A seat left running with no work and no owner | The matched seat idled for 11 days or more until it was deleted. | This is about seat lifecycle, not the bus. marvel saw the seat as running and healthy throughout. |
 | A cue that does not wake, so the seat falls back to blocking waits | Today this seat's `inbox_summary` reports the cue as unverified ("no nonce echo after self-test"). | Not measured per seat. The contrast case (below) is the opposite failure. |
 | A cue storm, or mail that never comes | Not seen: the idle hours show 0.23 waits with mail per hour. | |
