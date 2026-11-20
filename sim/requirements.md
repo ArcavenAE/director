@@ -2823,6 +2823,23 @@ reading.
 never kept).*
 *Source: OBSERVED, with the operator's correction quoted. Sharpens R-127.*
 
+**R-231 (JUDGMENT) · every decision a supervisor delegates names how it is
+enacted: the seat or capability that acts, and how that seat is woken if idle.**
+A delegation with no enactment path is returned to the delegator, not held.
+*Earned by: the supervisor-development review of 2026-11-19, which found no
+register or role text for it beyond the composer-safety part (R-112).*
+*Source: RULED 2026-11-20, accepted by the operator as written in the
+supervisor-development design.*
+
+**R-232 (JUDGMENT, HELD) · status carries a monotone work counter produced by
+the work itself, and any standing board names the instrument that re-verifies it
+and when it last ran. Until an emitter exists, the absence is reported, not
+estimated.** Recorded here as held, not in force: the operator ruled to hold it
+until an event source exists. The design records that nothing yet emits a work
+counter.
+*Earned by: the same review.*
+*Source: HELD 2026-11-20 by the operator; reopens when an event source exists.*
+
 ### Harvest diff (2026-10-24)
 
 Covers `observations.md` O-2094 to O-2112 and the unnumbered entries dated
