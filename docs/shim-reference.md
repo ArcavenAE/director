@@ -78,7 +78,7 @@ changes.
 | `DIRECTOR_HANDLED` | `1` turns the handled mode on; anything else leaves ack-on-read as it is |
 | `DIRECTOR_STATE` | the seat's state directory, default `~/.director/state`; holds `handled.jsonl`, its lock, and `thresholds.json` |
 
-The channel cue (#166). Off unless `DIRECTOR_CUE=1`, and per process.
+The channel cue (#166). On when `DIRECTOR_CUE` is unset and off for any value other than `1`, per process. The launcher sets it to `1` when it binds the channel and `0` when it does not, so the two agree.
 
 | Variable | Meaning |
 |---|---|
