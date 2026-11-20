@@ -420,6 +420,33 @@ else
     || bad "scoped-builder: the empty-scope refusal does not name CAST_SCOPE" "$(cat "$root/out/stderr")"
 fi
 
+# --- usher track builders: the builder role, scope only from CAST_SCOPE ---------
+# usher-track-2-builder and usher-track-3-builder have no wardrobe role of their
+# own, so without a row they would slice a role named after themselves. Each maps
+# to builder with an empty default scope and needs CAST_SCOPE, like scoped-builder.
+for utrole in usher-track-2-builder usher-track-3-builder; do
+  if cast "$utrole" CAST_SCOPE="UT-SCOPE-MARK only"; then
+    grep -q "stub slice for builder" "$root/out/claude.args" \
+      && ok "$utrole: slices the builder role" \
+      || bad "$utrole: slices the builder role" "$(cat "$root/out/claude.args")"
+    grep -q "recorded by the supervisor: UT-SCOPE-MARK only." "$root/out/claude.args" \
+      && ok "$utrole: the scope comes from CAST_SCOPE" \
+      || bad "$utrole: the scope comes from CAST_SCOPE" "$(cat "$root/out/claude.args")"
+  else
+    bad "$utrole cast with CAST_SCOPE" "$(cat "$root/out/stderr")"
+  fi
+  if cast "$utrole"; then
+    bad "$utrole: a cast with CAST_SCOPE unset was allowed" "$(cat "$root/out/claude.args")"
+  else
+    grep -q "CAST_SCOPE" "$root/out/stderr" \
+      && ok "$utrole: with CAST_SCOPE unset the cast is refused, naming CAST_SCOPE" \
+      || bad "$utrole: the refusal does not name CAST_SCOPE" "$(cat "$root/out/stderr")"
+    [[ ! -e "$root/out/claude.args" ]] \
+      && ok "$utrole: the refused cast never launched claude" \
+      || bad "$utrole: the refused cast launched claude"
+  fi
+done
+
 # --- C-5: the channel cue is opt-in per seat (sim/design/channel-cue.md) -------
 # Operator rulings 2026-10-01: the development-channels flag is adopted per
 # seat. Only DIRECTOR_CUE=1, the value the shim itself honors, turns it on.
