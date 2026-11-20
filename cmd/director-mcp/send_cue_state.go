@@ -29,10 +29,11 @@ var cueStatesThatDoNotWake = map[string]bool{"off": true, "unverified": true, "s
 // row, and for a row that carries no cue field (the cue is off in its own
 // config, or its shim predates the field): the result then says nothing about
 // the cue rather than guessing. When a recipient has several live rows, the
-// newest by ts speaks.
-func (b *Bus) recipientCueFields(ctx context.Context, addr string) map[string]any {
+// newest by ts speaks, among the rows whose workspace is the one the send was
+// built for (workspace, as the send resolved it; empty reads nothing).
+func (b *Bus) recipientCueFields(ctx context.Context, addr, workspace string) map[string]any {
 	rest, ok := strings.CutPrefix(addr, "agent://")
-	if !ok || b.kv == nil {
+	if !ok || b.kv == nil || workspace == "" {
 		return nil
 	}
 	team, id, ok := strings.Cut(rest, "/")
@@ -56,6 +57,11 @@ func (b *Bus) recipientCueFields(ctx context.Context, addr string) map[string]an
 		}
 		var rec map[string]any
 		if json.Unmarshal(entry.Value(), &rec) != nil {
+			continue
+		}
+		// Only the workspace the send went to speaks: the same team/id can be
+		// live in another workspace with another cue.
+		if ws, _ := rec["workspace"].(string); ws != workspace {
 			continue
 		}
 		ts, _ := rec["ts"].(string)

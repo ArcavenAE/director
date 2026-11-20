@@ -357,7 +357,7 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	}
 	// What the recipient's presence row says about its cue, so a send to a seat
 	// the cue will not wake is not silent (director#719).
-	for k, v := range bus.recipientCueFields(ctx, e.Recipient.Address) {
+	for k, v := range bus.recipientCueFields(ctx, e.Recipient.Address, res.Workspace) {
 		out[k] = v
 	}
 	// The stream and sequence are the hub's (or the local broker's) own word
