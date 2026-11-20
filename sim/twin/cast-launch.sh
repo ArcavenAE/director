@@ -131,17 +131,27 @@ if [[ -n "$CR_DIR" ]]; then
     [[ -d "$CR_DIR" ]] || cr_fail "'$CR_DIR' exists and is not a directory"
     cr_extra="$(find "$CR_DIR" -mindepth 1 -maxdepth 1 ! -name cast-settings.json -print -quit)"
     [[ -z "$cr_extra" ]] || cr_fail "'$CR_DIR' is not fresh: it is not empty"
+    # The one entry allowed is this mode's own settings file from an earlier dry run, and
+    # only as a regular file: a symlink there would send the write below out of the directory.
+    if [[ -e "$CR_DIR/cast-settings.json" || -L "$CR_DIR/cast-settings.json" ]]; then
+      [[ -f "$CR_DIR/cast-settings.json" && ! -L "$CR_DIR/cast-settings.json" ]] \
+        || cr_fail "'$CR_DIR/cast-settings.json' is not a regular file"
+    fi
   fi
   CR_DIR="$cr_real"
   (umask 077; mkdir -p "$CR_DIR") || cr_fail "cannot create '$CR_DIR'"
   CR_SETTINGS="$CR_DIR/cast-settings.json"
   cr_policy=""; cr_prev=""
   for a in "$@"; do [[ "$cr_prev" == "--settings" ]] && cr_policy="$a"; cr_prev="$a"; done
+  # Written to a new file in the directory and renamed over the settings file, so the
+  # write never follows a link that appeared at the final name.
+  cr_tmp="$(umask 077; mktemp "$CR_DIR/.cast-settings.XXXXXX")" || cr_fail "cannot create a file in '$CR_DIR'"
   if [[ -n "$cr_policy" && -f "$cr_policy" ]]; then
-    (umask 077; cat "$cr_policy" > "$CR_SETTINGS") || cr_fail "cannot write $CR_SETTINGS"
+    cat "$cr_policy" > "$cr_tmp" || cr_fail "cannot write $CR_SETTINGS"
   else
-    (umask 077; printf '{}\n' > "$CR_SETTINGS") || cr_fail "cannot write $CR_SETTINGS"
+    printf '{}\n' > "$cr_tmp" || cr_fail "cannot write $CR_SETTINGS"
   fi
+  mv -f "$cr_tmp" "$CR_SETTINGS" || cr_fail "cannot write $CR_SETTINGS"
   if [[ "${CAST_CLEAN_ROOM_DRY_RUN:-0}" == 1 ]]; then
     echo "cast-launch: clean-room dry run for $MARVEL_SESSION: CLAUDE_CONFIG_DIR=$CR_DIR; settings file $CR_SETTINGS follows; nothing was launched"
     cat "$CR_SETTINGS"
@@ -583,13 +593,14 @@ fi
 # The role mark (aae-orc-20062): this pid survives the exec, so it is the
 # shim's parent pid; the shim holds a director identity only with it.
 export DIRECTOR_ROLE_MARK=$$
-# In the clean-room mode claude starts without any DIRECTOR_*, NATS_URL or RELAY_LOG
-# variable, whether this script exported it or marvel and the shell passed it down.
+# In the clean-room mode claude starts without any DIRECTOR_*, NATS_URL, RELAY_LOG
+# or MARVEL_* variable (the daemon socket, the heartbeat token file and the rest), whether
+# this script exported it or marvel and the shell passed it down.
 cr_env=()
 if [[ -n "$CR_DIR" ]]; then
   export CLAUDE_CONFIG_DIR="$CR_DIR"
   cr_env=(env -u NATS_URL -u RELAY_LOG)
-  while IFS= read -r cr_v; do cr_env+=(-u "$cr_v"); done < <(compgen -v DIRECTOR_)
+  while IFS= read -r cr_v; do cr_env+=(-u "$cr_v"); done < <(compgen -v DIRECTOR_; compgen -v MARVEL_)
 fi
 exec ${cr_env[@]+"${cr_env[@]}"} claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
