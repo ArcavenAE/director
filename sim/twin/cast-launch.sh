@@ -78,6 +78,88 @@ if [[ ( "$MARVEL_ROLE" == scoped-builder || "$MARVEL_ROLE" == usher-track-2-buil
   echo "cast-launch: role $MARVEL_ROLE needs CAST_SCOPE (its scope comes only from the private seat file); set CAST_SCOPE and cast again" >&2
   exit 1
 fi
+# The clean-room mode (wardrobe finding-wardrobe-keku items 1, 3 and 4). Chosen by
+# CAST_CLEAN_ROOM_DIR, an environment variable and not a flag, because every flag
+# in "$@" goes on to claude. It does three things and nothing else:
+#   1. a per-seat CLAUDE_CONFIG_DIR at the path the caller gives, which must be
+#      absolute, fresh (absent or empty, or holding only the settings file this
+#      mode wrote before) and outside the operator's config directory, so the seat
+#      shares none of the operator's CLAUDE.md, imports, memory or projects;
+#   2. no director shim: claude is handed an empty strict MCP config, the bus
+#      pre-flight, the relay log and the global tier are skipped, no DIRECTOR_*,
+#      NATS_URL or RELAY_LOG variable reaches claude, and no channel cue is set
+#      (the cue loads the shim);
+#   3. CAST_CLEAN_ROOM_DRY_RUN=1 writes the seat's settings file, prints its path
+#      and content, and ends before the role is sliced or claude is started, so
+#      a memory check can read the file before any cast.
+# The seat's settings file is marvel's projected policy (the last --settings in
+# "$@"), or an empty object when there is none, written to
+# $CAST_CLEAN_ROOM_DIR/cast-settings.json and passed as the last --settings. No
+# backend overlay is applied: an overlay is a settings file, so it can carry more
+# than backend env, and it is operator state. Sign-in is the Bedrock key block
+# below, unchanged (the operator's ruling for clean-room sign-in: "use bedrock"):
+# with CLAUDE_CODE_USE_BEDROCK=1 the seat signs in through the host's own key,
+# brokered by item name, with no login and no copied credential, and nothing is
+# read from the operator's config directory. This mode reads or creates no other
+# credential.
+CR_DIR="${CAST_CLEAN_ROOM_DIR:-}"
+CR_SETTINGS=""
+cr_fail() { echo "cast-launch: CAST_CLEAN_ROOM_DIR: $1; not starting the harness" >&2; exit 1; }
+if [[ -z "$CR_DIR" && "${CAST_CLEAN_ROOM_DRY_RUN:-0}" == 1 ]]; then
+  echo "cast-launch: CAST_CLEAN_ROOM_DRY_RUN=1 needs CAST_CLEAN_ROOM_DIR, the per-seat config directory the settings file is written in" >&2; exit 1
+fi
+if [[ -n "$CR_DIR" ]]; then
+  [[ "$CR_DIR" == /* ]] || cr_fail "'$CR_DIR' is not an absolute path"
+  [[ "$CR_DIR" != *$'\n'* && "$CR_DIR" != *'..'* ]] || cr_fail "the path holds a newline or '..'"
+  [[ ! -L "$CR_DIR" ]] || cr_fail "'$CR_DIR' is a symlink"
+  # The physical path of CR_DIR, which may not exist yet: resolve its nearest existing
+  # ancestor and append the rest, so a symlinked parent cannot hide a path inside the
+  # operator's directory.
+  cr_phys() {
+    local p="$1" rest="" base
+    while [[ ! -d "$p" ]]; do base="$(basename "$p")"; rest="/$base$rest"; p="$(dirname "$p")"; done
+    printf '%s%s' "$(cd -P "$p" && pwd -P)" "$rest"
+  }
+  cr_real="$(cr_phys "$CR_DIR")"
+  cr_op="$(cr_phys "${CLAUDE_CONFIG_DIR:-$HOME/.claude}")"
+  cr_home="$(cr_phys "$HOME")"
+  if [[ "$cr_real" == "$cr_op" || "$cr_real" == "$cr_op"/* || "$cr_op" == "$cr_real"/* ]]; then
+    cr_fail "'$CR_DIR' is the operator's config directory, inside it or around it ($cr_op)"
+  fi
+  [[ "$cr_real" != / && "$cr_real" != "$cr_home" && "$cr_home" != "$cr_real"/* ]] \
+    || cr_fail "'$CR_DIR' is the home directory or an ancestor of it"
+  if [[ -e "$CR_DIR" ]]; then
+    [[ -d "$CR_DIR" ]] || cr_fail "'$CR_DIR' exists and is not a directory"
+    cr_extra="$(find "$CR_DIR" -mindepth 1 -maxdepth 1 ! -name cast-settings.json -print -quit)"
+    [[ -z "$cr_extra" ]] || cr_fail "'$CR_DIR' is not fresh: it is not empty"
+    # The one entry allowed is this mode's own settings file from an earlier dry run, and
+    # only as a regular file: a symlink there would send the write below out of the directory.
+    if [[ -e "$CR_DIR/cast-settings.json" || -L "$CR_DIR/cast-settings.json" ]]; then
+      [[ -f "$CR_DIR/cast-settings.json" && ! -L "$CR_DIR/cast-settings.json" ]] \
+        || cr_fail "'$CR_DIR/cast-settings.json' is not a regular file"
+    fi
+  fi
+  CR_DIR="$cr_real"
+  (umask 077; mkdir -p "$CR_DIR") || cr_fail "cannot create '$CR_DIR'"
+  CR_SETTINGS="$CR_DIR/cast-settings.json"
+  cr_policy=""; cr_prev=""
+  for a in "$@"; do [[ "$cr_prev" == "--settings" ]] && cr_policy="$a"; cr_prev="$a"; done
+  # Written to a new file in the directory and renamed over the settings file, so the
+  # write never follows a link that appeared at the final name.
+  cr_tmp="$(umask 077; mktemp "$CR_DIR/.cast-settings.XXXXXX")" || cr_fail "cannot create a file in '$CR_DIR'"
+  if [[ -n "$cr_policy" && -f "$cr_policy" ]]; then
+    cat "$cr_policy" > "$cr_tmp" || cr_fail "cannot write $CR_SETTINGS"
+  else
+    printf '{}\n' > "$cr_tmp" || cr_fail "cannot write $CR_SETTINGS"
+  fi
+  mv -f "$cr_tmp" "$CR_SETTINGS" || cr_fail "cannot write $CR_SETTINGS"
+  if [[ "${CAST_CLEAN_ROOM_DRY_RUN:-0}" == 1 ]]; then
+    echo "cast-launch: clean-room dry run for $MARVEL_SESSION: CLAUDE_CONFIG_DIR=$CR_DIR; settings file $CR_SETTINGS follows; nothing was launched"
+    cat "$CR_SETTINGS"
+    exit 0
+  fi
+fi
+
 # Identities that compose with a role (sole_fit at proposal): director and envoy.
 case "$WROLE" in
   director) IDENTITY=assistive-agent;;
@@ -86,7 +168,9 @@ case "$WROLE" in
 esac
 
 [[ -d "$WARDROBE_ROOT/roles" ]] || { echo "cast-launch: no wardrobe root at $WARDROBE_ROOT (set WARDROBE_ROOT)" >&2; exit 1; }
+if [[ -z "$CR_DIR" ]]; then
 [[ -x "$SHIM_BIN" ]] || { echo "cast-launch: director shim not executable at $SHIM_BIN; build and install it there (cd cmd/director-mcp in the director checkout, then go build -o \"\$HOME/.director/bin/director-mcp\" .) or set DIRECTOR_SHIM_BIN to its path. Never point it inside a temporary directory: a scratchpad path is reaped and every later cast fails here" >&2; exit 1; }
+fi
 slice_sh="$(dirname "$WARDROBE_ROOT")/scripts/slice.sh"
 [[ -x "$slice_sh" ]] || { echo "cast-launch: $slice_sh missing; the install root is a full checkout" >&2; exit 1; }
 
@@ -126,6 +210,9 @@ case "$envout_text" in
   *) echo "cast-launch: slice.sh wrote something other than CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 to the --env-out file; refusing, not starting the harness" >&2; exit 1;;
 esac
 
+# In the clean-room mode none of the bus wiring below runs (no id, relay log, role, global
+# tier, channel cue, shim): see the clean-room block above.
+if [[ -z "$CR_DIR" ]]; then
 # One source for the bus id (R-73). marvel's computed per-replica name until
 # the declared identity block exists; marvel wins if it already set it.
 export DIRECTOR_AGENT_ID="${DIRECTOR_AGENT_ID:-$MARVEL_SESSION}"
@@ -321,7 +408,14 @@ fi
 mcp_json="$(printf '{"mcpServers":{"director":{"command":"%s","env":{"DIRECTOR_AGENT_ID":"%s","DIRECTOR_ROLE":"%s","DIRECTOR_TEAM":"%s","DIRECTOR_WORKSPACE":"%s","NATS_URL":"%s"%s%s%s}}}}' \
   "$SHIM_BIN" "$DIRECTOR_AGENT_ID" "$DIRECTOR_ROLE" "$DIRECTOR_TEAM" "$DIRECTOR_WORKSPACE" "$NATS_URL" "$global_env" "$cue_env" "$pred_env")"
 
+else
+  DIRECTOR_AGENT_ID="$MARVEL_SESSION"; GROLE=""; GLOBAL_ADDR=""; startup_note=""
+  cue_how=""; cue_note=""; cue_args=()
+  mcp_json='{"mcpServers":{}}'
+fi
+
 cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_ROLE in team $DIRECTOR_TEAM, address agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID."
+[[ -n "$CR_DIR" ]] && cast_line="You are cast as wardrobe role/$WROLE for the manifest role $MARVEL_ROLE in team $DIRECTOR_TEAM, in a clean-room run: you hold no director address and have no bus."
 [[ -n "$SCOPE" ]] && cast_line+=" Your scope, set at cast time and recorded by the supervisor: $SCOPE."
 # Ruling 84 means the seat's OWN line (director). In a team cast the last line
 # of the log belongs to whichever seat spawned last, so the seat greps for its
@@ -386,9 +480,11 @@ cd "$TWIN_CWD" || { echo "cast-launch: cannot cd to $TWIN_CWD (set TWIN_CWD to a
 # then reports running with no presence. Crash here instead, so marvel sees a
 # failed session and backs off loudly. --preflight creates no consumer and
 # writes no presence.
+if [[ -z "$CR_DIR" ]]; then
 DIRECTOR_TEAM="$DIRECTOR_TEAM" DIRECTOR_WORKSPACE="$DIRECTOR_WORKSPACE" NATS_URL="$NATS_URL" \
   "$SHIM_BIN" --preflight \
   || { echo "cast-launch: bus pre-flight failed for agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID on $NATS_URL; not starting the harness (finding-166)" >&2; exit 1; }
+fi
 
 # The Bedrock key (the operator's ruling, relayed by director on 2026-10-08). When
 # the session runs on Bedrock, claude takes its credential from
@@ -443,7 +539,7 @@ unset bedrock_xtrace
 # overlay present is itself a loud failure.
 settings_args=()
 overlay_file="$MARVEL_OVERLAY_ROOT/by-role/$MARVEL_ROLE.json"
-if [[ -f "$overlay_file" ]]; then
+if [[ -z "$CR_DIR" && -f "$overlay_file" ]]; then
   command -v jq >/dev/null 2>&1 \
     || { echo "cast-launch: jq is required to attach a backend overlay but is not installed; not starting the harness (finding-166)" >&2; exit 1; }
   jq -e . "$overlay_file" >/dev/null 2>&1 \
@@ -461,6 +557,8 @@ if [[ -f "$overlay_file" ]]; then
   settings_args=(--settings "$merged")
   echo "cast-launch: attaching backend overlay $overlay_file for role $MARVEL_ROLE (merged over marvel policy as --settings $merged)" >&2
 fi
+
+[[ -n "$CR_DIR" ]] && settings_args=(--settings "$CR_SETTINGS")
 
 # The development-channels prompt (aae-orc-d3rel, route R4; the operator's ruling of
 # 2026-11-09). A seat started with the dev-channels flag stops at a startup prompt until
@@ -488,11 +586,24 @@ if [[ -n "$cue_how" ]]; then
   fi
 fi
 
+if [[ -n "$CR_DIR" ]]; then
+  echo "cast-launch: $MARVEL_SESSION -> role/$WROLE CLEAN ROOM, no director shim, CLAUDE_CONFIG_DIR $CR_DIR, cwd $TWIN_CWD$bedrock_note" >&2
+else
 echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD$cue_note$devch_note$bedrock_note" >&2
+fi
 # The role mark (aae-orc-20062): this pid survives the exec, so it is the
 # shim's parent pid; the shim holds a director identity only with it.
 export DIRECTOR_ROLE_MARK=$$
-exec claude -n "$DIRECTOR_AGENT_ID" \
+# In the clean-room mode claude starts without any DIRECTOR_*, NATS_*, RELAY_LOG
+# or MARVEL_* variable (the daemon socket, the heartbeat token file and the rest), whether
+# this script exported it or marvel and the shell passed it down.
+cr_env=()
+if [[ -n "$CR_DIR" ]]; then
+  export CLAUDE_CONFIG_DIR="$CR_DIR"
+  cr_env=(env -u RELAY_LOG)
+  while IFS= read -r cr_v; do cr_env+=(-u "$cr_v"); done < <(compgen -v DIRECTOR_; compgen -v NATS_; compgen -v MARVEL_)
+fi
+exec ${cr_env[@]+"${cr_env[@]}"} claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$prompt" \
   "$@" \
