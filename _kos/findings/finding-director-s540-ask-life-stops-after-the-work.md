@@ -84,16 +84,20 @@ stopped:
 
 ## 2a. The back half, over the whole ask register
 
-| received | asks | closed before 2026-11-20 | closed only by the triage | still open |
+| received | asks | closed before 2026-11-20 | closed on 2026-11-20 | still open |
 |---|---|---|---|---|
 | before 2026-11-10 02:35Z | 359 | 52 | 174 | 133 |
 | after | 293 | 199 | 38 | 56 |
 
 The split is at 2026-11-10 02:35Z, the first recorded close event. After it
 the median time from intake to close was 0.5 hours, and
-the 90th percentile 25 hours. The close record works when it exists. The
-38 later asks closed only by the triage were done work whose close was not
-written.
+the 90th percentile 25 hours. The close record works when it exists. Of the
+38 later asks closed on 2026-11-20, 34 cite a triage shelf row: done work
+whose close was not written. Two more close on a follow-up check director
+ran that day. The last two arrived on 2026-11-20 and closed within ten
+minutes, before the triage read the register, which is why the
+later row holds 94 asks not closed before that day against the 92 the
+triage classed. The earlier row's 174 and 133 match the triage's 307.
 
 **Answers that stopped after the operator.** A Desk re-sync at 00:53Z on
 2026-11-20 moved 133 answered cards off "open". In the same pass, seven
@@ -173,7 +177,7 @@ In the sample of 118:
 | board.md | 15 |
 | Desk | 20, of them 13 of the 14 card-class asks |
 | bd | 23 |
-| ask register close | 36, all written on 2026-11-20 by the triage |
+| ask register close | 36, all written on 2026-11-20; 34 cite a triage shelf row and 2 a follow-up check that day |
 
 The relay log is the only register that holds most asks. The others each
 hold a different small slice. For asks older than 2026-11-10, no register
