@@ -561,6 +561,54 @@ if cr_cast seat2; then
 else
   bad "clean-room: reuse after a dry run" "$(cat "$root/out/stderr")"
 fi
+# The operator's directory is both $HOME/.claude and, when it is set, CLAUDE_CONFIG_DIR.
+# With CLAUDE_CONFIG_DIR pointing elsewhere, a directory equal to, inside or around
+# $HOME/.claude is still refused, and so is one that reaches it through a symlink.
+mkdir -p "$root/.claude" "$root/elsewhere"
+ln -s "$root/.claude" "$root/cr/dotlink"
+for refuse in "$root/.claude:equal to the home one" "$root/.claude/x:inside the home one" \
+              "$root/cr/dotlink/sub:inside the home one through a symlink" "$root/elsewhere/x:inside CLAUDE_CONFIG_DIR" \
+              "$root/elsewhere:equal to CLAUDE_CONFIG_DIR"; do
+  dir="${refuse%%:*}"; why="${refuse#*:}"
+  if cast builder CAST_SCOPE="CR-SCOPE-MARK only" CLAUDE_CONFIG_DIR="$root/elsewhere" CAST_CLEAN_ROOM_DIR="$dir"; then
+    bad "clean-room: with CLAUDE_CONFIG_DIR set, a config directory $why was allowed" "$dir"
+  else
+    grep -q "CAST_CLEAN_ROOM_DIR" "$root/out/stderr" && [[ ! -e "$root/out/claude.args" ]] \
+      && ok "clean-room: with CLAUDE_CONFIG_DIR set, a config directory $why is refused and nothing launches" \
+      || bad "clean-room: refusal with CLAUDE_CONFIG_DIR set for $why" "$(cat "$root/out/stderr")"
+  fi
+done
+if cast builder CAST_SCOPE="CR-SCOPE-MARK only" CLAUDE_CONFIG_DIR="$root/elsewhere" CAST_CLEAN_ROOM_DIR="$root/cr/apart"; then
+  ok "clean-room: with CLAUDE_CONFIG_DIR set, an unrelated config directory is accepted"
+else
+  bad "clean-room: an unrelated directory was refused with CLAUDE_CONFIG_DIR set" "$(cat "$root/out/stderr")"
+fi
+
+# A link planted at the settings name between the check and the rename must not carry
+# the write out of the directory. The stub mktemp stands in for the race: the launcher
+# calls it after its check and before its rename, so it plants the link there.
+cat > "$root/bin/mktemp" <<'STUB'
+#!/usr/bin/env bash
+if [[ -n "${PLANT_LINK_TARGET:-}" && "${1:-}" == */.cast-settings.* ]]; then
+  ln -s "$PLANT_LINK_TARGET" "$(dirname "$1")/cast-settings.json"
+fi
+exec /usr/bin/mktemp "$@"
+STUB
+chmod +x "$root/bin/mktemp"
+mkdir -p "$root/cr/victimdir"
+cast builder CAST_SCOPE="CR-SCOPE-MARK only" CAST_CLEAN_ROOM_DIR="$root/cr/race1" PLANT_LINK_TARGET="$root/cr/victimdir" || true
+vleft="$(ls -A "$root/cr/victimdir")"
+[[ -z "$vleft" ]] \
+  && ok "clean-room: a link planted at the settings name before the rename carries nothing into the directory it points at" \
+  || bad "clean-room: the settings file was moved through a planted link" "victimdir holds: $vleft"
+if [[ -e "$root/out/claude.args" ]]; then
+  [[ -f "$root/cr/race1/cast-settings.json" && ! -L "$root/cr/race1/cast-settings.json" ]] \
+    && ok "clean-room: if the cast went on after the planted link, the settings file is a regular file" \
+    || bad "clean-room: the cast went on with a settings file that is not a regular file"
+else
+  ok "clean-room: the cast stopped after the planted link and launched nothing"
+fi
+
 # marvel's control variables stay out of the seat: the socket, the heartbeat token
 # file and any other MARVEL_* the daemon passes down.
 if cr_cast seat5 MARVEL_SOCKET="$root/marvel.sock" MARVEL_HEARTBEAT_TOKEN_FILE="$root/hb.token" MARVEL_SEAT_URI=marvel://x/y MARVEL_WORKDIR="$root"; then

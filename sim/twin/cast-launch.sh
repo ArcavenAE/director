@@ -121,11 +121,15 @@ if [[ -n "$CR_DIR" ]]; then
     printf '%s%s' "$(cd -P "$p" && pwd -P)" "$rest"
   }
   cr_real="$(cr_phys "$CR_DIR")"
-  cr_op="$(cr_phys "${CLAUDE_CONFIG_DIR:-$HOME/.claude}")"
   cr_home="$(cr_phys "$HOME")"
-  if [[ "$cr_real" == "$cr_op" || "$cr_real" == "$cr_op"/* || "$cr_op" == "$cr_real"/* ]]; then
-    cr_fail "'$CR_DIR' is the operator's config directory, inside it or around it ($cr_op)"
-  fi
+  # Both places the operator's config can live: $HOME/.claude, and CLAUDE_CONFIG_DIR
+  # when it is set. Checking only the second let a directory under $HOME/.claude
+  # through whenever CLAUDE_CONFIG_DIR pointed elsewhere.
+  for cr_op in "$(cr_phys "$HOME/.claude")" ${CLAUDE_CONFIG_DIR:+"$(cr_phys "$CLAUDE_CONFIG_DIR")"}; do
+    if [[ "$cr_real" == "$cr_op" || "$cr_real" == "$cr_op"/* || "$cr_op" == "$cr_real"/* ]]; then
+      cr_fail "'$CR_DIR' is the operator's config directory, inside it or around it ($cr_op)"
+    fi
+  done
   [[ "$cr_real" != / && "$cr_real" != "$cr_home" && "$cr_home" != "$cr_real"/* ]] \
     || cr_fail "'$CR_DIR' is the home directory or an ancestor of it"
   if [[ -e "$CR_DIR" ]]; then
@@ -152,7 +156,12 @@ if [[ -n "$CR_DIR" ]]; then
   else
     printf '{}\n' > "$cr_tmp" || cr_fail "cannot write $CR_SETTINGS"
   fi
-  mv -f "$cr_tmp" "$CR_SETTINGS" || cr_fail "cannot write $CR_SETTINGS"
+  # Never into a directory the final name has become a link to: GNU mv takes -T, BSD
+  # mv takes -h; either renames onto the name itself. A link planted after the check
+  # above is replaced, not followed, and the name is checked once more afterwards.
+  if mv --version >/dev/null 2>&1; then mv -fT "$cr_tmp" "$CR_SETTINGS"; else mv -fh "$cr_tmp" "$CR_SETTINGS"; fi \
+    || cr_fail "cannot write $CR_SETTINGS"
+  [[ -f "$CR_SETTINGS" && ! -L "$CR_SETTINGS" ]] || cr_fail "'$CR_SETTINGS' is not a regular file after the write"
   if [[ "${CAST_CLEAN_ROOM_DRY_RUN:-0}" == 1 ]]; then
     echo "cast-launch: clean-room dry run for $MARVEL_SESSION: CLAUDE_CONFIG_DIR=$CR_DIR; settings file $CR_SETTINGS follows; nothing was launched"
     cat "$CR_SETTINGS"
