@@ -355,6 +355,11 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		"tier":       res.Tier,
 		"note":       "accepted is not delivered or read; the recipient reports those (R-08)",
 	}
+	// What the recipient's presence row says about its cue, so a send to a seat
+	// the cue will not wake is not silent (director#719).
+	for k, v := range bus.recipientCueFields(ctx, e.Recipient.Address) {
+		out[k] = v
+	}
 	// The stream and sequence are the hub's (or the local broker's) own word
 	// that the bytes are stored. It matters most at the global tier, where a
 	// leaf-side sender is not permitted to read the director's stream back.
