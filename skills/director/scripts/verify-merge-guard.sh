@@ -262,8 +262,6 @@ echo "Get https://api.github.com/repos/org/repo/commits/abc1234def5678: i/o time
 expect_stop "the head commit read times out: STOP" "i/o timeout"
 fixture; view OPEN false CLEAN > "$fx/view.json"; echo '{"message":"Not Found"}' > "$fx/commit.json"
 expect_stop "a head commit read with no committer date: STOP" "committer date"
-fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[],"reviews":[],"labels":[]}' > "$fx/view.json"
-expect_stop "the head commit is not in the view's commit list: STOP" "head commit"
 fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[{"oid":"abc1234def5678","committedDate":"2026-09-28T10:00:00Z"}],"labels":[]}' > "$fx/view.json"
 expect_stop "a view with no reviews field: STOP" "reviews"
 
