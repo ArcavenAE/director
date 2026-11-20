@@ -447,6 +447,18 @@ for utrole in usher-track-2-builder usher-track-3-builder; do
   fi
 done
 
+# --- test-architect-b: the usher manifest's second test-architect seat -----------
+# marvel refuses replicas 2 on a role with a max-age arm, so usher gets a second
+# test-architect seat as its own manifest role. It has no wardrobe role of its own,
+# so without a row it would slice a role named test-architect-b, which does not exist.
+if cast test-architect-b; then
+  grep -q "stub slice for test-architect$" "$root/out/claude.args" \
+    && ok "test-architect-b: slices the test-architect role" \
+    || bad "test-architect-b: slices the test-architect role" "$(cat "$root/out/claude.args")"
+else
+  bad "test-architect-b cast" "$(cat "$root/out/stderr")"
+fi
+
 # --- clean-room mode: a per-seat config directory, no shim, a settings dry run ---
 # wardrobe finding-wardrobe-keku items 1, 3 and 4. CAST_CLEAN_ROOM_DIR names a
 # fresh per-seat CLAUDE_CONFIG_DIR outside the operator's; the seat gets no
