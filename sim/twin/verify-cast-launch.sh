@@ -985,6 +985,48 @@ for flag in --print -p; do
   launch_args=()
 done
 
+# --- the launcher and the shim agree on the cue (director#719, option D) ------
+# The shim turns the cue on when DIRECTOR_CUE is unset, so a launcher that binds
+# no channel and leaves the variable unset sends the seat a cue on a channel it
+# never loaded: it reads "unverified" and misses mail. The launcher decides once
+# and tells the shim: the shim's answer, read the way the shim reads it (the
+# value in its mcp env, else the one it inherits, unset meaning on, and only 1
+# meaning on), must equal whether the channel flag is bound.
+shim_cue_answer() {
+  local v
+  if grep -q '"DIRECTOR_CUE":"' "$root/out/claude.args"; then
+    v="$(grep -o '"DIRECTOR_CUE":"[^"]*"' "$root/out/claude.args" | head -1 | cut -d'"' -f4)"
+  elif grep -q '^DIRECTOR_CUE=' "$root/out/claude.env"; then
+    v="$(grep '^DIRECTOR_CUE=' "$root/out/claude.env" | head -1 | cut -d= -f2-)"
+  else
+    echo on; return
+  fi
+  [[ "$v" == 1 ]] && echo on || echo off
+}
+channel_answer() { cue_flag && echo on || echo off; }
+agree_case() { # label, role, then extra KEY=VALUE pairs
+  local label="$1" role="$2"; shift 2
+  if cast "$role" "$@"; then
+    [[ "$(shim_cue_answer)" == "$(channel_answer)" ]] \
+      && ok "agree: $label: the shim's answer ($(shim_cue_answer)) matches the channel flag" \
+      || bad "agree: $label: the shim's answer matches the channel flag" "shim=$(shim_cue_answer) channel=$(channel_answer) args=$(tail -4 "$root/out/claude.args" | tr '\n' ' ')"
+  else
+    bad "agree: $label: cast" "$(cat "$root/out/stderr")"
+  fi
+}
+agree_case "builder, cue unset" builder
+agree_case "director, cue unset" director
+agree_case "supervisor, cue unset" supervisor
+agree_case "research-supervisor, cue unset" research-supervisor
+launch_args=(--print); agree_case "supervisor with --print, cue unset" supervisor; launch_args=()
+launch_args=(-p); agree_case "builder with -p, cue unset" builder; launch_args=()
+agree_case "builder, DIRECTOR_CUE=1" builder DIRECTOR_CUE=1
+agree_case "supervisor, DIRECTOR_CUE=1" supervisor DIRECTOR_CUE=1
+for v in 0 true yes ""; do
+  agree_case "builder, DIRECTOR_CUE='$v'" builder DIRECTOR_CUE="$v"
+  agree_case "supervisor, DIRECTOR_CUE='$v'" supervisor DIRECTOR_CUE="$v"
+done
+
 # --- a supervisor cast without levers on a leafed host is loud, not refused --
 # director#180. The global tier stays optional: the launcher warns only when the
 # local broker's monitor reports a leaf remote up, and a closed monitor port, a
