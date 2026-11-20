@@ -593,14 +593,14 @@ fi
 # The role mark (aae-orc-20062): this pid survives the exec, so it is the
 # shim's parent pid; the shim holds a director identity only with it.
 export DIRECTOR_ROLE_MARK=$$
-# In the clean-room mode claude starts without any DIRECTOR_*, NATS_URL, RELAY_LOG
+# In the clean-room mode claude starts without any DIRECTOR_*, NATS_*, RELAY_LOG
 # or MARVEL_* variable (the daemon socket, the heartbeat token file and the rest), whether
 # this script exported it or marvel and the shell passed it down.
 cr_env=()
 if [[ -n "$CR_DIR" ]]; then
   export CLAUDE_CONFIG_DIR="$CR_DIR"
-  cr_env=(env -u NATS_URL -u RELAY_LOG)
-  while IFS= read -r cr_v; do cr_env+=(-u "$cr_v"); done < <(compgen -v DIRECTOR_; compgen -v MARVEL_)
+  cr_env=(env -u RELAY_LOG)
+  while IFS= read -r cr_v; do cr_env+=(-u "$cr_v"); done < <(compgen -v DIRECTOR_; compgen -v NATS_; compgen -v MARVEL_)
 fi
 exec ${cr_env[@]+"${cr_env[@]}"} claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
