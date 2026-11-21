@@ -275,10 +275,7 @@ func (f *forFilter) otherSeat(name, cluster string, rows []map[string]any) bool 
 	return f.seatClass(name, cluster, rows) == seatOther
 }
 
-// seatClass is otherSeat's three-way answer, so a caller can tell a seat proven
-// to be another from one proven to be this seat and from one the rows could not
-// place. Both of the last two deliver; only the last is a doubt that a later
-// roster read may clear (director#731).
+// seatKind is what the presence rows say a FOR name resolves to.
 type seatKind int
 
 const (
@@ -287,6 +284,10 @@ const (
 	seatUnknown                 // no fresh row answers, or rows of different teams do
 )
 
+// seatClass is otherSeat's three-way answer, so a caller can tell a seat proven
+// to be another from one proven to be this seat and from one the rows could not
+// place. Both of the last two deliver; only the last is a doubt that a later
+// roster read may clear (director#731).
 func (f *forFilter) seatClass(name, cluster string, rows []map[string]any) seatKind {
 	own := forGenOnly.ReplaceAllString(f.agentID, "$1")
 	found, team0 := false, ""
