@@ -29,11 +29,15 @@ func relayEntries(t *testing.T, log string) []string {
 	return out
 }
 
+// taskURL is the scratch server of the fixture's last run, for a test that needs a third seat. The tests do not run in parallel.
+var taskURL string
+
 func taskFixture(t *testing.T) (ctx context.Context, director, builder *Bus, log string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
 	url := startScratchServer(t)
+	taskURL = url
 	_, js := provision(t, ctx, url)
 	auditStream(t, ctx, js)
 	director = liveSeat(t, ctx, url, Sender{AgentID: "director", Workspace: "w", Team: "t"})
@@ -108,17 +112,27 @@ func TestTheFirstReplyToAnUnresolvedSendAppendsAnEntryNamingTheSession(t *testin
 	}
 }
 
-func TestOnlyTheFirstReplyResolvesAndALaterReplyAppendsNothing(t *testing.T) {
+func TestOnlyTheFirstReplyResolvesSoALaterReplyFromAnotherSeatNamesNothingNew(t *testing.T) {
 	ctx, director, builder, log := taskFixture(t)
+	other := liveSeat(t, ctx, taskURL, Sender{AgentID: "builder2", Role: "builder", Workspace: "w", Team: "t"})
 	id := sendAsk(t, ctx, director, map[string]any{"to": "role://t/builder", "ask": "I-7"})
-	for _, text := range []string{"first", "second"} {
-		sendAsk(t, ctx, builder, map[string]any{"to": "agent://t/director", "performative": "INFORM", "text": text, "in_reply_to": id})
+	reply := func(from *Bus, text string) {
+		sendAsk(t, ctx, from, map[string]any{"to": "agent://t/director", "performative": "INFORM", "text": text, "in_reply_to": id})
 		if _, err := toolWait(ctx, director, json.RawMessage(`{"timeout_seconds":5}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if es := relayEntries(t, log); len(es) != 2 {
-		t.Fatalf("entries = %d, want 2 (a second reply must not append a third):\n%v", len(es), es)
+	reply(builder, "first")
+	if es := relayEntries(t, log); len(es) != 2 || !strings.Contains(es[1], "**Session:** w/builder\n") {
+		t.Fatalf("after the first reply: want 2 entries, the second naming w/builder, got %d:\n%v", len(es), es)
+	}
+	reply(other, "second, from another seat")
+	es := relayEntries(t, log)
+	if len(es) != 2 {
+		t.Fatalf("entries = %d, want 2 (a later reply must not append a third):\n%v", len(es), es)
+	}
+	if strings.Contains(strings.Join(es, "\n"), "w/builder2") {
+		t.Fatalf("the later replier was recorded as the session:\n%v", es)
 	}
 }
 
