@@ -75,13 +75,33 @@ func (c *cueFilterCache) put(k cueFilterKey, now time.Time, drops uint64) {
 // leaveOutDropped is the global tier's count with the messages the filter will
 // drop taken out. It never returns more than the count it was given.
 func leaveOutDropped(ctx context.Context, c tierCounts) uint64 {
+	if c.g == nil {
+		return c.global
+	}
+	return leaveOutDroppedIn(ctx, c, &c.g.cueDrop, nil)
+}
+
+// leaveOutDroppedIn is leaveOutDropped over a stored-count slot of the caller's
+// own, and over the messages the caller holds. The cue and the drain each have a
+// slot, because their counts mean different things: the cue counts what waits,
+// the drain what waits after the call's own hold, and a key from one is not a
+// key for the other (director#733). A held message is in the caller's reply, so
+// it is never counted as a drop here: the caller takes it off once, as the hold.
+// A count taken with a hold is neither read from nor stored in the slot, since
+// the held set is not in the key.
+func leaveOutDroppedIn(ctx context.Context, c tierCounts, slot *cueFilterCache, held map[uint64]struct{}) uint64 {
 	g := c.g
 	if g == nil || g.forFilter == nil || c.global == 0 || c.ginfo == nil {
 		return c.global
 	}
+	useSlot := len(held) == 0
 	key := cueFilterKey{waiting: c.global, ackFloor: c.ginfo.AckFloor.Stream, delivered: c.ginfo.Delivered.Stream}
 	now := cueFilterNow()
-	drops, ok := g.cueDrop.get(key, now)
+	var drops uint64
+	ok := false
+	if useSlot {
+		drops, ok = slot.get(key, now)
+	}
 	if !ok {
 		pctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
 		defer cancel()
@@ -94,7 +114,9 @@ func leaveOutDropped(ctx context.Context, c tierCounts) uint64 {
 			// inbox a seat holds), so it may have stopped before the end of what
 			// waits. That is a doubt, and a doubt cues: count the durable's own
 			// number and cache it as no drops.
-			g.cueDrop.put(key, now, 0)
+			if useSlot {
+				slot.put(key, now, 0)
+			}
 			return c.global
 		}
 		// A message above the consumer's delivered sequence has not been handed out,
@@ -109,6 +131,9 @@ func leaveOutDropped(ctx context.Context, c tierCounts) uint64 {
 		for _, it := range items {
 			if it.Env == nil {
 				continue // does not decode: delivered, so counted
+			}
+			if _, isHeld := held[it.Seq]; isHeld {
+				continue // in the caller's reply: taken off once, by the caller's hold
 			}
 			drop, _, doubt := g.foreignDoubt(pctx, it.Env)
 			if doubt {
@@ -128,12 +153,12 @@ func leaveOutDropped(ctx context.Context, c tierCounts) uint64 {
 			uncertain = 0
 		}
 		drops = certain + uncertain
-		if !doubted {
+		if !doubted && useSlot {
 			// A count that met a doubt is used for this poll only: the roster may
 			// place the message by the next one, and the drain then drops it, so
 			// keeping the count would hold the cue up for mail it will not hand
 			// over (director#731).
-			g.cueDrop.put(key, now, drops)
+			slot.put(key, now, drops)
 		}
 	}
 	if drops >= c.global {

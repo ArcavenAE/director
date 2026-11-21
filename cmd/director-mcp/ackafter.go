@@ -89,6 +89,19 @@ func (a *ackLater) heldByTier() map[string]uint64 {
 	return out
 }
 
+// heldSeqs are the stream sequences of the messages this call holds on one tier.
+func (a *ackLater) heldSeqs(tier string) map[uint64]struct{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := map[uint64]struct{}{}
+	for _, h := range a.held {
+		if h.item.Tier == tier {
+			out[h.item.Seq] = struct{}{}
+		}
+	}
+	return out
+}
+
 // nak gives every held message back to the broker unread.
 func (a *ackLater) nak() int {
 	a.mu.Lock()

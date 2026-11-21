@@ -475,6 +475,9 @@ type globalTier struct {
 	// cueDrop is the cue count's last peek for a durable position
 	// (cue_filter.go).
 	cueDrop cueFilterCache
+	// drainDrop is the drain's own stored count (drain.go), apart from the cue's: the
+	// two key on different figures (director#733).
+	drainDrop cueFilterCache
 
 	// forDrops counts messages dropForeign has dropped, so a pull that came
 	// back empty only because it dropped can go on to the mail behind them.
