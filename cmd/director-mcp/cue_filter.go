@@ -41,6 +41,11 @@ var cueFilterPeekMax = 1000
 // the durable, so the reuse ends on its own.
 const cueFilterReuse = 30 * time.Second
 
+// cueFilterNow is the clock the peek's reuse reads. Production keeps time.Now;
+// a test sets it to its own clock so it can move past a poll without waiting.
+// It is a package variable, so a test that swaps it must not run in parallel.
+var cueFilterNow = time.Now
+
 type cueFilterKey struct{ waiting, ackFloor, delivered uint64 }
 
 // cueFilterCache is the last peek's result for a durable position.
@@ -75,7 +80,7 @@ func leaveOutDropped(ctx context.Context, c tierCounts) uint64 {
 		return c.global
 	}
 	key := cueFilterKey{waiting: c.global, ackFloor: c.ginfo.AckFloor.Stream, delivered: c.ginfo.Delivered.Stream}
-	now := time.Now()
+	now := cueFilterNow()
 	drops, ok := g.cueDrop.get(key, now)
 	if !ok {
 		pctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
@@ -100,11 +105,16 @@ func leaveOutDropped(ctx context.Context, c tierCounts) uint64 {
 		// the count is never too low and a dropped message that is plainly still
 		// waiting is no longer cancelled by an unrelated acked one.
 		var certain, uncertain uint64
+		doubted := false // a message was delivered only because the roster could not place it
 		for _, it := range items {
 			if it.Env == nil {
 				continue // does not decode: delivered, so counted
 			}
-			if drop, _ := g.foreign(pctx, it.Env); drop {
+			drop, _, doubt := g.foreignDoubt(pctx, it.Env)
+			if doubt {
+				doubted = true
+			}
+			if drop {
 				if it.Seq > c.ginfo.Delivered.Stream {
 					certain++
 				} else {
@@ -118,7 +128,13 @@ func leaveOutDropped(ctx context.Context, c tierCounts) uint64 {
 			uncertain = 0
 		}
 		drops = certain + uncertain
-		g.cueDrop.put(key, now, drops)
+		if !doubted {
+			// A count that met a doubt is used for this poll only: the roster may
+			// place the message by the next one, and the drain then drops it, so
+			// keeping the count would hold the cue up for mail it will not hand
+			// over (director#731).
+			g.cueDrop.put(key, now, drops)
+		}
 	}
 	if drops >= c.global {
 		return 0

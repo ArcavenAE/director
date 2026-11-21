@@ -272,6 +272,23 @@ func (f *forFilter) namesSelf(name, cluster string) bool {
 // that rows of different teams answer to is a doubt and delivers, as does a
 // name no fresh row answers to.
 func (f *forFilter) otherSeat(name, cluster string, rows []map[string]any) bool {
+	return f.seatClass(name, cluster, rows) == seatOther
+}
+
+// seatKind is what the presence rows say a FOR name resolves to.
+type seatKind int
+
+const (
+	seatOther   seatKind = iota // every fresh row that answers to the name is another seat
+	seatSelf                    // a row answers that is this seat, its predecessor or a seat it stands in for
+	seatUnknown                 // no fresh row answers, or rows of different teams do
+)
+
+// seatClass is otherSeat's three-way answer, so a caller can tell a seat proven
+// to be another from one proven to be this seat and from one the rows could not
+// place. Both of the last two deliver; only the last is a doubt that a later
+// roster read may clear (director#731).
+func (f *forFilter) seatClass(name, cluster string, rows []map[string]any) seatKind {
 	own := forGenOnly.ReplaceAllString(f.agentID, "$1")
 	found, team0 := false, ""
 	for _, r := range rows {
@@ -286,19 +303,22 @@ func (f *forFilter) otherSeat(name, cluster string, rows []map[string]any) bool 
 			continue
 		}
 		if agent == f.agentID || (team == f.team && forGenOnly.ReplaceAllString(agent, "$1") == own) {
-			return false
+			return seatSelf
 		}
 		// A seat of the team this one stands in for, in this seat's own role, is
 		// this seat's to answer (standsin.go).
 		if f.standsIn != "" && team == f.standsIn && role == f.role {
-			return false
+			return seatSelf
 		}
 		if found && team != team0 {
-			return false
+			return seatUnknown
 		}
 		found, team0 = true, team
 	}
-	return found
+	if found {
+		return seatOther
+	}
+	return seatUnknown
 }
 
 // fresh reports whether a presence row was written within forRowFresh. A row
@@ -312,9 +332,21 @@ func (f *forFilter) fresh(r map[string]any) bool {
 // drops decides one envelope. It returns true and the FOR text only when
 // every token on the leading FOR lines resolves to a seat other than this one.
 func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
+	drop, text, _ := f.decide(ctx, e)
+	return drop, text
+}
+
+// decide is drops with a third answer: doubt is true when the message is
+// delivered only because the roster could not prove it is for another seat (the
+// read failed, or no fresh row names the seat, or rows of different teams do).
+// A later read may prove it, so a caller that keeps a count must not keep one
+// that met a doubt (director#731). A message delivered for a settled reason (no
+// FOR line, an ambiguous line, a name that is this seat's own, a seat proven to
+// be this one) is not a doubt.
+func (f *forFilter) decide(ctx context.Context, e *Envelope) (drop bool, text string, doubt bool) {
 	texts := forTexts(e.Content.Data)
 	if len(texts) == 0 {
-		return false, ""
+		return false, "", false
 	}
 	var toks, prose []string
 	for _, tx := range texts {
@@ -322,27 +354,27 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 		toks = append(toks, n...)
 		prose = append(prose, p...)
 	}
-	text := strings.Join(texts, ", ")
+	text = strings.Join(texts, ", ")
 	if len(toks) == 0 {
-		return false, ""
+		return false, "", false
 	}
 	for _, t := range toks {
 		if !forSeat.MatchString(t) && !forRole.MatchString(t) {
-			return false, "" // ambiguous: one bad token spoils the line
+			return false, "", false // ambiguous: one bad token spoils the line
 		}
 	}
 	for _, t := range toks {
 		name, cluster := forSplit(t)
 		if f.namesSelf(name, cluster) {
-			return false, ""
+			return false, "", false
 		}
 	}
 	if f.forProseNamesSelf(prose) {
-		return false, "" // this seat is named in the prose: deliver
+		return false, "", false // this seat is named in the prose: deliver
 	}
 	rows, err := f.roster(ctx)
 	if err != nil {
-		return false, ""
+		return false, "", true
 	}
 	f.first.Do(func() {
 		note := f.note
@@ -353,11 +385,11 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 	})
 	for _, t := range toks {
 		name, cluster := forSplit(t)
-		if !f.otherSeat(name, cluster, rows) {
-			return false, ""
+		if k := f.seatClass(name, cluster, rows); k != seatOther {
+			return false, "", k == seatUnknown
 		}
 	}
-	return true, text
+	return true, text, false
 }
 
 // foreign is the one decision whether the filter drops a message: false with
@@ -366,10 +398,19 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 // count (cue_filter.go) leaves out what it reports true, so the two cannot
 // drift (director#572).
 func (g *globalTier) foreign(ctx context.Context, e *Envelope) (bool, string) {
+	drop, text, _ := g.foreignDoubt(ctx, e)
+	return drop, text
+}
+
+// foreignDoubt is foreign with the filter's doubt (forFilter.decide): true when
+// the message is delivered only because the roster could not place it. The drain
+// treats it as deliver, as before; the cue's count uses it to avoid keeping a
+// count that a later roster read may change.
+func (g *globalTier) foreignDoubt(ctx context.Context, e *Envelope) (drop bool, text string, doubt bool) {
 	if g.forFilter == nil {
-		return false, ""
+		return false, "", false
 	}
-	return g.forFilter.drops(ctx, e)
+	return g.forFilter.decide(ctx, e)
 }
 
 // dropForeign is the one place a received message meets the filter. Every path
