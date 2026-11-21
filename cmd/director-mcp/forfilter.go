@@ -353,7 +353,7 @@ func (f *forFilter) decide(ctx context.Context, e *Envelope) (drop bool, text st
 		toks = append(toks, n...)
 		prose = append(prose, p...)
 	}
-	text := strings.Join(texts, ", ")
+	text = strings.Join(texts, ", ")
 	if len(toks) == 0 {
 		return false, "", false
 	}
