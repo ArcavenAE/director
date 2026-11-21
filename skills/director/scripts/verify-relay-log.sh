@@ -165,5 +165,23 @@ x = [i for i, l in enumerate(e) if l.startswith("**Text, verbatim:**")]
 assert k and c and x and k[0] < c[0] < x[0], (k, c, x)
 P
 
+# --- M5: --task and --session write **Task:** and **Session:** lines (aae-orc-e6cgf) --
+tl="$root/task-relay.md"; : >"$tl"
+RELAY_LOG="$tl" "$RL" append --to agent://t/a --ask I-7 --kind relay --task I-7 --session w/builder --text "with a session" >"$root/tout1" 2>&1 \
+  && ok "relay_log_task_and_session_are_accepted" || bad "relay_log_task_and_session_are_accepted" "refused: $(cat "$root/tout1")"
+RELAY_LOG="$tl" "$RL" append --to role://t/b --ask I-7 --kind relay --task I-7 --session unresolved --text "role recipient" >"$root/tout2" 2>&1 \
+  && ok "relay_log_session_accepts_unresolved" || bad "relay_log_session_accepts_unresolved" "refused: $(cat "$root/tout2")"
+RELAY_LOG="$tl" "$RL" append --to agent://t/a --ask I-7 --kind relay --text "neither flag" >/dev/null 2>&1 || true
+grep -q '^\*\*Task:\*\* I-7$' "$tl" && grep -q '^\*\*Session:\*\* w/builder$' "$tl" && grep -q '^\*\*Session:\*\* unresolved$' "$tl" \
+  && ok "relay_log_task_and_session_lines_hold_their_values" || bad "relay_log_task_and_session_lines_hold_their_values" "$(cat "$tl")"
+[[ "$(grep -c '^\*\*Task:\*\*' "$tl")" == 2 && "$(grep -c '^\*\*Session:\*\*' "$tl")" == 2 ]] \
+  && ok "relay_log_no_flag_writes_no_task_or_session_line" || bad "relay_log_no_flag_writes_no_task_or_session_line" "want 2 of each for 3 entries"
+n1="$(wc -c <"$tl" | tr -d ' ')"
+if RELAY_LOG="$tl" "$RL" append --to agent://t/a --task 7 --text x >"$root/tout3" 2>&1; then bad "relay_log_task_that_is_not_an_ask_id_is_refused"; else
+  grep -q -e '--task' "$root/tout3" && grep -q -e 'I-<n>' "$root/tout3" && ok "relay_log_task_that_is_not_an_ask_id_is_refused" || bad "relay_log_task_that_is_not_an_ask_id_is_refused" "refusal does not name --task and the I-<n> form: $(cat "$root/tout3")"; fi
+if RELAY_LOG="$tl" "$RL" append --to agent://t/a --task I-7 --session t --text x >"$root/tout4" 2>&1; then bad "relay_log_session_that_is_not_workspace_slash_name_is_refused"; else
+  grep -q -e '--session' "$root/tout4" && grep -q -e '<workspace>/<name>' "$root/tout4" && ok "relay_log_session_that_is_not_workspace_slash_name_is_refused" || bad "relay_log_session_that_is_not_workspace_slash_name_is_refused" "refusal does not name --session and the <workspace>/<name> form: $(cat "$root/tout4")"; fi
+[[ "$(wc -c <"$tl" | tr -d ' ')" == "$n1" ]] && grep -q '^\*\*Task:\*\*' "$tl" && ok "relay_log_refused_task_and_session_write_nothing" || bad "relay_log_refused_task_and_session_write_nothing"
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
