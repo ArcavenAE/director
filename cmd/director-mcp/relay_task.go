@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // A relay entry for a send with an ask records the task it served (the ask id,
@@ -116,9 +117,21 @@ func resolveRelaySession(ctx context.Context, env *Envelope) {
 	if env == nil || env.InReplyTo == "" || env.Sender.AgentID == "" || env.Sender.Workspace == "" {
 		return
 	}
+	if _, ok := pendingSend(env.InReplyTo); !ok {
+		return // the common case, answered without taking the lock
+	}
+	// One resolver at a time, across goroutines and processes: the check, the entry
+	// and the resolved note are one step, so a send gets exactly one session. The
+	// lock is an flock on a file in the state directory, which the kernel drops
+	// when its holder dies, so a crash leaves nothing stuck.
+	unlock, err := lockUnresolved()
+	if err != nil {
+		return // the send stays pending and the next reply tries again
+	}
+	defer unlock()
 	rec, ok := pendingSend(env.InReplyTo)
 	if !ok {
-		return
+		return // another resolver won while this one waited
 	}
 	session := env.Sender.Workspace + "/" + env.Sender.AgentID
 	text := "session resolved for message " + rec.MessageID + ": " + session + " answered it"
@@ -127,4 +140,29 @@ func resolveRelaySession(ctx context.Context, env *Envelope) {
 		return
 	}
 	_ = appendUnresolved(unresolvedRec{Resolved: rec.MessageID})
+}
+
+// lockUnresolved takes the exclusive lock that serializes resolutions and returns
+// its release. It blocks until the holder is done; a holder is bounded by the
+// relay-log timeout.
+func lockUnresolved() (func(), error) {
+	path, err := unresolvedPath()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
 }

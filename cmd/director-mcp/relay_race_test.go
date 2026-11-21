@@ -42,7 +42,7 @@ func raceFixture(t *testing.T) string {
 
 func TestTwoConcurrentResolversWriteOneResolutionEntryPerSend(t *testing.T) {
 	log := raceFixture(t)
-	for round := 0; round < 4; round++ {
+	for round := 0; round < 20; round++ {
 		id := fmt.Sprintf("send-%d", round)
 		if err := rememberUnresolved(id, "I-7", "role://t/builder"); err != nil {
 			t.Fatal(err)
