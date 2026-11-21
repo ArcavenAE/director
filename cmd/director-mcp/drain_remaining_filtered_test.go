@@ -104,3 +104,37 @@ func TestRemainingGlobalDoesNotReuseTheCuesCount(t *testing.T) {
 		t.Fatalf("remaining global = %d, want 0 (plain1 is held, drop1 is dropped)", got)
 	}
 }
+
+// Control for the test above: the same state with no poll by the cue reads 0, so
+// the cue's stored count is what the drain was reusing.
+func TestRemainingGlobalWithNoCuePollLeavesOutTheDroppedArrival(t *testing.T) {
+	r, _ := forPathRig(t)
+	sub := r.bus.global.cfg.inboxSubject()
+	pubEnv(t, r.ctx, r.gjs, sub, "plain1", "INFORM", "no FOR line")
+	wctx := holdOne(t, r)
+	pubEnv(t, r.ctx, r.gjs, sub, "drop1", "INFORM", "FOR alpha-supervisor\nnot for you")
+	rem, failedTiers := r.bus.remainingRead(wctx)
+	if len(failedTiers) != 0 {
+		t.Fatalf("a tier could not be read: %v", failedTiers)
+	}
+	if got := rem["global"]; got != 0 {
+		t.Fatalf("remaining global = %d, want 0 (plain1 is held, drop1 is dropped)", got)
+	}
+}
+
+// The other direction: what the drain stores must not be what the cue reuses.
+// The drain reads first with a hold; a dropped message then arrives, and the cue's
+// count must see it.
+func TestCueCountDoesNotReuseTheDrainsCount(t *testing.T) {
+	r, _ := forPathRig(t)
+	sub := r.bus.global.cfg.inboxSubject()
+	pubEnv(t, r.ctx, r.gjs, sub, "plain1", "INFORM", "no FOR line")
+	wctx := holdOne(t, r)
+	if rem, _ := r.bus.remainingRead(wctx); rem["global"] != 0 {
+		t.Fatalf("setup: remaining global = %d, want 0 (plain1 is held)", rem["global"])
+	}
+	pubEnv(t, r.ctx, r.gjs, sub, "drop1", "INFORM", "FOR alpha-supervisor\nnot for you")
+	if n := cueCountOf(t, r); n != 1 {
+		t.Fatalf("cue count = %d, want 1 (plain1 is ack-pending and counted; drop1 is dropped)", n)
+	}
+}

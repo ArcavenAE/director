@@ -404,8 +404,14 @@ func (b *Bus) remainingRead(ctx context.Context) (out map[string]uint64, failed 
 			if info, err := g.cons().Info(ctx); err == nil {
 				// Mail the FOR filter will drop is not mail the seat will be handed, so it
 				// is not remaining, as the cue's count and the pending tracker have it.
-				// The hold comes off first; with the filter off this is the figure it was.
-				out["global"] = leaveOutDropped(ctx, tierCounts{global: waitingAfter(info, own["global"]), g: g, ginfo: info})
+				// The hold comes off first, and a held message is not counted as a drop as
+				// well, so it leaves the figure once. The drain keeps its own stored count,
+				// apart from the cue's. With the filter off this is the figure it was.
+				var heldSeqs map[uint64]struct{}
+				if al := ackLaterFrom(ctx); al != nil {
+					heldSeqs = al.heldSeqs("global")
+				}
+				out["global"] = leaveOutDroppedIn(ctx, tierCounts{global: waitingAfter(info, own["global"]), g: g, ginfo: info}, &g.drainDrop, heldSeqs)
 			} else {
 				failed = append(failed, "global")
 			}
