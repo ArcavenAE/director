@@ -6,7 +6,7 @@ Director's relay-log times were typed by hand and ran up to 35 minutes ahead of
 writes, under the lock, and offers no way for the caller to set it: there is no
 time argument, and the entry text is never read for one.
 
-  relay-log append --to <address> [--ws <slug>]... [--ask <id>] [--kind <word>] [--outcome <text>] (--text <t> | --text-file <path|->)
+  relay-log append --to <address> [--ws <slug>]... [--ask <id>] [--kind <word>] [--task <id>] [--session <key>] [--outcome <text>] (--text <t> | --text-file <path|->)
   relay-log outcome <R-n> (--text <t> | --text-file <path|->)
 
 append adds the next numbered entry (SKILL.md's shape: R-N, to, the verbatim
@@ -17,6 +17,8 @@ text, the outcome) with a UTC stamp in the heading:
   **Intake:** <id>                        (only when --ask is given)
   **Kind:** <word>                        (only when --kind is given)
   **Card:** <path or none>                (only when --card is given)
+  **Task:** <id>                          (only when --task is given)
+  **Session:** <key>                      (only when --session is given)
   **Text, verbatim:**
   > <each line of the text, prefixed with "> ">
   **Outcome:** <outcome, "pending" when none is given>
@@ -36,6 +38,11 @@ file is never opened, so an entry written with no ask id behaves exactly as it d
 --card names the card file a relay that asks the operator to decide points at, or the word none, and is written as
 a **Card:** line after the Kind line. It is checked for one non-empty line only: the file is never opened. The
 standing hook counts Kind question entries of the last 24 hours that carry no Card line (S11, design section 6).
+
+--task and --session record which task an entry's send served and which session took it. --task is the intake id
+(I-<n>), the fleet's task key. --session is marvel's session key, <workspace>/<name>, or the word unresolved for a send
+to a role that no seat has answered yet. Both are written after the Card line and checked for shape only, and an entry
+written with neither behaves exactly as it did before.
 
 An answer entry (--kind answer) owes the operator a Reply Shelf row, and nothing else prompts for it. It needs
 --ask, and after the heading the writer prints one more line naming the shelf-row call to make, with the ask
@@ -61,6 +68,7 @@ import argparse, datetime, fcntl, os, re, subprocess, sys
 HEADING = re.compile(rb"^## R-(\d+)\b", re.M)
 SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]*$")  # dws's pattern; the writer checks the shape only
 ASK_ID = re.compile(r"^I-[0-9]+$")  # dws intake's id; the writer checks the shape only
+SESSION_KEY = re.compile(r"^(unresolved|[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*)$")  # marvel's workspace/name, or unresolved
 KINDS = ("relay", "ruling", "build", "research", "question", "answer")
 
 
@@ -110,6 +118,8 @@ def main():
     a.add_argument("--ask", help="the intake id (I-<n>) of the operator ask this entry answers")
     a.add_argument("--kind", choices=KINDS, help="what sort of entry this is")
     a.add_argument("--card", help="the card file path the entry asks the operator to decide on, or the word none")
+    a.add_argument("--task", help="the task key of the send, an intake id (I-<n>)")
+    a.add_argument("--session", help="the session the send went to, <workspace>/<name>, or unresolved")
     g = a.add_mutually_exclusive_group(required=True)
     g.add_argument("--text")
     g.add_argument("--text-file")
@@ -143,6 +153,12 @@ def main():
         ws_line = ("**Workstream:** " + ", ".join(dict.fromkeys(args.ws)) + "\n") if args.ws else ""
         ws_line += (f"**Intake:** {args.ask}\n" if args.ask else "") + (f"**Kind:** {args.kind}\n" if args.kind else "")
         ws_line += f"**Card:** {args.card}\n" if args.card is not None else ""
+        if args.task is not None and not ASK_ID.match(args.task):
+            sys.exit(f"relay-log: --task {args.task!r} is not a task key (an intake id, I-<n>); nothing written")
+        if args.session is not None and not SESSION_KEY.match(args.session):
+            sys.exit(f"relay-log: --session {args.session!r} is not unresolved or <workspace>/<name>; nothing written")
+        ws_line += f"**Task:** {args.task}\n" if args.task is not None else ""
+        ws_line += f"**Session:** {args.session}\n" if args.session is not None else ""
 
     fd = os.open(log + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
