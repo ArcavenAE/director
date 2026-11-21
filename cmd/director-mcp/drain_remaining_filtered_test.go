@@ -44,6 +44,13 @@ func TestRemainingGlobalKeepsMailTheFilterKeeps(t *testing.T) {
 // what it fetches, as a wait does (ackafter.go), and returns that call's context.
 func holdOne(t *testing.T, r *pipeRig) context.Context {
 	t.Helper()
+	wctx, _ := holdOneWith(t, r)
+	return wctx
+}
+
+// holdOneWith is holdOne that also returns the call's hold, so a test can ack it.
+func holdOneWith(t *testing.T, r *pipeRig) (context.Context, *ackLater) {
+	t.Helper()
 	wctx, al := withAckLater(r.ctx)
 	env, _, _, err := r.bus.global.fetchOne(wctx, 2*time.Second)
 	if err != nil || env == nil {
@@ -52,7 +59,7 @@ func holdOne(t *testing.T, r *pipeRig) context.Context {
 	if got := al.heldByTier()["global"]; got != 1 {
 		t.Fatalf("setup: the call holds %d global messages, want 1", got)
 	}
-	return wctx
+	return wctx, al
 }
 
 // A message the call holds is in its reply, so the hold takes it off once. It
@@ -123,18 +130,43 @@ func TestRemainingGlobalWithNoCuePollLeavesOutTheDroppedArrival(t *testing.T) {
 }
 
 // The other direction: what the drain stores must not be what the cue reuses.
-// The drain reads first with a hold; a dropped message then arrives, and the cue's
-// count must see it.
+// The setup makes the drain's figure non-zero after its hold, so it reaches the
+// stored count (a figure of 0 returns before any slot is read), and makes the cue's
+// later poll come at the same floor and delivered sequence with a different set of
+// drops:
+//
+//   - seq 1 (plain1) is held by another call and never acked, so it holds the ack floor;
+//   - seq 2 (doubt1) is kept as a doubt at the fetch (the roster could not place it)
+//     and held by the draining call; the roster then places it, so the drain counts
+//     it as a drop, as the first version did, and stores that count;
+//   - the draining call's reply is written and its hold acked, which leaves the
+//     floor and the delivered sequence where they were and the cue's raw count equal
+//     to the figure the drain keyed on.
+//
+// The cue's count must then be 1 (plain1 waits). A cue that reused the drain's
+// stored count would read 0.
 func TestCueCountDoesNotReuseTheDrainsCount(t *testing.T) {
 	r, _ := forPathRig(t)
+	failing := true
+	r.bus.global.forFilter.roster = func(context.Context) ([]map[string]any, error) {
+		if failing {
+			return nil, errors.New("roster unreadable")
+		}
+		return forTestRows(), nil
+	}
 	sub := r.bus.global.cfg.inboxSubject()
 	pubEnv(t, r.ctx, r.gjs, sub, "plain1", "INFORM", "no FOR line")
-	wctx := holdOne(t, r)
-	if rem, _ := r.bus.remainingRead(wctx); rem["global"] != 0 {
-		t.Fatalf("setup: remaining global = %d, want 0 (plain1 is held)", rem["global"])
+	holdOne(t, r) // another call holds seq 1 and never acks it, so it keeps the floor down
+	pubEnv(t, r.ctx, r.gjs, sub, "doubt1", "INFORM", "FOR alpha-supervisor\nnot for you")
+	wctx, al := holdOneWith(t, r)
+	failing = false
+	// The drain's own figure is not what this test checks (the held-message test
+	// does); it only has to read, so it keys and stores a count if it is able to.
+	if _, failedTiers := r.bus.remainingRead(wctx); len(failedTiers) != 0 {
+		t.Fatalf("a tier could not be read: %v", failedTiers)
 	}
-	pubEnv(t, r.ctx, r.gjs, sub, "drop1", "INFORM", "FOR alpha-supervisor\nnot for you")
+	al.ack(r.bus, t.Logf)
 	if n := cueCountOf(t, r); n != 1 {
-		t.Fatalf("cue count = %d, want 1 (plain1 is ack-pending and counted; drop1 is dropped)", n)
+		t.Fatalf("cue count = %d, want 1 (plain1 waits; the drain's count must not be reused)", n)
 	}
 }
