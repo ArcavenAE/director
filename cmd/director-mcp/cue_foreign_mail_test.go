@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -70,5 +72,61 @@ func TestCueStaysQuietForGlobalMailTheFilterDrops(t *testing.T) {
 	}
 	if len(r.warns) != 0 {
 		t.Fatalf("a warning went out for mail the filter drops: %v", r.warns)
+	}
+}
+
+// A message the filter cannot place (the roster cannot be read, or no fresh row
+// names the seat it is for) is delivered by the drain, so the cue counts it for
+// that poll. That count must not be kept: when the doubt clears the next poll
+// leaves the message out, as the drain will, and the cue must not stay up for
+// mail it will not hand over (director#731).
+
+// setCueFilterClock sets the cue's reuse clock for one test.
+func setCueFilterClock(t *testing.T, now func() time.Time) {
+	t.Helper()
+	prev := cueFilterNow
+	cueFilterNow = now
+	t.Cleanup(func() { cueFilterNow = prev })
+}
+
+// Factor: the roster read fails on the first poll and recovers before the next.
+func TestCueCountLeavesOutDroppedMailOnceTheRosterReadRecovers(t *testing.T) {
+	r, _ := forPathRig(t)
+	clock := time.Now()
+	setCueFilterClock(t, func() time.Time { return clock })
+	failing := true
+	r.bus.global.forFilter.roster = func(context.Context) ([]map[string]any, error) {
+		if failing {
+			return nil, errors.New("roster unreadable")
+		}
+		return forTestRows(), nil
+	}
+	pubEnv(t, r.ctx, r.gjs, r.bus.global.cfg.inboxSubject(), "drop1", "INFORM", "FOR alpha-supervisor\nnot for you")
+	if n := cueCountOf(t, r); n != 1 {
+		t.Fatalf("cue count with the roster unreadable = %d, want 1 (a doubt is delivered, so counted)", n)
+	}
+	failing = false
+	clock = clock.Add(2 * time.Second)
+	if n := cueCountOf(t, r); n != 0 {
+		t.Fatalf("cue count after the roster read recovered = %d, want 0 (the filter now drops the message, and the drain will)", n)
+	}
+}
+
+// Factor: every row of the seat the mail is for is stale on the first poll and
+// fresh on the next, so the same doubt clears from the other side.
+func TestCueCountLeavesOutDroppedMailOnceTheRowsTurnFresh(t *testing.T) {
+	r, _ := forPathRig(t)
+	clock := time.Now()
+	setCueFilterClock(t, func() time.Time { return clock })
+	rows := []map[string]any{forRow("alpha-supervisor-g1-0", "alpha", "supervisor", "c1", 10*time.Minute)}
+	r.bus.global.forFilter.roster = func(context.Context) ([]map[string]any, error) { return rows, nil }
+	pubEnv(t, r.ctx, r.gjs, r.bus.global.cfg.inboxSubject(), "drop1", "INFORM", "FOR alpha-supervisor\nnot for you")
+	if n := cueCountOf(t, r); n != 1 {
+		t.Fatalf("cue count with only a stale row = %d, want 1 (no fresh row names the seat, so the message is delivered)", n)
+	}
+	rows = []map[string]any{forRow("alpha-supervisor-g1-0", "alpha", "supervisor", "c1", time.Second)}
+	clock = clock.Add(2 * time.Second)
+	if n := cueCountOf(t, r); n != 0 {
+		t.Fatalf("cue count once the row is fresh = %d, want 0 (the filter now drops the message, and the drain will)", n)
 	}
 }

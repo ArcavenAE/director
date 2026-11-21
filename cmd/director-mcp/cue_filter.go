@@ -41,6 +41,10 @@ var cueFilterPeekMax = 1000
 // the durable, so the reuse ends on its own.
 const cueFilterReuse = 30 * time.Second
 
+// cueFilterNow is the clock the peek's reuse reads. Production keeps time.Now;
+// a test sets it to its own clock so it can move past a poll without waiting.
+var cueFilterNow = time.Now
+
 type cueFilterKey struct{ waiting, ackFloor, delivered uint64 }
 
 // cueFilterCache is the last peek's result for a durable position.
@@ -75,7 +79,7 @@ func leaveOutDropped(ctx context.Context, c tierCounts) uint64 {
 		return c.global
 	}
 	key := cueFilterKey{waiting: c.global, ackFloor: c.ginfo.AckFloor.Stream, delivered: c.ginfo.Delivered.Stream}
-	now := time.Now()
+	now := cueFilterNow()
 	drops, ok := g.cueDrop.get(key, now)
 	if !ok {
 		pctx, cancel := context.WithTimeout(ctx, streamReadTimeout)
