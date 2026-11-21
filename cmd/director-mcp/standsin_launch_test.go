@@ -19,7 +19,7 @@ func TestResolveSeatEnvReadsStandsInFor(t *testing.T) {
 	}{
 		{"a team name is kept", "cue", "cue", nil},
 		{"unset stands in for no one", "", "", nil},
-		{"a malformed value is logged and ignored", "cue.ent", "", []string{`"cue.ent"`, "ignored"}},
+		{"a malformed value is logged and ignored", "cue.ent", "", []string{`"cue.ent"`, "ignored", `contains "."`}},
 		{"the seat's own team is logged and ignored", "ops", "", []string{`"ops"`, "ignored", "its own team"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

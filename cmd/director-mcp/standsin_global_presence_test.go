@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // The global presence row carries stands_in_for while the seat has one set
@@ -15,7 +17,16 @@ func TestGlobalPresenceRowCarriesStandsInFor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
-	provision(t, ctx, url)
+	nc, _ := provision(t, ctx, url)
+	// A supervisor's global tier opens a durable on GLOBAL_TO_<cluster>, which
+	// provision does not create.
+	gjs, err := jetstream.NewWithDomain(nc, "global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gjs.CreateStream(ctx, jetstream.StreamConfig{Name: "GLOBAL_TO_kinu", Subjects: []string{"global.kinu.>"}}); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct{ id, standsIn string }{{"mirror", "cue"}, {"plain", ""}} {
 		b, err := connect(ctx, url, Sender{AgentID: tc.id, Workspace: "aae-orc", Team: "ops", StandsIn: tc.standsIn},
 			&globalConfig{Domain: "global", Cluster: "kinu", Role: "supervisor"})
