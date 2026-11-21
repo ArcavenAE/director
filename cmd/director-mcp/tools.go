@@ -379,10 +379,17 @@ func toolSend(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	if ask != "" {
 		// The send has left. A relay-log that cannot write is a warning on the accepted
 		// result, never a failed send: refusing now would invite a duplicate.
-		if entry, shelf, err := writeRelayEntry(ctx, ask, kind, e.Recipient.Address, e.Content.Data, e.MessageID); err != nil {
+		session := relaySession(e.Recipient.Address, res.Workspace)
+		if entry, shelf, err := writeRelayEntry(ctx, ask, kind, e.Recipient.Address, e.Content.Data, e.MessageID, session); err != nil {
 			out["warning"] = "accepted, but no relay-log entry was written: " + err.Error()
 		} else {
 			out["relay_entry"] = entry
+			if session == sessionUnresolved {
+				// The first reply that names this send will say which session took it.
+				if rerr := rememberUnresolved(e.MessageID, ask, e.Recipient.Address); rerr != nil {
+					out["session_warning"] = "the session of this send is unresolved and could not be remembered for its reply: " + rerr.Error()
+				}
+			}
 			if shelf != "" {
 				// An answer entry owes the Reply Shelf a row; the cue reaches the seat here.
 				out["shelf"] = shelf
@@ -494,6 +501,7 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 			}
 		}
 	}
+	resolveRelaySession(ctx, res.Env)
 	out := map[string]any{"message": res.Env}
 	if inherited != "" {
 		out["inherited_from"] = inherited
@@ -536,6 +544,9 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 // returnedResult answers a wait from the returned queue, in the shape the
 // wait would have used.
 func returnedResult(ctx context.Context, bus *Bus, a waitArgs, items []drained) map[string]any {
+	for _, it := range items {
+		resolveRelaySession(ctx, it.Env)
+	}
 	note := "returned: the reply that first carried this mail was cancelled after it was written; it is not new mail"
 	if a.Max > 1 {
 		rem, failed := bus.remainingRead(ctx)
@@ -565,6 +576,9 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 	items := res.Items
 	if items == nil {
 		items = []drained{}
+	}
+	for _, it := range items {
+		resolveRelaySession(ctx, it.Env)
 	}
 	out := map[string]any{
 		"messages": items,

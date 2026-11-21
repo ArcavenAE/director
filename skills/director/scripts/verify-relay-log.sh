@@ -20,7 +20,7 @@ pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1${2:+ -- $2}"; fail=$((fail+1)); }
 
-root="$(mktemp -d)"
+root="$(mktemp -d "${TMPDIR:-/tmp}/relay-log-verify.XXXXXX")"
 trap 'rm -rf "$root"' EXIT
 export RELAY_LOG="$root/relay-log.md"
 printf '# Relay log\n\n## R-7 (old) -> someone\nolder entry, hand typed\n' > "$RELAY_LOG"

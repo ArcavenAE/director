@@ -121,11 +121,23 @@ func directorHome() string {
 
 var relayHeading = regexp.MustCompile(`^## (R-[0-9]+) `)
 
+// relayArgs are the fields of one relay-log append. When session is set the entry
+// also carries the Task line (the ask id) and the Session line.
+type relayArgs struct {
+	ask, kind, to, text, outcome, session string
+}
+
 // writeRelayEntry has relay-log append the entry for an accepted send and returns
 // its number (R-<n>) and, for an answer entry, the `shelf:` cue line relay-log prints
 // after the heading (empty for every other kind). The text goes in on stdin,
-// verbatim; the message id rides on the Outcome line.
-func writeRelayEntry(ctx context.Context, ask, kind, to, text, messageID string) (string, string, error) {
+// verbatim; the message id rides on the Outcome line. session is the session the
+// send went to, as relaySession names it.
+func writeRelayEntry(ctx context.Context, ask, kind, to, text, messageID, session string) (string, string, error) {
+	return relayAppend(ctx, relayArgs{ask: ask, kind: kind, to: to, text: text, outcome: "sent; message " + messageID, session: session})
+}
+
+// relayAppend runs relay-log append with the given fields.
+func relayAppend(ctx context.Context, a relayArgs) (string, string, error) {
 	home := directorHome()
 	if home == "" {
 		return "", "", errors.New("no DIRECTOR_HOME and no home directory")
@@ -133,9 +145,12 @@ func writeRelayEntry(ctx context.Context, ask, kind, to, text, messageID string)
 	bin := filepath.Join(home, "bin", "relay-log")
 	ctx, cancel := context.WithTimeout(ctx, relayLogTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "append", "--to", to, "--ask", ask, "--kind", kind,
-		"--outcome", "sent; message "+messageID, "--text-file", "-")
-	cmd.Stdin = strings.NewReader(text)
+	argv := []string{"append", "--to", a.to, "--ask", a.ask, "--kind", a.kind, "--outcome", a.outcome, "--text-file", "-"}
+	if a.session != "" {
+		argv = append(argv, "--task", a.ask, "--session", a.session)
+	}
+	cmd := exec.CommandContext(ctx, bin, argv...)
+	cmd.Stdin = strings.NewReader(a.text)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
