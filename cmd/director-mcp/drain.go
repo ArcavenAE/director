@@ -402,7 +402,10 @@ func (b *Bus) remainingRead(ctx context.Context) (out map[string]uint64, failed 
 		b.globalMu.Unlock()
 		if g != nil {
 			if info, err := g.cons().Info(ctx); err == nil {
-				out["global"] = waitingAfter(info, own["global"])
+				// Mail the FOR filter will drop is not mail the seat will be handed, so it
+				// is not remaining, as the cue's count and the pending tracker have it.
+				// The hold comes off first; with the filter off this is the figure it was.
+				out["global"] = leaveOutDropped(ctx, tierCounts{global: waitingAfter(info, own["global"]), g: g, ginfo: info})
 			} else {
 				failed = append(failed, "global")
 			}
