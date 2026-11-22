@@ -16,7 +16,7 @@ it writes nothing, sends nothing and gates nothing.
 
 The pair (team, name): the session's `Team` and `Name` against the roster row's `team` and `agent_id`. The join assumes the
 roster `agent_id` is the marvel session name; it was built from the fixtures and the roster reader's code, and has not
-been run against a live host. The same name under another team does not join.
+been run against a live host. The same name under another team does not join. Caveat: a seat name declared some day may override `DIRECTOR_AGENT_ID`, and then the roster `agent_id` and the marvel session name could differ; the join would need a mapping.
 
 | marvel session | roster row | joined |
 |---|---|---|
@@ -25,8 +25,9 @@ been run against a live host. The same name under another team does not join.
 | Team `t1`, Name `t1-lost-g1-0` | no row | no |
 
 `director-mcp roster --json` reads the local broker. `--roster FILE` applies one roster to every cluster, and
-`--roster CLUSTER=FILE` gives a cluster its own. When per-cluster rosters are given and a cluster has none, that
-cluster prints a GAP and its seats are not claimed missing.
+`--roster CLUSTER=FILE` gives a cluster its own. When per-cluster rosters are given and a cluster has none, or its
+roster cannot be read, that cluster prints a GAP and its seats are not claimed missing; the other clusters still print.
+A starting cluster prints a NOTE that its rows may be incomplete.
 
 ## The line
 

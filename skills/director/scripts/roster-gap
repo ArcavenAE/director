@@ -23,7 +23,8 @@ the seat is printed, never dropped.
 
 Gaps print as `roster-gap: GAP ...` and never read as zero seats: a cluster whose record is not answered, starting
 or same_daemon; sessions or roster that cannot be read; a cluster with no roster when per-cluster rosters were given.
---roster FILE applies to every cluster; --roster CLUSTER=FILE applies to that cluster only. The last line counts the
+--roster FILE applies to every cluster; --roster CLUSTER=FILE applies to that cluster only, and one that cannot be read
+prints a GAP for that cluster while the others still print. The last line counts the
 seats checked.
 
 Inputs default to the two commands ($ROSTER_GAP_MARVEL, default marvel; $ROSTER_GAP_DIRECTOR_MCP, default
@@ -155,6 +156,7 @@ def main(argv):
         print("roster-gap: GAP sessions (no sessions list in the answer)")
         return 0
 
+    gaps, silent = 0, set()
     by_cluster, shared = {}, None
     if rosters:
         for spec in rosters:
@@ -166,7 +168,11 @@ def main(argv):
             label = name or "all clusters"
             if keys is None:
                 print("roster-gap: GAP roster %s (%s)" % (clean(label), why or "no rows list"))
-                return 0
+                if not name:
+                    return 0
+                silent.add(name)  # this cluster's seats are not claimed missing; the others still print
+                gaps += 1
+                continue
             if name:
                 by_cluster[name] = keys
             else:
@@ -179,9 +185,10 @@ def main(argv):
             return 0
         shared = keys
 
-    gaps, silent = 0, set()
     if isinstance(clusters, list):
         for c in clusters:
+            if isinstance(c, dict) and c.get("outcome") == "starting":
+                print("roster-gap: NOTE cluster %s is starting, its rows may be incomplete" % clean(c.get("cluster") or "?"))
             if isinstance(c, dict) and c.get("outcome") not in OK_OUTCOMES:
                 print("roster-gap: GAP cluster %s (%s)" % (clean(c.get("cluster") or "?"), clean(c.get("outcome") or "no outcome")))
                 silent.add(c.get("cluster"))

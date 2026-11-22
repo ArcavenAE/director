@@ -108,6 +108,12 @@ has "roster-gap: GAP roster (" && ok "no roster file and no director-mcp is a GA
 # --- per-cluster rosters -----------------------------------------------------------------------------------------------------
 run -- --sessions "$root/sessions.json" --roster "alpha=$root/roster-alpha.json" --roster "beta=$root/roster-beta.json"
 has "alpha/t2-builder-g1-0" && hasnt "beta/" && ok "per-cluster rosters are used for their own cluster" || bad "per cluster" "$(cat "$root/out")"
+run -- --sessions "$root/sessions.json" --roster "alpha=$root/roster-alpha.json" --roster "beta=$root/bad.json"
+has "roster-gap: GAP roster beta (not JSON)" && has "alpha/t2-builder-g1-0" && hasnt "beta/t3-builder-g1-0" && ok "one unreadable per-cluster roster prints a GAP for that cluster and the other clusters still print" || bad "per-cluster unreadable" "$(cat "$root/out")"
+has "roster-gap: checked 4 claude seat(s) past 10 min, 3 without a roster row, 2 cluster gap(s)" && ok "the unreadable cluster counts as a gap and its seats are not checked" || bad "per-cluster summary" "$(tail -1 "$root/out")"
+sed 's/"cluster":"beta","outcome":"answered"/"cluster":"beta","outcome":"starting"/' "$root/sessions.json" >"$root/sessions-starting.json"
+run -- --sessions "$root/sessions-starting.json" --roster "$root/roster.json"
+has "roster-gap: NOTE cluster beta is starting, its rows may be incomplete" && ok "a starting cluster prints a NOTE" || bad "starting note" "$(cat "$root/out")"
 run -- --sessions "$root/sessions.json" --roster "alpha=$root/roster-alpha.json"
 has "roster-gap: GAP cluster beta (no roster given for it)" && ok "a cluster with no roster given prints a GAP when others have one" || bad "no roster for beta" "$(cat "$root/out")"
 run -- --sessions "$root/sessions.json" --roster "$root/roster.json" --min-minutes 200
