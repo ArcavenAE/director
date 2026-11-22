@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""login-expiry - warn before a harness login lapses (sim/design/login-expiry.md).
+
+  login-expiry [--host NAME] [--home-label LABEL] [--state-dir DIR] [--now TIME] [--warn-hours N]
+
+Run once a day per host and per HOME. It runs `claude auth status --json` and keeps three keys of the answer:
+loginExpiresAt, loggedIn and subscriptionType. The same command prints an email address and an organization;
+neither is kept. The raw answer is parsed in memory, never printed, logged or written, and a failed read says only
+that the answer was unreadable.
+
+At or under 72 hours before loginExpiresAt, or when loggedIn is false, it prints two lines:
+  desk: login-expiry HOST HOME-LABEL expires TIME, N h left, subscription S
+  introspect: login-expiry HOST/HOME-LABEL ... | id: TIME | remedy: renew the claude login | owner: operator
+Above 72 hours it prints nothing and appends one state line to <state-dir>/state.log.
+
+Renewal: <state-dir>/last-expiry.json keeps the last seen expiry per host and HOME label. When the new expiry is
+later than the stored one, it reads `marvel get sessions --all-clusters -o json` and prints one line per running seat
+whose harness state is logged-out, so the operator or director can nudge it:
+  renewal: nudge CLUSTER/SEAT (logged-out)
+When the sessions cannot be read in full (marvel gives no answer, or a cluster is not answered or same_daemon, a
+starting cluster included) it prints the seats it did see, then `renewal: GAP (...)` naming the cluster, and leaves the
+stored expiry as it was, so the next run lists again; a seat may be nudged twice in that case. marvel's exit status
+alone is a GAP only when no cluster explains it. It never sends or restarts anything.
+
+The HOME is named by a label (default "default", or $LOGIN_EXPIRY_HOME_LABEL), never by its path, in any line.
+Programs: $LOGIN_EXPIRY_CLAUDE (default claude) and $LOGIN_EXPIRY_MARVEL (default marvel). State directory:
+$LOGIN_EXPIRY_STATE, else $DIRECTOR_STATE/login-expiry, else ~/.director/state/login-expiry (directory 700, files
+600). It reads no credential file and sends nothing. Exit 0 whatever it finds; 2 for a usage error.
+"""
+import datetime
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+
+WARN_HOURS = 72
+OK_OUTCOMES = ("answered", "same_daemon")
+TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
+LABEL_RE = re.compile(r"[A-Za-z0-9._-]{1,40}\Z")
+UTC = datetime.timezone.utc
+
+
+def parse_time(v):
+    """An ISO-8601 string (Z or an offset, optional fraction) or an epoch in seconds or milliseconds."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        secs = v / 1000.0 if v > 1e11 else float(v)
+        try:
+            return datetime.datetime.fromtimestamp(secs, UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        t = datetime.datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=UTC)
+    return t.astimezone(UTC)
+
+
+def fmt(t):
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def clean(s, n=40):
+    """A value that goes into a line: printable, one line, short."""
+    return re.sub(r"[^A-Za-z0-9._: -]", "?", str(s))[:n]
+
+
+def state_dir(arg):
+    d = arg or os.environ.get("LOGIN_EXPIRY_STATE")
+    if not d:
+        base = os.environ.get("DIRECTOR_STATE") or os.path.join(os.path.expanduser("~"), ".director", "state")
+        d = os.path.join(base, "login-expiry")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    return d
+
+
+def write_private(path, text, mode):
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if mode == "a" else os.O_TRUNC)
+    fd = os.open(path, flags, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+
+
+def read_auth():
+    """Return (fields, why). fields holds only the three kept keys; the raw output stays in this function."""
+    prog = os.environ.get("LOGIN_EXPIRY_CLAUDE", "claude")
+    try:
+        p = subprocess.run([prog, "auth", "status", "--json"], capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None, "claude auth status did not run"
+    try:
+        doc = json.loads(p.stdout.decode("utf-8", "replace"))
+    except ValueError:
+        return None, "claude auth status gave no readable answer"
+    if not isinstance(doc, dict):
+        return None, "claude auth status gave no readable answer"
+    return {k: doc.get(k) for k in ("loginExpiresAt", "loggedIn", "subscriptionType")}, ""
+
+
+def logged_out_seats():
+    """Return (lines, why): one line per running seat whose harness state is logged-out."""
+    prog = os.environ.get("LOGIN_EXPIRY_MARVEL", "marvel")
+    try:
+        p = subprocess.run([prog, "get", "sessions", "--all-clusters", "-o", "json"], capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return [], "marvel did not run"
+    try:
+        doc = json.loads(p.stdout.decode("utf-8", "replace"))
+    except ValueError:
+        first = p.stderr.decode("utf-8", "replace").strip().splitlines()[:1]
+        return [], "marvel gave no readable answer" + (": " + clean(first[0], 100) if first else "")
+    rows = doc.get("sessions") if isinstance(doc, dict) else doc
+    if not isinstance(rows, list):
+        return [], "marvel's answer has no sessions list"
+    # a cluster that did not answer, or is still starting, leaves its seats out: that is a GAP, never a full list
+    bad = []
+    clusters = doc.get("clusters") if isinstance(doc, dict) else None
+    if isinstance(clusters, list):
+        for c in clusters:
+            if isinstance(c, dict) and c.get("outcome") not in OK_OUTCOMES:
+                bad.append("%s %s" % (clean(c.get("cluster") or "?"), clean(c.get("outcome") or "no outcome")))
+    why = ""
+    if bad:
+        why = "cluster not read in full: " + ", ".join(bad)
+    elif p.returncode != 0:
+        why = "marvel exited %d with no cluster to explain it" % p.returncode
+    out = []
+    for r in rows:
+        if not isinstance(r, dict) or r.get("State") != "running":
+            continue
+        hs = r.get("harness_state")
+        if isinstance(hs, dict) and hs.get("state") == "logged-out":
+            out.append("renewal: nudge %s/%s (logged-out)" % (clean(r.get("cluster") or "-"), clean(r.get("Name") or "?", 80)))
+    return sorted(out), why
+
+
+def main(argv):
+    opts = {"--host": None, "--home-label": None, "--state-dir": None, "--now": None, "--warn-hours": None}
+    i = 0
+    while i < len(argv):
+        if argv[i] not in opts or i + 1 >= len(argv):
+            sys.stderr.write("usage: login-expiry [--host NAME] [--home-label LABEL] [--state-dir DIR] [--now TIME] [--warn-hours N]\n")
+            return 2
+        opts[argv[i]] = argv[i + 1]
+        i += 2
+    host = clean(opts["--host"] or socket.gethostname().split(".")[0], 40)
+    label = opts["--home-label"] or os.environ.get("LOGIN_EXPIRY_HOME_LABEL") or "default"
+    if not LABEL_RE.match(label):
+        sys.stderr.write("login-expiry: the home label is letters, digits, dot, dash and underscore, up to 40\n")
+        return 2
+    if opts["--now"] is not None:
+        if not TIME_RE.match(opts["--now"]) or parse_time(opts["--now"]) is None:
+            sys.stderr.write("login-expiry: --now is YYYY-MM-DDTHH:MM:SSZ\n")
+            return 2
+        now = parse_time(opts["--now"])
+    else:
+        now = datetime.datetime.now(UTC)
+    try:
+        warn = int(opts["--warn-hours"]) if opts["--warn-hours"] is not None else WARN_HOURS
+    except ValueError:
+        sys.stderr.write("login-expiry: --warn-hours is a whole number\n")
+        return 2
+    sdir = state_dir(opts["--state-dir"])
+    key = "%s/%s" % (host, label)
+
+    fields, why = read_auth()
+    if fields is None:
+        line = "desk: login-expiry %s %s UNKNOWN (%s)" % (host, label, why)
+        print(line)
+        write_private(os.path.join(sdir, "state.log"), "%s %s unknown\n" % (fmt(now), key), "a")
+        return 0
+
+    sub = clean(fields["subscriptionType"] if fields["subscriptionType"] is not None else "unknown", 30)
+    logged_in = fields["loggedIn"]
+    expiry = parse_time(fields["loginExpiresAt"])
+
+    if logged_in is False:
+        exp_txt = fmt(expiry) if expiry else "unknown"
+        print("desk: login-expiry %s %s logged out, last expiry %s, subscription %s" % (host, label, exp_txt, sub))
+        print("introspect: login-expiry %s logged out | id: %s | remedy: log in again | owner: operator" % (key, exp_txt))
+        write_private(os.path.join(sdir, "state.log"), "%s %s logged-out\n" % (fmt(now), key), "a")
+        return 0
+    if expiry is None:
+        print("desk: login-expiry %s %s UNKNOWN (no readable loginExpiresAt), subscription %s" % (host, label, sub))
+        write_private(os.path.join(sdir, "state.log"), "%s %s no-expiry\n" % (fmt(now), key), "a")
+        return 0
+
+    secs = (expiry - now).total_seconds()
+    hours = int(secs / 3600)  # toward zero, so a login that lapsed 30 minutes ago is under 1 h, not 1 h
+    warned = secs <= warn * 3600
+    if warned:
+        if secs >= 0:
+            left = "%d h left" % hours
+        elif hours == 0:
+            left = "expired under 1 h ago"
+        else:
+            left = "expired %d h ago" % (-hours)
+        print("desk: login-expiry %s %s expires %s, %s, subscription %s" % (host, label, fmt(expiry), left, sub))
+        print("introspect: login-expiry %s expires %s, %s | id: %s | remedy: renew the claude login | owner: operator"
+              % (key, fmt(expiry), left, fmt(expiry)))
+    write_private(os.path.join(sdir, "state.log"),
+                  "%s %s expires %s hours_left %d%s\n" % (fmt(now), key, fmt(expiry), hours, " warned" if warned else ""), "a")
+
+    # renewal: a later expiry than the one last seen
+    last_path = os.path.join(sdir, "last-expiry.json")
+    try:
+        with open(last_path) as f:
+            last = json.load(f)
+        if not isinstance(last, dict):
+            last = {}
+    except (OSError, ValueError):
+        last = {}
+    prev = parse_time(last.get(key)) if key in last else None
+    if prev is not None and expiry > prev:
+        lines, why = logged_out_seats()
+        if why:
+            for ln in lines:
+                print(ln)
+            print("renewal: GAP (%s)" % why)
+            return 0  # the stored expiry stays, so the next run lists again
+        for ln in lines:
+            print(ln)
+    last[key] = fmt(expiry)
+    write_private(last_path, json.dumps(last, sort_keys=True) + "\n", "w")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

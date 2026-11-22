@@ -213,6 +213,10 @@ grep -qF "$BINHOME/route-ledger" "$skill" && ok "skill calls route-ledger from t
 grep -qF "$BINHOME/schedule-ack" "$skill" && ok "skill calls schedule-ack from the bin home" || bad "skill calls schedule-ack from the bin home"
 [[ -x "$here/skills/director/scripts/schedule-ack" ]] && ok "the fallback scripts/schedule-ack exists in the checkout" || bad "the fallback scripts/schedule-ack exists in the checkout"
 [[ -f "$cp_home/director/bin/schedule-ack" && ! -L "$cp_home/director/bin/schedule-ack" && -x "$cp_home/director/bin/schedule-ack" ]] && ok "copy install puts a real executable schedule-ack in the bin home" || bad "copy install puts a real executable schedule-ack in the bin home"
+# login-expiry (I-685): installed and executable, with the script in the checkout. Nothing schedules it from here.
+[[ -x "$clean/director/bin/login-expiry" ]] && ok "install puts login-expiry in the bin home, executable" || bad "install puts login-expiry in the bin home, executable"
+[[ -x "$here/skills/director/scripts/login-expiry" ]] && ok "the script login-expiry exists in the checkout, executable" || bad "the script login-expiry exists in the checkout, executable"
+[[ -f "$cp_home/director/bin/login-expiry" && ! -L "$cp_home/director/bin/login-expiry" && -x "$cp_home/director/bin/login-expiry" ]] && ok "copy install puts a real executable login-expiry in the bin home" || bad "copy install puts a real executable login-expiry in the bin home"
 
 # Director's own role definition ships with the skill and the skill points at it (aae-orc-xq3el).
 # It must stand alone: no catalog front matter, no fragment includes, and none of the terms of
