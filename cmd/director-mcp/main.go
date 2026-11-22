@@ -228,8 +228,17 @@ func main() {
 	// with defers unrun and a live-looking presence row left behind (BEAT-C).
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	bus, err := connect(ctx, url, self, gcfg)
+	// One plan for every attempt, so a retry after a half-finished connect
+	// reuses the instance and the start floors (connectPlan).
+	plan := newConnectPlan()
+	bus, err := connectRetry(ctx, defaultConnectRetry, realRetryClock, logf, func(ctx context.Context) (*Bus, error) {
+		return connectPlanned(ctx, url, self, gcfg, plan)
+	})
 	if err != nil {
+		if ctx.Err() != nil {
+			logf("shutdown signal received during the bus connect, exiting")
+			return
+		}
 		fmt.Fprintf(os.Stderr, "director-mcp: bus connect failed: %v\n", err)
 		os.Exit(1)
 	}
