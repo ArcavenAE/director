@@ -125,6 +125,8 @@ install_one "$SRC/skills/director/scripts/route-ledger" "$DIRECTOR_HOME/bin/rout
 install_one "$SRC/skills/director/scripts/schedule-ack" "$DIRECTOR_HOME/bin/schedule-ack"
 # login-expiry: the daily warning before a harness login lapses; the skill names it by its bin-home path.
 install_one "$SRC/skills/director/scripts/login-expiry" "$DIRECTOR_HOME/bin/login-expiry"
+# roster-gap: the sweep line for a seat up in marvel and absent from the director roster; the skill names it by its bin-home path.
+install_one "$SRC/skills/director/scripts/roster-gap" "$DIRECTOR_HOME/bin/roster-gap"
 # director: the seat launcher's reader of seat.env. `director env` prints the validated lines and works from a
 # --copy install; `director start` and `director prove` need the repo beside it (a link finds it).
 install_one "$SRC/scripts/director" "$DIRECTOR_HOME/bin/director"
