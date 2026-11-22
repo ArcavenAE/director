@@ -43,10 +43,10 @@ sessions() {
   cat >"$root/sessions.json" <<'JSON'
 {"clusters":[{"cluster":"alpha","outcome":"answered","as_of":"2030-01-10T12:00:00Z"}],
  "sessions":[
-  {"cluster":"alpha","Name":"seat-b-g1-0","State":"running","HarnessState":{"state":"logged-out","confidence":"high"}},
-  {"cluster":"alpha","Name":"seat-a-g1-0","State":"running","HarnessState":{"state":"logged-out","confidence":"high"}},
-  {"cluster":"alpha","Name":"seat-c-g1-0","State":"running","HarnessState":{"state":"ready"}},
-  {"cluster":"alpha","Name":"seat-d-g1-0","State":"failed","HarnessState":{"state":"logged-out"}},
+  {"cluster":"alpha","Name":"seat-b-g1-0","State":"running","harness_state":{"state":"logged-out","confidence":"high"}},
+  {"cluster":"alpha","Name":"seat-a-g1-0","State":"running","harness_state":{"state":"logged-out","confidence":"high"}},
+  {"cluster":"alpha","Name":"seat-c-g1-0","State":"running","harness_state":{"state":"ready"}},
+  {"cluster":"alpha","Name":"seat-d-g1-0","State":"failed","harness_state":{"state":"logged-out"}},
   {"cluster":"alpha","Name":"seat-e-g1-0","State":"running"}]}
 JSON
 }
