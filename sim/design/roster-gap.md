@@ -14,8 +14,9 @@ it writes nothing, sends nothing and gates nothing.
 
 ## The join key
 
-The pair (team, name): the session's `Team` and `Name` against the roster row's `team` and `agent_id`. Both sides are
-built from the same seat name, so the same name under another team does not join.
+The pair (team, name): the session's `Team` and `Name` against the roster row's `team` and `agent_id`. The join assumes the
+roster `agent_id` is the marvel session name; it was built from the fixtures and the roster reader's code, and has not
+been run against a live host. The same name under another team does not join.
 
 | marvel session | roster row | joined |
 |---|---|---|
