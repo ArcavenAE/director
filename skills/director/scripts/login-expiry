@@ -124,7 +124,7 @@ def logged_out_seats():
     for r in rows:
         if not isinstance(r, dict) or r.get("State") != "running":
             continue
-        hs = r.get("HarnessState")
+        hs = r.get("harness_state")
         if isinstance(hs, dict) and hs.get("state") == "logged-out":
             out.append("renewal: nudge %s/%s (logged-out)" % (clean(r.get("cluster") or "-"), clean(r.get("Name") or "?", 80)))
     return sorted(out), ""
