@@ -344,6 +344,12 @@ func (f *forFilter) drops(ctx context.Context, e *Envelope) (bool, string) {
 // FOR line, an ambiguous line, a name that is this seat's own, a seat proven to
 // be this one) is not a doubt.
 func (f *forFilter) decide(ctx context.Context, e *Envelope) (drop bool, text string, doubt bool) {
+	return f.decideWith(ctx, e, f.roster)
+}
+
+// decideWith is decide over a roster read the caller supplies, so a caller that
+// decides many messages at once can read the roster once for all of them.
+func (f *forFilter) decideWith(ctx context.Context, e *Envelope, roster func(context.Context) ([]map[string]any, error)) (drop bool, text string, doubt bool) {
 	texts := forTexts(e.Content.Data)
 	if len(texts) == 0 {
 		return false, "", false
@@ -372,7 +378,7 @@ func (f *forFilter) decide(ctx context.Context, e *Envelope) (drop bool, text st
 	if f.forProseNamesSelf(prose) {
 		return false, "", false // this seat is named in the prose: deliver
 	}
-	rows, err := f.roster(ctx)
+	rows, err := roster(ctx)
 	if err != nil {
 		return false, "", true
 	}
@@ -407,10 +413,39 @@ func (g *globalTier) foreign(ctx context.Context, e *Envelope) (bool, string) {
 // treats it as deliver, as before; the cue's count uses it to avoid keeping a
 // count that a later roster read may change.
 func (g *globalTier) foreignDoubt(ctx context.Context, e *Envelope) (drop bool, text string, doubt bool) {
+	return g.foreignDoubtWith(ctx, e, nil)
+}
+
+// foreignDoubtWith is foreignDoubt over a roster read the caller supplies (nil
+// keeps the filter's own read, once per message).
+func (g *globalTier) foreignDoubtWith(ctx context.Context, e *Envelope, roster func(context.Context) ([]map[string]any, error)) (drop bool, text string, doubt bool) {
 	if g.forFilter == nil {
 		return false, "", false
 	}
-	return g.forFilter.decide(ctx, e)
+	if roster == nil {
+		roster = g.forFilter.roster
+	}
+	return g.forFilter.decideWith(ctx, e, roster)
+}
+
+// rosterOnce wraps a roster read so a caller that decides a list of messages
+// reads it once, on the first message that needs it, and every later message
+// uses that answer, an error included. A burst of N waiting messages is then
+// one scan of the presence rows and not N, inside the one read deadline the
+// count has (I-685 item 8).
+func rosterOnce(read func(context.Context) ([]map[string]any, error)) func(context.Context) ([]map[string]any, error) {
+	var (
+		done bool
+		rows []map[string]any
+		err  error
+	)
+	return func(ctx context.Context) ([]map[string]any, error) {
+		if !done {
+			rows, err = read(ctx)
+			done = true
+		}
+		return rows, err
+	}
 }
 
 // dropForeign is the one place a received message meets the filter. Every path

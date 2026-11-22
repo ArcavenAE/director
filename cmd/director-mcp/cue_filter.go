@@ -128,6 +128,9 @@ func leaveOutDroppedIn(ctx context.Context, c tierCounts, slot *cueFilterCache, 
 		// waiting is no longer cancelled by an unrelated acked one.
 		var certain, uncertain uint64
 		doubted := false // a message was delivered only because the roster could not place it
+		// One roster read for the whole list: a burst of N messages is one scan of
+		// the presence rows, not N inside the one read deadline (I-685 item 8).
+		roster := rosterOnce(g.forFilter.roster)
 		for _, it := range items {
 			if it.Env == nil {
 				continue // does not decode: delivered, so counted
@@ -135,7 +138,7 @@ func leaveOutDroppedIn(ctx context.Context, c tierCounts, slot *cueFilterCache, 
 			if _, isHeld := held[it.Seq]; isHeld {
 				continue // in the caller's reply: taken off once, by the caller's hold
 			}
-			drop, _, doubt := g.foreignDoubt(pctx, it.Env)
+			drop, _, doubt := g.foreignDoubtWith(pctx, it.Env, roster)
 			if doubt {
 				doubted = true
 			}
