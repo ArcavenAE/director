@@ -278,6 +278,40 @@ func newInstanceID() string {
 }
 
 func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (*Bus, error) {
+	return connectPlanned(ctx, url, self, gcfg, newConnectPlan())
+}
+
+// createConsumer is how connect creates a durable. A test replaces it to make
+// the broker answer with a timeout, the way a loaded host does.
+var createConsumer = func(ctx context.Context, js jetstream.JetStream, stream string, cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+	return js.CreateOrUpdateConsumer(ctx, stream, cfg)
+}
+
+// connectPlan is what stays the same across the attempts of one startup: the
+// instance id, which names the durables, and the start floors, which a durable
+// that already exists cannot be moved off. A retry that drew a new instance
+// would leave the first attempt's durable behind as a stray seat, and one that
+// read the floors again could ask an existing durable for a different start
+// sequence, which the broker refuses.
+type connectPlan struct {
+	instance  string
+	floorsSet bool
+	floor     uint64
+	roleFloor uint64
+	localWhy  string
+	roleWhy   string
+}
+
+func newConnectPlan() *connectPlan { return &connectPlan{instance: newInstanceID()} }
+
+// permanentConnectError marks a failure a retry cannot cure (a bad local
+// setting), so the retry loop returns it at once.
+type permanentConnectError struct{ err error }
+
+func (p *permanentConnectError) Error() string { return p.err.Error() }
+func (p *permanentConnectError) Unwrap() error { return p.err }
+
+func connectPlanned(ctx context.Context, url string, self Sender, gcfg *globalConfig, plan *connectPlan) (*Bus, error) {
 	ring := &violationRing{}
 	nc, js, err := dialRing(url, self, ring)
 	if err != nil {
@@ -291,9 +325,9 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	h, herr := handledFromEnv()
 	if herr != nil {
 		nc.Close()
-		return nil, herr
+		return nil, &permanentConnectError{herr}
 	}
-	b := &Bus{violations: ring, nc: nc, js: js, kv: kv, self: self, instance: newInstanceID(), pid: os.Getpid(), pidspace: thisPidspace(), state: stateCatchingUp, connectedAt: time.Now(), globalCfg: gcfg, handled: h}
+	b := &Bus{violations: ring, nc: nc, js: js, kv: kv, self: self, instance: plan.instance, pid: os.Getpid(), pidspace: thisPidspace(), state: stateCatchingUp, connectedAt: time.Now(), globalCfg: gcfg, handled: h}
 	if h != nil {
 		h.streamOf = b.streamFor
 		h.onAck = b.noteTierAcked
@@ -341,34 +375,50 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 	// The own subject resumes after this id's departed durables that read it
 	// (a combined one from before the split counts), the role subject after
 	// every durable of any id that reads it, live or departed. Both floors are
-	// read before either durable is created.
-	floor, ferr := ownSubjectFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", ownSubject, liveLocal)
-	localWhy := ""
-	if ferr != nil && floor == 0 {
-		localWhy = "listing this seat's local durables failed: " + ferr.Error()
+	// read before either durable is created, and once per startup: after the
+	// first create call a durable may exist (a timed-out create can still have
+	// landed), so a retry reuses what the first attempt read.
+	if !plan.floorsSet {
+		var ferr error
+		plan.floor, ferr = ownSubjectFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", ownSubject, liveLocal)
+		if ferr != nil && plan.floor == 0 {
+			plan.localWhy = "listing this seat's local durables failed: " + ferr.Error()
+		}
+		if b.self.Role != "" {
+			roleSubject := b.roleSubject(b.self.Workspace, b.self.Team, b.self.Role)
+			var rerr error
+			plan.roleFloor, _, rerr = roleSubjectFloor(ctx, js, "AGENT_INBOX", roleSubject)
+			if rerr != nil && plan.roleFloor == 0 {
+				plan.roleWhy = "listing the role subject's durables failed: " + rerr.Error()
+			}
+		}
+		plan.floorsSet = true
 	}
+	floor, localWhy := plan.floor, plan.localWhy
+	roleFloor, roleWhy := plan.roleFloor, plan.roleWhy
 	var roleCfg jetstream.ConsumerConfig
-	var roleFloor uint64
-	roleWhy := ""
 	if b.self.Role != "" {
 		roleSubject := b.roleSubject(b.self.Workspace, b.self.Team, b.self.Role)
 		roleCfg = cfg
 		roleCfg.Durable = b.durableOf(true)
 		roleCfg.FilterSubject = roleSubject
-		var rerr error
-		roleFloor, _, rerr = roleSubjectFloor(ctx, js, "AGENT_INBOX", roleSubject)
-		if rerr != nil && roleFloor == 0 {
-			roleWhy = "listing the role subject's durables failed: " + rerr.Error()
-		}
 	}
 	baseCfg := cfg // a rebuild starts from this, with its own start sequence
 	if floor > 0 {
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
 		cfg.OptStartSeq = floor + 1
 	}
-	cons, err := js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", cfg)
-	if err != nil {
+	// A failed attempt closes the connection and stops the keepalive the
+	// handled mode started above, so retries do not pile either up.
+	giveUp := func() {
+		if h != nil {
+			h.stop()
+		}
 		nc.Close()
+	}
+	cons, err := createConsumer(ctx, js, "AGENT_INBOX", cfg)
+	if err != nil {
+		giveUp()
 		return nil, fmt.Errorf("durable consumer: %w", err)
 	}
 	b.consumer = cons
@@ -380,9 +430,9 @@ func connect(ctx context.Context, url string, self Sender, gcfg *globalConfig) (
 			roleCfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
 			roleCfg.OptStartSeq = roleFloor + 1
 		}
-		roleCons, err = js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", roleCfg)
+		roleCons, err = createConsumer(ctx, js, "AGENT_INBOX", roleCfg)
 		if err != nil {
-			nc.Close()
+			giveUp()
 			return nil, fmt.Errorf("role durable consumer: %w", err)
 		}
 		b.roleCons = roleCons

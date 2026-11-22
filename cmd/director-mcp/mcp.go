@@ -55,11 +55,15 @@ type toolAnnotations struct {
 }
 
 type Server struct {
-	bus   *Bus
-	out   *bufio.Writer
-	outMu sync.Mutex
-	tools []toolDef
-	log   func(string, ...any)
+	bus   *Bus // set at construction, or by attach once the connect succeeds; read through cur
+	busMu sync.RWMutex
+	// connecting reports the connect state while bus is nil: the attempt count and
+	// the last error, for the named error a tool call gets until the bus is up.
+	connecting func() (attempt int, lastErr string)
+	out        *bufio.Writer
+	outMu      sync.Mutex
+	tools      []toolDef
+	log        func(string, ...any)
 	// cue is the P1 channel cue, nil unless the seat opted in (cue.go).
 	cue *cue
 	// running counts tools/call requests in flight; calls maps each one's
@@ -102,6 +106,63 @@ func newServer(bus *Bus, logf func(string, ...any), cueOn bool) *Server {
 	}
 	s.tools = withHoldTools(toolCatalogHandled(bus.globalCfg, cueOn, bus.handled != nil), bus.watch != nil)
 	return s
+}
+
+// newPendingServer is newServer for a shim that answers the harness's handshake
+// before the bus is up: it has no bus yet, builds the tool catalog from what the
+// environment already says, and attach gives it the bus once the connect
+// succeeds. Until then every tools/call gets the named "bus connecting" error.
+func newPendingServer(gcfg *globalConfig, logf func(string, ...any), cueOn, handledOn, watchOn bool, connecting func() (int, string)) *Server {
+	s := &Server{out: bufio.NewWriter(os.Stdout), log: logf, connecting: connecting}
+	if dir, err := stateDir(); err == nil {
+		if table, notes, err := loadThresholdsNotes(dir); err == nil {
+			s.lateWindow = table[thresholdLateCancelWindow]
+			for _, n := range notes {
+				logf("%s", n)
+			}
+		} else {
+			logf("threshold table: %v; the late-cancel window keeps its default", err)
+		}
+	}
+	s.tools = withHoldTools(toolCatalogHandled(gcfg, cueOn, handledOn), watchOn)
+	return s
+}
+
+// cur is the bus, or nil while the shim is still connecting.
+func (s *Server) cur() *Bus {
+	s.busMu.RLock()
+	defer s.busMu.RUnlock()
+	return s.bus
+}
+
+// attach gives the server its bus once the connect has succeeded and everything
+// that starts after it (presence, the cue) is running, so a tool call that sees
+// the bus sees a ready one.
+func (s *Server) attach(b *Bus) {
+	s.busMu.Lock()
+	s.bus = b
+	s.busMu.Unlock()
+}
+
+// busConnectingError is what every tool returns until the bus is up.
+func busConnectingError(attempt int, lastErr string) error {
+	if lastErr == "" {
+		lastErr = "none yet"
+	}
+	return fmt.Errorf("bus connecting (attempt %d, last error: %s); the shim is still connecting to the bus, try again shortly", attempt, lastErr)
+}
+
+// dispatch2 runs a tool on the bus, or returns the named error while there is none.
+func (s *Server) dispatch2(ctx context.Context, name string, args json.RawMessage) (any, error) {
+	b := s.cur()
+	if b == nil {
+		attempt, lastErr := 0, ""
+		if s.connecting != nil {
+			attempt, lastErr = s.connecting()
+		}
+		return nil, busConnectingError(attempt, lastErr)
+	}
+	return dispatchTool(ctx, b, name, args)
 }
 
 // inFlight reports how many tools/call requests are running.
@@ -193,7 +254,7 @@ func (s *Server) cancelCall(params json.RawMessage) {
 			items := e.items
 			e.items = nil
 			s.callsMu.Unlock()
-			s.bus.returnMail(items, "late cancel of call "+key, s.log)
+			s.cur().returnMail(items, "late cancel of call "+key, s.log)
 			return
 		}
 		s.callsMu.Unlock()
@@ -209,7 +270,7 @@ func (s *Server) cancelCall(params json.RawMessage) {
 		return
 	}
 	if time.Since(a.replied) <= s.lateCancelWindow() {
-		s.bus.returnMail(a.items, "late cancel of call "+key, s.log)
+		s.cur().returnMail(a.items, "late cancel of call "+key, s.log)
 		return
 	}
 	s.log("late cancel for call %s arrived %s after its reply, past the %s window; nothing changed (message_ids: %s)", key, time.Since(a.replied).Round(time.Second), s.lateCancelWindow(), idsOf(a.items))
@@ -311,7 +372,7 @@ func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
 	if p.Name == "wait_for_message" {
 		dctx, al = withAckLater(ctx)
 	}
-	res, err := dispatchTool(dctx, s.bus, p.Name, p.Args)
+	res, err := s.dispatch2(dctx, p.Name, p.Args)
 	if m, ok := res.(map[string]any); ok && pushOnly {
 		m["push"] = pushOnlyNote
 	}
@@ -354,7 +415,7 @@ func (s *Server) callTool(ctx context.Context, req *rpcRequest) {
 	}
 	if al != nil {
 		items := al.items()
-		al.ack(s.bus, s.log)
+		al.ack(s.cur(), s.log)
 		s.afterReply(callKey(req.ID), items)
 	}
 }
@@ -368,7 +429,7 @@ func (s *Server) giveBack(al *ackLater, why string) {
 	carried := al.carried
 	al.carried = nil
 	al.mu.Unlock()
-	s.bus.returnMail(carried, why, s.log)
+	s.cur().returnMail(carried, why, s.log)
 	if n > 0 {
 		s.log("%s: %d fetched message(s) given back unacked", why, n)
 	}
@@ -390,7 +451,7 @@ func (s *Server) afterReply(key string, items []drained) {
 	e.replied = time.Now()
 	if e.cancelled {
 		s.callsMu.Unlock()
-		s.bus.returnMail(items, "cancel crossed the reply of call "+key, s.log)
+		s.cur().returnMail(items, "cancel crossed the reply of call "+key, s.log)
 		return
 	}
 	e.items = items
@@ -437,7 +498,7 @@ func (s *Server) cueBefore(name string, args json.RawMessage) func(any) {
 	}
 	switch name {
 	case "wait_for_message":
-		if s.bus != nil && s.bus.waitIsOpen() {
+		if b := s.cur(); b != nil && b.waitIsOpen() {
 			// toolWait refuses this call and reads nothing: it answers the
 			// cue's receipt and does not count as an open wait.
 			s.cue.answered()
