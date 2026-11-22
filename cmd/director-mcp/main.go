@@ -51,6 +51,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -228,19 +229,83 @@ func main() {
 	// with defers unrun and a live-looking presence row left behind (BEAT-C).
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// The shim answers the harness's handshake first and connects to the bus
+	// behind it. Claude Code gives an MCP server about 30 seconds to answer
+	// initialize (MCP_TIMEOUT), so a connect that retries for minutes must not
+	// hold the answer back. Until the bus is up every tool returns the named
+	// "bus connecting" error; presence and the cue start after the connect.
+	cueCfg := loadCueConfig()
+	var connMu sync.Mutex
+	connAttempt, connLastErr := 0, ""
+	srv := newPendingServer(gcfg, logf, cueCfg.Enabled, os.Getenv("DIRECTOR_HANDLED") == "1",
+		os.Getenv("DIRECTOR_PRESENCE_WATCH") == "1" && gcfg != nil && gcfg.Role == roleDirector,
+		func() (int, string) {
+			connMu.Lock()
+			defer connMu.Unlock()
+			return connAttempt + 1, connLastErr
+		})
+	var cueSrc *busCueSource
+	var c *cue
+	if cueCfg.Enabled {
+		cueSrc = &busCueSource{}
+		c = newCue(cueCfg, cueSrc, srv.notifyCue, func(ids []string, state string) {
+			if b := srv.cur(); b != nil {
+				warnUnanswered(ctx, b, logf, ids, state)
+			}
+		}, time.Now, randomNonce)
+		c.giveUp = func(ids []string, state string) {
+			if b := srv.cur(); b != nil {
+				informGaveUp(ctx, b, logf, ids, state)
+			}
+		}
+		c.logf = logf
+		srv.cue = c
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.serve(ctx, os.Stdin) }()
+
 	// One plan for every attempt, so a retry after a half-finished connect
 	// reuses the instance and the start floors (connectPlan).
 	plan := newConnectPlan()
-	bus, err := connectRetry(ctx, connectRetryPolicy(os.Getenv, logf), realRetryClock, logf, func(ctx context.Context) (*Bus, error) {
-		return connectPlanned(ctx, url, self, gcfg, plan)
-	})
-	if err != nil {
-		if ctx.Err() != nil {
-			logf("shutdown signal received during the bus connect, exiting")
-			return
+	type connected struct {
+		bus *Bus
+		err error
+	}
+	connDone := make(chan connected, 1)
+	go func() {
+		b, err := connectRetry(ctx, connectRetryPolicy(os.Getenv, logf), realRetryClock, logf, func(n int, err error) {
+			connMu.Lock()
+			connAttempt, connLastErr = n, err.Error()
+			connMu.Unlock()
+		}, func(ctx context.Context) (*Bus, error) {
+			return connectPlanned(ctx, url, self, gcfg, plan)
+		})
+		connDone <- connected{b, err}
+	}()
+
+	var bus *Bus
+	select {
+	case r := <-connDone:
+		if r.err != nil {
+			if ctx.Err() != nil {
+				logf("shutdown signal received during the bus connect, exiting")
+				return
+			}
+			fmt.Fprintf(os.Stderr, "director-mcp: bus connect failed: %v\n", r.err)
+			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "director-mcp: bus connect failed: %v\n", err)
-		os.Exit(1)
+		bus = r.bus
+	case err := <-serveErr:
+		// The harness closed the pipe, or the stream broke, before the bus came
+		// up: nothing is registered yet, so there is nothing to deregister.
+		if err != nil {
+			logf("serve ended before the bus connected: %v", err)
+		}
+		stop()
+		if r := <-connDone; r.bus != nil {
+			r.bus.close()
+		}
+		return
 	}
 	defer bus.close()
 	// The inbox lifetime is read from the stream itself, not assumed (aae-orc-t77rr).
@@ -266,16 +331,8 @@ func main() {
 	if gcfg != nil {
 		logf("global tier on: %s, consuming %s from stream %s in domain %q", gcfg.selfAddress(), gcfg.inboxSubject(), gcfg.streamName(), gcfg.Domain)
 	}
-
-	cueCfg := loadCueConfig()
-	srv := newServer(bus, logf, cueCfg.Enabled)
-	if cueCfg.Enabled {
-		c := newCue(cueCfg, busCueSource{bus}, srv.notifyCue, func(ids []string, state string) {
-			warnUnanswered(ctx, bus, logf, ids, state)
-		}, time.Now, randomNonce)
-		c.giveUp = func(ids []string, state string) { informGaveUp(ctx, bus, logf, ids, state) }
-		c.logf = logf
-		srv.cue = c
+	if c != nil {
+		cueSrc.b = bus
 		bus.attachCue(c)
 		bus.nc.SetReconnectHandler(func(*nats.Conn) { c.reconnected() })
 		go c.run(ctx)
@@ -284,8 +341,8 @@ func main() {
 			logf("class-aware cue on (DIRECTOR_CUE_CLASS=1): act mail cues at once, routine mail is held up to %s", cueCfg.Window)
 		}
 	}
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.serve(ctx, os.Stdin) }()
+	// Tools see the bus only now, with presence and the cue running.
+	srv.attach(bus)
 	select {
 	case err := <-serveErr:
 		if err != nil {

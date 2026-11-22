@@ -76,8 +76,10 @@ var realRetryClock = retryClock{
 // connectRetry calls attempt until it succeeds, the policy's total time is
 // spent, attempt returns a permanentConnectError, or ctx ends. Each failed
 // attempt is logged with its error. A ctx that ends returns ctx.Err(), which
-// the caller treats as an orderly stop and not as a connect failure.
-func connectRetry(ctx context.Context, pol retryPolicy, clk retryClock, logf func(string, ...any), attempt func(ctx context.Context) (*Bus, error)) (*Bus, error) {
+// the caller treats as an orderly stop and not as a connect failure. note, when
+// not nil, is told each failed attempt before the loop decides what to do next,
+// so a caller can report the attempt count and the last error while it retries.
+func connectRetry(ctx context.Context, pol retryPolicy, clk retryClock, logf func(string, ...any), note func(attempt int, err error), attempt func(ctx context.Context) (*Bus, error)) (*Bus, error) {
 	start := clk.now()
 	delay := pol.first
 	for n := 1; ; n++ {
@@ -95,9 +97,12 @@ func connectRetry(ctx context.Context, pol retryPolicy, clk retryClock, logf fun
 		if errors.As(err, &perm) {
 			return nil, err
 		}
+		if note != nil {
+			note(n, err)
+		}
 		spent := clk.now().Sub(start)
 		if spent+delay > pol.total {
-			return nil, fmt.Errorf("gave up (attempt %d, %s spent): %w", n, spent.Round(time.Second), err)
+			return nil, fmt.Errorf("gave up after %d attempts over %s: %w", n, spent.Round(time.Second), err)
 		}
 		logf("bus connect attempt %d failed: %v; retrying in %s", n, err, delay)
 		if !clk.wait(ctx, delay) {

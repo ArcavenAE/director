@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ func TestConnectRetryServesAfterNTimeouts(t *testing.T) {
 	calls := 0
 	var logged []string
 	logf := func(f string, a ...any) { logged = append(logged, f) }
-	got, err := connectRetry(context.Background(), defaultConnectRetry, fc.clock(), logf, func(context.Context) (*Bus, error) {
+	got, err := connectRetry(context.Background(), defaultConnectRetry, fc.clock(), logf, nil, func(context.Context) (*Bus, error) {
 		calls++
 		if calls <= 3 {
 			return nil, errors.New("role durable consumer: " + context.DeadlineExceeded.Error())
@@ -62,7 +63,7 @@ func TestConnectRetryServesAfterNTimeouts(t *testing.T) {
 func TestConnectRetryBackoffDoublesToTheCap(t *testing.T) {
 	fc := &fakeClock{t: time.Unix(0, 0)}
 	calls := 0
-	_, _ = connectRetry(context.Background(), defaultConnectRetry, fc.clock(), discardLog, func(context.Context) (*Bus, error) {
+	_, _ = connectRetry(context.Background(), defaultConnectRetry, fc.clock(), discardLog, nil, func(context.Context) (*Bus, error) {
 		calls++
 		if calls <= 8 {
 			return nil, errors.New("durable consumer: timeout")
@@ -83,14 +84,14 @@ func TestConnectRetryBackoffDoublesToTheCap(t *testing.T) {
 func TestConnectRetryGivesUpAfterTheBound(t *testing.T) {
 	fc := &fakeClock{t: time.Unix(0, 0)}
 	calls := 0
-	_, err := connectRetry(context.Background(), defaultConnectRetry, fc.clock(), discardLog, func(context.Context) (*Bus, error) {
+	_, err := connectRetry(context.Background(), defaultConnectRetry, fc.clock(), discardLog, nil, func(context.Context) (*Bus, error) {
 		calls++
 		return nil, errors.New("durable consumer: " + context.DeadlineExceeded.Error())
 	})
 	if err == nil {
 		t.Fatal("connectRetry returned nil for a connect that never works")
 	}
-	if !strings.Contains(err.Error(), "gave up") || !strings.Contains(err.Error(), "context deadline exceeded") {
+	if !strings.Contains(err.Error(), "gave up after") || !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Errorf("error lost the give-up note or the last cause: %v", err)
 	}
 	if spent := fc.t.Sub(time.Unix(0, 0)); spent > connectRetryTotal {
@@ -104,7 +105,7 @@ func TestConnectRetryGivesUpAfterTheBound(t *testing.T) {
 func TestConnectRetryReturnsAPermanentErrorAtOnce(t *testing.T) {
 	fc := &fakeClock{t: time.Unix(0, 0)}
 	calls := 0
-	_, err := connectRetry(context.Background(), defaultConnectRetry, fc.clock(), discardLog, func(context.Context) (*Bus, error) {
+	_, err := connectRetry(context.Background(), defaultConnectRetry, fc.clock(), discardLog, nil, func(context.Context) (*Bus, error) {
 		calls++
 		return nil, &permanentConnectError{errors.New("bad DIRECTOR_HANDLED setting")}
 	})
@@ -113,11 +114,11 @@ func TestConnectRetryReturnsAPermanentErrorAtOnce(t *testing.T) {
 	}
 }
 
-func TestConnectRetryStopsOnASignalDuringTheWait(t *testing.T) {
+func TestConnectRetryStopsOnASignalDuringTheAttempt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	fc := &fakeClock{t: time.Unix(0, 0)}
 	calls := 0
-	_, err := connectRetry(ctx, defaultConnectRetry, fc.clock(), discardLog, func(context.Context) (*Bus, error) {
+	_, err := connectRetry(ctx, defaultConnectRetry, fc.clock(), discardLog, nil, func(context.Context) (*Bus, error) {
 		calls++
 		cancel() // SIGTERM arrives while the attempt runs
 		return nil, errors.New("durable consumer: timeout")
@@ -139,30 +140,81 @@ func TestConnectRetryRealClockWaitEndsOnCancel(t *testing.T) {
 	}
 }
 
-// The role durable fails once after the own durable was created. The retry
-// must reuse the instance, so the seat ends with its own durable and its role
-// durable and no stray from the first attempt, and must keep the start floors.
+// The role durable create times out after it landed on the broker, with the own
+// durable already created and a departed seat's durables holding nonzero floors.
+// The retry must reuse the instance (no stray durable), must not move a start
+// floor (a durable that exists cannot be given a different start sequence), and
+// must end with both durables starting where the first attempt put them, even
+// though the departed seat acked more mail in between.
 func TestConnectRetryAfterHalfFinishedConnectLeavesNoStrayDurable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
 	_, js := provision(t, ctx, url)
 
+	self := Sender{AgentID: "ops-builder-g1-0", Workspace: "w", Team: "t", Role: "builder"}
+	ownSubject := fmt.Sprintf("agent.%s.%s.%s.inbox", self.Workspace, self.Team, self.AgentID)
+	roleSubject := fmt.Sprintf("agent.%s.%s.role.%s.inbox", self.Workspace, self.Team, self.Role)
+
+	// A departed predecessor of the seat and a departed holder of the role, each with
+	// mail acked: both start floors are above 0.
+	for _, subj := range []string{ownSubject, roleSubject} {
+		for i := 0; i < 5; i++ {
+			if _, err := js.Publish(ctx, subj, []byte(fmt.Sprintf(`{"n":%d}`, i))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	ackSome := func(name, subj string, n int) {
+		t.Helper()
+		cons, err := js.CreateOrUpdateConsumer(ctx, "AGENT_INBOX", jetstream.ConsumerConfig{Durable: name, FilterSubject: subj, AckPolicy: jetstream.AckExplicitPolicy})
+		if err != nil {
+			t.Fatal(err)
+		}
+		batch, err := cons.Fetch(n, jetstream.FetchMaxWait(5*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for m := range batch.Messages() {
+			if err := m.DoubleAck(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	predecessor := "mcp_" + self.AgentID + "_01JAAAAAAAAAAAAAAAAAAAAAAA"
+	roleHolder := "mcp_other-seat-g1-0_01JBBBBBBBBBBBBBBBBBBBBBBB"
+	ackSome(predecessor, ownSubject, 3)
+	ackSome(roleHolder, roleSubject, 3)
+	wantOwn, err := ownSubjectFloor(ctx, js, "AGENT_INBOX", "mcp_"+self.AgentID+"_", ownSubject, func(string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRole, _, err := roleSubjectFloor(ctx, js, "AGENT_INBOX", roleSubject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantOwn == 0 || wantRole == 0 {
+		t.Fatalf("seeded floors own=%d role=%d, want both above 0", wantOwn, wantRole)
+	}
+
+	// The role create lands and then reports a timeout; before the retry the
+	// role holder acks more mail, so a floor read again would be higher.
 	failedRole := 0
 	old := createConsumer
 	createConsumer = func(ctx context.Context, js jetstream.JetStream, stream string, cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
-		if strings.HasSuffix(cfg.Durable, "-role") && failedRole == 0 {
+		cons, err := old(ctx, js, stream, cfg)
+		if err == nil && strings.HasSuffix(cfg.Durable, "-role") && failedRole == 0 {
 			failedRole++
+			ackSome(roleHolder, roleSubject, 2)
 			return nil, context.DeadlineExceeded
 		}
-		return old(ctx, js, stream, cfg)
+		return cons, err
 	}
 	defer func() { createConsumer = old }()
 
-	self := Sender{AgentID: "ops-builder-g1-0", Workspace: "w", Team: "t", Role: "builder"}
 	plan := newConnectPlan()
 	fc := &fakeClock{t: time.Unix(0, 0)}
-	bus, err := connectRetry(ctx, defaultConnectRetry, fc.clock(), discardLog, func(ctx context.Context) (*Bus, error) {
+	bus, err := connectRetry(ctx, defaultConnectRetry, fc.clock(), discardLog, nil, func(ctx context.Context) (*Bus, error) {
 		return connectPlanned(ctx, url, self, nil, plan)
 	})
 	if err != nil {
@@ -172,26 +224,39 @@ func TestConnectRetryAfterHalfFinishedConnectLeavesNoStrayDurable(t *testing.T) 
 	if failedRole != 1 {
 		t.Fatalf("the hook failed the role create %d times, want 1", failedRole)
 	}
-	if !plan.floorsSet {
-		t.Error("the plan did not keep the start floors for the retry")
+	if now, _, _ := roleSubjectFloor(ctx, js, "AGENT_INBOX", roleSubject); now <= wantRole {
+		t.Fatalf("the role floor read again is %d, not above %d: the retry could not have moved it, so the test proves nothing", now, wantRole)
+	}
+	if !plan.floorsSet || plan.floor != wantOwn || plan.roleFloor != wantRole {
+		t.Errorf("plan floors own=%d role=%d set=%v, want %d and %d from the first attempt", plan.floor, plan.roleFloor, plan.floorsSet, wantOwn, wantRole)
 	}
 	st, err := js.Stream(ctx, "AGENT_INBOX")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var names []string
+	starts := map[string]uint64{}
 	lister := st.ListConsumers(ctx)
 	for info := range lister.Info() {
-		if strings.HasPrefix(info.Name, "mcp_"+self.AgentID+"_") {
+		if strings.HasPrefix(info.Name, "mcp_"+self.AgentID+"_") && strings.Contains(info.Name, plan.instance) {
 			names = append(names, info.Name)
+			starts[info.Name] = info.Config.OptStartSeq
 		}
 	}
 	if len(names) != 2 {
-		t.Errorf("durables for the seat after the retry: %v, want its own and its role durable only", names)
+		t.Errorf("durables of this startup after the retry: %v, want its own and its role durable only", names)
 	}
-	for _, n := range names {
-		if !strings.Contains(n, plan.instance) {
-			t.Errorf("durable %s does not carry the plan's instance %s: the retry drew a new one", n, plan.instance)
+	if got := starts["mcp_"+self.AgentID+"_"+plan.instance]; got != wantOwn+1 {
+		t.Errorf("own durable starts at %d, want %d (the first attempt's floor plus one)", got, wantOwn+1)
+	}
+	if got := starts["mcp_"+self.AgentID+"_"+plan.instance+"-role"]; got != wantRole+1 {
+		t.Errorf("role durable starts at %d, want %d (the first attempt's floor plus one, not the floor after the holder acked more)", got, wantRole+1)
+	}
+	// No durable of this seat from another instance, other than the seeded departed one.
+	lister2 := st.ListConsumers(ctx)
+	for info := range lister2.Info() {
+		if strings.HasPrefix(info.Name, "mcp_"+self.AgentID+"_") && !strings.Contains(info.Name, plan.instance) && info.Name != predecessor {
+			t.Errorf("stray durable %s left by an attempt", info.Name)
 		}
 	}
 }
@@ -225,7 +290,7 @@ func TestConnectRetryPolicyReadsTheOverride(t *testing.T) {
 	// With a zero bound the first failure is final: one attempt, no wait.
 	fc := &fakeClock{t: time.Unix(0, 0)}
 	calls := 0
-	_, err := connectRetry(context.Background(), connectRetryPolicy(get("0s"), note), fc.clock(), discardLog, func(context.Context) (*Bus, error) {
+	_, err := connectRetry(context.Background(), connectRetryPolicy(get("0s"), note), fc.clock(), discardLog, nil, func(context.Context) (*Bus, error) {
 		calls++
 		return nil, errors.New("durable consumer: timeout")
 	})
