@@ -569,7 +569,9 @@ routing decision and a route-event@1 per later event (ack, relay, note, close, c
 route and the acked and closed times. To read a ledger the same way whatever its age, run
 `${DIRECTOR_HOME:-$HOME/.director}/bin/route-ledger check FILE` (`--json` for the counts as one object). It
 reads the file and writes nothing; legacy rows are counted, and a refused row names its line and one field and
-reason, never the value. Depth that was not recorded reads as unknown, not zero.
+reason, never the value. Depth that was not recorded reads as unknown, not zero. A route record should carry the
+route as sent (`text`) or a pointer to its relay-log entry (`relay_ref`) so a successor can read it; a routed record
+with neither prints a "route text missing" warning, which never changes the exit code.
 
 ## Scheduled firings with no acked result
 
