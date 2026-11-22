@@ -123,7 +123,7 @@ install_one "$SRC/skills/director/scripts/director-doctor" "$DIRECTOR_HOME/bin/d
 install_one "$SRC/skills/director/scripts/route-ledger" "$DIRECTOR_HOME/bin/route-ledger"
 # schedule-ack: the sweep line for a scheduled firing with no acked result (H-6); the skill names it by its bin-home path.
 install_one "$SRC/skills/director/scripts/schedule-ack" "$DIRECTOR_HOME/bin/schedule-ack"
-# login-expiry: the daily warning before a harness login lapses; the skill names it by its bin-home path.
+# login-expiry: the daily warning before a harness login lapses. Nothing in the skill calls it yet; the operator schedules it.
 install_one "$SRC/skills/director/scripts/login-expiry" "$DIRECTOR_HOME/bin/login-expiry"
 # director: the seat launcher's reader of seat.env. `director env` prints the validated lines and works from a
 # --copy install; `director start` and `director prove` need the repo beside it (a link finds it).

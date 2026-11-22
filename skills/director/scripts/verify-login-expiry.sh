@@ -32,7 +32,7 @@ NOW="2030-01-10T12:00:00Z"
 # stub claude: prints $STUB_AUTH_FILE's content, exit 0
 printf '#!/bin/sh\n[ "$1 $2 $3" = "auth status --json" ] || exit 9\ncat "$STUB_AUTH_FILE"\n' >"$root/bin/claude"
 # stub marvel: prints $STUB_SESSIONS_FILE, or fails when it is absent
-printf '#!/bin/sh\n[ "$1 $2 $3 $4 $5" = "get sessions --all-clusters -o json" ] || exit 9\n[ -f "$STUB_SESSIONS_FILE" ] || { echo "Error: refused" >&2; exit 1; }\ncat "$STUB_SESSIONS_FILE"\n' >"$root/bin/marvel"
+printf '#!/bin/sh\n[ "$1 $2 $3 $4 $5" = "get sessions --all-clusters -o json" ] || exit 9\n[ -f "$STUB_SESSIONS_FILE" ] || { echo "Error: refused" >&2; exit 1; }\ncat "$STUB_SESSIONS_FILE"\nexit ${STUB_SESSIONS_RC:-0}\n' >"$root/bin/marvel"
 chmod +x "$root/bin/claude" "$root/bin/marvel"
 
 auth() { # auth <expiresAt> <loggedIn true|false> [subscription]
@@ -51,7 +51,7 @@ sessions() {
 JSON
 }
 run() { # run [args...]
-  env -i HOME="$root/home" PATH="$root/bin:$PYDIR:/usr/bin:/bin" STUB_AUTH_FILE="$root/auth.json" STUB_SESSIONS_FILE="$root/sessions.json" \
+  env -i HOME="$root/home" PATH="$root/bin:$PYDIR:/usr/bin:/bin" STUB_AUTH_FILE="$root/auth.json" STUB_SESSIONS_FILE="$root/sessions.json" STUB_SESSIONS_RC="${SESSIONS_RC:-0}" \
     python3 -I "$L" --host hostx --home-label lab --state-dir "$root/state" --now "$NOW" "$@" >"$root/out" 2>"$root/err"
   rc=$?
 }
@@ -75,6 +75,8 @@ fresh; auth "2030-01-13T12:00:01Z" true
 run; [[ ! -s "$root/out" ]] && ok "72 h and one second prints nothing" || bad "73 h" "$(cat "$root/out")"
 fresh; auth "2030-01-10T10:00:00Z" true
 run; grep -qF 'expired 2 h ago' "$root/out" && ok "an expiry in the past reads expired N h ago" || bad "past" "$(cat "$root/out")"
+fresh; auth "2030-01-10T11:30:00Z" true
+run; grep -qF 'expired under 1 h ago' "$root/out" && ok "a login that lapsed 30 minutes ago reads under 1 h, not 1 h" || bad "under 1 h" "$(cat "$root/out")"
 fresh; auth "2030-01-20T12:00:00Z" false
 run; [[ "$(nlines)" == 2 ]] && grep -qF 'logged out' "$root/out" && ok "loggedIn false prints the two lines whatever the expiry" || bad "logged out" "$(cat "$root/out")"
 fresh; auth "2030-01-20T12:00:00.000+00:00" true
@@ -111,12 +113,25 @@ grep -qF '"hostx/lab": "2030-02-20T12:00:00Z"' "$root/state/last-expiry.json" &&
 auth "2030-03-20T12:00:00Z" true; hide_sessions; run
 grep -qF 'renewal: GAP (marvel gave no readable answer: Error: refused)' "$root/out" && ok "unreadable sessions print a renewal GAP, not zero seats" || bad "gap" "$(cat "$root/out")"
 grep -qF '"hostx/lab": "2030-02-20T12:00:00Z"' "$root/state/last-expiry.json" && ok "a GAP leaves the stored expiry so the next run lists again" || bad "kept" "$(cat "$root/state/last-expiry.json")"
+auth "2030-04-20T12:00:00Z" true; sessions; cp "$root/sessions.json" "$root/sessions.base"
+sed 's/"clusters":\[/"clusters":[{"cluster":"omega","outcome":"no_answer_in_time","as_of":"2030-01-10T12:00:00Z"},/' "$root/sessions.base" >"$root/sessions.json"
+SESSIONS_RC=10 run
+grep -qF 'renewal: nudge alpha/seat-a-g1-0 (logged-out)' "$root/out" && grep -qF 'renewal: GAP (cluster not read in full: omega no_answer_in_time)' "$root/out" && ok "a cluster that did not answer is a GAP naming it, after the seats that were seen" || bad "silent cluster" "$(cat "$root/out")"
+grep -qF '"hostx/lab": "2030-02-20T12:00:00Z"' "$root/state/last-expiry.json" && ok "a silent cluster leaves the stored expiry so the next run lists again" || bad "silent cluster kept" "$(cat "$root/state/last-expiry.json")"
+sed 's/"outcome":"answered","as_of":"2030-01-10T12:00:00Z"}\]/"outcome":"starting","as_of":"2030-01-10T12:00:00Z"}]/' "$root/sessions.base" >"$root/sessions.json"
+SESSIONS_RC=10 run
+grep -qF 'renewal: GAP (cluster not read in full: alpha starting)' "$root/out" && ok "a starting cluster is a GAP" || bad "starting" "$(cat "$root/out")"
+sessions; SESSIONS_RC=10 run
+grep -qF 'renewal: GAP (marvel exited 10 with no cluster to explain it)' "$root/out" && ok "a nonzero marvel exit that no cluster explains is a GAP" || bad "exit status" "$(cat "$root/out")"
+sessions; run
+grep -qF 'renewal: nudge alpha/seat-a-g1-0 (logged-out)' "$root/out" && ! grep -qF 'GAP' "$root/out" && ok "a full answer with every cluster answered lists and stores" || bad "full answer" "$(cat "$root/out")"
+printf '{"hostx/lab": "2030-02-20T12:00:00Z"}\n' >"$root/state/last-expiry.json"
 printf '{"hostx/lab": "2030-02-20T12:00:00Z", "other/lab": "2031-01-01T00:00:00Z"}\n' >"$root/state/last-expiry.json"
 auth "2030-02-20T12:00:00Z" true; run; sessions
 grep -qF '"other/lab": "2031-01-01T00:00:00Z"' "$root/state/last-expiry.json" && ok "another host and label's stored expiry is kept" || bad "other kept" "$(cat "$root/state/last-expiry.json")"
 
 # --- state files and usage -----------------------------------------------------------------------------------------
-m="$(stat -f '%Lp' "$root/state/last-expiry.json" 2>/dev/null || stat -c '%a' "$root/state/last-expiry.json")"
+m="$(python3 -I -c 'import os, sys; print(format(os.stat(sys.argv[1]).st_mode & 0o777, "o"))' "$root/state/last-expiry.json")"  # same on BSD and GNU, unlike stat
 [[ "$m" == 600 ]] && ok "the state files are mode 600" || bad "file mode" "$m"
 run --warn-hours x; [[ $rc -eq 2 ]] && ok "a bad --warn-hours is exit 2" || bad "warn-hours" "rc=$rc"
 run --bogus 1; [[ $rc -eq 2 ]] && ok "an unknown option is exit 2" || bad "bogus" "rc=$rc"
