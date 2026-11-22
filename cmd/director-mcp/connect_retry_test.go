@@ -90,7 +90,7 @@ func TestConnectRetryGivesUpAfterTheBound(t *testing.T) {
 	if err == nil {
 		t.Fatal("connectRetry returned nil for a connect that never works")
 	}
-	if !strings.Contains(err.Error(), "gave up after") || !strings.Contains(err.Error(), "context deadline exceeded") {
+	if !strings.Contains(err.Error(), "gave up") || !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Errorf("error lost the give-up note or the last cause: %v", err)
 	}
 	if spent := fc.t.Sub(time.Unix(0, 0)); spent > connectRetryTotal {
@@ -193,5 +193,43 @@ func TestConnectRetryAfterHalfFinishedConnectLeavesNoStrayDurable(t *testing.T) 
 		if !strings.Contains(n, plan.instance) {
 			t.Errorf("durable %s does not carry the plan's instance %s: the retry drew a new one", n, plan.instance)
 		}
+	}
+}
+
+func TestConnectRetryPolicyReadsTheOverride(t *testing.T) {
+	var notes []string
+	note := func(f string, a ...any) { notes = append(notes, f) }
+	get := func(v string) func(string) string {
+		return func(k string) string {
+			if k == connectRetryEnv {
+				return v
+			}
+			return ""
+		}
+	}
+	if p := connectRetryPolicy(get(""), note); p != defaultConnectRetry || len(notes) != 0 {
+		t.Errorf("unset: got %+v with %d notes, want the default", p, len(notes))
+	}
+	if p := connectRetryPolicy(get("90s"), note); p.total != 90*time.Second || p.first != connectRetryFirst {
+		t.Errorf("90s: got %+v", p)
+	}
+	if p := connectRetryPolicy(get("0"), note); p.total != 0 {
+		t.Errorf("0: got %+v, want a zero bound", p)
+	}
+	for _, bad := range []string{"soon", "-5s", "5"} {
+		notes = nil
+		if p := connectRetryPolicy(get(bad), note); p != defaultConnectRetry || len(notes) != 1 {
+			t.Errorf("%q: got %+v with %d notes, want the default and one note", bad, p, len(notes))
+		}
+	}
+	// With a zero bound the first failure is final: one attempt, no wait.
+	fc := &fakeClock{t: time.Unix(0, 0)}
+	calls := 0
+	_, err := connectRetry(context.Background(), connectRetryPolicy(get("0s"), note), fc.clock(), discardLog, func(context.Context) (*Bus, error) {
+		calls++
+		return nil, errors.New("durable consumer: timeout")
+	})
+	if err == nil || calls != 1 || len(fc.waits) != 0 {
+		t.Errorf("zero bound: err=%v calls=%d waits=%v, want one call, no wait", err, calls, fc.waits)
 	}
 }

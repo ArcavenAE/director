@@ -20,7 +20,7 @@ func TestShimStartHoldsTheDirectorIdentityOnlyWithTheMark(t *testing.T) {
 	bin := buildShim(t, t.TempDir(), true)
 	run := func(args []string, extra ...string) (int, string) {
 		cmd := exec.Command(bin, args...)
-		cmd.Env = append([]string{"PATH=/usr/bin:/bin", "NATS_URL=nats://127.0.0.1:1", "DIRECTOR_TEAM=ops", "DIRECTOR_WORKSPACE=w"}, extra...)
+		cmd.Env = append([]string{"PATH=/usr/bin:/bin", "NATS_URL=nats://127.0.0.1:1", "DIRECTOR_BUS_CONNECT_RETRY=0", "DIRECTOR_TEAM=ops", "DIRECTOR_WORKSPACE=w"}, extra...)
 		var errb bytes.Buffer
 		cmd.Stderr = &errb
 		done := make(chan error, 1)

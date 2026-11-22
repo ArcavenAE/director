@@ -231,7 +231,7 @@ func main() {
 	// One plan for every attempt, so a retry after a half-finished connect
 	// reuses the instance and the start floors (connectPlan).
 	plan := newConnectPlan()
-	bus, err := connectRetry(ctx, defaultConnectRetry, realRetryClock, logf, func(ctx context.Context) (*Bus, error) {
+	bus, err := connectRetry(ctx, connectRetryPolicy(os.Getenv, logf), realRetryClock, logf, func(ctx context.Context) (*Bus, error) {
 		return connectPlanned(ctx, url, self, gcfg, plan)
 	})
 	if err != nil {

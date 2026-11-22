@@ -29,6 +29,29 @@ type retryPolicy struct {
 
 var defaultConnectRetry = retryPolicy{first: connectRetryFirst, max: connectRetryCap, total: connectRetryTotal}
 
+// connectRetryEnv overrides the total time the shim keeps retrying, as a Go
+// duration ("90s", "10m"). "0" makes the first failure final, which a test of
+// the failure path or an operator who wants the old behavior can use.
+const connectRetryEnv = "DIRECTOR_BUS_CONNECT_RETRY"
+
+// connectRetryPolicy is the default policy with the total taken from get when
+// the override is set. An unreadable or negative value keeps the default and
+// says so through note, so a typo does not silently change the bound.
+func connectRetryPolicy(get func(string) string, note func(string, ...any)) retryPolicy {
+	pol := defaultConnectRetry
+	v := get(connectRetryEnv)
+	if v == "" {
+		return pol
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		note("%s=%q is not a duration of zero or more; keeping %s", connectRetryEnv, v, pol.total)
+		return pol
+	}
+	pol.total = d
+	return pol
+}
+
 // retryClock is the time source of the loop, so a test runs it without waiting.
 type retryClock struct {
 	now func() time.Time
@@ -74,7 +97,7 @@ func connectRetry(ctx context.Context, pol retryPolicy, clk retryClock, logf fun
 		}
 		spent := clk.now().Sub(start)
 		if spent+delay > pol.total {
-			return nil, fmt.Errorf("gave up after %d attempts over %s: %w", n, spent.Round(time.Second), err)
+			return nil, fmt.Errorf("gave up (attempt %d, %s spent): %w", n, spent.Round(time.Second), err)
 		}
 		logf("bus connect attempt %d failed: %v; retrying in %s", n, err, delay)
 		if !clk.wait(ctx, delay) {
