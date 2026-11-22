@@ -17,8 +17,10 @@ Renewal: <state-dir>/last-expiry.json keeps the last seen expiry per host and HO
 later than the stored one, it reads `marvel get sessions --all-clusters -o json` and prints one line per running seat
 whose harness state is logged-out, so the operator or director can nudge it:
   renewal: nudge CLUSTER/SEAT (logged-out)
-When the sessions cannot be read it prints `renewal: GAP (...)` and leaves the stored expiry as it was, so the
-next run lists again. It never sends or restarts anything.
+When the sessions cannot be read in full (marvel gives no answer, or a cluster is not answered or same_daemon, a
+starting cluster included) it prints the seats it did see, then `renewal: GAP (...)` naming the cluster, and leaves the
+stored expiry as it was, so the next run lists again; a seat may be nudged twice in that case. marvel's exit status
+alone is a GAP only when no cluster explains it. It never sends or restarts anything.
 
 The HOME is named by a label (default "default", or $LOGIN_EXPIRY_HOME_LABEL), never by its path, in any line.
 Programs: $LOGIN_EXPIRY_CLAUDE (default claude) and $LOGIN_EXPIRY_MARVEL (default marvel). State directory:
@@ -34,6 +36,7 @@ import subprocess
 import sys
 
 WARN_HOURS = 72
+OK_OUTCOMES = ("answered", "same_daemon")
 TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 LABEL_RE = re.compile(r"[A-Za-z0-9._-]{1,40}\Z")
 UTC = datetime.timezone.utc
@@ -120,6 +123,18 @@ def logged_out_seats():
     rows = doc.get("sessions") if isinstance(doc, dict) else doc
     if not isinstance(rows, list):
         return [], "marvel's answer has no sessions list"
+    # a cluster that did not answer, or is still starting, leaves its seats out: that is a GAP, never a full list
+    bad = []
+    clusters = doc.get("clusters") if isinstance(doc, dict) else None
+    if isinstance(clusters, list):
+        for c in clusters:
+            if isinstance(c, dict) and c.get("outcome") not in OK_OUTCOMES:
+                bad.append("%s %s" % (clean(c.get("cluster") or "?"), clean(c.get("outcome") or "no outcome")))
+    why = ""
+    if bad:
+        why = "cluster not read in full: " + ", ".join(bad)
+    elif p.returncode != 0:
+        why = "marvel exited %d with no cluster to explain it" % p.returncode
     out = []
     for r in rows:
         if not isinstance(r, dict) or r.get("State") != "running":
@@ -127,7 +142,7 @@ def logged_out_seats():
         hs = r.get("harness_state")
         if isinstance(hs, dict) and hs.get("state") == "logged-out":
             out.append("renewal: nudge %s/%s (logged-out)" % (clean(r.get("cluster") or "-"), clean(r.get("Name") or "?", 80)))
-    return sorted(out), ""
+    return sorted(out), why
 
 
 def main(argv):
@@ -182,10 +197,15 @@ def main(argv):
         return 0
 
     secs = (expiry - now).total_seconds()
-    hours = int(secs // 3600)
+    hours = int(secs / 3600)  # toward zero, so a login that lapsed 30 minutes ago is under 1 h, not 1 h
     warned = secs <= warn * 3600
     if warned:
-        left = "%d h left" % hours if hours >= 0 else "expired %d h ago" % (-hours)
+        if secs >= 0:
+            left = "%d h left" % hours
+        elif hours == 0:
+            left = "expired under 1 h ago"
+        else:
+            left = "expired %d h ago" % (-hours)
         print("desk: login-expiry %s %s expires %s, %s, subscription %s" % (host, label, fmt(expiry), left, sub))
         print("introspect: login-expiry %s expires %s, %s | id: %s | remedy: renew the claude login | owner: operator"
               % (key, fmt(expiry), left, fmt(expiry)))
@@ -205,8 +225,10 @@ def main(argv):
     if prev is not None and expiry > prev:
         lines, why = logged_out_seats()
         if why:
+            for ln in lines:
+                print(ln)
             print("renewal: GAP (%s)" % why)
-            return 0
+            return 0  # the stored expiry stays, so the next run lists again
         for ln in lines:
             print(ln)
     last[key] = fmt(expiry)
