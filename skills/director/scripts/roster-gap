@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""roster-gap - the sweep line for a seat that is up in marvel and absent from the director roster
+(sim/design/roster-gap.md).
+
+  roster-gap [--sessions FILE] [--roster [CLUSTER=]FILE]... [--now TIME] [--min-minutes N]
+
+Compares the claude seats of `marvel get sessions --all-clusters -o json` with the rows of
+`director-mcp roster --json`, and prints one line per seat that has run more than 10 minutes with no roster row:
+  roster-gap: CLUSTER/SEAT team TEAM running 134 min, no roster row
+  roster-gap: CLUSTER/SEAT team TEAM running 134 min, no director MCP configured
+  roster-gap: CLUSTER/SEAT team TEAM running 134 min, no roster row, reason unknown
+
+The join key is the pair (team, seat): the session's Team and Name against the roster row's team and agent_id.
+A claude seat is a running session whose runtime name or command names claude. The age is now minus CreatedAt;
+a session with no readable CreatedAt is listed with "age unknown", never dropped.
+
+Why a seat has no row. A seat launched with no director MCP configured never joins, so it is classed apart from a
+missed join. The class needs evidence of the seat's own pane: $ROSTER_GAP_PANE names a program that is called with
+the cluster and the session name and prints the pane text; the text "no MCP server configured with that name"
+(as seen on a bootstrap seat) gives "no director MCP configured". A pane read without that text gives plain
+"no roster row" (a missed join). With no program, or a pane that cannot be read, the reason is "reason unknown":
+the seat is printed, never dropped.
+
+Gaps print as `roster-gap: GAP ...` and never read as zero seats: a cluster whose record is not answered, starting
+or same_daemon; sessions or roster that cannot be read; a cluster with no roster when per-cluster rosters were given.
+--roster FILE applies to every cluster; --roster CLUSTER=FILE applies to that cluster only, and one that cannot be read
+prints a GAP for that cluster while the others still print. The last line counts the
+seats checked.
+
+Inputs default to the two commands ($ROSTER_GAP_MARVEL, default marvel; $ROSTER_GAP_DIRECTOR_MCP, default
+director-mcp). marvel refuses the all-clusters view inside a seat, so the sweep runs this as the operator, or reads
+a file with --sessions. Reminds only: it writes nothing, sends nothing and gates nothing. Exit 0 whatever it finds;
+2 for a usage error.
+"""
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+
+UTC = datetime.timezone.utc
+TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
+OK_OUTCOMES = ("answered", "starting", "same_daemon")
+NO_MCP_TEXT = "no MCP server configured with that name"
+
+
+def parse_time(v):
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        t = datetime.datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=UTC)
+    t = t.astimezone(UTC)
+    return None if t.year < 2000 else t  # marvel's zero time is year 1
+
+
+def clean(s, n=80):
+    return re.sub(r"[^A-Za-z0-9._:/ -]", "?", str(s))[:n]
+
+
+def load(path_or_cmd, argv):
+    """Return (doc, why). A file when path_or_cmd is a path, else the command's stdout."""
+    try:
+        if path_or_cmd:
+            with open(path_or_cmd, "rb") as f:
+                raw = f.read()
+        else:
+            p = subprocess.run(argv, capture_output=True, timeout=120)
+            raw = p.stdout
+            if not raw.strip():
+                err = p.stderr.decode("utf-8", "replace").strip().splitlines()[:1]
+                return None, "no answer" + (": " + clean(err[0], 100) if err else "")
+        return json.loads(raw.decode("utf-8", "replace")), ""
+    except (OSError, subprocess.SubprocessError):
+        return None, "could not run or read"
+    except ValueError:
+        return None, "not JSON"
+
+
+def is_claude(rt):
+    if not isinstance(rt, dict):
+        return False
+    for k in ("Name", "Command"):
+        v = rt.get(k)
+        if isinstance(v, str) and "claude" in os.path.basename(v).lower():
+            return True
+    return False
+
+
+def pane_state(cluster, name):
+    """no-mcp when the pane says the director MCP is not configured, seen when it does not, unknown when no pane was read."""
+    prog = os.environ.get("ROSTER_GAP_PANE")
+    if not prog:
+        return "unknown"
+    try:
+        p = subprocess.run([prog, cluster, name], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if p.returncode != 0 or not p.stdout.strip():
+        return "unknown"
+    return "no-mcp" if NO_MCP_TEXT in p.stdout.decode("utf-8", "replace") else "seen"
+
+
+def roster_keys(doc):
+    rows = doc.get("rows") if isinstance(doc, dict) else doc
+    if not isinstance(rows, list):
+        return None
+    keys = set()
+    for r in rows:
+        if isinstance(r, dict) and r.get("team") and r.get("agent_id"):
+            keys.add((r["team"], r["agent_id"]))
+    return keys
+
+
+def main(argv):
+    sessions_file, rosters, now, minutes = None, [], None, 10
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a not in ("--sessions", "--roster", "--now", "--min-minutes") or i + 1 >= len(argv):
+            sys.stderr.write("usage: roster-gap [--sessions FILE] [--roster [CLUSTER=]FILE]... [--now TIME] [--min-minutes N]\n")
+            return 2
+        v = argv[i + 1]
+        if a == "--sessions":
+            sessions_file = v
+        elif a == "--roster":
+            rosters.append(v)
+        elif a == "--now":
+            if not TIME_RE.match(v):
+                sys.stderr.write("roster-gap: --now is YYYY-MM-DDTHH:MM:SSZ\n")
+                return 2
+            now = parse_time(v)
+        else:
+            try:
+                minutes = int(v)
+            except ValueError:
+                sys.stderr.write("roster-gap: --min-minutes is a whole number\n")
+                return 2
+        i += 2
+    now = now or datetime.datetime.now(UTC)
+
+    sdoc, why = load(sessions_file, [os.environ.get("ROSTER_GAP_MARVEL", "marvel"), "get", "sessions", "--all-clusters", "-o", "json"])
+    if sdoc is None:
+        print("roster-gap: GAP sessions (%s)" % why)
+        return 0
+    clusters = sdoc.get("clusters") if isinstance(sdoc, dict) else None
+    rows = sdoc.get("sessions") if isinstance(sdoc, dict) else sdoc
+    if not isinstance(rows, list):
+        print("roster-gap: GAP sessions (no sessions list in the answer)")
+        return 0
+
+    gaps, silent = 0, set()
+    by_cluster, shared = {}, None
+    if rosters:
+        for spec in rosters:
+            name, _, path = spec.partition("=")
+            if not path:
+                name, path = None, spec
+            doc, why = load(path, None)
+            keys = roster_keys(doc) if doc is not None else None
+            label = name or "all clusters"
+            if keys is None:
+                print("roster-gap: GAP roster %s (%s)" % (clean(label), why or "no rows list"))
+                if not name:
+                    return 0
+                silent.add(name)  # this cluster's seats are not claimed missing; the others still print
+                gaps += 1
+                continue
+            if name:
+                by_cluster[name] = keys
+            else:
+                shared = keys
+    else:
+        doc, why = load(None, [os.environ.get("ROSTER_GAP_DIRECTOR_MCP", "director-mcp"), "roster", "--json"])
+        keys = roster_keys(doc) if doc is not None else None
+        if keys is None:
+            print("roster-gap: GAP roster (%s)" % (why or "no rows list"))
+            return 0
+        shared = keys
+
+    if isinstance(clusters, list):
+        for c in clusters:
+            if isinstance(c, dict) and c.get("outcome") == "starting":
+                print("roster-gap: NOTE cluster %s is starting, its rows may be incomplete" % clean(c.get("cluster") or "?"))
+            if isinstance(c, dict) and c.get("outcome") not in OK_OUTCOMES:
+                print("roster-gap: GAP cluster %s (%s)" % (clean(c.get("cluster") or "?"), clean(c.get("outcome") or "no outcome")))
+                silent.add(c.get("cluster"))
+                gaps += 1
+
+    checked, missing = 0, 0
+    for r in rows:
+        if not isinstance(r, dict) or r.get("State") != "running" or not is_claude(r.get("Runtime")):
+            continue
+        cluster, name, team = r.get("cluster") or "-", r.get("Name") or "?", r.get("Team") or "?"
+        if cluster in silent:
+            continue
+        roster = by_cluster.get(cluster, shared)
+        if roster is None:
+            print("roster-gap: GAP cluster %s (no roster given for it)" % clean(cluster))
+            silent.add(cluster)
+            gaps += 1
+            continue
+        t = parse_time(r.get("CreatedAt"))
+        age = None if t is None else (now - t).total_seconds() / 60.0
+        if age is not None and age <= minutes:
+            continue
+        checked += 1
+        if (team, name) in roster:
+            continue
+        missing += 1
+        st = pane_state(cluster, name)
+        reason = {"no-mcp": "no director MCP configured", "seen": "no roster row"}.get(st, "no roster row, reason unknown")
+        print("roster-gap: %s/%s team %s running %s, %s" % (
+            clean(cluster), clean(name), clean(team, 60), "age unknown" if age is None else "%d min" % int(age), reason))
+    print("roster-gap: checked %d claude seat(s) past %d min, %d without a roster row, %d cluster gap(s)" % (checked, minutes, missing, gaps))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
