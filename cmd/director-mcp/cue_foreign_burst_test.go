@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -92,5 +93,34 @@ func TestNoCueForAForeignBurstWhileTheRosterIsSlow(t *testing.T) {
 	}
 	if len(r.warns) != 0 {
 		t.Fatalf("warnings for mail the filter drops: %v", r.warns)
+	}
+}
+
+// A transient roster failure costs the messages whose own read failed, as at
+// main, and not the whole list: with the roster failing its first k reads and
+// then answering, the cue's count for a burst of 5 is no higher than main's
+// (0 for k of 1, 2 and 3 in this rig) and no cue goes out. rosterOnce keeps only
+// a read that succeeded.
+func TestAFailedRosterReadDoesNotCountTheWholeBurst(t *testing.T) {
+	for _, k := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("first %d reads fail", k), func(t *testing.T) {
+			r := newForeignCueRig(t)
+			reads := 0
+			r.bus.global.forFilter.roster = func(context.Context) ([]map[string]any, error) {
+				reads++
+				if reads <= k {
+					return nil, errors.New("roster read failed")
+				}
+				return forTestRows(), nil
+			}
+			publishForeignBurst(t, r, 5, fmt.Sprintf("err%d-", k))
+			if n := cueCountOf(t, r.pipeRig); n != 0 {
+				t.Fatalf("count after %d failed roster reads = %d, want 0 (main's count)", k, n)
+			}
+			r.step(2 * time.Second)
+			if got := r.mailCues(); len(got) != 0 {
+				t.Fatalf("a cue went out after %d failed roster reads: %v", k, got)
+			}
+		})
 	}
 }

@@ -430,21 +430,26 @@ func (g *globalTier) foreignDoubtWith(ctx context.Context, e *Envelope, roster f
 
 // rosterOnce wraps a roster read so a caller that decides a list of messages
 // reads it once, on the first message that needs it, and every later message
-// uses that answer, an error included. A burst of N waiting messages is then
-// one scan of the presence rows and not N, inside the one read deadline the
-// count has (I-685 item 8).
+// uses that answer. Only a read that succeeded is kept: after an error the next
+// message reads again, as it did before, so a transient failure costs the
+// messages whose own read failed and not the whole list. A burst of N waiting
+// messages is then one scan of the presence rows and not N, inside the one read
+// deadline the count has (I-685 item 8).
 func rosterOnce(read func(context.Context) ([]map[string]any, error)) func(context.Context) ([]map[string]any, error) {
 	var (
 		done bool
 		rows []map[string]any
-		err  error
 	)
 	return func(ctx context.Context) ([]map[string]any, error) {
-		if !done {
-			rows, err = read(ctx)
-			done = true
+		if done {
+			return rows, nil
 		}
-		return rows, err
+		r, err := read(ctx)
+		if err != nil {
+			return nil, err
+		}
+		rows, done = r, true
+		return rows, nil
 	}
 }
 
