@@ -20,15 +20,21 @@ func TestShimStartHoldsTheDirectorIdentityOnlyWithTheMark(t *testing.T) {
 	bin := buildShim(t, t.TempDir(), true)
 	run := func(args []string, extra ...string) (int, string) {
 		cmd := exec.Command(bin, args...)
-		cmd.Env = append([]string{"PATH=/usr/bin:/bin", "NATS_URL=nats://127.0.0.1:1", "DIRECTOR_TEAM=ops", "DIRECTOR_WORKSPACE=w"}, extra...)
+		cmd.Env = append([]string{"PATH=/usr/bin:/bin", "NATS_URL=nats://127.0.0.1:1", "DIRECTOR_BUS_CONNECT_RETRY=0", "DIRECTOR_TEAM=ops", "DIRECTOR_WORKSPACE=w"}, extra...)
 		var errb bytes.Buffer
 		cmd.Stderr = &errb
+		// An open stdin: the shim serves the harness's pipe while it connects, and
+		// closing it ends the shim before the connect has failed.
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatalf("stdin pipe: %v", err)
+		}
+		defer stdin.Close()
 		done := make(chan error, 1)
 		if err := cmd.Start(); err != nil {
 			t.Fatalf("start shim: %v", err)
 		}
 		go func() { done <- cmd.Wait() }()
-		var err error
 		select {
 		case err = <-done:
 		case <-time.After(20 * time.Second):

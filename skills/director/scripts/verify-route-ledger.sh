@@ -46,8 +46,32 @@ python3 - "$root/out" <<'PY' && ok "--json prints the same counts as one object"
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d == {"rows": 11, "asks": 4, "routed": 4, "acked": 3, "closed": 2, "cancelled": 1, "open": 1,
-             "depth_known": 2, "depth_total": 4, "event_v1": 2, "legacy": 4, "firing_acks": 1, "refused": 0}, d
+             "depth_known": 2, "depth_total": 4, "event_v1": 2, "legacy": 4, "firing_acks": 1, "refused": 0,
+             "text_missing": 1}, d
 PY
+
+# --- route text: a record carries the route as sent, or a pointer to it (I-685 3) ---------------------------
+run check "$fx"
+[[ "$(grep -c 'route text missing' "$root/err")" -eq 1 ]] && grep -qxF 'route-ledger: warning: row 4: route text missing' "$root/err" && ok "the example ledger warns once, on the one record with neither text nor relay_ref" || bad "fixture warning" "$(cat "$root/err")"
+row "{$REC}"; grep -qxF 'route-ledger: warning: row 1: route text missing' "$root/err" && [[ $rc -eq 0 ]] && ok "a routed record with neither text nor relay_ref warns, and the exit stays 0" || bad "missing text warning" "rc=$rc $(cat "$root/err")"
+want_line='route-ledger: rows 1, asks 1, routed 1, acked 0, closed 0, cancelled 0, open 1, depth known 0 of 1, event@1 0, legacy 0, firing acks 0, refused 0'
+[[ "$(cat "$root/out")" == "$want_line" ]] && ok "the warning changes no count in the summary line" || bad "summary line with warning" "$(cat "$root/out")"
+run check "$root/l.jsonl" --json; python3 - "$root/out" <<'PY' && ok "--json carries text_missing" || bad "--json text_missing" "$(head -c 300 "$root/out")"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["text_missing"] == 1 and d["refused"] == 0, d
+PY
+row "{$REC,\"text\":\"the route as sent\"}"; [[ $rc -eq 0 && ! -s "$root/err" ]] && ok "a record with text does not warn" || bad "text present" "rc=$rc $(cat "$root/err")"
+row "{$REC,\"relay_ref\":\"01PLACEHOLDER\"}"; [[ $rc -eq 0 && ! -s "$root/err" ]] && ok "a record with relay_ref does not warn" || bad "relay_ref present" "rc=$rc $(cat "$root/err")"
+row "{$REC,\"text\":\"t\",\"relay_ref\":\"r\"}"; [[ $rc -eq 0 && ! -s "$root/err" ]] && ok "a record with both does not warn" || bad "both present" "rc=$rc $(cat "$root/err")"
+row "{$REC,\"text\":\"  \",\"relay_ref\":\"\"}"; grep -qF 'route text missing' "$root/err" && ok "blank text and relay_ref count as missing" || bad "blank text" "$(cat "$root/err")"
+row "{$REC,\"text\":null,\"relay_ref\":null}"; grep -qF 'route text missing' "$root/err" && [[ $rc -eq 0 ]] && ok "null text and relay_ref count as missing, and are valid" || bad "null text" "rc=$rc $(cat "$root/err")"
+row "{${REC/role:\/\/t\/builder/none}}"; [[ $rc -eq 0 && ! -s "$root/err" ]] && ok "a no-route record (routed_to none) is not asked for text" || bad "no-route exempt" "rc=$rc $(cat "$root/err")"
+row "{$REC,\"text\":5}"; refused "a text that is not text is refused" "row 1: text:shape"
+row "{$REC,\"relay_ref\":[\"x\"]}"; refused "a relay_ref that is not text is refused" "row 1: relay_ref:shape"
+printf '%s\n' "{\"ask_id\":\"canary-ask\",\"routed_to\":\"canary-to\",\"basis\":\"b\",\"principal\":\"p\",\"supervisor_epoch\":\"g1-0\",\"routed_at\":\"2030-01-01T10:00:00Z\",\"text\":\"canary-text\"}" >"$root/l.jsonl"; run check "$root/l.jsonl"
+! grep -q canary "$root/err" "$root/out" && ok "a warning or a count never echoes a field value" || bad "echo" "$(cat "$root/err")"
+row "{$REC,\"acked_at\":\"2030-01-01T10:05:00Z\"}"; grep -qF 'acked 1' "$root/out" && ok "a row written before the fields existed still reads as before (counts the same, one warning)" || bad "old row" "$(cat "$root/out")"
 
 # --- records ------------------------------------------------------------------------------------------
 row "{$REC}"; [[ $rc -eq 0 ]] && ok "a record with only the required fields passes (depth unknown)" || bad "minimal record" "$(cat "$root/err")"

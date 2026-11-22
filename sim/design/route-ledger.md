@@ -34,6 +34,14 @@ supervisor onto the shape; that is a separate step per supervisor.
 | `cancelled_at` | time | optional; when the routing was withdrawn |
 | `closed_at` | time | optional; when the ask was done, if the supervisor closes it on the record itself |
 | `no_route` | object or text | optional; the reason when `routed_to` is `none` |
+| `text` | text | optional; the full text of the route as it was sent |
+| `relay_ref` | text | optional; a pointer to the route's relay-log entry (its message id), when the text is kept there |
+
+`text` and `relay_ref` let a successor supervisor read what a route said, not only that it was routed: a ledger row
+that holds only a one-line scope ("the step 1 scope of route X") loses the instruction at a handoff. A record may
+carry either or both. A routed record that carries neither is read as **route text missing** (see the checker).
+A record with `routed_to` of `none` sent no route, so it is not asked for text. Both fields are additive: a row
+written before they existed stays valid.
 
 A record with no `depth_at_route` is **depth unknown**, never zero. Fields a local ledger adds beyond these are
 allowed and ignored.
@@ -99,11 +107,17 @@ route-ledger: rows N, asks N, routed N, acked N, closed N, cancelled N, open N, 
 
 A refused row prints `route-ledger: refused: row <line>: <field>:<reason>` on stderr, in fixed words and never the
 value, and the other rows are still read. Exit 0 when nothing was refused, 1 when a row was, 2 for a usage error
-or an unreadable file. `verify-route-ledger.sh` proves it against `fixtures/route-ledger.example.jsonl`
+or an unreadable file.
+
+A routed record with neither `text` nor `relay_ref` prints `route-ledger: warning: row <line>: route text missing` on
+stderr. It is a diagnostic and not a gate: it changes no count in the line above and never the exit code, and
+`--json` carries the number of such rows as `text_missing`. A `text` or `relay_ref` that is not text is refused as
+`<field>:shape`. `verify-route-ledger.sh` proves it against `fixtures/route-ledger.example.jsonl`
 (placeholder ids only), red first, with a mutant for each count and refusal.
 
 ## Not here
 
 Moving each supervisor onto the shape, and any change to a supervisor role file, are separate steps (a
-role-library change goes by its own pull request). The ledger's home (a file per seat, or marvel's store) is
+role-library change goes by its own pull request). In particular the supervisor role's list of what it carries
+across a handoff should name the route text; that role library is private, so that change follows separately. The ledger's home (a file per seat, or marvel's store) is
 undecided and out of scope.
