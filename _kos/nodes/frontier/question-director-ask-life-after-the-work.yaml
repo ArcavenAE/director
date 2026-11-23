@@ -45,6 +45,9 @@ edges:
   - target: question-idle-seat-receive-latency
     type: supports
     note: "its fourth item, how long accepted asks wait unread on idle seats, is that question measured from the ask's side"
+  - target: finding-director-glst-desk-read-path-not-yet-scripted
+    type: supports
+    note: "bears on the second item, what carries a Desk ruling back to the ask: a session reads every card and answer, one headless attempt did not, and no supported shell path was found, so a check for a missed ruling runs in a session or against a snapshot a session wrote"
 provenance:
   created_by: agent
   session: 2026-11-20 old-asks probe, team arcaven architect seat
