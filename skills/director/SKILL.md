@@ -192,6 +192,8 @@ in the list. Detail on request, by number. Session 1's operator complaint was
 "can you get to the point? These summaries are a wall of distracting text",
 and that complaint is a requirement.
 
+In director replies, report only what changed. Repeat the operator's pending list only when it changes or when asked.
+
 When `$DIRECTOR_STATE/workstreams.jsonl` exists, take Blocked on you from the
 ledger: run `${DIRECTOR_HOME:-$HOME/.director}/bin/dws show --json` and list the rows whose `blocked` is
 `operator` and whose `stage` is not `parked`, oldest `last_moved` first, each as `<owner> - <workstream>: <next action>`,
