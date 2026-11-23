@@ -161,9 +161,39 @@ func brokerAddress(raw string) string {
 }
 
 // connectReason is the text of a failed connect, for an error line. It must not
-// carry the address's user or password.
+// carry the address's user or password, and an error from the url package does:
+// it quotes the raw URL. A *url.Error therefore gives a fixed reason. Any other
+// error keeps its text with every part of the address, its user and its
+// password taken out, so a dial that echoes the address stays safe too.
 func connectReason(err error, raw string) string {
-	return err.Error()
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return "the address does not parse"
+	}
+	text := err.Error()
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		text = strings.ReplaceAll(text, part, brokerAddress(part))
+		rest := part
+		if i := strings.Index(rest, "://"); i >= 0 {
+			rest = rest[i+3:]
+		}
+		at := strings.LastIndex(rest, "@")
+		if at <= 0 {
+			continue
+		}
+		userinfo := rest[:at]
+		user, pass, _ := strings.Cut(userinfo, ":")
+		for _, secret := range []string{userinfo + "@", userinfo, pass, user} {
+			if secret != "" {
+				text = strings.ReplaceAll(text, secret, "[redacted]")
+			}
+		}
+	}
+	return text
 }
 
 func rosterRowFromKey(key string, rec map[string]any, now time.Time) (rosterRow, string) {
