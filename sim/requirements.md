@@ -2912,8 +2912,7 @@ condition it carried, and one became a sed rule that contradicted a seat's
 handoff. A ruling is written to the record the seats read, with its ruler and
 date, and memory points at that record.
 *Earned by: bus 01M83F5PS3 (one store through the symlink), 01M83F4R5G (the
-sed rule against a handoff), 01M83GTTMH (the lost condition); aae-orc#1149
-(1bcdd226), which gives the rulings a home.*
+sed rule against a handoff), 01M83GTTMH (the lost condition).*
 *Source: OBSERVED. Cross-refs R-226 (rule provenance), R-204.*
 
 ### Harvest diff (2026-11-23)
