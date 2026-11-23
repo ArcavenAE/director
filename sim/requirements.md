@@ -2935,7 +2935,7 @@ the replies.
     start setting, `DIRECTOR_START` (inherit, head, after a sequence, since a
     time, all), read only when a durable is created (bd aae-orc-9glr0, open).
     Evidence: bus 01M83F5PS3 (1273 skipped; also 01M82T98CR), 01M83F66ZP
-    (1212 waiting; director#596), 01M83F40776 (792 behind), 01M83F1HD8 (a
+    (1212 waiting; director#596), 01M83F4077 (792 behind), 01M83F1HD8 (a
     global advance returned 3, 1 arrived).
   - R-130: the inbox stream still drops unread mail at its max age, 168h by the
     fallback in `cmd/director-mcp/asklookup.go`, so the first clause of R-130
