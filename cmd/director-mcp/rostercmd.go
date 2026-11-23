@@ -3,16 +3,29 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 const rosterUsage = "director-mcp roster --json"
+
+// The roster output is a published interface, documented in docs/roster-json.md.
+// rosterSchemaVersion changes only when a reader of the old shape would misread
+// the new one; a field added beside the others does not change it.
+const rosterSchemaVersion = 1
+
+// rosterExitNoBroker is the exit status when no broker answers at the address.
+// A broker that answers and then fails the read is exit 1, so a caller can tell
+// "director is not present" from "director is present and unreadable".
+const rosterExitNoBroker = 3
 
 // rosterRow is one presence row of the local broker, as a script reads it.
 // Fresh is true when the row is no older than presenceTTL, the bound the
@@ -42,10 +55,19 @@ type rosterRow struct {
 	CueProvedAt   string   `json:"cue_proved_at,omitempty"`
 }
 
+// rosterBroker names the broker a roster was read from, so a host with more
+// than one cluster can tell whose rows they are. URL has no credential.
+type rosterBroker struct {
+	URL        string `json:"url"`
+	ServerName string `json:"server_name,omitempty"`
+}
+
 type rosterReport struct {
-	ReadAt   string      `json:"read_at"`
-	Rows     []rosterRow `json:"rows"`
-	Warnings []string    `json:"warnings,omitempty"`
+	SchemaVersion int          `json:"schema_version"`
+	Broker        rosterBroker `json:"broker"`
+	ReadAt        string       `json:"read_at"`
+	Rows          []rosterRow  `json:"rows"`
+	Warnings      []string     `json:"warnings,omitempty"`
 }
 
 // readRosterRows lists the local presence rows without creating a consumer or
@@ -53,7 +75,7 @@ type rosterReport struct {
 // with fresh false and a warning, never dropped, so it cannot read as a seat
 // that is not there.
 func readRosterRows(ctx context.Context, js jetstream.JetStream, now time.Time) (rosterReport, error) {
-	rep := rosterReport{ReadAt: now.UTC().Format(time.RFC3339), Rows: []rosterRow{}}
+	rep := rosterReport{SchemaVersion: rosterSchemaVersion, ReadAt: now.UTC().Format(time.RFC3339), Rows: []rosterRow{}}
 	kv, err := js.KeyValue(ctx, "AGENT_STATE")
 	if err != nil {
 		return rep, fmt.Errorf("presence bucket AGENT_STATE: %w", err)
@@ -93,9 +115,14 @@ func readRosterRows(ctx context.Context, js jetstream.JetStream, now time.Time) 
 // broker is an error on stderr with a nonzero exit and nothing on stdout, so a
 // caller never mistakes it for an empty roster.
 func runRosterCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Writer) int {
+	addr := brokerAddress(url)
 	nc, js, err := dial(url, Sender{AgentID: "unread-reader"})
 	if err != nil {
-		_, _ = fmt.Fprintf(errw, "director-mcp roster: connect %s: %v\n", url, err)
+		if errors.Is(err, nats.ErrNoServers) {
+			_, _ = fmt.Fprintf(errw, "director-mcp roster: no broker reachable: connect %s: %s\n", addr, connectReason(err, url))
+			return rosterExitNoBroker
+		}
+		_, _ = fmt.Fprintf(errw, "director-mcp roster: connect %s: %s\n", addr, connectReason(err, url))
 		return 1
 	}
 	defer nc.Close()
@@ -104,6 +131,7 @@ func runRosterCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Wri
 		_, _ = fmt.Fprintf(errw, "director-mcp roster: %v\n", err)
 		return 1
 	}
+	rep.Broker = rosterBroker{URL: addr, ServerName: nc.ConnectedServerName()}
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(rep); err != nil {
@@ -111,6 +139,61 @@ func runRosterCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Wri
 		return 1
 	}
 	return 0
+}
+
+// brokerAddress is the broker's URL without any user or password, so neither the
+// document nor an error line carries a credential. The URL may be a
+// comma-separated list, each server with its own credential, so every part is
+// redacted. A part that does not parse is reported as "unparseable" and never
+// echoed; the other parts are kept.
+func brokerAddress(raw string) string {
+	parts := strings.Split(raw, ",")
+	for i, part := range parts {
+		u, err := url.Parse(strings.TrimSpace(part))
+		if err != nil || u.Host == "" {
+			parts[i] = "unparseable"
+			continue
+		}
+		u.User = nil
+		parts[i] = u.String()
+	}
+	return strings.Join(parts, ",")
+}
+
+// connectReason is the text of a failed connect, for an error line. It must not
+// carry the address's user or password, and an error from the url package does:
+// it quotes the raw URL. A *url.Error therefore gives a fixed reason. Any other
+// error keeps its text with every part of the address, its user and its
+// password taken out, so a dial that echoes the address stays safe too.
+func connectReason(err error, raw string) string {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return "the address does not parse"
+	}
+	text := err.Error()
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		text = strings.ReplaceAll(text, part, brokerAddress(part))
+		rest := part
+		if i := strings.Index(rest, "://"); i >= 0 {
+			rest = rest[i+3:]
+		}
+		at := strings.LastIndex(rest, "@")
+		if at <= 0 {
+			continue
+		}
+		userinfo := rest[:at]
+		user, pass, _ := strings.Cut(userinfo, ":")
+		for _, secret := range []string{userinfo + "@", userinfo, pass, user} {
+			if secret != "" {
+				text = strings.ReplaceAll(text, secret, "[redacted]")
+			}
+		}
+	}
+	return text
 }
 
 func rosterRowFromKey(key string, rec map[string]any, now time.Time) (rosterRow, string) {
