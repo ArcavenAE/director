@@ -2840,6 +2840,111 @@ counter.
 *Earned by: the same review.*
 *Source: HELD 2026-11-20 by the operator; reopens when an event source exists.*
 
+**R-233 (OBSERVED) · a seat's environment record shows what the process
+actually received, not only what its role declared.** The record a seat's
+environment is read from is the role's declared `Runtime.Env`. It misses the
+exports a cast launch adds and the variables the launcher sets itself, among
+them `MARVEL_SESSION`, which marvel puts in the constructed launch env, not in
+the role's declared env. A reader that trusts the record sees a seat without
+the identity it runs under. Director (or the component that spawns the seat)
+records the environment the process got, by key name, at launch.
+*Earned by: marvel `internal/runtime/adapter.go` (the launch env that sets
+`MARVEL_SESSION`) against the declared `Runtime.Env` in
+`internal/api/types.go`; the cast launch script sets the key after marvel's
+spec (cast-launch lines 191 to 210); bus 01M83EXW9S, 01M83F3720, 01M83F8NP4,
+01M83F1HD8, 01M83F4R5G, 01M83F6JCH (cue correction), 01M83FA25F (bootstrap ps
+check), 01M83FASF8 (reviewer correction).*
+*Source: OBSERVED. Cross-refs R-83, R-84. Cross-repo note: `MARVEL_SESSION` is
+marvel's variable, so the launch half of this is marvel's to build.*
+
+**R-234 (OBSERVED) · mail addressed to another seat on a shared address costs
+that seat neither a cue nor a turn.** The FOR filter keeps another seat's mail
+out of a seat's reading, but the cue still fires for it: cue.unanswered and
+repeat cues arm on FOR-other mail on a shared supervisor address, including
+the `global://<cluster>/supervisor` fan-out, so every seat on the address is
+woken for a turn that holds nothing for it. A cue counts only mail the
+filter would hand the seat, and the count reads the roster once per cue.
+*Earned by: director#731 (cues fire for FOR-other mail on a shared supervisor
+address), director#734 (where the FOR seat list ends), director#741 (the cue's
+count reads the roster once, not once per message); bus 01M83EVQ91 (about 45
+messages, 01M82CWYQW, 01M82TJNDZ), 01M83F33A3 (120 cues, 4 for the seat),
+01M83F8NP4 (54 messages, 01M82ME9G2 to 01M83ETCQF).*
+*Source: OBSERVED. Cross-refs R-183, R-168.*
+
+**R-235 (OBSERVED) · an operator ask id can be named from any host that
+answers it.** A send that names an ask is refused unless that host's own
+`asks.jsonl` holds the id, and the ask register is kept on one host, so a seat
+on another host that answers the ask cannot tag its send with it. The answer
+then arrives with no link to its ask. Director resolves an ask id against the
+register of record, or carries the id to every host that may answer it.
+*Earned by: `cmd/director-mcp/sendask.go` (the send refuses an id that is not
+in the local `asks.jsonl`); bus 01M83EGAB4 (audit seq 115054, corporate),
+01M83ERGE0 (seq 115067), 01M83F6QPJ (mokuzai).*
+*Source: OBSERVED. Cross-refs R-132, R-202.*
+
+**R-236 (OBSERVED) · a live manifest operation has a role that holds it.** No
+seat role holds live manifest operations, so a manifest change such as filling
+a placeholder has no route: it waits for a person or for director to apply it
+by hand, and nothing shows it as waiting. The register names the role that
+applies a manifest change, or records that director holds it, so a plan that
+needs one can route it.
+*Earned by: bus 01M83F53H8 (NO-ROUTE), 01M83FB9QN (a maintainer's refusal),
+01M83FASMT (a seat holds the fill).*
+*Source: OBSERVED, as reported by the supervisors. Cross-refs R-231 (a
+delegation names how it is enacted).*
+
+**R-237 (OBSERVED) · a lock on another seat's worktree stops a commit there,
+not only a prune.** The fleet locks each seat's worktree with an owner reason,
+and a seat checks that lock before it removes a worktree. Git's lock prevents
+only pruning, moving and deleting the worktree; nothing stops another seat from
+committing in it. A commit into another seat's locked worktree is refused, or
+at least reported to the owner and its supervisor.
+*Earned by: `git help worktree`, the `lock` entry (prevents pruning, moving
+and deletion); bus 01M83F8NP4 section 2, 01M83BJ2TC, 01M83BMDEC.*
+*Source: OBSERVED. Cross-refs R-79.*
+
+**R-238 (OBSERVED) · a standing ruling lives in a record with its source, never
+only in a seat's memory, and a host's shared memory store is known to be
+shared.** On one host a single memory store serves every seat through the
+skippy-ultra projects symlink, so a note one seat writes is read by all of
+them as their own. Two rulings drifted while held only in memory: one lost a
+condition it carried, and one became a sed rule that contradicted a seat's
+handoff. A ruling is written to the record the seats read, with its ruler and
+date, and memory points at that record.
+*Earned by: bus 01M83F5PS3 (one store through the symlink), 01M83F4R5G (the
+sed rule against a handoff), 01M83GTTMH (the lost condition).*
+*Source: OBSERVED. Cross-refs R-226 (rule provenance), R-204.*
+
+### Harvest diff (2026-11-23)
+
+Covers the supervisors' harvest replies of 2026-11-23, as briefed to the
+architect seat. Each candidate was checked against this register and, where a
+mechanism is named, against the code at director origin/main 9927724 and marvel
+main. Evidence is cited by bus message id, PR and bd id, as director relayed
+the replies.
+
+- **Promoted (6):** R-233 (the environment record shows what the process got),
+  R-234 (another seat's mail costs no cue and no turn), R-235 (an ask id can be
+  named from any host), R-236 (a live manifest operation has a holding role),
+  R-237 (a lock stops a commit, not only a prune), R-238 (a ruling lives in a
+  record, not only in memory).
+- **Unchanged, new instances:**
+  - R-144: a successor or swapped seat starts reading at the head, not at its
+    predecessor's floor, and a team swap moves the global cursor, so mail sent
+    between the two is skipped rather than redelivered. The build is an explicit
+    start setting, `DIRECTOR_START` (inherit, head, after a sequence, since a
+    time, all), read only when a durable is created (bd aae-orc-9glr0, open).
+    Evidence: bus 01M83F5PS3 (1273 skipped; also 01M82T98CR), 01M83F66ZP
+    (1212 waiting; director#596), 01M83F4077 (792 behind), 01M83F1HD8 (a
+    global advance returned 3, 1 arrived).
+  - R-130: the inbox stream still drops unread mail at its max age, 168h by the
+    fallback in `cmd/director-mcp/asklookup.go`, so the first clause of R-130
+    is unmet. The candidate said the seat gets no notice; that part no longer
+    holds. Since director#486 (2026-11-04) and #503 (2026-11-09) an empty poll
+    reports that mail "may have expired unread", once per gap and as a window,
+    not a count. The mail itself is not kept. Evidence: bus 01M83F1HD8
+    (AGENT_INBOX 79281 to 79841 aged out), 01M83FASMT (80269 to 80744, 168h).
+
 ### Harvest diff (2026-10-24)
 
 Covers `observations.md` O-2094 to O-2112 and the unnumbered entries dated
