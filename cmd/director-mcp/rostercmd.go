@@ -119,10 +119,10 @@ func runRosterCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Wri
 	nc, js, err := dial(url, Sender{AgentID: "unread-reader"})
 	if err != nil {
 		if errors.Is(err, nats.ErrNoServers) {
-			_, _ = fmt.Fprintf(errw, "director-mcp roster: no broker reachable: connect %s: %v\n", addr, err)
+			_, _ = fmt.Fprintf(errw, "director-mcp roster: no broker reachable: connect %s: %s\n", addr, connectReason(err, url))
 			return rosterExitNoBroker
 		}
-		_, _ = fmt.Fprintf(errw, "director-mcp roster: connect %s: %v\n", addr, err)
+		_, _ = fmt.Fprintf(errw, "director-mcp roster: connect %s: %s\n", addr, connectReason(err, url))
 		return 1
 	}
 	defer nc.Close()
@@ -158,6 +158,12 @@ func brokerAddress(raw string) string {
 		parts[i] = u.String()
 	}
 	return strings.Join(parts, ",")
+}
+
+// connectReason is the text of a failed connect, for an error line. It must not
+// carry the address's user or password.
+func connectReason(err error, raw string) string {
+	return err.Error()
 }
 
 func rosterRowFromKey(key string, rec map[string]any, now time.Time) (rosterRow, string) {
