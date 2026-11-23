@@ -25,6 +25,8 @@ creates no consumer and writes no presence.
   change it, so a reader ignores fields it does not know and refuses a version
   it does not know.
 - `broker.url`: the address the command read, with any user or password removed.
+  When the address is a comma-separated list, every part is redacted; a part
+  that does not parse reads `unparseable`.
   `broker.server_name`: the connected server's own name, omitted when the server
   reports none. A host with more than one cluster uses these two to tell whose
   rows it has read.

@@ -142,15 +142,22 @@ func runRosterCmd(ctx context.Context, url string, cli cliArgs, out, errw io.Wri
 }
 
 // brokerAddress is the broker's URL without any user or password, so neither the
-// document nor an error line carries a credential. A URL that does not parse is
-// reported as such and never echoed.
+// document nor an error line carries a credential. The URL may be a
+// comma-separated list, each server with its own credential, so every part is
+// redacted. A part that does not parse is reported as "unparseable" and never
+// echoed; the other parts are kept.
 func brokerAddress(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return "unparseable"
+	parts := strings.Split(raw, ",")
+	for i, part := range parts {
+		u, err := url.Parse(strings.TrimSpace(part))
+		if err != nil || u.Host == "" {
+			parts[i] = "unparseable"
+			continue
+		}
+		u.User = nil
+		parts[i] = u.String()
 	}
-	u.User = nil
-	return u.String()
+	return strings.Join(parts, ",")
 }
 
 func rosterRowFromKey(key string, rec map[string]any, now time.Time) (rosterRow, string) {
