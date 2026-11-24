@@ -239,6 +239,36 @@ assert r["event"] == "close" and r["as"] == "not-an-ask" and r["reason"] == "cha
 P
   "$DWS" asks >"$root/ct"
   [[ "$(sed -n 1p "$root/ct" | awk '{print NF}')" == 7 && "$(grep -c 'not-an-ask' "$root/ct")" == 1 ]] && ok "the table shows the closed column and the kind" || bad "table closed column" "$(cat "$root/ct")"
+  # superseded and folded: each records its kind and the ref it points to (aae-orc-kjr67)
+  for kind in superseded folded; do
+    printf 'ask for %s\n' "$kind" >"$root/c-$kind.txt"
+    id="$("$DWS" intake --text-file "$root/c-$kind.txt")"
+    if "$DWS" ask-close "$id" --as "$kind" --ref "pr:ArcavenAE/director#2" >/dev/null 2>&1; then ok "ask-close --as $kind --ref succeeds"; else bad "ask-close --as $kind --ref succeeds"; fi
+    python3 - "$CA" "$id" "$kind" <<'P' && ok "the $kind close row records the kind and the ref" || bad "$kind close row" "$(tail -n1 "$CA")"
+import json, sys
+r = json.loads(open(sys.argv[1]).read().splitlines()[-1])
+assert r["event"] == "close" and r["ask_id"] == sys.argv[2] and r["as"] == sys.argv[3] and r["ref"] == "pr:ArcavenAE/director#2", r
+P
+    "$DWS" asks --json >"$root/cj-$kind"
+    python3 - "$root/cj-$kind" "$id" "$kind" <<'P' && ok "dws asks shows $id closed $kind" || bad "asks after $kind close" "$(cat "$root/cj-$kind")"
+import json, sys
+j = {e["ask_id"]: e["closed"] for e in json.load(open(sys.argv[1]))}
+assert j[sys.argv[2]] == sys.argv[3], j
+P
+  done
+  # a superseded or folded close with no --ref points nowhere, so it is refused and appends nothing
+  for kind in superseded folded; do
+    printf 'ask for %s without a ref\n' "$kind" >"$root/c-$kind-noref.txt"
+    id="$("$DWS" intake --text-file "$root/c-$kind-noref.txt")"
+    n0="$(nlines "$CA")"
+    refuse "$kind with no --ref" "$id" --as "$kind"
+    "$DWS" ask-close "$id" --as "$kind" >"$root/nr-$kind" 2>&1 || true
+    grep -q -- "--as $kind needs --ref" "$root/nr-$kind" && ok "the $kind refusal names --ref" || bad "the $kind refusal names --ref" "$(cat "$root/nr-$kind")"
+  done
+  "$DWS" ask-close --help >"$root/ch" 2>&1 || true
+  for kind in superseded folded; do
+    grep -q "$kind" "$root/ch" && ok "ask-close help lists $kind" || bad "ask-close help lists $kind"
+  done
 }
 export DIRECTOR_STATE="$saved_state"
 

@@ -45,8 +45,8 @@ be read it writes nothing and exits 1.
 
 Intake: `dws intake --text-file <path|-> [--source S]` records an operator ask in
 $DIRECTOR_STATE/asks.jsonl, stamped from the clock under one flock, and prints its id, I-<n>.
-`dws ask-close I-<n> --as answered|carded|not-an-ask [--ref R] [--reason T]` records how it ended (a not-an-ask
-needs a reason; there is no relayed kind, so a relayed ask is closed by hand with --as answered --ref); the close
+`dws ask-close I-<n> --as answered|carded|not-an-ask|superseded|folded [--ref R] [--reason T]` records how it ended (a not-an-ask
+needs a reason; superseded and folded need a --ref naming what replaced or absorbed the ask; there is no relayed kind, so a relayed ask is closed by hand with --as answered --ref); the close
 is a row with an event key in the same file and mints nothing, and `dws asks` shows it in a closed column.
 The id then travels: relay-log append --ask I-<n> [--kind K], card-ingest parse --intake I-<n>
 (desk-snapshot keeps it per card), and an intake:I-<n> link on a row (a typed link, set with
@@ -1362,7 +1362,8 @@ def read_asks(path=None):
     return out
 
 
-CLOSE_KINDS = ("answered", "carded", "not-an-ask")
+CLOSE_KINDS = ("answered", "carded", "not-an-ask", "superseded", "folded")
+REF_KINDS = ("superseded", "folded")
 
 
 def read_closes(path=None):
@@ -1419,6 +1420,8 @@ def cmd_ask_close(a):
     reason = (a.reason or "").strip()
     if a.kind == "not-an-ask" and not reason:
         raise Refused("--as not-an-ask needs --reason; nothing written")
+    if a.kind in REF_KINDS and not (a.ref or "").strip():
+        raise Refused(f"--as {a.kind} needs --ref; nothing written")
     os.makedirs(STATE, exist_ok=True)
     fd = os.open(ASKS_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
     try:
@@ -3668,10 +3671,10 @@ def main(argv):
     ik.add_argument("--source", default="operator", help="where the ask came from (a slug word)")
     ik.set_defaults(fn=cmd_intake)
 
-    ac = sub.add_parser("ask-close", help="record how an operator ask ended: answered, carded or not-an-ask (needs --reason); one close per ask")
+    ac = sub.add_parser("ask-close", help="record how an operator ask ended: answered, carded, not-an-ask (needs --reason), superseded or folded (each needs --ref); one close per ask")
     ac.add_argument("ask_id", help="the ask id (I-<n>) from intake")
     ac.add_argument("--as", dest="kind", required=True, choices=CLOSE_KINDS)
-    ac.add_argument("--ref", help="where the close can be checked: a PR, a card, a message id")
+    ac.add_argument("--ref", help="where the close can be checked: a PR, a card, a message id; required for superseded and folded")
     ac.add_argument("--reason", help="why; required for not-an-ask")
     ac.set_defaults(fn=cmd_ask_close)
 

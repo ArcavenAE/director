@@ -233,8 +233,8 @@ release, revise or cancel (the cancel_held tool).
    the clock. Carry the id: `relay-log append ... --ask I-<n> --kind relay|ruling|build|research|question|answer`,
    `card-ingest parse ... --intake I-<n>`, and `dws link <slug> intake:I-<n>` on the row. `dws asks` then joins
    each ask to its card, the answer's time, the relay entry, the row and how it was closed, with "none" for a blank.
-   Close every ask when it ends: `dws ask-close I-<n> --as answered|carded|not-an-ask --ref <where to check>`
-   (`--reason` is required for not-an-ask; one close per ask). Pass `--answers`
+   Close every ask when it ends: `dws ask-close I-<n> --as answered|carded|not-an-ask|superseded|folded --ref <where to check>`
+   (`--reason` is required for not-an-ask, `--ref` for superseded and folded; one close per ask). Pass `--answers`
    to `desk-snapshot write` so each read also adds one row to `desk-reads.jsonl`.
    For an entry already written, link it afterwards with
    `dws link <slug> relay:R-<n>`. Nothing is matched from message text. Read
