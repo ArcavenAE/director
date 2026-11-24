@@ -95,7 +95,7 @@ func parseRelaySent(text string) map[string]string {
 	return out
 }
 
-var closeKinds = map[string]bool{"answered": true, "carded": true, "not-an-ask": true}
+var closeKinds = map[string]bool{"answered": true, "carded": true, "not-an-ask": true, "superseded": true, "folded": true}
 
 // readAskRecords reads asks.jsonl as dws does: torn or malformed lines are
 // skipped, a row with an event key is not an ask, and a close row counts only
