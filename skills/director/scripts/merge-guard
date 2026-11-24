@@ -133,7 +133,9 @@ read_json() {
   if ! json="$(gh "$@" 2>"$err")"; then
     stop "$label failed: $(tr '\n' ' ' <"$err")"
   fi
-  [[ -n "${json//[[:space:]]/}" ]] || stop "$label returned nothing: $(tr '\n' ' ' <"$err")"
+  # Test for a non-space character without rewriting the string: a global
+  # substitution over a 1 MB head commit read took minutes.
+  [[ "$json" == *[![:space:]]* ]] || stop "$label returned nothing: $(tr '\n' ' ' <"$err")"
   jq -e . >/dev/null 2>&1 <<<"$json" || stop "$label returned something that is not JSON: $(head -c 160 <<<"$json" | tr '\n' ' ')"
 }
 field() { jq -r --arg f "$1" 'if has($f) then .[$f] | tostring else "__missing__" end' <<<"$json"; }
@@ -243,7 +245,10 @@ author="$(jq -r '.author.login // empty' <<<"$json")"
 # The head is dated by reading the commit itself. The view's commit list is
 # capped at 100, so on a longer PR the head is missing from it.
 view_json="$json"   # read_json overwrites $json; the PR view is needed below
-read_json "gh api (head commit)" api "repos/$repo/commits/$head_sha"
+# Ask for the committer date alone: the whole commit carries every changed file
+# and runs to a megabyte on a large merge commit.
+read_json "gh api (head commit)" api "repos/$repo/commits/$head_sha" \
+  -q '{commit: {committer: {date: .commit.committer.date}}}'
 head_at="$(jq -r '.commit.committer.date // empty' <<<"$json")"
 json="$view_json"
 [[ -n "$head_at" ]] || stop "the head commit read has no committer date; cannot date $head_sha"

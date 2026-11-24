@@ -252,7 +252,7 @@ expect_stop "a paged check-suite read: STOP" "paged"
 # from it. The head is dated from its own commit read, never from the view's list.
 fixture; view OPEN false CLEAN | jq -c '.commits = [range(100) | {oid: ("c\(.)"), committedDate: "2026-09-27T09:00:00Z"}]' > "$fx/view.json"
 expect_proceed "a PR with more than 100 commits, head absent from the view's capped list: PROCEED"
-grep -q "repos/org/repo/commits/abc1234def5678$" "$fx/commit.args" 2>/dev/null \
+grep -Eq "repos/org/repo/commits/abc1234def5678( |$)" "$fx/commit.args" 2>/dev/null \
   && ok "the head is dated by reading the head commit itself" \
   || bad "the head commit read" "args: $(cat "$fx/commit.args" 2>/dev/null)"
 fixture; view OPEN false CLEAN | jq -c '.commits[-1].committedDate = "2026-09-29T00:00:00Z"' > "$fx/view.json"
@@ -262,6 +262,32 @@ echo "Get https://api.github.com/repos/org/repo/commits/abc1234def5678: i/o time
 expect_stop "the head commit read times out: STOP" "i/o timeout"
 fixture; view OPEN false CLEAN > "$fx/view.json"; echo '{"message":"Not Found"}' > "$fx/commit.json"
 expect_stop "a head commit read with no committer date: STOP" "committer date"
+# A head that is a large merge commit: its commit read carries every changed file
+# and runs to about 1 MB. read_json must test it for content without rewriting
+# the string (a global pattern substitution over 1 MB took minutes), so the guard
+# answers in seconds. The bound is a wall-clock limit on one run.
+guard_within() { # seconds, then the guard's arguments; returns 124 on the bound
+  local limit="$1" pid rc=0 end; shift
+  guard "$@" & pid=$!
+  end=$((SECONDS + limit))
+  while kill -0 "$pid" 2>/dev/null && (( SECONDS < end )); do sleep 0.2; done
+  if kill -0 "$pid" 2>/dev/null; then kill -TERM "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; return 124; fi
+  wait "$pid" || rc=$?
+  return "$rc"
+}
+fixture; view OPEN false CLEAN > "$fx/view.json"
+{ printf '{"commit":{"committer":{"date":"%s"}},"files":[{"filename":"big","patch":"' "$HEAD_AT"
+  awk 'BEGIN { for (i = 0; i < 87382; i++) printf "ab cd ef gh " }'; printf '"}]}\n'; } > "$fx/commit.json"
+[[ "$(wc -c < "$fx/commit.json")" -gt 1000000 ]] || bad "the large commit fixture is about 1 MB" "$(wc -c < "$fx/commit.json") bytes"
+rc=0; guard_within 10 org/repo 7 || rc=$?
+if [[ $rc -eq 0 ]] && grep -q "^PROCEED org/repo#7 @abc1234def5678" "$fx/out"; then
+  ok "a 1 MB head commit read: PROCEED inside the time bound"
+else
+  bad "a 1 MB head commit read inside 10s" "rc=$rc $(head -c 300 "$fx/out")"
+fi
+# The head commit read asks gh for the committer date only, not the whole commit and its files.
+grep -q -- "-q " "$fx/commit.args" 2>/dev/null && ok "the head commit read asks for the committer date only" \
+  || bad "the head commit read is narrowed with -q" "args: $(cat "$fx/commit.args" 2>/dev/null)"
 fixture; echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc1234def5678","statusCheckRollup":[],"author":{"login":"builder"},"commits":[{"oid":"abc1234def5678","committedDate":"2026-09-28T10:00:00Z"}],"labels":[]}' > "$fx/view.json"
 expect_stop "a view with no reviews field: STOP" "reviews"
 
