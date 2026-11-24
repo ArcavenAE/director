@@ -256,6 +256,15 @@ j = {e["ask_id"]: e["closed"] for e in json.load(open(sys.argv[1]))}
 assert j[sys.argv[2]] == sys.argv[3], j
 P
   done
+  # a superseded or folded close with no --ref points nowhere, so it is refused and appends nothing
+  for kind in superseded folded; do
+    printf 'ask for %s without a ref\n' "$kind" >"$root/c-$kind-noref.txt"
+    id="$("$DWS" intake --text-file "$root/c-$kind-noref.txt")"
+    n0="$(nlines "$CA")"
+    refuse "$kind with no --ref" "$id" --as "$kind"
+    "$DWS" ask-close "$id" --as "$kind" >"$root/nr-$kind" 2>&1 || true
+    grep -q -- "--as $kind needs --ref" "$root/nr-$kind" && ok "the $kind refusal names --ref" || bad "the $kind refusal names --ref" "$(cat "$root/nr-$kind")"
+  done
   "$DWS" ask-close --help >"$root/ch" 2>&1 || true
   for kind in superseded folded; do
     grep -q "$kind" "$root/ch" && ok "ask-close help lists $kind" || bad "ask-close help lists $kind"
