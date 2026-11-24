@@ -98,6 +98,25 @@ func TestLaneIsEmptyOnceTheAskIsClosed(t *testing.T) {
 	}
 }
 
+func TestSupersededAndFoldedClosesLeaveTheLane(t *testing.T) {
+	for _, kind := range []string{"superseded", "folded"} {
+		t.Run(kind, func(t *testing.T) {
+			asks := laneAsks(t,
+				`{"ask_id":"I-1","received_at":"2026-11-09T04:59:00Z","text":"x","source":"operator"}`,
+				`{"event":"close","ask_id":"I-1","closed_at":"2026-11-09T06:00:00Z","as":"`+kind+`","ref":"pr:ArcavenAE/director#2"}`)
+			rec, err := readAskRecords(asks)
+			if err != nil {
+				t.Fatal(err)
+			}
+			items := []summaryItem{laneMsg("local", 13, "reply", "INFORM", "01MSENT1")}
+			l := buildLane(items, parseRelaySent(laneRelayLog), rec, laneNow)
+			if len(l.Items) != 0 {
+				t.Fatalf("lane = %+v, want empty after a %s close of I-1", l.Items, kind)
+			}
+		})
+	}
+}
+
 func TestPreCutoffOpenAskShowsOnlyInTheBacklogLine(t *testing.T) {
 	asks := laneAsks(t,
 		`{"ask_id":"I-0","received_at":"2026-11-09T03:00:00Z","text":"old","source":"operator"}`,
