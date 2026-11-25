@@ -207,13 +207,18 @@ left="$(find "$d/state" -name '.loop-status*' -o -name 'loop-status.json.*' 2>/d
 # "card" is the only required key. "ruled_at" and "forward" (a bd:, pr: or finding: edge) are optional and carried
 # verbatim; a row without them is not a gap (director, 2026-11-25).
 seed() { mkdir -p "$1/state/desk"; printf '%s' "$2" >"$1/state/desk/decided-not-built.seed.jsonl"; }
+seedpath() { printf '%s/state/desk/decided-not-built.seed.jsonl' "$1"; }
+seedfile() { printf '%s/state/desk/decided-not-built.seed.jsonl' "$1"; }
+sig() { "$PY" -I -c 'import os,sys,hashlib
+p=sys.argv[1]; st=os.stat(p); print(st.st_ino, st.st_size, st.st_mtime_ns, oct(st.st_mode), hashlib.sha256(open(p,"rb").read()).hexdigest())' "$1" 2>/dev/null || echo UNREADABLE; }
 dnb() { pyq "$(status "$1")" "$2"; }
 FIX2=$'{"card":"ops2-desk-store","ruled_at":"2026-10-10","forward":"pr:ArcavenAE/director#699"}\n{"card":"flow1027-1","note":"timer"}\n'
 
-d="$(fresh_state dnb_absent)"; tick "$d"; s="$(status "$d")"
+d="$(fresh_state dnb_absent)"; mkdir -p "$d/state/desk"; tick "$d"; s="$(status "$d")"
 { [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == skipped && "$(pyq "$s" 'len(d["steps"]["decided_not_built"]["reason"])>0')" == True \
   && "$(pyq "$s" '"decided_not_built" in d')" == False ]]; } \
   && okay "decided_not_built: no seed file is a skipped step with a reason and no top-level key" || miss "decided_not_built: absent seed file should be skipped with a reason and no top-level key"
+[[ ! -e "$(seedpath "$d")" ]] && okay "decided_not_built: the tick does not create an absent seed" || miss "decided_not_built: the tick created the seed file"
 
 d="$(fresh_state dnb_two)"; seed "$d" "$FIX2"; tick "$d"; s="$(status "$d")"
 [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]')" == "{'status': 'ok'}" ]] \
@@ -236,7 +241,9 @@ d="$(fresh_state dnb_empty)"; seed "$d" ""; tick "$d"; s="$(status "$d")"
 # bad lines: line 2 is not JSON, line 3 is JSON without a card, line 4 is an array, line 5 has an empty card
 d="$(fresh_state dnb_bad)"
 seed "$d" $'{"card":"good1"}\nnot json at all\n{"note":"no card"}\n["card"]\n{"card":""}\n{"card":"good2"}\n'
+bsig="$(sig "$(seedfile "$d")")"
 tick "$d"; s="$(status "$d")"
+[[ "$(sig "$(seedfile "$d")")" == "$bsig" ]] && okay "decided_not_built: a seed with bad lines is not repaired (bytes, inode, mtime kept)" || miss "decided_not_built: the tick rewrote a seed that has bad lines"
 { [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == gap && "$(cat "$d/rc" 2>/dev/null || echo none)" == 0 ]]; } \
   && okay "decided_not_built: bad lines make a gap and the tick still exits 0" || miss "decided_not_built: bad lines should make a gap with exit 0"
 { [[ "$(pyq "$s" 'all(__import__("re").search(r"\bline %d\b" % n, d["steps"]["decided_not_built"]["reason"]) for n in (2,3,4,5))')" == True \
@@ -255,7 +262,9 @@ tick "$d"; s="$(status "$d")"
 
 # a bad line after a blank line is numbered by its place in the file, blank lines counted
 d="$(fresh_state dnb_blankbad)"; seed "$d" $'{"card":"a"}\n\nnot json\n{"card":"b"}\n'
+bsig="$(sig "$(seedfile "$d")")"
 tick "$d"; s="$(status "$d")"
+[[ "$(sig "$(seedfile "$d")")" == "$bsig" ]] && okay "decided_not_built: a seed with a blank and a bad line is not repaired" || miss "decided_not_built: the tick rewrote a seed with a blank and a bad line"
 { [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == gap \
   && "$(pyq "$s" '__import__("re").search(r"\bline 3\b", d["steps"]["decided_not_built"]["reason"]) is not None and __import__("re").search(r"\bline 2\b", d["steps"]["decided_not_built"]["reason"]) is None')" == True \
   && "$(pyq "$s" 'd["decided_not_built"]["count"]')" == 2 ]]; } \
@@ -263,9 +272,6 @@ tick "$d"; s="$(status "$d")"
 
 # idempotent; and the seed is never written: it is made read-only before the tick, and its inode, size,
 # mtime and mode must be what they were after two ticks as well as its bytes
-seedfile() { printf '%s/state/desk/decided-not-built.seed.jsonl' "$1"; }
-sig() { "$PY" -I -c 'import os,sys,hashlib
-p=sys.argv[1]; st=os.stat(p); print(st.st_ino, st.st_size, st.st_mtime_ns, oct(st.st_mode), hashlib.sha256(open(p,"rb").read()).hexdigest())' "$1" 2>/dev/null || echo UNREADABLE; }
 # seed_untouched <dir> <sig before>: the seed has the same signature, the status read it ok with 2 rows, and desk/ holds only it
 seed_untouched() {
   [[ "$(sig "$(seedfile "$1")")" == "$2" && "$2" != UNREADABLE ]] \
@@ -280,6 +286,13 @@ seed_untouched "$d" "$before" && okay "decided_not_built: a read-only seed keeps
   || miss "decided_not_built: the tick changed the seed (inode, size, mtime, mode or bytes), failed to read it, or wrote into desk/"
 { ! grep -Eq '^(tmux|nats|nats-server|dash-writer) ' "$calls" && grep -q decided_not_built "$d/first.json"; } \
   && okay "decided_not_built: the step calls no pane, bus or dashboard" || miss "decided_not_built: a pane, bus or dashboard call was logged, or the step is absent"
+
+# the same check on a WRITABLE seed, which is what a real host has: a write that swallows its own error survives a
+# read-only seed, and is caught here by the mtime and inode
+d="$(fresh_state dnb_writable)"; seed "$d" "$FIX2"; wsig="$(sig "$(seedfile "$d")")"
+tick "$d"; tick "$d"
+seed_untouched "$d" "$wsig" && okay "decided_not_built: a writable seed also keeps its inode, size, mtime and bytes across two ticks" \
+  || miss "decided_not_built: the tick changed a writable seed, or failed to read it"
 
 # mutants: a copy of the tick with one fault each must be caught by the checks above. Each mutant is made by one
 # exact text replacement; if the replacement text is not in the tick, the mutant is a miss, not a pass.
@@ -296,10 +309,18 @@ READ_OLD='        with open(path, "rb") as f:
 mutants_caught() { # <name> <old> <new> <check: seed|blank>
   local m saved="$TICK"; m="$(mutant_tick "$1" "$2" "$3")" || m=""
   if [[ -z "$m" ]]; then miss "mutant $1: the text to mutate is not in the tick"; return; fi
-  if [[ "$4" == seed ]]; then
-    local md; md="$(fresh_state "mut_$1")"; seed "$md" "$FIX2"; chmod a-w "$(seedfile "$md")"; local mb; mb="$(sig "$(seedfile "$md")")"
+  if [[ "$4" == seed || "$4" == seedw ]]; then
+    local md; md="$(fresh_state "mut_$1")"; seed "$md" "$FIX2"; [[ "$4" == seed ]] && chmod a-w "$(seedfile "$md")"; local mb; mb="$(sig "$(seedfile "$md")")"
     TICK="$m"; tick "$md"; TICK="$saved"
     if seed_untouched "$md" "$mb"; then miss "mutant $1 survives: the seed checks did not catch it"; else okay "mutant $1 is caught by the seed checks"; fi
+  elif [[ "$4" == bad ]]; then
+    local md; md="$(fresh_state "mut_$1")"; seed "$md" $'{"card":"a"}\nnot json\n{"card":"b"}\n'; local mb; mb="$(sig "$(seedfile "$md")")"
+    TICK="$m"; tick "$md"; TICK="$saved"
+    if [[ "$(sig "$(seedfile "$md")")" == "$mb" ]]; then miss "mutant $1 survives: the bad-line seed checks did not catch it"; else okay "mutant $1 is caught by the bad-line seed check"; fi
+  elif [[ "$4" == absent ]]; then
+    local md; md="$(fresh_state "mut_$1")"; mkdir -p "$md/state/desk"
+    TICK="$m"; tick "$md"; TICK="$saved"
+    if [[ -e "$(seedpath "$md")" ]]; then okay "mutant $1 is caught by the absent-seed check"; else miss "mutant $1 survives: the absent seed was not created"; fi
   else
     local md; md="$(fresh_state "mut_$1")"; seed "$md" $'{"card":"a"}\n\nnot json\n{"card":"b"}\n'
     TICK="$m"; tick "$md"; TICK="$saved"
@@ -312,6 +333,19 @@ mutants_caught append "$READ_OLD" "$READ_OLD
         open(path, \"ab\").close()" seed
 mutants_caught touch "$READ_OLD" "$READ_OLD
         os.utime(path, (1, 1))" seed
+mutants_caught swallowedwrite "$READ_OLD" "$READ_OLD
+        try:
+            open(path, \"wb\").write(raw)
+        except OSError:
+            pass" seedw
+mutants_caught repair '    if bad:
+        steps["decided_not_built"]' '    if bad:
+        open(path, "wb").write(b"")
+        steps["decided_not_built"]' bad
+mutants_caught create '    except FileNotFoundError:
+        steps["decided_not_built"]' '    except FileNotFoundError:
+        open(path, "w").close()
+        steps["decided_not_built"]' absent
 mutants_caught blanknumbering 'enumerate(raw.split(b"\n"), 1)' 'enumerate([c for c in raw.split(b"\n") if c.strip()], 1)' blank
 
 # --- a step that prints an invalid byte is still a step -----------------------------------------------------------
