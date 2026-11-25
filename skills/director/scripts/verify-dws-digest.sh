@@ -61,5 +61,70 @@ section 'Not run' | grep -q 'recommendation-sell-by' && ok "the reconciler's not
 grep -q 'DIGEST_INTERRUPTS' "$DWS" && ok "the default interrupt list is a named table in dws" || bad "DIGEST_INTERRUPTS table"
 grep -q 'Q1' "$DWS" && ok "dws cites Q1 for it" || bad "cites Q1"
 
+# --- runs-with-no-session: the tick writes the digest (slice 17, operator card i652r-1, choice 1) ---------------------
+# director-tick runs `dws digest` as its step `digest` when digest.md is absent or older than digest_max_age hours
+# (12 by default, from [loop]); otherwise the step is skipped as current. No session, pane, bus send or dashboard
+# writer is involved: every run is env -i with a scratch HOME, TMPDIR and DIRECTOR_STATE, and tmux, nats, nats-server,
+# gh, dash-writer and director-mcp on PATH are fakes that log each call.
+TICK="${DIRECTOR_TICK_BIN:-$here/director-tick}"
+PY="$(command -v python3)"; pydir="$(dirname "$PY")"
+tnow=2026-11-18T12:00:00Z
+tbin="$root/tickbin"; mkdir -p "$tbin"; tcalls="$root/tick-calls.log"
+for t in tmux nats nats-server dash-writer; do printf '#!/bin/sh\nprintf "%s %%s\\n" "$*" >>"$CALLS_LOG"\nexit 0\n' "$t" >"$tbin/$t"; done
+printf '#!/bin/sh\nprintf "gh %%s\\n" "$*" >>"$CALLS_LOG"\necho "[]"\n' >"$tbin/gh"
+printf '#!/bin/sh\nprintf "director-mcp %%s\\n" "$*" >>"$CALLS_LOG"\necho "{\\"rows\\":[]}"\n' >"$tbin/director-mcp"
+chmod +x "$tbin"/*
+# tick_case <name> [VAR=value...]: a fresh scratch state, the tick run once; the case dir is printed
+tick_case() {
+  local n="$1"; shift; local d="$root/tk-$n"; rm -rf "$d"; mkdir -p "$d/home" "$d/tmp" "$d/state"; printf '%s' "$d"
+}
+run_tick() { # <dir> [VAR=value...]
+  local d="$1"; shift; local rc=0
+  env -i HOME="$d/home" TMPDIR="$d/tmp" PATH="$tbin:$pydir:/usr/bin:/bin" LANG=C DIRECTOR_STATE="$d/state" CALLS_LOG="$tcalls" \
+    TICK_NOW="$tnow" DWS_TEST_CLOCK=1 DWS_NOW="$tnow" DWS_NO_RERENDER=1 PYTHONDONTWRITEBYTECODE=1 "$@" "$TICK" >"$d/out" 2>"$d/err" || rc=$?
+  printf '%s' "$rc" >"$d/rc"
+}
+tq() { "$PY" -I -c '
+import json,sys
+try:
+    d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))
+except Exception:
+    print("MISSING")' "$1/state/loop-status.json" "$2"; }
+
+d="$(tick_case absent)"; : >"$tcalls"; run_tick "$d"
+[[ "$(tq "$d" 'd["steps"]["digest"]["status"]')" == ok ]] && ok "runs-with-no-session: with no digest.md the tick's digest step is ok" || bad "runs-with-no-session: digest step ok with no digest.md" "$(tq "$d" 'd["steps"].get("digest")') rc $(cat "$d/rc") $(head -c 200 "$d/err")"
+{ [[ -s "$d/state/digest.md" ]] && head -1 "$d/state/digest.md" | grep -q '^# Digest'; } && ok "runs-with-no-session: the tick wrote digest.md, a digest" || bad "runs-with-no-session: digest.md written by the tick"
+{ ! grep -Eq '^(tmux|nats|nats-server|dash-writer) ' "$tcalls" && ! grep -E '^director-mcp ' "$tcalls" | grep -vqx 'director-mcp roster --json'; } \
+  && ok "runs-with-no-session: no pane, bus, dashboard or non-roster call" || bad "runs-with-no-session: the tick called a pane, the bus or the dashboard writer" "$(tr '\n' ';' <"$tcalls")"
+[[ "$(cat "$d/rc")" == 0 ]] && ok "runs-with-no-session: the tick exits 0" || bad "runs-with-no-session: tick exit"
+
+# a digest younger than digest_max_age is left alone
+d="$(tick_case fresh)"; printf 'SENTINEL\n' >"$d/state/digest.md"; TZ=UTC touch -t 202611180900 "$d/state/digest.md"   # 3h before tnow
+st0="$("$PY" -I -c 'import os,sys; s=os.stat(sys.argv[1]); print(s.st_ino, s.st_size, s.st_mtime_ns)' "$d/state/digest.md")"
+run_tick "$d"
+st1="$("$PY" -I -c 'import os,sys; s=os.stat(sys.argv[1]); print(s.st_ino, s.st_size, s.st_mtime_ns)' "$d/state/digest.md")"
+{ [[ "$(tq "$d" 'd["steps"]["digest"]["status"]')" == skipped && "$(tq "$d" '"current" in d["steps"]["digest"]["reason"]')" == True && "$st0" == "$st1" && "$(cat "$d/state/digest.md")" == SENTINEL ]]; } \
+  && ok "runs-with-no-session: a 3 hour old digest.md is left alone and the step says it is current" || bad "runs-with-no-session: a 3 hour old digest.md should be left alone, step skipped as current ($st0 / $st1)"
+
+# a digest older than the default 12 hours is rewritten
+d="$(tick_case stale)"; printf 'SENTINEL\n' >"$d/state/digest.md"; TZ=UTC touch -t 202611172300 "$d/state/digest.md"   # 13h before tnow
+run_tick "$d"
+{ [[ "$(tq "$d" 'd["steps"]["digest"]["status"]')" == ok ]] && head -1 "$d/state/digest.md" | grep -q '^# Digest'; } \
+  && ok "runs-with-no-session: a 13 hour old digest.md is rewritten" || bad "runs-with-no-session: a 13 hour old digest.md should be rewritten by the tick"
+
+# digest_max_age comes from [loop]
+d="$(tick_case profile)"; printf 'schema_version = 1\n[loop]\ndigest_max_age = 48\n' >"$d/profile.toml"
+printf 'SENTINEL\n' >"$d/state/digest.md"; TZ=UTC touch -t 202611172300 "$d/state/digest.md"
+run_tick "$d" DIRECTOR_PROFILE="$d/profile.toml"
+{ [[ "$(tq "$d" 'd["steps"]["digest"]["status"]')" == skipped && "$(cat "$d/state/digest.md")" == SENTINEL ]]; } \
+  && ok "runs-with-no-session: digest_max_age = 48 keeps a 13 hour old digest.md" || bad "runs-with-no-session: digest_max_age from [loop] should keep a 13 hour old digest"
+
+# a failing dws is a gap with a reason and does not fail the tick
+d="$(tick_case gap)"; mkdir -p "$d/beside"; cp "$TICK" "$d/beside/director-tick"
+printf '#!/bin/sh\n[ "$1" = digest ] && { echo "dws digest: store unreadable" >&2; exit 1; }\nexit 0\n' >"$d/beside/dws"; chmod +x "$d/beside"/*
+rc=0; env -i HOME="$d/home" TMPDIR="$d/tmp" PATH="$tbin:$pydir:/usr/bin:/bin" LANG=C DIRECTOR_STATE="$d/state" CALLS_LOG="$tcalls" TICK_NOW="$tnow" "$d/beside/director-tick" >"$d/out" 2>"$d/err" || rc=$?
+{ [[ "$rc" == 0 && "$(tq "$d" 'd["steps"]["digest"]["status"]')" == gap && "$(tq "$d" '"unreadable" in d["steps"]["digest"]["reason"]')" == True ]]; } \
+  && ok "runs-with-no-session: a failing dws digest is a gap with its first error line, and the tick exits 0" || bad "runs-with-no-session: a failing dws digest should be a gap with a reason and exit 0 (rc $rc)"
+
 echo "dws digest: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

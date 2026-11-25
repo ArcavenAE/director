@@ -98,8 +98,8 @@ s="$(status "$d")"
 [[ "$(cat "$d/rc" 2>/dev/null || echo none)" == 0 ]] && okay "tick exits 0" || miss "tick exits 0 (rc $(cat "$d/rc" 2>/dev/null || echo none): $(head -c 200 "$d/err" 2>/dev/null))"
 [[ "$(pyq "$s" 'd["schema"]')" == 1 ]] && okay "schema is 1" || miss "status-written-and-valid-json: schema 1 in $s"
 [[ "$(pyq "$s" 'd["ran_at"]')" == "$NOW" ]] && okay "ran_at is the tick clock" || miss "ran_at equals TICK_NOW"
-[[ "$(pyq "$s" 'sorted(d["steps"])')" == "['decided_not_built', 'desk_refresh', 'presence', 'stalled_ideas', 'waiting_write']" ]] \
-  && okay "the five steps are named" || miss "steps are decided_not_built, desk_refresh, presence, stalled_ideas, waiting_write"
+[[ "$(pyq "$s" 'sorted(d["steps"])')" == "['decided_not_built', 'desk_refresh', 'digest', 'presence', 'stalled_ideas', 'waiting_write']" ]] \
+  && okay "the six steps are named" || miss "steps are decided_not_built, desk_refresh, digest, presence, stalled_ideas, waiting_write"
 [[ "$(pyq "$s" 'all(v["status"] in ("ok","skipped","gap") for v in d["steps"].values())')" == True ]] \
   && okay "every step is ok, skipped or gap" || miss "step statuses are ok, skipped or gap"
 [[ "$(pyq "$s" 'sorted(d["due"])')" == "['dashboard', 'desk_read', 'drain']" && "$(pyq "$s" 'all(isinstance(v,bool) for v in d["due"].values())')" == True ]] \
