@@ -268,6 +268,93 @@ out="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:$pydir:/usr/bin:/bin"
 set -e
 [[ "$out" == *"timeouts [30]"* && "$out" == *"exit 1"* && "$out" != *"Traceback"* ]] || miss "L2 director-profile needs a 30 s timeout and a timeout must exit 1: $out"
 
+# ---- slice 16: --schedule prints the entry and installs it only on an explicit --yes ----
+# (operator card i652r-2, choice 1: opt-in per install; the profile's scheduler stays "none" until then.)
+# launchctl, crontab and systemctl are fakes that only log; the crontab fake keeps its table in a scratch file.
+# Nothing installs on a real host: every run is env -i with the scratch HOME, and the plist path is under it.
+tick_path="$(cd "$here" && pwd -P)/director-tick"
+sched_fakes() {
+  : >"$work/sched.log"; rm -f "$work/cron.store"
+  printf '%s\n' '#!/bin/sh' 'echo "launchctl $*" >>"$SCHED_LOG"' 'exit 0' >"$stubs/launchctl"
+  printf '%s\n' '#!/bin/sh' 'echo "systemctl $*" >>"$SCHED_LOG"' 'exit 0' >"$stubs/systemctl"
+  printf '%s\n' '#!/bin/sh' 'echo "crontab $*" >>"$SCHED_LOG"' 'case "$1" in' \
+    '  -l) if [ -f "$CRON_STORE" ]; then cat "$CRON_STORE"; else echo "no crontab for user" >&2; exit 1; fi ;;' \
+    '  -) cat >"$CRON_STORE" ;;' '  *) exit 2 ;;' 'esac' >"$stubs/crontab"
+  chmod +x "$stubs/launchctl" "$stubs/systemctl" "$stubs/crontab"
+}
+senv=(SCHED_LOG="$work/sched.log" CRON_STORE="$work/cron.store")
+plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"
+calls() { grep -c "^$1" "$work/sched.log" || true; }
+
+# S1: launchd, no --yes: the entry is printed and nothing is installed or written
+fresh; stub_marvel; sched_fakes; run -- --entry-role builder; plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"
+h0="$(hash_tree)"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler launchd
+{ [[ $rc -eq 0 && "$out" == *"com.arcaven.director-tick"* && "$out" == *"<key>StartInterval</key>"* && "$out" == *"<integer>1800</integer>"* && "$out" == *"$tick_path"* ]]; } \
+  || miss "S1 --schedule on launchd prints the entry (label, StartInterval 1800, the tick path $tick_path) and exits 0: rc=$rc out=$out"
+{ [[ ! -e "$plist" && ! -d "$home/Library" && "$(hash_tree)" == "$h0" && ! -s "$work/sched.log" ]]; } \
+  || miss "S1 without --yes nothing is written and no scheduler tool is called: $(tr '\n' ';' <"$work/sched.log")"
+
+# S2: cron, no --yes
+fresh; sched_fakes; run -- --entry-role builder; h0="$(hash_tree)"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler cron
+{ [[ $rc -eq 0 && "$out" == *"*/30 * * * * $tick_path # director-tick"* ]]; } || miss "S2 --schedule on cron prints one marked line every 30 minutes: rc=$rc out=$out"
+{ [[ ! -e "$work/cron.store" && "$(calls 'crontab -$')" == 0 && "$(hash_tree)" == "$h0" ]]; } || miss "S2 without --yes the crontab is not written: $(tr '\n' ';' <"$work/sched.log")"
+
+# S3: --schedule alone picks the host's scheduler: launchd on Darwin, cron elsewhere
+fresh; sched_fakes; run -- --entry-role builder; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule
+if [[ "$(uname -s)" == Darwin ]]; then want=com.arcaven.director-tick; else want='# director-tick'; fi
+[[ $rc -eq 0 && "$out" == *"$want"* ]] || miss "S3 --schedule alone prints the host's entry ($want): rc=$rc out=$out"
+
+# S4: --yes installs on launchd, records scheduler = "launchd" in the profile, keeps a backup, and the profile still checks clean
+fresh; sched_fakes; run -- --entry-role builder; plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler launchd --yes
+{ [[ $rc -eq 0 && -f "$plist" ]] && grep -q "$tick_path" "$plist" && grep -q '<integer>1800</integer>' "$plist"; } || miss "S4 --yes writes the plist with the tick path and 1800 seconds: rc=$rc out=$out"
+[[ "$(calls "launchctl load -w $plist")" == 1 ]] || miss "S4 launchctl load -w <plist> is called once: $(tr '\n' ';' <"$work/sched.log")"
+grep -q '^scheduler = "launchd"' "$prof" && grep -q '^\[loop\]' "$prof" || miss "S4 the profile records scheduler = \"launchd\" under [loop]: $(cat "$prof")"
+[[ "$(check_profile "$prof")" != *"loop.scheduler"* ]] || miss "S4 the profile still passes director-profile check: $(check_profile "$prof")"
+ls "$state"/operating-profile.toml.bak-* >/dev/null 2>&1 || miss "S4 a backup of the profile is kept before it changes"
+[[ "$(calls systemctl)" == 0 ]] || miss "S4 systemctl is never called"
+
+# S5: --yes on cron appends one marked line and keeps every other line
+fresh; sched_fakes; run -- --entry-role builder; printf '0 3 * * * /usr/bin/true\n' >"$work/cron.store"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 0 && "$(grep -c '# director-tick' "$work/cron.store")" == 1 && "$(grep -c '/usr/bin/true' "$work/cron.store")" == 1 && "$(grep -c "\*/30 \* \* \* \* $tick_path # director-tick" "$work/cron.store")" == 1 ]]; } \
+  || miss "S5 --yes on cron adds exactly one marked line and keeps the others: rc=$rc store=$(cat "$work/cron.store" 2>/dev/null)"
+grep -q '^scheduler = "cron"' "$prof" || miss "S5 the profile records scheduler = \"cron\""
+
+# S6: a second --yes adds neither a second crontab line nor a second plist (director's idempotence case)
+cs="$(shasum -a 256 <"$work/cron.store")"; run "${senv[@]}" -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 0 && "$(shasum -a 256 <"$work/cron.store")" == "$cs" && "$(grep -c '# director-tick' "$work/cron.store")" == 1 ]]; } || miss "S6 a second cron install changes nothing: rc=$rc out=$out"
+fresh; sched_fakes; run -- --entry-role builder; plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"
+run "${senv[@]}" -- --schedule --scheduler launchd --yes; ps1="$(shasum -a 256 <"$plist")"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler launchd --yes
+{ [[ $rc -eq 0 && "$(ls "$home/Library/LaunchAgents" | wc -l | tr -d ' ')" == 1 && "$(shasum -a 256 <"$plist")" == "$ps1" && "$(calls 'launchctl load')" == 0 ]]; } \
+  || miss "S6 a second launchd install adds no plist, changes none and loads nothing again: rc=$rc out=$out $(tr '\n' ';' <"$work/sched.log")"
+
+# S7: a plain init, with or without --yes, never touches a scheduler and leaves scheduler at none
+fresh; sched_fakes; run "${senv[@]}" -- --entry-role builder --yes
+{ [[ $rc -eq 0 && ! -s "$work/sched.log" && ! -d "$home/Library" ]] && ! grep -q 'scheduler = "\(launchd\|cron\)"' "$prof"; } || miss "S7 plain init calls no scheduler tool and does not set a scheduler: $(tr '\n' ';' <"$work/sched.log")"
+
+# S8: --schedule needs an existing profile; with none, even --yes installs nothing
+fresh; sched_fakes; run "${senv[@]}" -- --schedule --scheduler launchd --yes
+{ [[ $rc -eq 1 && "$out" == *"no profile"* && ! -s "$work/sched.log" && ! -d "$home/Library" ]]; } || miss "S8 with no profile --schedule --yes is refused and installs nothing: rc=$rc out=$out"
+
+# S9: tick_interval from [loop] sets the period; cron cannot express more than 59 minutes and says so
+fresh; sched_fakes; run -- --entry-role builder; printf '\n[loop]\ntick_interval = 10\n' >>"$prof"
+run "${senv[@]}" -- --schedule --scheduler launchd; [[ "$out" == *"<integer>600</integer>"* ]] || miss "S9 tick_interval = 10 prints StartInterval 600: $out"
+run "${senv[@]}" -- --schedule --scheduler cron; [[ "$out" == *"*/10 * * * * "* ]] || miss "S9 tick_interval = 10 prints */10: $out"
+fresh; sched_fakes; run -- --entry-role builder; printf '\n[loop]\ntick_interval = 90\n' >>"$prof"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 1 && "$out" == *"tick_interval"* && "$out" == *"59"* && ! -e "$work/cron.store" ]]; } || miss "S9 cron with tick_interval = 90 is refused naming the 59 minute limit and installs nothing: rc=$rc out=$out"
+
+# S10: a different entry already at the plist path is not overwritten
+fresh; sched_fakes; run -- --entry-role builder; plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"
+mkdir -p "$home/Library/LaunchAgents"; printf 'someone else\n' >"$plist"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler launchd --yes
+{ [[ $rc -eq 1 && "$(cat "$plist")" == "someone else" && "$(calls 'launchctl load')" == 0 ]]; } || miss "S10 a different plist at the path is refused and left alone: rc=$rc out=$out"
+
 # ---- the python rule ----
 fresh
 old_py() {
