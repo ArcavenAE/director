@@ -112,6 +112,24 @@ run_tick "$d"
 { [[ "$(tq "$d" 'd["steps"]["digest"]["status"]')" == ok ]] && head -1 "$d/state/digest.md" | grep -q '^# Digest'; } \
   && ok "runs-with-no-session: a 13 hour old digest.md is rewritten" || bad "runs-with-no-session: a 13 hour old digest.md should be rewritten by the tick"
 
+# the default bound is exactly 12 hours: 11 hours is current, 12 hours exactly is current, 12 hours and a minute is stale
+for spec in "11h 202611180100 skipped" "12h 202611180000 skipped" "12h1m 202611172359 ok"; do
+  set -- $spec; label="$1"; stamp="$2"; want="$3"
+  d="$(tick_case "bound_$label")"; printf 'SENTINEL\n' >"$d/state/digest.md"; TZ=UTC touch -t "$stamp" "$d/state/digest.md"
+  run_tick "$d"
+  [[ "$(tq "$d" 'd["steps"]["digest"]["status"]')" == "$want" ]] \
+    && ok "runs-with-no-session: a digest.md $label old is $want at the default 12 hour bound" || bad "runs-with-no-session: a digest.md $label old should be $want at the default bound (got $(tq "$d" 'd["steps"].get("digest")'))"
+done
+
+# the success path runs `dws digest` itself (a wrapper beside the tick logs the call and hands on to the real dws)
+d="$(tick_case wrap)"; mkdir -p "$d/beside"; cp "$TICK" "$d/beside/director-tick"
+for t in dws desk-snapshot dbi director-profile; do [[ -x "$here/$t" ]] && printf '#!/bin/sh\nprintf "%s %%s\\n" "$*" >>"$DWS_LOG"\nexec "%s/%s" "$@"\n' "$t" "$here" "$t" >"$d/beside/$t"; done
+chmod +x "$d/beside"/*; : >"$d/dws.log"
+rc=0; env -i HOME="$d/home" TMPDIR="$d/tmp" PATH="$tbin:$pydir:/usr/bin:/bin" LANG=C DIRECTOR_STATE="$d/state" CALLS_LOG="$tcalls" DWS_LOG="$d/dws.log" \
+  TICK_NOW="$tnow" DWS_TEST_CLOCK=1 DWS_NOW="$tnow" DWS_NO_RERENDER=1 PYTHONDONTWRITEBYTECODE=1 "$d/beside/director-tick" >"$d/out" 2>"$d/err" || rc=$?
+{ [[ "$(grep -cx 'dws digest' "$d/dws.log")" == 1 ]] && head -1 "$d/state/digest.md" | grep -q '^# Digest'; } \
+  && ok "runs-with-no-session: the tick ran dws digest once, and digest.md is its output" || bad "runs-with-no-session: dws digest should run exactly once in the absent case ($(tr '\n' ';' <"$d/dws.log"))"
+
 # digest_max_age comes from [loop]
 d="$(tick_case profile)"; printf 'schema_version = 1\n[loop]\ndigest_max_age = 48\n' >"$d/profile.toml"
 printf 'SENTINEL\n' >"$d/state/digest.md"; TZ=UTC touch -t 202611172300 "$d/state/digest.md"
