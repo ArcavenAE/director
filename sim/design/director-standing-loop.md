@@ -80,12 +80,13 @@ The steps, in order: `desk_refresh` (`dws refresh --local`), `waiting_write`
 reads and never writes). That step is skipped when the file is absent. When it
 exists the status gains `"decided_not_built": {"count": N, "rows": [...]}`, each
 row an object with a non-empty string `card` and optional `ruled_at` and
-`forward` (a `bd:`, `pr:` or `finding:` edge), carried verbatim in file order. A
+`forward` (a `bd:`, `pr:` or `finding:` edge), carried in file order with values
+verbatim and keys sorted within a row. A
 line that is not valid UTF-8, not a JSON object or without a `card` makes the
 step a gap with one `line <n>: <why>` entry per bad line, and the good lines are
 still carried. A step that fails is a
 gap carrying the first line of its error, and never fails the tick. A step whose
-tool is not installed is skipped, with that reason. A fifth step, `profile`,
+tool is not installed is skipped, with that reason. A sixth step, `profile`,
 appears only when the profile is refused. When `director-profile check` refuses
 it, the step is a gap carrying the first error line, both defaults apply, and
 the tick exits 0. When the tick itself refuses a `[loop]` value that is not a

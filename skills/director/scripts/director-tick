@@ -20,8 +20,8 @@ appears only when a [loop] value is refused.
 
 decided_not_built reads $DIRECTOR_STATE/desk/decided-not-built.seed.jsonl, director's file, and
 never writes it. Each non-blank line is a JSON object with a non-empty string "card"; "ruled_at"
-and "forward" (a bd:, pr: or finding: edge) are optional, and every key is carried verbatim, in
-file order. No file is a skipped step and no "decided_not_built" key. A readable file is an ok
+and "forward" (a bd:, pr: or finding: edge) are optional, and every key is carried, with its
+value verbatim, in file order. Keys are written sorted within a row, as everywhere in the status. No file is a skipped step and no "decided_not_built" key. A readable file is an ok
 step, with its count and rows in the status. A line that is not valid UTF-8, not a JSON object, or
 has no such "card" is a bad line: the step is a gap whose reason holds one "line <n>: <why>" entry
 (1-based) per bad line, and the valid lines are still counted and carried.

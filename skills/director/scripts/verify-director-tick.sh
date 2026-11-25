@@ -250,16 +250,66 @@ tick "$d"; s="$(status "$d")"
   && "$(pyq "$s" '[d["decided_not_built"]["count"], [r["card"] for r in d["decided_not_built"]["rows"]]]')" == "[1, ['a']]" ]]; } \
   && okay "decided_not_built: an undecodable line is a gap naming line 2, and only the good row is carried" || miss "decided_not_built: an invalid byte should be a gap naming line 2 with count 1 and rows ['a'] (rc $(cat "$d/rc" 2>/dev/null || echo none))"
 
-# idempotent, and the seed is never written
-d="$(fresh_state dnb_idem)"; seed "$d" "$FIX2"; before="$(shasum -a 256 <"$d/state/desk/decided-not-built.seed.jsonl")"
+# a bad line after a blank line is numbered by its place in the file, blank lines counted
+d="$(fresh_state dnb_blankbad)"; seed "$d" $'{"card":"a"}\n\nnot json\n{"card":"b"}\n'
+tick "$d"; s="$(status "$d")"
+{ [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == gap \
+  && "$(pyq "$s" '__import__("re").search(r"\bline 3\b", d["steps"]["decided_not_built"]["reason"]) is not None and __import__("re").search(r"\bline 2\b", d["steps"]["decided_not_built"]["reason"]) is None')" == True \
+  && "$(pyq "$s" 'd["decided_not_built"]["count"]')" == 2 ]]; } \
+  && okay "decided_not_built: a bad line after a blank line is numbered by its place in the file (line 3)" || miss "decided_not_built: a bad line after a blank line should be line 3, with line 2 not named and count 2"
+
+# idempotent; and the seed is never written: it is made read-only before the tick, and its inode, size,
+# mtime and mode must be what they were after two ticks as well as its bytes
+seedfile() { printf '%s/state/desk/decided-not-built.seed.jsonl' "$1"; }
+sig() { "$PY" -I -c 'import os,sys,hashlib
+p=sys.argv[1]; st=os.stat(p); print(st.st_ino, st.st_size, st.st_mtime_ns, oct(st.st_mode), hashlib.sha256(open(p,"rb").read()).hexdigest())' "$1" 2>/dev/null || echo UNREADABLE; }
+# seed_untouched <dir> <sig before>: the seed has the same signature, the status read it ok with 2 rows, and desk/ holds only it
+seed_untouched() {
+  [[ "$(sig "$(seedfile "$1")")" == "$2" && "$2" != UNREADABLE ]] \
+    && [[ "$(pyq "$(status "$1")" 'd["steps"]["decided_not_built"]["status"]')" == ok && "$(pyq "$(status "$1")" 'd["decided_not_built"]["count"]')" == 2 ]] \
+    && [[ "$(find "$1/state/desk" -type f | wc -l | tr -d ' ')" == 1 ]]
+}
+d="$(fresh_state dnb_idem)"; seed "$d" "$FIX2"; chmod a-w "$(seedfile "$d")"; before="$(sig "$(seedfile "$d")")"
 tick "$d"; cp "$(status "$d")" "$d/first.json" 2>/dev/null || : >"$d/first.json"; tick "$d"
 { [[ -s "$d/first.json" ]] && cmp -s "$d/first.json" "$(status "$d")" && grep -q decided_not_built "$d/first.json"; } \
   && okay "decided_not_built: two runs at one clock are byte-identical" || miss "decided_not_built: two runs at one clock differ, or the step is absent"
-{ [[ "$(shasum -a 256 <"$d/state/desk/decided-not-built.seed.jsonl")" == "$before" ]] && [[ "$(find "$d/state/desk" -type f | wc -l | tr -d ' ')" == 1 ]] \
-  && grep -q decided_not_built "$d/first.json"; } \
-  && okay "decided_not_built: the seed is byte-equal after two ticks and nothing else lands in desk/" || miss "decided_not_built: the tick wrote to the seed or to desk/, or the step is absent"
+seed_untouched "$d" "$before" && okay "decided_not_built: a read-only seed keeps its inode, size, mtime, mode and bytes across two ticks, and nothing else lands in desk/" \
+  || miss "decided_not_built: the tick changed the seed (inode, size, mtime, mode or bytes), failed to read it, or wrote into desk/"
 { ! grep -Eq '^(tmux|nats|nats-server|dash-writer) ' "$calls" && grep -q decided_not_built "$d/first.json"; } \
   && okay "decided_not_built: the step calls no pane, bus or dashboard" || miss "decided_not_built: a pane, bus or dashboard call was logged, or the step is absent"
+
+# mutants: a copy of the tick with one fault each must be caught by the checks above. Each mutant is made by one
+# exact text replacement; if the replacement text is not in the tick, the mutant is a miss, not a pass.
+mutant_tick() { # <name> <old> <new>: prints the path of the mutated copy, or nothing
+  local out="$work/mutant-$1"; mkdir -p "$out"
+  "$PY" -I -c '
+import sys
+src=open(sys.argv[1]).read()
+if src.count(sys.argv[2]) != 1: sys.exit(1)
+open(sys.argv[4],"w").write(src.replace(sys.argv[2], sys.argv[3]))' "$TICK" "$2" "$3" "$out/director-tick" && chmod +x "$out/director-tick" && printf '%s' "$out/director-tick"
+}
+READ_OLD='        with open(path, "rb") as f:
+            raw = f.read()'
+mutants_caught() { # <name> <old> <new> <check: seed|blank>
+  local m saved="$TICK"; m="$(mutant_tick "$1" "$2" "$3")" || m=""
+  if [[ -z "$m" ]]; then miss "mutant $1: the text to mutate is not in the tick"; return; fi
+  if [[ "$4" == seed ]]; then
+    local md; md="$(fresh_state "mut_$1")"; seed "$md" "$FIX2"; chmod a-w "$(seedfile "$md")"; local mb; mb="$(sig "$(seedfile "$md")")"
+    TICK="$m"; tick "$md"; TICK="$saved"
+    if seed_untouched "$md" "$mb"; then miss "mutant $1 survives: the seed checks did not catch it"; else okay "mutant $1 is caught by the seed checks"; fi
+  else
+    local md; md="$(fresh_state "mut_$1")"; seed "$md" $'{"card":"a"}\n\nnot json\n{"card":"b"}\n'
+    TICK="$m"; tick "$md"; TICK="$saved"
+    if [[ "$(pyq "$(status "$md")" '__import__("re").search(r"\bline 3\b", d["steps"]["decided_not_built"]["reason"]) is not None')" == True ]]; then miss "mutant $1 survives: the blank-line case did not catch it"; else okay "mutant $1 is caught by the blank-line case"; fi
+  fi
+}
+mutants_caught rewrite "$READ_OLD" "$READ_OLD
+        open(path, \"wb\").write(raw)" seed
+mutants_caught append "$READ_OLD" "$READ_OLD
+        open(path, \"ab\").close()" seed
+mutants_caught touch "$READ_OLD" "$READ_OLD
+        os.utime(path, (1, 1))" seed
+mutants_caught blanknumbering 'enumerate(raw.split(b"\n"), 1)' 'enumerate([c for c in raw.split(b"\n") if c.strip()], 1)' blank
 
 # --- a step that prints an invalid byte is still a step -----------------------------------------------------------
 # dws and dbi run from beside the tick, so a copy of the tick sits beside fakes that write a byte that is not
