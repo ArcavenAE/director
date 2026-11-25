@@ -25,12 +25,14 @@ director's rulings of 2026-11-12 recorded on that ticket). It does five things:
 
 --schedule (slice 16 of sim/design/director-standing-loop.md, operator card i652r-2, choice 1) is
 opt-in per install. It needs an existing profile. It prints the entry that would run `director-tick`
-(the one beside this script) every [loop] tick_interval minutes (30 by default) on the host's
+(the one beside this script), on the python3 that ran this script and with the PATH captured now
+(absolute entries only, none under /tmp, /private/tmp or /var/folders, else /usr/bin:/bin), every
+[loop] tick_interval minutes (30 by default) on the host's
 scheduler: launchd on Darwin (a user agent, StartInterval), cron elsewhere (one line marked
 `# director-tick`), or the one --scheduler names. Without --yes that is all it does: it writes
 nothing and calls no scheduler tool. With --yes it installs the entry (launchctl load -w, or
-crontab with the old lines kept), then records [loop] scheduler in the profile atomically, with
-the backup. A second --yes changes nothing; a different file at the plist path is refused. A
+crontab with the old lines kept), after checking the profile edit, then records [loop] scheduler in
+the profile atomically, with the backup. The entry is never installed when the profile cannot record it. A second --yes changes nothing; a different file at the plist path is refused. A
 systemd timer is not built, and neither is an uninstall: the owner removes the plist or the cron line.
 
 Plain director-init never installs a schedule: the launcher is install.sh's. Not in the first build, and
@@ -64,6 +66,7 @@ if tuple(sys.version_info[:2]) < MIN:
 
 import json  # noqa: E402
 import re  # noqa: E402
+import shlex  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
@@ -342,20 +345,40 @@ def tick_minutes(target):
     return n
 
 
-def plist_text(tick, minutes):
+SCRATCH_PREFIXES = ("/tmp", "/private/tmp", "/var/folders")
+
+
+def captured_path():
+    """PATH for the entry: absolute entries only, none under a scratch directory (a dead session's), else /usr/bin:/bin."""
+    keep = []
+    for e in os.environ.get("PATH", "").split(os.pathsep):
+        if not e.startswith("/"):
+            continue
+        if any(e == p or e.startswith(p + "/") for p in SCRATCH_PREFIXES):
+            continue
+        keep.append(e)
+    return os.pathsep.join(keep) if keep else "/usr/bin:/bin"
+
+
+def plist_text(tick, minutes, python, path):
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
         '<plist version="1.0">\n<dict>\n'
         "  <key>Label</key>\n  <string>%s</string>\n"
-        "  <key>ProgramArguments</key>\n  <array>\n    <string>%s</string>\n  </array>\n"
+        "  <key>ProgramArguments</key>\n  <array>\n    <string>%s</string>\n    <string>%s</string>\n  </array>\n"
+        "  <key>EnvironmentVariables</key>\n  <dict>\n    <key>PATH</key>\n    <string>%s</string>\n  </dict>\n"
         "  <key>StartInterval</key>\n  <integer>%d</integer>\n"
-        "</dict>\n</plist>\n" % (SCHEDULE_LABEL, tick, minutes * 60)
+        "</dict>\n</plist>\n" % (SCHEDULE_LABEL, xml_escape(python), xml_escape(tick), xml_escape(path), minutes * 60)
     )
 
 
-def cron_line(tick, minutes):
-    return "*/%d * * * * %s %s" % (minutes, tick, CRON_MARK)
+def xml_escape(text):
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def cron_line(tick, minutes, python, path):
+    return "*/%d * * * * PATH=%s %s %s %s" % (minutes, shlex.quote(path), shlex.quote(python), shlex.quote(tick), CRON_MARK)
 
 
 def set_loop_scheduler(text, kind):
@@ -378,41 +401,44 @@ def set_loop_scheduler(text, kind):
     return "\n".join(lines) + "\n\n[loop]\n" + line + "\n"
 
 
-def write_profile_scheduler(target, kind):
-    """Atomically set scheduler in the profile, after check passes, keeping a backup. Returns (changed, backup)."""
+def stage_profile_scheduler(target, kind):
+    """Write the profile with scheduler = kind to a temp file and check it. Returns (tmp or None when nothing changes), or None on a refusal."""
     with open(target, encoding="utf-8") as fh:
         old = fh.read()
     new = set_loop_scheduler(old, kind)
     if new == old:
-        return False, None
+        return (None,)
     fd, tmp = tempfile.mkstemp(prefix=".operating-profile.", suffix=".tmp", dir=os.path.dirname(os.path.abspath(target)))
-    try:
-        with os.fdopen(fd, "w") as fh:
-            fh.write(new)
-            fh.flush()
-            os.fsync(fh.fileno())
-        ok, shown = check_profile(tmp)
-        if not ok:
-            err("the profile with the scheduler set does not pass director-profile check:")
-            sys.stderr.write(shown)
-            return None, None
-        saved = backup(target)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, target)
-        tmp = None
-    finally:
-        if tmp and os.path.exists(tmp):
-            os.unlink(tmp)
-    return True, saved
+    with os.fdopen(fd, "w") as fh:
+        fh.write(new)
+        fh.flush()
+        os.fsync(fh.fileno())
+    ok, shown = check_profile(tmp)
+    if not ok:
+        os.unlink(tmp)
+        err("the profile with the scheduler set does not pass director-profile check; nothing was installed:")
+        sys.stderr.write(shown)
+        return None
+    return (tmp,)
+
+
+def commit_profile_scheduler(target, staged):
+    """Move the staged profile into place, keeping a backup. Returns the backup path, or None when nothing changed."""
+    tmp = staged[0]
+    if tmp is None:
+        return None
+    saved = backup(target)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, target)
+    return saved
 
 
 def default_scheduler():
     return "launchd" if sys.platform == "darwin" else "cron"
 
 
-def install_launchd(tick, minutes):
+def install_launchd(want):
     path = os.path.join(home(), "Library", "LaunchAgents", SCHEDULE_LABEL + ".plist")
-    want = plist_text(tick, minutes)
     if os.path.exists(path):
         with open(path, encoding="utf-8", errors="replace") as fh:
             have = fh.read()
@@ -448,8 +474,7 @@ def install_launchd(tick, minutes):
     return True
 
 
-def install_cron(tick, minutes):
-    line = cron_line(tick, minutes)
+def install_cron(line):
     try:
         res = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=TOOL_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -462,7 +487,7 @@ def install_cron(tick, minutes):
     else:
         err("crontab -l failed (exit %d): %s" % (res.returncode, res.stderr.strip()))
         return False
-    marked = [l for l in old.splitlines() if CRON_MARK in l]
+    marked = [l for l in old.splitlines() if l.rstrip().endswith(" " + CRON_MARK) and not l.lstrip().startswith("#")]
     if marked:
         if marked == [line]:
             print("already installed: one %s line in the crontab" % CRON_MARK)
@@ -501,18 +526,26 @@ def do_schedule(opts):
         err("cron cannot run every %d minutes from tick_interval: it must be 1 to 59 (the limit of */N); nothing installed" % minutes)
         return 1
     tick = os.path.join(os.path.dirname(os.path.realpath(__file__)), "director-tick")
-    entry = plist_text(tick, minutes) if kind == "launchd" else cron_line(tick, minutes) + "\n"
-    print("scheduler: %s, every %d minutes, running %s" % (kind, minutes, tick))
+    python, path = sys.executable, captured_path()
+    entry = plist_text(tick, minutes, python, path) if kind == "launchd" else cron_line(tick, minutes, python, path) + "\n"
+    print("scheduler: %s, every %d minutes, running %s on %s" % (kind, minutes, tick, python))
     sys.stdout.write(entry)
     if not opts["yes"]:
         print("not installed: pass --yes to install this entry and record scheduler = \"%s\" in %s" % (kind, target))
         return 0
-    if not (install_launchd(tick, minutes) if kind == "launchd" else install_cron(tick, minutes)):
+    # The profile edit is built and checked first: an entry is never installed when the profile cannot record it.
+    staged = stage_profile_scheduler(target, kind)
+    if staged is None:
         return 1
-    changed, saved = write_profile_scheduler(target, kind)
-    if changed is None:
-        return 1
-    if changed:
+    try:
+        done = install_launchd(entry) if kind == "launchd" else install_cron(entry.rstrip("\n"))
+        if not done:
+            return 1
+        saved = commit_profile_scheduler(target, staged)
+    finally:
+        if staged and staged[0] and os.path.exists(staged[0]):
+            os.unlink(staged[0])
+    if saved:
         print("profile: scheduler = \"%s\" in %s" % (kind, target))
         print("backup kept: %s" % saved)
     return 0
