@@ -285,6 +285,7 @@ sched_fakes() {
 senv=(SCHED_LOG="$work/sched.log" CRON_STORE="$work/cron.store")
 plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"
 calls() { grep -c "^$1" "$work/sched.log" || true; }
+sum_of() { shasum -a 256 <"$1" 2>/dev/null || echo none; }
 
 # S1: launchd, no --yes: the entry is printed and nothing is installed or written
 fresh; stub_marvel; sched_fakes; run -- --entry-role builder; plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"
@@ -325,12 +326,12 @@ run "${senv[@]}" -- --schedule --scheduler cron --yes
 grep -q '^scheduler = "cron"' "$prof" || miss "S5 the profile records scheduler = \"cron\""
 
 # S6: a second --yes adds neither a second crontab line nor a second plist (director's idempotence case)
-cs="$(shasum -a 256 <"$work/cron.store")"; run "${senv[@]}" -- --schedule --scheduler cron --yes
-{ [[ $rc -eq 0 && "$(shasum -a 256 <"$work/cron.store")" == "$cs" && "$(grep -c '# director-tick' "$work/cron.store")" == 1 ]]; } || miss "S6 a second cron install changes nothing: rc=$rc out=$out"
+cs="$(sum_of "$work/cron.store")"; run "${senv[@]}" -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 0 && "$(sum_of "$work/cron.store")" == "$cs" && "$(grep -c '# director-tick' "$work/cron.store")" == 1 ]]; } || miss "S6 a second cron install changes nothing: rc=$rc out=$out"
 fresh; sched_fakes; run -- --entry-role builder; plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"
-run "${senv[@]}" -- --schedule --scheduler launchd --yes; ps1="$(shasum -a 256 <"$plist")"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler launchd --yes; ps1="$(sum_of "$plist")"; : >"$work/sched.log"
 run "${senv[@]}" -- --schedule --scheduler launchd --yes
-{ [[ $rc -eq 0 && "$(ls "$home/Library/LaunchAgents" | wc -l | tr -d ' ')" == 1 && "$(shasum -a 256 <"$plist")" == "$ps1" && "$(calls 'launchctl load')" == 0 ]]; } \
+{ [[ $rc -eq 0 && "$(ls "$home/Library/LaunchAgents" | wc -l | tr -d ' ')" == 1 && "$(sum_of "$plist")" == "$ps1" && "$(calls 'launchctl load')" == 0 ]]; } \
   || miss "S6 a second launchd install adds no plist, changes none and loads nothing again: rc=$rc out=$out $(tr '\n' ';' <"$work/sched.log")"
 
 # S7: a plain init, with or without --yes, never touches a scheduler and leaves scheduler at none
