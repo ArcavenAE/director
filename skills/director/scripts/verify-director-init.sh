@@ -280,7 +280,7 @@ run_path="$stubs:$pydir:/usr/bin:/bin"
 py_abs="$(env -i PATH="$pydir" python3 -c 'import sys; print(sys.executable)')"
 sched_fakes() {
   : >"$work/sched.log"; rm -f "$work/cron.store"
-  printf '%s\n' '#!/bin/sh' 'echo "launchctl $*" >>"$SCHED_LOG"' 'exit 0' >"$stubs/launchctl"
+  printf '%s\n' '#!/bin/sh' 'echo "launchctl $*" >>"$SCHED_LOG"' '[ -n "$LAUNCHCTL_FAIL" ] && { echo "launchctl: load failed" >&2; exit 1; }' 'exit 0' >"$stubs/launchctl"
   printf '%s\n' '#!/bin/sh' 'echo "systemctl $*" >>"$SCHED_LOG"' 'exit 0' >"$stubs/systemctl"
   printf '%s\n' '#!/bin/sh' 'echo "crontab $*" >>"$SCHED_LOG"' 'case "$1" in' \
     '  -l) if [ -n "$CRON_FAIL" ]; then echo "crontab: permission denied" >&2; exit 1; elif [ -f "$CRON_STORE" ]; then cat "$CRON_STORE"; else echo "no crontab for user" >&2; exit 1; fi ;;' \
@@ -365,13 +365,21 @@ mkdir -p "$home/Library/LaunchAgents"; printf 'someone else\n' >"$plist"; : >"$w
 run "${senv[@]}" -- --schedule --scheduler launchd --yes
 { [[ $rc -eq 1 && "$(cat "$plist")" == "someone else" && "$(calls 'launchctl load')" == 0 ]]; } || miss "S10 a different plist at the path is refused and left alone: rc=$rc out=$out"
 
-# F1: the PATH captured in the entry keeps absolute entries and drops relative ones and scratch directories
+# F1: the PATH captured in the entry keeps absolute entries and drops relative ones and scratch directories.
+# The run goes through $pydir/python3 and is compared with the interpreter that same command reports, so the case
+# agrees on a Mac (symlink resolved) and on Linux (symlink kept). $stubs is first on PATH, so no real scheduler
+# binary can be reached from these runs even if a regression called one without --yes.
+raw_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "$out"; }
 fresh; sched_fakes; run -- --entry-role builder
-set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="/usr/bin:/opt/x/bin:rel/bin:.::/tmp/a:/private/tmp/b:/var/folders/c:/tmp:/bin:/Users/x/bin" "$PY" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
-{ [[ $frc -eq 0 && "$fout" == *"PATH=/usr/bin:/opt/x/bin:/bin:/Users/x/bin $py_abs $tick_path # director-tick"* ]]; } || miss "F1 the captured PATH drops relative entries, empty entries and anything under /tmp, /private/tmp or /var/folders: rc=$frc out=$fout"
+fpy="$(env -i PATH="$stubs" "$pydir/python3" -c 'import sys; print(sys.executable)')"
+fpath_in="$stubs:/usr/bin:/opt/x/bin:rel/bin:.::/tmp/a:/private/tmp/b:/var/folders/c:/tmp:/bin:/Users/x/bin"
+fwant="$(raw_path "$stubs")"; fwant="${fwant:+$fwant:}/usr/bin:/opt/x/bin:/bin:/Users/x/bin"
+set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$fpath_in" "$pydir/python3" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
+{ [[ $frc -eq 0 && "$fout" == *"PATH=$fwant $fpy $tick_path # director-tick"* ]]; } || miss "F1 the captured PATH drops relative entries, empty entries and anything under /tmp, /private/tmp or /var/folders: rc=$frc want PATH=$fwant $fpy out=$fout"
 # an all-scratch PATH falls back to /usr/bin:/bin
-set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="/tmp/a:rel" "$PY" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
-[[ "$fout" == *"PATH=/usr/bin:/bin "* ]] || miss "F1 a PATH with nothing usable falls back to /usr/bin:/bin: rc=$frc out=$fout"
+fwant="$(raw_path "$stubs")"; fwant="${fwant:-/usr/bin:/bin}"
+set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:/tmp/a:rel" "$pydir/python3" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
+[[ "$fout" == *"PATH=$fwant "* ]] || miss "F1 a PATH with nothing usable falls back to /usr/bin:/bin: rc=$frc want PATH=$fwant out=$fout"
 
 # F2: the profile edit is checked before anything is installed
 fresh; sched_fakes; run -- --entry-role builder; sed -i.bak 's/^schema_version = 1$/schema_version = 1\nloop.tick_interval = 5/' "$prof"; rm -f "$prof.bak"
@@ -392,6 +400,38 @@ run "${senv[@]}" CRON_FAIL=1 -- --schedule --scheduler cron --yes
 fresh; sched_fakes; run -- --entry-role builder; printf '# old note: # director-tick was here\n#*/5 * * * * /x/director-tick # director-tick\n0 3 * * * /usr/bin/true # director-tick-cleanup\n' >"$work/cron.store"
 run "${senv[@]}" -- --schedule --scheduler cron --yes
 { [[ $rc -eq 0 && "$(grep -c ' # director-tick$' "$work/cron.store")" == 2 && "$(grep -c 'director-tick-cleanup' "$work/cron.store")" == 1 ]]; } || miss "F-open a line that only mentions the mark (commented out, or director-tick-cleanup) does not block the install: rc=$rc out=$out store=$(cat "$work/cron.store")"
+
+# Review 6051212942 (director#755): a failing launchctl removes the plist this run wrote and leaves the profile alone;
+# a differing marked crontab line is refused with the store untouched. Each is a function of $BIN so a mutant can run it.
+case_load_fails() {
+  fresh; sched_fakes; run -- --entry-role builder
+  local pl="$home/Library/LaunchAgents/com.arcaven.director-tick.plist" p0; p0="$(sum_of "$prof")"; : >"$work/sched.log"
+  run "${senv[@]}" LAUNCHCTL_FAIL=1 -- --schedule --scheduler launchd --yes
+  [[ $rc -eq 1 && ! -e "$pl" && "$(sum_of "$prof")" == "$p0" && "$(calls 'launchctl load')" == 1 && "$out" == *"load failed"* ]]
+}
+case_differing_line() {
+  fresh; sched_fakes; run -- --entry-role builder
+  printf '0 3 * * * /usr/bin/true\n*/5 * * * * /other/tick # director-tick\n' >"$work/cron.store"
+  local c0 p0; c0="$(sum_of "$work/cron.store")"; p0="$(sum_of "$prof")"; : >"$work/sched.log"
+  run "${senv[@]}" -- --schedule --scheduler cron --yes
+  [[ $rc -eq 1 && "$(sum_of "$work/cron.store")" == "$c0" && "$(calls 'crontab -$')" == 0 && "$(sum_of "$prof")" == "$p0" && "$out" == *"differs"* ]]
+}
+case_load_fails && : || miss "R1 a failing launchctl load exits 1, removes the plist this run wrote, leaves the profile unchanged and says so: rc=$rc out=$out"
+case_differing_line && : || miss "R2 a differing marked crontab line is refused (rc 1), the store and the profile stay as they were, and crontab - is not called: rc=$rc out=$out"
+init_mutant() {  # name old new: a copy of director-init with one fault, beside the scripts it needs
+  local m="$work/imut-$1"; mkdir -p "$m"; cp "$here"/director-profile "$m/" 2>/dev/null || true
+  "$PY" -I -c '
+import sys
+src=open(sys.argv[1]).read()
+if src.count(sys.argv[2]) != 1: sys.exit(1)
+open(sys.argv[4],"w").write(src.replace(sys.argv[2], sys.argv[3]))' "$BIN" "$2" "$3" "$m/director-init" || { miss "mutant $1: the text to mutate is not in director-init"; return 1; }
+  chmod +x "$m/director-init"; printf '%s' "$m/director-init"
+}
+saved_bin="$BIN"
+mpath="$(init_mutant keeps_plist '        os.unlink(path)
+        err("launchctl load -w' '        err("launchctl load -w')" && { BIN="$mpath"; if case_load_fails; then miss "mutant keeps_plist survives: R1 did not catch a plist kept after a failed load"; else echo "ok  mutant keeps_plist is caught by R1"; fi; BIN="$saved_bin"; }
+mpath="$(init_mutant appends_differing '        err("the crontab already has a %s line that differs from this entry; it is left alone" % CRON_MARK)
+        return False' '        pass')" && { BIN="$mpath"; if case_differing_line; then miss "mutant appends_differing survives: R2 did not catch a differing line appended"; else echo "ok  mutant appends_differing is caught by R2"; fi; BIN="$saved_bin"; }
 
 # ---- the python rule ----
 fresh
