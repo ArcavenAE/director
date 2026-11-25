@@ -211,7 +211,7 @@ p=sys.argv[1]; st=os.stat(p); print(st.st_ino, st.st_size, st.st_mtime_ns, oct(s
 dnb() { pyq "$(status "$1")" "$2"; }
 FIX2=$'{"card":"ops2-desk-store","ruled_at":"2026-10-10","forward":"pr:ArcavenAE/director#699"}\n{"card":"flow1027-1","note":"timer"}\n'
 
-d="$(fresh_state dnb_absent)"; tick "$d"; s="$(status "$d")"
+d="$(fresh_state dnb_absent)"; mkdir -p "$d/state/desk"; tick "$d"; s="$(status "$d")"
 { [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == skipped && "$(pyq "$s" 'len(d["steps"]["decided_not_built"]["reason"])>0')" == True \
   && "$(pyq "$s" '"decided_not_built" in d')" == False ]]; } \
   && okay "decided_not_built: no seed file is a skipped step with a reason and no top-level key" || miss "decided_not_built: absent seed file should be skipped with a reason and no top-level key"
@@ -315,7 +315,7 @@ mutants_caught() { # <name> <old> <new> <check: seed|blank>
     TICK="$m"; tick "$md"; TICK="$saved"
     if [[ "$(sig "$(seedfile "$md")")" == "$mb" ]]; then miss "mutant $1 survives: the bad-line seed checks did not catch it"; else okay "mutant $1 is caught by the bad-line seed check"; fi
   elif [[ "$4" == absent ]]; then
-    local md; md="$(fresh_state "mut_$1")"
+    local md; md="$(fresh_state "mut_$1")"; mkdir -p "$md/state/desk"
     TICK="$m"; tick "$md"; TICK="$saved"
     if [[ -e "$(seedpath "$md")" ]]; then okay "mutant $1 is caught by the absent-seed check"; else miss "mutant $1 survives: the absent seed was not created"; fi
   else
