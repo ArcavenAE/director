@@ -35,16 +35,19 @@ bad() { echo "FAIL $1${2:+ -- $2}"; echo F >> "$tally"; }
 source "$here/cast-stubs.sh"
 tally="$root/tally"; : > "$tally"
 
-GLOBAL_ON=(DIRECTOR_GLOBAL_DOMAIN=global DIRECTOR_CLUSTER=mokuzai)
+# A placeholder, not a real host name: this repo is public, and the cast only
+# threads the value through, so any valid cluster word proves the same thing.
+FX_CLUSTER=fixture-cluster
+GLOBAL_ON=(DIRECTOR_GLOBAL_DOMAIN=global "DIRECTOR_CLUSTER=$FX_CLUSTER")
 
 # --- 1. the supervisor gets all three, on both surfaces -----------------------
 if cast supervisor "${GLOBAL_ON[@]}"; then
   miss=""
   in_mcp DIRECTOR_GLOBAL_DOMAIN global    || miss+=" mcp:domain"
-  in_mcp DIRECTOR_CLUSTER mokuzai         || miss+=" mcp:cluster"
+  in_mcp DIRECTOR_CLUSTER "$FX_CLUSTER"         || miss+=" mcp:cluster"
   in_mcp DIRECTOR_GLOBAL_ROLE supervisor  || miss+=" mcp:role"
   in_env DIRECTOR_GLOBAL_DOMAIN global claude.env   || miss+=" env:domain"
-  in_env DIRECTOR_CLUSTER mokuzai claude.env        || miss+=" env:cluster"
+  in_env DIRECTOR_CLUSTER "$FX_CLUSTER" claude.env        || miss+=" env:cluster"
   in_env DIRECTOR_GLOBAL_ROLE supervisor claude.env || miss+=" env:role"
   [[ -z "$miss" ]] && ok "supervisor: all three levers reach mcp_json and the session environment" \
                    || bad "supervisor levers" "missing:$miss"
@@ -58,7 +61,7 @@ in_env DIRECTOR_GLOBAL_ROLE supervisor preflight.env \
   || bad "supervisor pre-flight environment"
 
 # --- 3. the derived role is the cast's, and the address is reported -----------
-grep -q "global://mokuzai/supervisor" "$root/out/stderr" \
+grep -q "global://$FX_CLUSTER/supervisor" "$root/out/stderr" \
   && ok "supervisor: the cast log names the session's global address" \
   || bad "cast log global address" "$(cat "$root/out/stderr")"
 
@@ -229,11 +232,11 @@ fi
 if cast research-supervisor "${GLOBAL_ON[@]}"; then
   miss=""
   in_mcp DIRECTOR_GLOBAL_ROLE supervisor               || miss+=" mcp:role"
-  in_mcp DIRECTOR_CLUSTER mokuzai                      || miss+=" mcp:cluster"
+  in_mcp DIRECTOR_CLUSTER "$FX_CLUSTER"                      || miss+=" mcp:cluster"
   in_env DIRECTOR_GLOBAL_ROLE supervisor claude.env    || miss+=" env:role"
   in_env DIRECTOR_GLOBAL_ROLE supervisor preflight.env || miss+=" preflight:role"
-  grep -q "global://mokuzai/supervisor" "$root/out/stderr" || miss+=" address"
-  [[ -z "$miss" ]] && ok "research-supervisor: global role supervisor on mcp_json, the session and the pre-flight, address global://mokuzai/supervisor" \
+  grep -q "global://$FX_CLUSTER/supervisor" "$root/out/stderr" || miss+=" address"
+  [[ -z "$miss" ]] && ok "research-supervisor: global role supervisor on mcp_json, the session and the pre-flight, address global://$FX_CLUSTER/supervisor" \
                    || bad "research-supervisor global tier" "missing:$miss"
 else
   bad "research-supervisor cast" "$(cat "$root/out/stderr")"
