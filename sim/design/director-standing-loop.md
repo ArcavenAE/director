@@ -84,9 +84,11 @@ row an object with a non-empty string `card` and optional `ruled_at` and
 verbatim and keys sorted within a row. A
 line that is not valid UTF-8, not a JSON object or without a `card` makes the
 step a gap with one `line <n>: <why>` entry per bad line, and the good lines are
-still carried. A step that fails is a
+still carried. A sixth step, `digest` (slice 17, ruled by the operator on
+card i652r-1), runs `dws digest` when `digest.md` is absent or older than
+`digest_max_age` hours, and is skipped as current otherwise. A step that fails is a
 gap carrying the first line of its error, and never fails the tick. A step whose
-tool is not installed is skipped, with that reason. A sixth step, `profile`,
+tool is not installed is skipped, with that reason. A seventh step, `profile`,
 appears only when the profile is refused. When `director-profile check` refuses
 it, the step is a gap carrying the first error line, both defaults apply, and
 the tick exits 0. When the tick itself refuses a `[loop]` value that is not a

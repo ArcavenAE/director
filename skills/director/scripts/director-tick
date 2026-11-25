@@ -12,7 +12,8 @@ $DIRECTOR_STATE/loop-status.json (default $HOME/.director/state):
    "decided_not_built": {"count": N, "rows": [<row objects>]}}      (only when the seed file exists)
 
 Steps, in order: desk_refresh (dws refresh --local), waiting_write (dws waiting write),
-stalled_ideas (dbi --json), presence (director-mcp roster --json), decided_not_built (below).
+stalled_ideas (dbi --json), presence (director-mcp roster --json), decided_not_built (below),
+digest (below).
 A step that fails is a gap
 carrying the first line of its error and never fails the tick; a step whose tool is not
 installed beside this script, or not on PATH, is skipped with that reason. A "profile" step
@@ -25,6 +26,12 @@ value verbatim, in file order. Keys are written sorted within a row, as everywhe
 step, with its count and rows in the status. A line that is not valid UTF-8, not a JSON object, or
 has no such "card" is a bad line: the step is a gap whose reason holds one "line <n>: <why>" entry
 (1-based) per bad line, and the valid lines are still counted and carried.
+
+digest (slice 17, operator card i652r-1, choice 1) runs `dws digest` when $DIRECTOR_STATE/digest.md
+is absent or last written more than digest_max_age hours ago (12 by default, from [loop]), so the
+operator's digest is written with no session. Otherwise the step is skipped, with a reason that says
+the digest is current, and digest.md is not touched. A failing `dws digest` is a gap with its first
+error line. The digest is read-only output and decides nothing.
 
 Due, against the stamps the loop already keeps and never against mail:
   drain      last-drain absent or older than tick_interval minutes (default 30, provisional
@@ -235,6 +242,26 @@ def read_decided_not_built(state, steps):
     return {"count": len(rows), "rows": rows}
 
 
+def run_digest(state, now, hours, steps):
+    """Slice 17: write digest.md through dws when it is absent or older than `hours`."""
+    exe = sibling("dws")
+    if exe is None:
+        steps["digest"] = {"status": "skipped", "reason": "dws is not installed beside director-tick"}
+        return
+    try:
+        written = datetime.datetime.fromtimestamp(os.stat(os.path.join(state, "digest.md")).st_mtime, datetime.timezone.utc)
+    except OSError:
+        written = None
+    if written is not None and not older_than(written, now, hours * 3600):
+        steps["digest"] = {"status": "skipped", "reason": "digest.md is current (written within %d hours)" % hours}
+        return
+    rc, out, err = run([exe, "digest"])
+    if rc == 0:
+        steps["digest"] = {"status": "ok"}
+    else:
+        steps["digest"] = {"status": "gap", "reason": first_line(err) or first_line(out) or "dws digest failed (exit %s)" % rc}
+
+
 def write_status(state, doc):
     os.makedirs(state, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=state, prefix=".loop-status.")
@@ -261,6 +288,7 @@ def main():
     run_step(steps, "stalled_ideas", "dbi", ["--json"])
     seats = read_seats(steps)
     seed = read_decided_not_built(state, steps)
+    run_digest(state, now, hours, steps)
     doc = {
         "schema": 1,
         "ran_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),

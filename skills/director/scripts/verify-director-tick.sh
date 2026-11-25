@@ -63,7 +63,10 @@ EOF
 chmod +x "$bin"/*
 
 # fresh_state <name>: a new scratch state dir, printed
-fresh_state() { local d="$work/$1"; rm -rf "$d"; mkdir -p "$d/home" "$d/tmp" "$d/state"; printf '%s' "$d"; }
+# It holds a current digest.md: the tick writes a missing or old digest (slice 17), and a first run that wrote one
+# would change an input of the second, so two runs at one clock would differ for a reason these cases do not test.
+# The digest step is proved in verify-dws-digest.sh.
+fresh_state() { local d="$work/$1"; rm -rf "$d"; mkdir -p "$d/home" "$d/tmp" "$d/state"; printf 'a current digest\n' >"$d/state/digest.md"; printf '%s' "$d"; }
 
 # tick <case dir> [VAR=value...]: one env -i run; stdout and stderr go to <dir>/out and <dir>/err,
 # the exit status to <dir>/rc, so a missing script is an assertion failure and not an abort
@@ -98,8 +101,8 @@ s="$(status "$d")"
 [[ "$(cat "$d/rc" 2>/dev/null || echo none)" == 0 ]] && okay "tick exits 0" || miss "tick exits 0 (rc $(cat "$d/rc" 2>/dev/null || echo none): $(head -c 200 "$d/err" 2>/dev/null))"
 [[ "$(pyq "$s" 'd["schema"]')" == 1 ]] && okay "schema is 1" || miss "status-written-and-valid-json: schema 1 in $s"
 [[ "$(pyq "$s" 'd["ran_at"]')" == "$NOW" ]] && okay "ran_at is the tick clock" || miss "ran_at equals TICK_NOW"
-[[ "$(pyq "$s" 'sorted(d["steps"])')" == "['decided_not_built', 'desk_refresh', 'presence', 'stalled_ideas', 'waiting_write']" ]] \
-  && okay "the five steps are named" || miss "steps are decided_not_built, desk_refresh, presence, stalled_ideas, waiting_write"
+[[ "$(pyq "$s" 'sorted(d["steps"])')" == "['decided_not_built', 'desk_refresh', 'digest', 'presence', 'stalled_ideas', 'waiting_write']" ]] \
+  && okay "the six steps are named" || miss "steps are decided_not_built, desk_refresh, digest, presence, stalled_ideas, waiting_write"
 [[ "$(pyq "$s" 'all(v["status"] in ("ok","skipped","gap") for v in d["steps"].values())')" == True ]] \
   && okay "every step is ok, skipped or gap" || miss "step statuses are ok, skipped or gap"
 [[ "$(pyq "$s" 'sorted(d["due"])')" == "['dashboard', 'desk_read', 'drain']" && "$(pyq "$s" 'all(isinstance(v,bool) for v in d["due"].values())')" == True ]] \
@@ -358,7 +361,7 @@ for mode in 1 0; do
   rc=0; env -i HOME="$d/home" TMPDIR="$d/tmp" PATH="$bin:$pydir:/usr/bin:/bin" LANG=C DIRECTOR_STATE="$d/state" CALLS_LOG="$calls" TICK_NOW="$NOW" \
     "$d/beside/director-tick" >"$d/out" 2>"$d/err" || rc=$?
   s="$(status "$d")"
-  { [[ "$rc" == 0 ]] && [[ "$(pyq "$s" 'all(v["status"]=="ok" or (v["status"] in ("gap","skipped") and len(v["reason"])>0) for k,v in d["steps"].items() if k=="decided_not_built") and all(v["status"]=="ok" or (v["status"]=="gap" and len(v["reason"])>0) for k,v in d["steps"].items() if k!="decided_not_built")')" == True ]] \
+  { [[ "$rc" == 0 ]] && [[ "$(pyq "$s" 'all(v["status"]=="ok" or (v["status"] in ("gap","skipped") and len(v["reason"])>0) for k,v in d["steps"].items() if k in ("decided_not_built","digest")) and all(v["status"]=="ok" or (v["status"]=="gap" and len(v["reason"])>0) for k,v in d["steps"].items() if k not in ("decided_not_built","digest"))')" == True ]] \
     && [[ "$(pyq "$s" 'd["steps"]["desk_refresh"]["status"] in ("ok","gap")')" == True ]]; } \
     && okay "invalid output bytes from dws and dbi (exit $mode) leave the tick at exit 0 with a status" \
     || miss "invalid-byte: a step printing a non-UTF-8 byte (exit $mode) failed the tick or left no status (rc $rc: $(head -c 160 "$d/err" 2>/dev/null))"
