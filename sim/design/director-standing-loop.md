@@ -130,7 +130,12 @@ asks for.
 
 Running `director tick` by hand needs no ruling. Installing a schedule does:
 `director init --schedule` prints the host's entry and installs it only on an
-explicit `--yes`. The profile's `scheduler` defaults to `none`.
+explicit `--yes`. The profile's `scheduler` defaults to `none`. Built: the entry runs
+`director-tick` on the python3 that ran `director init` (named as given, never by its realpath, which for Homebrew is a Cellar
+path that brew cleanup removes; refused when it, or its realpath, sits under a scratch directory), with a PATH captured at install (absolute entries, none
+under or resolving into a scratch directory), every `tick_interval` minutes, as a launchd user agent on Darwin or one
+marked crontab line elsewhere, which a second `--yes` does not duplicate. A systemd timer
+and an uninstall are not built; the host's owner removes the entry by hand.
 
 ## 3. Wiring and portability for any install
 
@@ -159,8 +164,8 @@ the profile today and no hook wiring). This design adds to it:
 - One profile table, `[loop]`, a closed set of optional keys: `state_dir`,
   `ticket_pattern` (a regex) and `workspace` are strings, `idea_roots` is a list
   of strings, `tick_interval` is whole minutes, `digest_max_age` is whole hours,
-  and `scheduler` accepts only `"none"` until slice 16 widens it. An unknown key
-  is refused as `loop.<key>`.
+  and `scheduler` is `"none"`, `"launchd"` or `"cron"` (slice 16; `director init
+  --schedule --yes` writes it). An unknown key is refused as `loop.<key>`.
 
 Five defaults today fit only the first install: the shipped idea roots, the
 session's default workspace, the ticket id pattern the stalled-ideas scan and
