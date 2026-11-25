@@ -61,6 +61,10 @@ type drained struct {
 	// InheritedFrom names the predecessor whose unread mail this is, set only on
 	// a message read from the inherited durable (localinherit.go).
 	InheritedFrom string `json:"inherited_from,omitempty"`
+	// ProposedTier and Reason are the receiver classifier's answer for this
+	// message, set on the batch form only (drain_tier.go).
+	ProposedTier string `json:"proposed_tier,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 }
 
 // tierRank puts local before global. The two tiers share no clock the shim
