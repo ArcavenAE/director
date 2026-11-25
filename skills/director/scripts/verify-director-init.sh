@@ -275,7 +275,7 @@ set -e
 tick_path="$(cd "$here" && pwd -P)/director-tick"
 # The entry names the interpreter that ran director-init and a PATH captured at install (director ruling 01M887991M):
 # absolute entries only, nothing under /tmp, /private/tmp or /var/folders, so it never points into a dead session's scratch.
-filter_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "${out:-/usr/bin:/bin}"; }
+filter_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*|/private/var/folders|/private/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "${out:-/usr/bin:/bin}"; }
 run_path="$stubs:$pydir:/usr/bin:/bin"
 py_abs="$(env -i PATH="$pydir" python3 -c 'import sys; print(sys.executable)')"
 sched_fakes() {
@@ -369,7 +369,7 @@ run "${senv[@]}" -- --schedule --scheduler launchd --yes
 # The run goes through $pydir/python3 and is compared with the interpreter that same command reports, so the case
 # agrees on a Mac (symlink resolved) and on Linux (symlink kept). $stubs is first on PATH, so no real scheduler
 # binary can be reached from these runs even if a regression called one without --yes.
-raw_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "$out"; }
+raw_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*|/private/var/folders|/private/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "$out"; }
 fresh; sched_fakes; run -- --entry-role builder
 fpy="$(env -i PATH="$stubs" "$pydir/python3" -c 'import sys; print(sys.executable)')"
 fpath_in="$stubs:/usr/bin:/opt/x/bin:rel/bin:.::/tmp/a:/private/tmp/b:/var/folders/c:/tmp:/bin:/Users/x/bin"
@@ -432,6 +432,48 @@ mpath="$(init_mutant keeps_plist '        os.unlink(path)
         err("launchctl load -w' '        err("launchctl load -w')" && { BIN="$mpath"; if case_load_fails; then miss "mutant keeps_plist survives: R1 did not catch a plist kept after a failed load"; else echo "ok  mutant keeps_plist is caught by R1"; fi; BIN="$saved_bin"; }
 mpath="$(init_mutant appends_differing '        err("the crontab already has a %s line that differs from this entry; it is left alone" % CRON_MARK)
         return False' '        pass')" && { BIN="$mpath"; if case_differing_line; then miss "mutant appends_differing survives: R2 did not catch a differing line appended"; else echo "ok  mutant appends_differing is caught by R2"; fi; BIN="$saved_bin"; }
+
+# director ruling 01M88ACQWC on director#755 (a) and (b): the interpreter is resolved with realpath and refused when it is
+# still under a scratch prefix; /private/var/folders joins the scratch prefixes; and the captured PATH entries are
+# compared after realpath too, so a symlinked scratch directory cannot slip through. The functions are exercised by
+# loading director-init as a module (nothing runs at import), so the refusals are pinned without a scratch python.
+pyfn() {  # <python code using the module m>: prints its result; an exception prints ERR:<type>
+  env -i HOME="$home" PATH="$pydir:/usr/bin:/bin" "$PY" -I -c '
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("dinit", sys.argv[1])
+spec = importlib.util.spec_from_loader("dinit", loader); m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+try:
+    exec(sys.argv[2])
+except Exception as e:
+    print("ERR:" + type(e).__name__)' "$BIN" "$1" 2>&1
+}
+fresh
+# (a) a scratch interpreter is refused, naming the resolved path and what to do
+for bad in /private/var/folders/aa/scr4tch/python3 /var/folders/aa/scr4tch/python3 /tmp/scr4tch/python3 /private/tmp/scr4tch/python3; do
+  got="$(pyfn "print(m.resolve_interpreter(\"$bad\"))")"
+  { [[ "$got" == "(None, "*"scr4tch/python3"*"run director-init with the python the tick should keep"* ]]; } || miss "R3 (a) an interpreter at $bad is refused with its path and the instruction: $got"
+done
+# (a) a symlink to a real interpreter is resolved, so the entry names the real binary and not the link
+mkdir -p "$work/lnk"; ln -sf "$(env -i PATH="$pydir" python3 -c 'import os,sys; print(os.path.realpath(sys.executable))')" "$work/lnk/python3"
+want_real="$(env -i PATH="$pydir" python3 -c 'import os,sys; print(os.path.realpath(sys.executable))')"
+got="$(pyfn "print(m.resolve_interpreter(\"$work/lnk/python3\"))")"
+[[ "$got" == "('$want_real', None)" ]] || miss "R3 (a) a symlinked interpreter resolves to the real binary $want_real: $got"
+# (b) /private/var/folders is a scratch prefix, in the printed entry too
+fresh; sched_fakes; run -- --entry-role builder
+set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:/usr/bin:/private/var/folders/d:/private/var/folders:/bin" "$pydir/python3" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
+fwant="$(raw_path "$stubs")"; fwant="${fwant:+$fwant:}/usr/bin:/bin"
+[[ "$fout" == *"PATH=$fwant "* ]] || miss "R4 (b) /private/var/folders and below are dropped from the captured PATH: rc=$frc want PATH=$fwant out=$fout"
+# (b) a PATH entry that is a symlink into a scratch directory is dropped, though its own name is not scratch
+got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/link/bin": "/private/var/folders/real/bin", "/usr/bin": "/usr/bin"}.get(p, real(p))
+os.environ["PATH"] = "/opt/link/bin:/usr/bin:/opt/ok/bin"
+print(m.captured_path())')"
+[[ "$got" == "/usr/bin:/opt/ok/bin" ]] || miss "R5 (b) a PATH entry whose realpath is under a scratch prefix is dropped: $got"
+# (b) the entry as written is kept for a clean entry, and a PATH of only scratch links falls back
+got="$(pyfn 'os.path.realpath = lambda p: "/private/tmp/x"
+os.environ["PATH"] = "/opt/a/bin:/opt/b/bin"
+print(m.captured_path())')"
+[[ "$got" == "/usr/bin:/bin" ]] || miss "R5 (b) a PATH whose entries all resolve into scratch falls back to /usr/bin:/bin: $got"
 
 # ---- the python rule ----
 fresh
