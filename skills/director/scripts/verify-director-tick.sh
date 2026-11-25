@@ -200,7 +200,7 @@ left="$(find "$d/state" -name '.loop-status*' -o -name 'loop-status.json.*' 2>/d
 # Absent file: the step is skipped with a reason and the status has no "decided_not_built" key. Readable file:
 # step ok and "decided_not_built": {"count": N, "rows": [<row objects in file order>]}. A blank line is ignored.
 # A line that is not a JSON object with a non-empty string "card" makes the step a gap whose reason names the
-# 1-based line number; the valid lines are still counted and carried, and the tick still exits 0.
+# 1-based line number, one "line <n>: <why>" entry per bad line; the valid lines are still counted and carried, and the tick still exits 0.
 # "card" is the only required key. "ruled_at" and "forward" (a bd:, pr: or finding: edge) are optional and carried
 # verbatim; a row without them is not a gap (director, 2026-11-25).
 seed() { mkdir -p "$1/state/desk"; printf '%s' "$2" >"$1/state/desk/decided-not-built.seed.jsonl"; }
@@ -236,17 +236,19 @@ seed "$d" $'{"card":"good1"}\nnot json at all\n{"note":"no card"}\n["card"]\n{"c
 tick "$d"; s="$(status "$d")"
 { [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == gap && "$(cat "$d/rc" 2>/dev/null || echo none)" == 0 ]]; } \
   && okay "decided_not_built: bad lines make a gap and the tick still exits 0" || miss "decided_not_built: bad lines should make a gap with exit 0"
-{ [[ "$(pyq "$s" 'all(str(n) in d["steps"]["decided_not_built"]["reason"] for n in (2,3,4,5))')" == True \
-  && "$(pyq "$s" '"line 1" in d["steps"]["decided_not_built"]["reason"] or "line 6" in d["steps"]["decided_not_built"]["reason"]')" == False ]]; } \
-  && okay "decided_not_built: the gap names line 2, 3, 4 and 5 and not the good lines" || miss "decided_not_built: the gap reason should name lines 2 to 5 and not 1 or 6"
+{ [[ "$(pyq "$s" 'all(__import__("re").search(r"\bline %d\b" % n, d["steps"]["decided_not_built"]["reason"]) for n in (2,3,4,5))')" == True \
+  && "$(pyq "$s" 'any(__import__("re").search(r"\bline %d\b" % n, d["steps"]["decided_not_built"]["reason"]) for n in (1,6))')" == False ]]; } \
+  && okay "decided_not_built: the gap names line 2, 3, 4 and 5 as whole tokens and not the good lines 1 and 6" || miss "decided_not_built: the gap reason should hold the tokens line 2 to line 5 and neither line 1 nor line 6"
 [[ "$(pyq "$s" '[d["decided_not_built"]["count"], [r["card"] for r in d["decided_not_built"]["rows"]]]')" == "[2, ['good1', 'good2']]" ]] \
   && okay "decided_not_built: the valid lines are still counted and carried" || miss "decided_not_built: valid lines should still be counted and carried"
 
-# a non-UTF-8 byte in the seed is a gap, not a failed tick
+# a line that does not decode as UTF-8 is a bad line: a gap naming line 2, and only line 1 is carried
 d="$(fresh_state dnb_byte)"; mkdir -p "$d/state/desk"; printf '{"card":"a"}\n{"card":"\377"}\n' >"$d/state/desk/decided-not-built.seed.jsonl"
 tick "$d"; s="$(status "$d")"
-{ [[ "$(cat "$d/rc" 2>/dev/null || echo none)" == 0 && "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"] in ("ok","gap")')" == True ]]; } \
-  && okay "decided_not_built: an invalid byte in the seed leaves the tick at exit 0 with a status" || miss "decided_not_built: an invalid byte failed the tick or left no status (rc $(cat "$d/rc" 2>/dev/null || echo none))"
+{ [[ "$(cat "$d/rc" 2>/dev/null || echo none)" == 0 && "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == gap \
+  && "$(pyq "$s" '__import__("re").search(r"\bline 2\b", d["steps"]["decided_not_built"]["reason"]) is not None')" == True \
+  && "$(pyq "$s" '[d["decided_not_built"]["count"], [r["card"] for r in d["decided_not_built"]["rows"]]]')" == "[1, ['a']]" ]]; } \
+  && okay "decided_not_built: an undecodable line is a gap naming line 2, and only the good row is carried" || miss "decided_not_built: an invalid byte should be a gap naming line 2 with count 1 and rows ['a'] (rc $(cat "$d/rc" 2>/dev/null || echo none))"
 
 # idempotent, and the seed is never written
 d="$(fresh_state dnb_idem)"; seed "$d" "$FIX2"; before="$(shasum -a 256 <"$d/state/desk/decided-not-built.seed.jsonl")"
