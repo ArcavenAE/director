@@ -475,6 +475,33 @@ os.environ["PATH"] = "/opt/a/bin:/opt/b/bin"
 print(m.captured_path())')"
 [[ "$got" == "/usr/bin:/bin" ]] || miss "R5 (b) a PATH whose entries all resolve into scratch falls back to /usr/bin:/bin: $got"
 
+# R6 (architect, director#755): do_schedule acts on the refusal. With sys.executable set to a scratch path that does not
+# exist (realpath of a missing file returns it, so it stays under /private/tmp), --schedule --yes exits 1, prints no entry,
+# calls no scheduler tool, and leaves the plist, the crontab store and the profile as they were.
+case_scratch_python() {  # <launchd|cron>
+  fresh; sched_fakes; run -- --entry-role builder
+  local pl="$home/Library/LaunchAgents/com.arcaven.director-tick.plist" p0; p0="$(sum_of "$prof")"; : >"$work/sched.log"
+  set +e
+  out="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:$pydir:/usr/bin:/bin" "${senv[@]}" "$PY" -I -c '
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("dinit", sys.argv[1])
+spec = importlib.util.spec_from_loader("dinit", loader); m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+m.check_profile = lambda p: (True, "")  # the real check runs sys.executable, which is faked below
+sys.executable = "/private/tmp/scr4tch/python3"
+sys.exit(m.main(["--schedule", "--scheduler", sys.argv[2], "--yes"]))' "$BIN" "$1" 2>&1 </dev/null)"
+  rc=$?
+  set -e
+  [[ $rc -eq 1 && "$out" != *"scheduler:"* && "$out" == *"scr4tch/python3"* && "$out" == *"run director-init with the python the tick should keep"* && "$out" != *"Traceback"* && ! -s "$work/sched.log" && ! -e "$pl" && ! -e "$work/cron.store" && "$(sum_of "$prof")" == "$p0" ]]
+}
+case_scratch_python launchd && : || miss "R6 a scratch interpreter makes --schedule --yes (launchd) refuse with rc 1 and no entry, scheduler call, plist or profile change: rc=$rc out=$out log=$(tr '\n' ';' <"$work/sched.log")"
+case_scratch_python cron && : || miss "R6 a scratch interpreter makes --schedule --yes (cron) refuse with rc 1 and no entry, scheduler call, crontab or profile change: rc=$rc out=$out log=$(tr '\n' ';' <"$work/sched.log")"
+mpath="$(init_mutant ignores_refusal '    if python is None:
+        err(why)
+        return 1
+' '    if python is None:
+        python = sys.executable
+')" && { BIN="$mpath"; if case_scratch_python launchd && case_scratch_python cron; then miss "mutant ignores_refusal survives: R6 did not catch do_schedule using a scratch interpreter"; else echo "ok  mutant ignores_refusal is caught by R6"; fi; BIN="$saved_bin"; }
+
 # ---- the python rule ----
 fresh
 old_py() {
