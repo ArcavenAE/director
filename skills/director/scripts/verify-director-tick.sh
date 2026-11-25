@@ -201,9 +201,11 @@ left="$(find "$d/state" -name '.loop-status*' -o -name 'loop-status.json.*' 2>/d
 # step ok and "decided_not_built": {"count": N, "rows": [<row objects in file order>]}. A blank line is ignored.
 # A line that is not a JSON object with a non-empty string "card" makes the step a gap whose reason names the
 # 1-based line number; the valid lines are still counted and carried, and the tick still exits 0.
+# "card" is the only required key. "ruled_at" and "forward" (a bd:, pr: or finding: edge) are optional and carried
+# verbatim; a row without them is not a gap (director, 2026-11-25).
 seed() { mkdir -p "$1/state/desk"; printf '%s' "$2" >"$1/state/desk/decided-not-built.seed.jsonl"; }
 dnb() { pyq "$(status "$1")" "$2"; }
-FIX2=$'{"card":"ops2-desk-store","ruled":"2026-10-10"}\n{"card":"flow1027-1","note":"timer"}\n'
+FIX2=$'{"card":"ops2-desk-store","ruled_at":"2026-10-10","forward":"pr:ArcavenAE/director#699"}\n{"card":"flow1027-1","note":"timer"}\n'
 
 d="$(fresh_state dnb_absent)"; tick "$d"; s="$(status "$d")"
 { [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == skipped && "$(pyq "$s" 'len(d["steps"]["decided_not_built"]["reason"])>0')" == True \
@@ -217,8 +219,8 @@ d="$(fresh_state dnb_two)"; seed "$d" "$FIX2"; tick "$d"; s="$(status "$d")"
   && okay "decided_not_built: count is 2" || miss "decided_not_built: count should be 2"
 [[ "$(pyq "$s" '[r["card"] for r in d["decided_not_built"]["rows"]]')" == "['ops2-desk-store', 'flow1027-1']" ]] \
   && okay "decided_not_built: rows keep file order" || miss "decided_not_built: rows should keep file order"
-[[ "$(pyq "$s" 'd["decided_not_built"]["rows"][0]["ruled"] + d["decided_not_built"]["rows"][1]["note"]')" == "2026-10-10timer" ]] \
-  && okay "decided_not_built: other keys ride along verbatim" || miss "decided_not_built: other row keys should be carried verbatim"
+[[ "$(pyq "$s" 'd["decided_not_built"]["rows"][0]["ruled_at"] + d["decided_not_built"]["rows"][0]["forward"] + d["decided_not_built"]["rows"][1]["note"]')" == "2026-10-10pr:ArcavenAE/director#699timer" ]] \
+  && okay "decided_not_built: optional ruled_at and forward, and other keys, ride along verbatim" || miss "decided_not_built: other row keys should be carried verbatim"
 
 d="$(fresh_state dnb_blank)"; seed "$d" $'\n{"card":"a"}\n   \n{"card":"b"}\n\n'; tick "$d"; s="$(status "$d")"
 { [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == ok && "$(pyq "$s" 'd["decided_not_built"]["count"]')" == 2 ]]; } \
