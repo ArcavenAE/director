@@ -471,6 +471,21 @@ got="$(pyfn 'real = os.path.realpath
 os.path.realpath = lambda p: {"/tmp/scr4tch/python3": "/usr/bin/python3"}.get(p, real(p))
 print(m.resolve_interpreter("/tmp/scr4tch/python3"))')"
 { [[ "$got" == "(None, "*"scr4tch/python3"*"run director-init with the python the tick should keep"* ]]; } || miss "R3 (a) an interpreter whose own name is under scratch is refused though its realpath is not: $got"
+# (a) without realpath nothing else makes the written path absolute, so a name that is not absolute is refused, and None
+# (some embeddings) is refused and not raised on (architect, Red Gate of the revised ruling, M1)
+for bad in '""' '"python3"' '"./python3"' 'None'; do
+  got="$(pyfn "print(m.resolve_interpreter($bad))")"
+  { [[ "$got" == "(None, "*"absolute"*"run director-init with the python the tick should keep"* ]]; } || miss "R3 (a) an interpreter that is not an absolute path ($bad) is refused and the message says absolute: $got"
+done
+# (a) on a host where the python3 is a Homebrew symlink into a Cellar directory, the real filesystem gives the same answer
+# without a patch; elsewhere the case prints SKIP
+hb=/opt/homebrew/bin/python3
+if [[ -L "$hb" || -e "$hb" ]] && [[ "$("$PY" -I -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$hb")" == *Cellar* ]]; then
+  got="$(pyfn "print(m.resolve_interpreter(\"$hb\"))")"
+  [[ "$got" == "('$hb', None)" ]] || miss "R3 (a) on this host $hb resolves into a Cellar directory and must come back as given: $got"
+else
+  echo "SKIP R3 (a) host case: $hb is absent or does not resolve into a Cellar directory"
+fi
 # (a) end to end: the printed launchd entry and cron line carry the stable path and never the Cellar path
 case_entry_keeps_given_path() {  # <launchd|cron>
   fresh; sched_fakes; run -- --entry-role builder
