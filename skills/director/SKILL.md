@@ -449,9 +449,10 @@ hook's three-line checklist asks about:
    tracked private-names list plus the client-team session prefixes, and know that with no list the
    writer refuses the waiting, in-flight and sessions panels. This gives the `dash_*` documents.
 6. If `$DIRECTOR_STATE/digest.md` is older than 12 hours, run `dws digest`. This
-   gives the digest the operator reads twice a day, by event and not by timer:
-   a session runs it on its own tick, and nothing runs on silence. The digest is
-   read-only output, so it is not an action fired on a clock.
+   gives the digest the operator reads twice a day. `director-tick` runs it when
+   the file is that old (`digest_max_age` hours, 12 by default), and a session may
+   run it by hand. The digest is read-only output and decides nothing, so it is
+   not an action fired on a clock.
 7. Answer QUERYs and act on MERGE RECOMMENDED, through `merge-guard`. This gives
    the replies and merges.
 

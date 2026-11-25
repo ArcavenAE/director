@@ -63,7 +63,10 @@ EOF
 chmod +x "$bin"/*
 
 # fresh_state <name>: a new scratch state dir, printed
-fresh_state() { local d="$work/$1"; rm -rf "$d"; mkdir -p "$d/home" "$d/tmp" "$d/state"; printf '%s' "$d"; }
+# It holds a current digest.md: the tick writes a missing or old digest (slice 17), and a first run that wrote one
+# would change an input of the second, so two runs at one clock would differ for a reason these cases do not test.
+# The digest step is proved in verify-dws-digest.sh.
+fresh_state() { local d="$work/$1"; rm -rf "$d"; mkdir -p "$d/home" "$d/tmp" "$d/state"; printf 'a current digest\n' >"$d/state/digest.md"; printf '%s' "$d"; }
 
 # tick <case dir> [VAR=value...]: one env -i run; stdout and stderr go to <dir>/out and <dir>/err,
 # the exit status to <dir>/rc, so a missing script is an assertion failure and not an abort
@@ -324,7 +327,7 @@ for mode in 1 0; do
   rc=0; env -i HOME="$d/home" TMPDIR="$d/tmp" PATH="$bin:$pydir:/usr/bin:/bin" LANG=C DIRECTOR_STATE="$d/state" CALLS_LOG="$calls" TICK_NOW="$NOW" \
     "$d/beside/director-tick" >"$d/out" 2>"$d/err" || rc=$?
   s="$(status "$d")"
-  { [[ "$rc" == 0 ]] && [[ "$(pyq "$s" 'all(v["status"]=="ok" or (v["status"] in ("gap","skipped") and len(v["reason"])>0) for k,v in d["steps"].items() if k=="decided_not_built") and all(v["status"]=="ok" or (v["status"]=="gap" and len(v["reason"])>0) for k,v in d["steps"].items() if k!="decided_not_built")')" == True ]] \
+  { [[ "$rc" == 0 ]] && [[ "$(pyq "$s" 'all(v["status"]=="ok" or (v["status"] in ("gap","skipped") and len(v["reason"])>0) for k,v in d["steps"].items() if k in ("decided_not_built","digest")) and all(v["status"]=="ok" or (v["status"]=="gap" and len(v["reason"])>0) for k,v in d["steps"].items() if k not in ("decided_not_built","digest"))')" == True ]] \
     && [[ "$(pyq "$s" 'd["steps"]["desk_refresh"]["status"] in ("ok","gap")')" == True ]]; } \
     && okay "invalid output bytes from dws and dbi (exit $mode) leave the tick at exit 0 with a status" \
     || miss "invalid-byte: a step printing a non-UTF-8 byte (exit $mode) failed the tick or left no status (rc $rc: $(head -c 160 "$d/err" 2>/dev/null))"
