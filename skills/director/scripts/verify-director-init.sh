@@ -277,7 +277,7 @@ tick_path="$(cd "$here" && pwd -P)/director-tick"
 # absolute entries only, nothing under /tmp, /private/tmp or /var/folders, so it never points into a dead session's scratch.
 filter_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*|/private/var/folders|/private/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "${out:-/usr/bin:/bin}"; }
 run_path="$stubs:$pydir:/usr/bin:/bin"
-py_abs="$(env -i PATH="$pydir" python3 -c 'import sys; print(sys.executable)')"
+py_abs="$(env -i PATH="$pydir" python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')"
 sched_fakes() {
   : >"$work/sched.log"; rm -f "$work/cron.store"
   printf '%s\n' '#!/bin/sh' 'echo "launchctl $*" >>"$SCHED_LOG"' '[ -n "$LAUNCHCTL_FAIL" ] && { echo "launchctl: load failed" >&2; exit 1; }' 'exit 0' >"$stubs/launchctl"
@@ -371,7 +371,7 @@ run "${senv[@]}" -- --schedule --scheduler launchd --yes
 # binary can be reached from these runs even if a regression called one without --yes.
 raw_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*|/private/var/folders|/private/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "$out"; }
 fresh; sched_fakes; run -- --entry-role builder
-fpy="$(env -i PATH="$stubs" "$pydir/python3" -c 'import sys; print(sys.executable)')"
+fpy="$(env -i PATH="$stubs" "$pydir/python3" -c 'import os, sys; print(os.path.realpath(sys.executable))')"
 fpath_in="$stubs:/usr/bin:/opt/x/bin:rel/bin:.::/tmp/a:/private/tmp/b:/var/folders/c:/tmp:/bin:/Users/x/bin"
 fwant="$(raw_path "$stubs")"; fwant="${fwant:+$fwant:}/usr/bin:/opt/x/bin:/bin:/Users/x/bin"
 set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$fpath_in" "$pydir/python3" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e

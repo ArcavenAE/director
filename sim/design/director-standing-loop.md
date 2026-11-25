@@ -131,8 +131,9 @@ asks for.
 Running `director tick` by hand needs no ruling. Installing a schedule does:
 `director init --schedule` prints the host's entry and installs it only on an
 explicit `--yes`. The profile's `scheduler` defaults to `none`. Built: the entry runs
-`director-tick` on the python3 that ran `director init`, with a PATH captured at install (absolute
-entries, none under a scratch directory), every `tick_interval` minutes, as a launchd user agent on Darwin or one
+`director-tick` on the python3 that ran `director init` (resolved with realpath, and refused when it
+still sits under a scratch directory), with a PATH captured at install (absolute entries, none
+under or resolving into a scratch directory), every `tick_interval` minutes, as a launchd user agent on Darwin or one
 marked crontab line elsewhere, which a second `--yes` does not duplicate. A systemd timer
 and an uninstall are not built; the host's owner removes the entry by hand.
 
