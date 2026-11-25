@@ -144,5 +144,29 @@ rc=0; env -i HOME="$d/home" TMPDIR="$d/tmp" PATH="$tbin:$pydir:/usr/bin:/bin" LA
 { [[ "$rc" == 0 && "$(tq "$d" 'd["steps"]["digest"]["status"]')" == gap && "$(tq "$d" '"unreadable" in d["steps"]["digest"]["reason"]')" == True ]]; } \
   && ok "runs-with-no-session: a failing dws digest is a gap with its first error line, and the tick exits 0" || bad "runs-with-no-session: a failing dws digest should be a gap with a reason and exit 0 (rc $rc)"
 
+# mutants of the digest step: a copy of the tick with one fault each, run beside the real dws; each must break at least
+# one of three outcomes (absent digest is written; a 3 hour old one is left alone; a 13 hour old one is rewritten)
+digest_outcomes() { # <tick path>: prints "ok" when all three outcomes hold
+  local t="$1" good=1 d
+  d="$(tick_case mo_a)"; TICK="$t" run_tick "$d"; head -1 "$d/state/digest.md" 2>/dev/null | grep -q '^# Digest' || good=0
+  d="$(tick_case mo_f)"; printf 'SENTINEL\n' >"$d/state/digest.md"; TZ=UTC touch -t 202611180900 "$d/state/digest.md"; TICK="$t" run_tick "$d"; [[ "$(cat "$d/state/digest.md")" == SENTINEL ]] || good=0
+  d="$(tick_case mo_s)"; printf 'SENTINEL\n' >"$d/state/digest.md"; TZ=UTC touch -t 202611172300 "$d/state/digest.md"; TICK="$t" run_tick "$d"; head -1 "$d/state/digest.md" | grep -q '^# Digest' || good=0
+  ((good)) && echo ok || echo broken
+}
+digest_mutant() { # <name> <old text> <new text>
+  local out="$root/dmut-$1"; mkdir -p "$out"; cp "$here"/* "$out"/ 2>/dev/null || true
+  if ! "$PY" -I -c '
+import sys
+src=open(sys.argv[1]).read()
+if src.count(sys.argv[2]) != 1: sys.exit(1)
+open(sys.argv[4],"w").write(src.replace(sys.argv[2], sys.argv[3]))' "$TICK" "$2" "$3" "$out/director-tick"; then bad "digest mutant $1: the text to mutate is not in the tick"; return; fi
+  chmod +x "$out/director-tick"
+  [[ "$(digest_outcomes "$out/director-tick")" == broken ]] && ok "digest mutant $1 is caught" || bad "digest mutant $1 survives"
+}
+[[ "$(digest_outcomes "$TICK")" == ok ]] && ok "digest mutants: the unmutated tick holds all three outcomes (control)" || bad "digest mutants: the control tick should hold all three outcomes"
+digest_mutant never_runs 'rc, out, err = run([exe, "digest"])' 'rc, out, err = 0, "", ""'
+digest_mutant wall_clock 'if written is not None and not older_than(written, now, hours * 3600):' 'if written is not None and not older_than(written, datetime.datetime.now(datetime.timezone.utc), hours * 3600):'
+digest_mutant always_runs 'if written is not None and not older_than(written, now, hours * 3600):' 'if False:'
+
 echo "dws digest: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
