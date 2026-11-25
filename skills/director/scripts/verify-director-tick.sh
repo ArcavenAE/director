@@ -7,7 +7,7 @@
 #   {"schema":1,"ran_at":"<UTC>","steps":{"<step>":{"status":"ok|skipped|gap","reason":"..."}},
 #    "due":{"drain":bool,"desk_read":bool,"dashboard":bool},
 #    "seats":[{"id","cue","cue_reason"}]}
-# steps: desk_refresh, waiting_write, stalled_ideas, presence (and profile, only when a [loop] value
+# steps: desk_refresh, waiting_write, stalled_ideas, presence, decided_not_built (and profile, only when a [loop] value
 # is refused). It never types into a pane, never sends or acks on the bus, never writes the Desk, and
 # never runs the dashboard writer.
 #
@@ -17,7 +17,7 @@
 # PATH are fakes that log every call, so a call to the live bus, a pane or GitHub is visible and none
 # is made. Nothing is written outside the scratch tree. The clock is TICK_NOW, so ages are exact.
 #
-# Covered: status-written-and-valid-json; no-tmux-or-nats-call; dashboard-untouched; idempotent;
+# Covered: decided_not_built (seed rows read into the status); status-written-and-valid-json; no-tmux-or-nats-call; dashboard-untouched; idempotent;
 # each-step-gap-has-reason; due-flags-from-stamps (drain at the 30 minute default, desk_read at 24
 # hours, dashboard at the 12 hour default); loop values read from [loop] (tick_interval,
 # digest_max_age); positive-interval-refused; never-list; no temp file left behind.
@@ -98,8 +98,8 @@ s="$(status "$d")"
 [[ "$(cat "$d/rc" 2>/dev/null || echo none)" == 0 ]] && okay "tick exits 0" || miss "tick exits 0 (rc $(cat "$d/rc" 2>/dev/null || echo none): $(head -c 200 "$d/err" 2>/dev/null))"
 [[ "$(pyq "$s" 'd["schema"]')" == 1 ]] && okay "schema is 1" || miss "status-written-and-valid-json: schema 1 in $s"
 [[ "$(pyq "$s" 'd["ran_at"]')" == "$NOW" ]] && okay "ran_at is the tick clock" || miss "ran_at equals TICK_NOW"
-[[ "$(pyq "$s" 'sorted(d["steps"])')" == "['desk_refresh', 'presence', 'stalled_ideas', 'waiting_write']" ]] \
-  && okay "the four steps are named" || miss "steps are desk_refresh, presence, stalled_ideas, waiting_write"
+[[ "$(pyq "$s" 'sorted(d["steps"])')" == "['decided_not_built', 'desk_refresh', 'presence', 'stalled_ideas', 'waiting_write']" ]] \
+  && okay "the five steps are named" || miss "steps are decided_not_built, desk_refresh, presence, stalled_ideas, waiting_write"
 [[ "$(pyq "$s" 'all(v["status"] in ("ok","skipped","gap") for v in d["steps"].values())')" == True ]] \
   && okay "every step is ok, skipped or gap" || miss "step statuses are ok, skipped or gap"
 [[ "$(pyq "$s" 'sorted(d["due"])')" == "['dashboard', 'desk_read', 'drain']" && "$(pyq "$s" 'all(isinstance(v,bool) for v in d["due"].values())')" == True ]] \
@@ -194,6 +194,68 @@ for f in desk-snapshot.json desk-reads.jsonl dash-writer.json desk; do [[ -e "$d
 # --- no temp file left behind ---------------------------------------------------------------------------------------
 left="$(find "$d/state" -name '.loop-status*' -o -name 'loop-status.json.*' 2>/dev/null | head -1)"
 { [[ -f "$(status "$d")" ]] && [[ -z "$left" ]]; } && okay "the status is renamed into place; no temp file remains" || miss "temp file: status missing or a temp file remains ($left)"
+
+# --- decided_not_built: the seed file's rows, read into the status (aae-orc I-652, director's call) ----------------
+# $DIRECTOR_STATE/desk/decided-not-built.seed.jsonl is director's file. The step reads it and writes nothing to it.
+# Absent file: the step is skipped with a reason and the status has no "decided_not_built" key. Readable file:
+# step ok and "decided_not_built": {"count": N, "rows": [<row objects in file order>]}. A blank line is ignored.
+# A line that is not a JSON object with a non-empty string "card" makes the step a gap whose reason names the
+# 1-based line number; the valid lines are still counted and carried, and the tick still exits 0.
+seed() { mkdir -p "$1/state/desk"; printf '%s' "$2" >"$1/state/desk/decided-not-built.seed.jsonl"; }
+dnb() { pyq "$(status "$1")" "$2"; }
+FIX2=$'{"card":"ops2-desk-store","ruled":"2026-10-10"}\n{"card":"flow1027-1","note":"timer"}\n'
+
+d="$(fresh_state dnb_absent)"; tick "$d"; s="$(status "$d")"
+{ [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == skipped && "$(pyq "$s" 'len(d["steps"]["decided_not_built"]["reason"])>0')" == True \
+  && "$(pyq "$s" '"decided_not_built" in d')" == False ]]; } \
+  && okay "decided_not_built: no seed file is a skipped step with a reason and no top-level key" || miss "decided_not_built: absent seed file should be skipped with a reason and no top-level key"
+
+d="$(fresh_state dnb_two)"; seed "$d" "$FIX2"; tick "$d"; s="$(status "$d")"
+[[ "$(pyq "$s" 'd["steps"]["decided_not_built"]')" == "{'status': 'ok'}" ]] \
+  && okay "decided_not_built: a 2-row seed is an ok step" || miss "decided_not_built: a 2-row seed should be an ok step"
+[[ "$(pyq "$s" 'd["decided_not_built"]["count"]')" == 2 ]] \
+  && okay "decided_not_built: count is 2" || miss "decided_not_built: count should be 2"
+[[ "$(pyq "$s" '[r["card"] for r in d["decided_not_built"]["rows"]]')" == "['ops2-desk-store', 'flow1027-1']" ]] \
+  && okay "decided_not_built: rows keep file order" || miss "decided_not_built: rows should keep file order"
+[[ "$(pyq "$s" 'd["decided_not_built"]["rows"][0]["ruled"] + d["decided_not_built"]["rows"][1]["note"]')" == "2026-10-10timer" ]] \
+  && okay "decided_not_built: other keys ride along verbatim" || miss "decided_not_built: other row keys should be carried verbatim"
+
+d="$(fresh_state dnb_blank)"; seed "$d" $'\n{"card":"a"}\n   \n{"card":"b"}\n\n'; tick "$d"; s="$(status "$d")"
+{ [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == ok && "$(pyq "$s" 'd["decided_not_built"]["count"]')" == 2 ]]; } \
+  && okay "decided_not_built: blank lines are ignored" || miss "decided_not_built: blank lines should be ignored"
+
+d="$(fresh_state dnb_empty)"; seed "$d" ""; tick "$d"; s="$(status "$d")"
+{ [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == ok && "$(pyq "$s" 'd["decided_not_built"]')" == "{'count': 0, 'rows': []}" ]]; } \
+  && okay "decided_not_built: an empty seed is ok with count 0" || miss "decided_not_built: an empty seed should be ok with count 0 and no rows"
+
+# bad lines: line 2 is not JSON, line 3 is JSON without a card, line 4 is an array, line 5 has an empty card
+d="$(fresh_state dnb_bad)"
+seed "$d" $'{"card":"good1"}\nnot json at all\n{"note":"no card"}\n["card"]\n{"card":""}\n{"card":"good2"}\n'
+tick "$d"; s="$(status "$d")"
+{ [[ "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"]')" == gap && "$(cat "$d/rc" 2>/dev/null || echo none)" == 0 ]]; } \
+  && okay "decided_not_built: bad lines make a gap and the tick still exits 0" || miss "decided_not_built: bad lines should make a gap with exit 0"
+{ [[ "$(pyq "$s" 'all(str(n) in d["steps"]["decided_not_built"]["reason"] for n in (2,3,4,5))')" == True \
+  && "$(pyq "$s" '"line 1" in d["steps"]["decided_not_built"]["reason"] or "line 6" in d["steps"]["decided_not_built"]["reason"]')" == False ]]; } \
+  && okay "decided_not_built: the gap names line 2, 3, 4 and 5 and not the good lines" || miss "decided_not_built: the gap reason should name lines 2 to 5 and not 1 or 6"
+[[ "$(pyq "$s" '[d["decided_not_built"]["count"], [r["card"] for r in d["decided_not_built"]["rows"]]]')" == "[2, ['good1', 'good2']]" ]] \
+  && okay "decided_not_built: the valid lines are still counted and carried" || miss "decided_not_built: valid lines should still be counted and carried"
+
+# a non-UTF-8 byte in the seed is a gap, not a failed tick
+d="$(fresh_state dnb_byte)"; mkdir -p "$d/state/desk"; printf '{"card":"a"}\n{"card":"\377"}\n' >"$d/state/desk/decided-not-built.seed.jsonl"
+tick "$d"; s="$(status "$d")"
+{ [[ "$(cat "$d/rc" 2>/dev/null || echo none)" == 0 && "$(pyq "$s" 'd["steps"]["decided_not_built"]["status"] in ("ok","gap")')" == True ]]; } \
+  && okay "decided_not_built: an invalid byte in the seed leaves the tick at exit 0 with a status" || miss "decided_not_built: an invalid byte failed the tick or left no status (rc $(cat "$d/rc" 2>/dev/null || echo none))"
+
+# idempotent, and the seed is never written
+d="$(fresh_state dnb_idem)"; seed "$d" "$FIX2"; before="$(shasum -a 256 <"$d/state/desk/decided-not-built.seed.jsonl")"
+tick "$d"; cp "$(status "$d")" "$d/first.json" 2>/dev/null || : >"$d/first.json"; tick "$d"
+{ [[ -s "$d/first.json" ]] && cmp -s "$d/first.json" "$(status "$d")" && grep -q decided_not_built "$d/first.json"; } \
+  && okay "decided_not_built: two runs at one clock are byte-identical" || miss "decided_not_built: two runs at one clock differ, or the step is absent"
+{ [[ "$(shasum -a 256 <"$d/state/desk/decided-not-built.seed.jsonl")" == "$before" ]] && [[ "$(find "$d/state/desk" -type f | wc -l | tr -d ' ')" == 1 ]] \
+  && grep -q decided_not_built "$d/first.json"; } \
+  && okay "decided_not_built: the seed is byte-equal after two ticks and nothing else lands in desk/" || miss "decided_not_built: the tick wrote to the seed or to desk/, or the step is absent"
+{ ! grep -Eq '^(tmux|nats|nats-server|dash-writer) ' "$calls" && grep -q decided_not_built "$d/first.json"; } \
+  && okay "decided_not_built: the step calls no pane, bus or dashboard" || miss "decided_not_built: a pane, bus or dashboard call was logged, or the step is absent"
 
 # --- a step that prints an invalid byte is still a step -----------------------------------------------------------
 # dws and dbi run from beside the tick, so a copy of the tick sits beside fakes that write a byte that is not
