@@ -36,7 +36,9 @@ PY="$(command -v python3 || true)"
 
 work="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/director-init-verify.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$work"' EXIT
-pydir="$work/pybin"; mkdir -p "$pydir"; ln -s "$PY" "$pydir/python3"   # only python3, so no real marvel or sideshow is on the test PATH
+# Only python3 is on this dir, so no real marvel or sideshow is on the test PATH. It is a one-line exec, not a symlink: a
+# symlink here lives under scratch, where Linux keeps it in sys.executable and director-init rightly refuses it.
+pydir="$work/pybin"; mkdir -p "$pydir"; printf '#!/bin/sh\nexec "%s" "$@"\n' "$PY" >"$pydir/python3"; chmod +x "$pydir/python3"
 fail=0
 miss() { echo "MISS: $*"; fail=1; }
 
@@ -277,7 +279,7 @@ tick_path="$(cd "$here" && pwd -P)/director-tick"
 # absolute entries only, nothing under /tmp, /private/tmp or /var/folders, so it never points into a dead session's scratch.
 filter_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*|/private/var/folders|/private/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "${out:-/usr/bin:/bin}"; }
 run_path="$stubs:$pydir:/usr/bin:/bin"
-py_abs="$(env -i PATH="$pydir" python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+py_abs="$(env -i PATH="$pydir" python3 -c 'import sys; print(sys.executable)')"   # as given, never its realpath (director ruling 01M88ACQWC, revised)
 sched_fakes() {
   : >"$work/sched.log"; rm -f "$work/cron.store"
   printf '%s\n' '#!/bin/sh' 'echo "launchctl $*" >>"$SCHED_LOG"' '[ -n "$LAUNCHCTL_FAIL" ] && { echo "launchctl: load failed" >&2; exit 1; }' 'exit 0' >"$stubs/launchctl"
@@ -371,7 +373,7 @@ run "${senv[@]}" -- --schedule --scheduler launchd --yes
 # binary can be reached from these runs even if a regression called one without --yes.
 raw_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*|/private/var/folders|/private/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "$out"; }
 fresh; sched_fakes; run -- --entry-role builder
-fpy="$(env -i PATH="$stubs" "$pydir/python3" -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+fpy="$(env -i PATH="$stubs" "$pydir/python3" -c 'import sys; print(sys.executable)')"
 fpath_in="$stubs:/usr/bin:/opt/x/bin:rel/bin:.::/tmp/a:/private/tmp/b:/var/folders/c:/tmp:/bin:/Users/x/bin"
 fwant="$(raw_path "$stubs")"; fwant="${fwant:+$fwant:}/usr/bin:/opt/x/bin:/bin:/Users/x/bin"
 set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$fpath_in" "$pydir/python3" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
@@ -453,11 +455,41 @@ for bad in /private/var/folders/aa/scr4tch/python3 /var/folders/aa/scr4tch/pytho
   got="$(pyfn "print(m.resolve_interpreter(\"$bad\"))")"
   { [[ "$got" == "(None, "*"scr4tch/python3"*"run director-init with the python the tick should keep"* ]]; } || miss "R3 (a) an interpreter at $bad is refused with its path and the instruction: $got"
 done
-# (a) a symlink to a real interpreter is resolved, so the entry names the real binary and not the link
-mkdir -p "$work/lnk"; ln -sf "$(env -i PATH="$pydir" python3 -c 'import os,sys; print(os.path.realpath(sys.executable))')" "$work/lnk/python3"
-want_real="$(env -i PATH="$pydir" python3 -c 'import os,sys; print(os.path.realpath(sys.executable))')"
-got="$(pyfn "print(m.resolve_interpreter(\"$work/lnk/python3\"))")"
-[[ "$got" == "('$want_real', None)" ]] || miss "R3 (a) a symlinked interpreter resolves to the real binary $want_real: $got"
+# (a) revised: the entry keeps the interpreter as given. Homebrew's realpath is Cellar/<version>, which brew cleanup removes
+# after a patch upgrade, so a symlink from a stable path into a fake Cellar must come back as the stable path. The test
+# patches realpath: a stable non-scratch name cannot be created from the verifier's scratch-only write locations.
+got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/homebrew/bin/python3": "/opt/homebrew/Cellar/python@3.14/3.14.7/bin/python3"}.get(p, real(p))
+print(m.resolve_interpreter("/opt/homebrew/bin/python3"))')"
+[[ "$got" == "('/opt/homebrew/bin/python3', None)" ]] || miss "R3 (a) an interpreter symlinked from a stable path into a Cellar directory keeps the stable path: $got"
+# (a) refused when its realpath is scratch though its own name is not, and when its name is scratch though its realpath is not
+got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/link/python3": "/private/var/folders/aa/scr4tch/python3"}.get(p, real(p))
+print(m.resolve_interpreter("/opt/link/python3"))')"
+{ [[ "$got" == "(None, "*"scr4tch/python3"*"run director-init with the python the tick should keep"* ]]; } || miss "R3 (a) an interpreter whose realpath is under scratch is refused: $got"
+got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/tmp/scr4tch/python3": "/usr/bin/python3"}.get(p, real(p))
+print(m.resolve_interpreter("/tmp/scr4tch/python3"))')"
+{ [[ "$got" == "(None, "*"scr4tch/python3"*"run director-init with the python the tick should keep"* ]]; } || miss "R3 (a) an interpreter whose own name is under scratch is refused though its realpath is not: $got"
+# (a) end to end: the printed launchd entry and cron line carry the stable path and never the Cellar path
+case_entry_keeps_given_path() {  # <launchd|cron>
+  fresh; sched_fakes; run -- --entry-role builder
+  set +e
+  out="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:$pydir:/usr/bin:/bin" "${senv[@]}" "$PY" -I -c '
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("dinit", sys.argv[1])
+spec = importlib.util.spec_from_loader("dinit", loader); m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+m.check_profile = lambda p: (True, "")  # the real check runs sys.executable, which is faked below
+real = os.path.realpath
+os.path.realpath = lambda p: "/opt/homebrew/Cellar/python@3.14/3.14.7/bin/python3" if p == "/opt/homebrew/bin/python3" else real(p)
+sys.executable = "/opt/homebrew/bin/python3"
+sys.exit(m.main(["--schedule", "--scheduler", sys.argv[2]]))' "$BIN" "$1" 2>&1 </dev/null)"
+  rc=$?
+  set -e
+  [[ $rc -eq 0 && "$out" == *"/opt/homebrew/bin/python3"* && "$out" != *"Cellar"* && ! -s "$work/sched.log" ]]
+}
+case_entry_keeps_given_path launchd && : || miss "R7 the launchd entry names the interpreter as given (/opt/homebrew/bin/python3), never its Cellar realpath: rc=$rc out=$out"
+case_entry_keeps_given_path cron && : || miss "R7 the cron line names the interpreter as given (/opt/homebrew/bin/python3), never its Cellar realpath: rc=$rc out=$out"
 # (b) /private/var/folders is a scratch prefix, in the printed entry too
 fresh; sched_fakes; run -- --entry-role builder
 set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:/usr/bin:/private/var/folders/d:/private/var/folders:/bin" "$pydir/python3" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
@@ -469,6 +501,12 @@ os.path.realpath = lambda p: {"/opt/link/bin": "/private/var/folders/real/bin", 
 os.environ["PATH"] = "/opt/link/bin:/usr/bin:/opt/ok/bin"
 print(m.captured_path())')"
 [[ "$got" == "/usr/bin:/opt/ok/bin" ]] || miss "R5 (b) a PATH entry whose realpath is under a scratch prefix is dropped: $got"
+# (b) a clean entry whose realpath is also clean is kept as written, not as its realpath (a control: it holds before and after)
+got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/link/bin": "/opt/real/bin"}.get(p, real(p))
+os.environ["PATH"] = "/opt/link/bin:/usr/bin"
+print(m.captured_path())')"
+[[ "$got" == "/opt/link/bin:/usr/bin" ]] || miss "R5 (b) a clean PATH entry whose realpath differs is written as it was given: $got"
 # (b) the entry as written is kept for a clean entry, and a PATH of only scratch links falls back
 got="$(pyfn 'os.path.realpath = lambda p: "/private/tmp/x"
 os.environ["PATH"] = "/opt/a/bin:/opt/b/bin"
