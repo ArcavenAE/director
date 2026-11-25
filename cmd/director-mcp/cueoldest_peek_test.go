@@ -14,7 +14,7 @@ import (
 func TestCueOldestMetaStepsOverMoreDroppedMailThanTheSummaryPeekHolds(t *testing.T) {
 	r, _ := forPathRig(t)
 	sub := r.bus.global.cfg.inboxSubject()
-	for i := 0; i < summaryDefault+5; i++ {
+	for i := 0; i < summaryMax+5; i++ {
 		pubEnv(t, r.ctx, r.gjs, sub, fmt.Sprintf("drop%d", i), "INFORM", "FOR alpha-supervisor\nnot for you")
 	}
 	pubEnv(t, r.ctx, r.gjs, sub, "kept1", "INFORM", "no FOR line")
@@ -26,6 +26,26 @@ func TestCueOldestMetaStepsOverMoreDroppedMailThanTheSummaryPeekHolds(t *testing
 		t.Fatalf("oldestMeta = %v, %v; want the kept message", m, err)
 	}
 	if m.MessageID != "kept1" {
-		t.Errorf("oldestMeta names %q, want kept1 (the %d dropped messages ahead of it are not described)", m.MessageID, summaryDefault+5)
+		t.Errorf("oldestMeta names %q, want kept1 (the %d dropped messages ahead of it are not described)", m.MessageID, summaryMax+5)
+	}
+}
+
+// The same read on the one tier the pending tracker found oldest. It has its own
+// peek bound, so it gets its own case; with the oldest-message read fixed, a
+// bound left at summaryDefault here is rescued by its fallback, so this pins the
+// result and not the bound on its own.
+func TestCueOldestMetaOnGlobalStepsOverMoreDroppedMailThanTheSummaryPeekHolds(t *testing.T) {
+	r, _ := forPathRig(t)
+	sub := r.bus.global.cfg.inboxSubject()
+	for i := 0; i < summaryMax+5; i++ {
+		pubEnv(t, r.ctx, r.gjs, sub, fmt.Sprintf("drop%d", i), "INFORM", "FOR alpha-supervisor\nnot for you")
+	}
+	pubEnv(t, r.ctx, r.gjs, sub, "kept1", "INFORM", "no FOR line")
+	m, err := busCueSource{r.bus}.oldestMetaOn(r.ctx, "global")
+	if err != nil || m == nil {
+		t.Fatalf("oldestMetaOn(global) = %v, %v; want the kept message", m, err)
+	}
+	if m.MessageID != "kept1" {
+		t.Errorf("oldestMetaOn(global) names %q, want kept1", m.MessageID)
 	}
 }
