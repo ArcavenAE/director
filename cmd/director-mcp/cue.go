@@ -714,7 +714,7 @@ func (s busCueSource) oldestMeta(ctx context.Context) (*cueMeta, error) {
 		if g, gerr := s.b.globalReady(ctx); gerr == nil {
 			// The oldest message is the oldest one the seat will be handed: mail the
 			// FOR filter will drop is not described, as the count leaves it out.
-			gitems, _, _, gerr := peekWaiting(ctx, g.js, g.cons(), "global", summaryDefault)
+			gitems, _, _, gerr := peekWaiting(ctx, g.js, g.cons(), "global", cueFilterPeekMax)
 			if gerr == nil {
 				gitems, _ = g.leaveOutForeign(ctx, gitems)
 			}
