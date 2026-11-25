@@ -274,7 +274,7 @@ for mode in 1 0; do
   rc=0; env -i HOME="$d/home" TMPDIR="$d/tmp" PATH="$bin:$pydir:/usr/bin:/bin" LANG=C DIRECTOR_STATE="$d/state" CALLS_LOG="$calls" TICK_NOW="$NOW" \
     "$d/beside/director-tick" >"$d/out" 2>"$d/err" || rc=$?
   s="$(status "$d")"
-  { [[ "$rc" == 0 ]] && [[ "$(pyq "$s" 'all(v["status"]=="ok" or (v["status"]=="gap" and len(v["reason"])>0) for v in d["steps"].values())')" == True ]] \
+  { [[ "$rc" == 0 ]] && [[ "$(pyq "$s" 'all(v["status"]=="ok" or (v["status"] in ("gap","skipped") and len(v["reason"])>0) for k,v in d["steps"].items() if k=="decided_not_built") and all(v["status"]=="ok" or (v["status"]=="gap" and len(v["reason"])>0) for k,v in d["steps"].items() if k!="decided_not_built")')" == True ]] \
     && [[ "$(pyq "$s" 'd["steps"]["desk_refresh"]["status"] in ("ok","gap")')" == True ]]; } \
     && okay "invalid output bytes from dws and dbi (exit $mode) leave the tick at exit 0 with a status" \
     || miss "invalid-byte: a step printing a non-UTF-8 byte (exit $mode) failed the tick or left no status (rc $rc: $(head -c 160 "$d/err" 2>/dev/null))"

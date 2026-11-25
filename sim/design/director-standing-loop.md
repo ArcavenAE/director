@@ -74,8 +74,16 @@ temporary name and renamed, with this shape:
 ```
 
 The steps, in order: `desk_refresh` (`dws refresh --local`), `waiting_write`
-(`dws waiting write`), `stalled_ideas` (`dbi --json`) and `presence`
-(`director-mcp roster --json`, whose rows give `seats`). A step that fails is a
+(`dws waiting write`), `stalled_ideas` (`dbi --json`), `presence`
+(`director-mcp roster --json`, whose rows give `seats`) and `decided_not_built`
+(the rows of `desk/decided-not-built.seed.jsonl`, director's file, which the tick
+reads and never writes). That step is skipped when the file is absent. When it
+exists the status gains `"decided_not_built": {"count": N, "rows": [...]}`, each
+row an object with a non-empty string `card` and optional `ruled_at` and
+`forward` (a `bd:`, `pr:` or `finding:` edge), carried verbatim in file order. A
+line that is not valid UTF-8, not a JSON object or without a `card` makes the
+step a gap with one `line <n>: <why>` entry per bad line, and the good lines are
+still carried. A step that fails is a
 gap carrying the first line of its error, and never fails the tick. A step whose
 tool is not installed is skipped, with that reason. A fifth step, `profile`,
 appears only when the profile is refused. When `director-profile check` refuses
