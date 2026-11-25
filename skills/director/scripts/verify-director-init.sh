@@ -505,6 +505,29 @@ sys.exit(m.main(["--schedule", "--scheduler", sys.argv[2]]))' "$BIN" "$1" 2>&1 <
 }
 case_entry_keeps_given_path launchd && : || miss "R7 the launchd entry names the interpreter as given (/opt/homebrew/bin/python3), never its Cellar realpath: rc=$rc out=$out"
 case_entry_keeps_given_path cron && : || miss "R7 the cron line names the interpreter as given (/opt/homebrew/bin/python3), never its Cellar realpath: rc=$rc out=$out"
+# mutants for the revised rule: each one-replacement copy of director-init must make a case above fail
+saved_bin="$BIN"
+run_r_cases() {  # R3 (a) Cellar and absolute, R5 clean entry, R7: prints a MISS-free run as rc 0, any failure as rc 1
+  local r=0 got
+  got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/homebrew/bin/python3": "/opt/homebrew/Cellar/python@3.14/3.14.7/bin/python3"}.get(p, real(p))
+print(m.resolve_interpreter("/opt/homebrew/bin/python3"))')"
+  [[ "$got" == "('/opt/homebrew/bin/python3', None)" ]] || r=1
+  got="$(pyfn 'print(m.resolve_interpreter(""))')"; [[ "$got" == "(None, "*"absolute"* ]] || r=1
+  got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/link/bin": "/opt/real/bin"}.get(p, real(p))
+os.environ["PATH"] = "/opt/link/bin:/usr/bin"
+print(m.captured_path())')"
+  [[ "$got" == "/opt/link/bin:/usr/bin" ]] || r=1
+  case_entry_keeps_given_path launchd || r=1
+  case_entry_keeps_given_path cron || r=1
+  return $r
+}
+mpath="$(init_mutant writes_realpath '    return executable, None
+' '    return real, None
+')" && { BIN="$mpath"; if run_r_cases; then miss "mutant writes_realpath survives: no case caught the interpreter written as its realpath"; else echo "ok  mutant writes_realpath is caught by R3 and R7"; fi; BIN="$saved_bin"; }
+mpath="$(init_mutant ignores_isabs 'if not isinstance(executable, str) or not os.path.isabs(executable):' 'if not isinstance(executable, str):')" && { BIN="$mpath"; if run_r_cases; then miss "mutant ignores_isabs survives: an empty interpreter is accepted"; else echo "ok  mutant ignores_isabs is caught by R3"; fi; BIN="$saved_bin"; }
+mpath="$(init_mutant writes_realpath_entry '        keep.append(e)' '        keep.append(os.path.realpath(e))')" && { BIN="$mpath"; if run_r_cases; then miss "mutant writes_realpath_entry survives: a PATH entry written as its realpath"; else echo "ok  mutant writes_realpath_entry is caught by R5"; fi; BIN="$saved_bin"; }
 # (b) /private/var/folders is a scratch prefix, in the printed entry too
 fresh; sched_fakes; run -- --entry-role builder
 set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:/usr/bin:/private/var/folders/d:/private/var/folders:/bin" "$pydir/python3" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e

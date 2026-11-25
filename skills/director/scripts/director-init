@@ -25,7 +25,7 @@ director's rulings of 2026-11-12 recorded on that ticket). It does five things:
 
 --schedule (slice 16 of sim/design/director-standing-loop.md, operator card i652r-2, choice 1) is
 opt-in per install. It needs an existing profile. It prints the entry that would run `director-tick`
-(the one beside this script), on the python3 that ran this script (resolved with realpath; refused when it is under a scratch directory) and
+(the one beside this script), on the python3 that ran this script (named as given, never by its realpath; refused when it or its realpath is under a scratch directory) and
 with the PATH captured now (absolute entries only, none under or resolving into /tmp, /private/tmp,
 /var/folders or /private/var/folders, else /usr/bin:/bin), every
 [loop] tick_interval minutes (30 by default) on the host's
@@ -367,12 +367,19 @@ def captured_path():
 
 
 def resolve_interpreter(executable):
-    """(real path, None), or (None, why) when the resolved interpreter is under a scratch directory."""
+    """(path, None), or (None, why). The entry names the interpreter as given and never its realpath: Homebrew's realpath
+    is Cellar/<version>, which brew cleanup removes after a patch upgrade, so a resolved path would stop the tick
+    starting. realpath is used only to test for a scratch directory, since a symlink into one dies with the session.
+    The path must be absolute, because nothing else makes a written name absolute."""
+    if not isinstance(executable, str) or not os.path.isabs(executable):
+        return None, ("the python3 running director-init has no absolute path (%r); "
+                      "run director-init with the python the tick should keep" % (executable,))
     real = os.path.realpath(executable)
-    if is_scratch(real):
-        return None, ("the python3 running director-init is under a scratch directory (%s), which will not outlast this session; "
-                      "run director-init with the python the tick should keep" % real)
-    return real, None
+    for path in (executable, real):
+        if is_scratch(path):
+            return None, ("the python3 running director-init is under a scratch directory (%s), which will not outlast this session; "
+                          "run director-init with the python the tick should keep" % path)
+    return executable, None
 
 
 def plist_text(tick, minutes, python, path):
