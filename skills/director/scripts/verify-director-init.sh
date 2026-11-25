@@ -273,12 +273,17 @@ set -e
 # launchctl, crontab and systemctl are fakes that only log; the crontab fake keeps its table in a scratch file.
 # Nothing installs on a real host: every run is env -i with the scratch HOME, and the plist path is under it.
 tick_path="$(cd "$here" && pwd -P)/director-tick"
+# The entry names the interpreter that ran director-init and a PATH captured at install (director ruling 01M887991M):
+# absolute entries only, nothing under /tmp, /private/tmp or /var/folders, so it never points into a dead session's scratch.
+filter_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "${out:-/usr/bin:/bin}"; }
+run_path="$stubs:$pydir:/usr/bin:/bin"
+py_abs="$(env -i PATH="$pydir" python3 -c 'import sys; print(sys.executable)')"
 sched_fakes() {
   : >"$work/sched.log"; rm -f "$work/cron.store"
   printf '%s\n' '#!/bin/sh' 'echo "launchctl $*" >>"$SCHED_LOG"' 'exit 0' >"$stubs/launchctl"
   printf '%s\n' '#!/bin/sh' 'echo "systemctl $*" >>"$SCHED_LOG"' 'exit 0' >"$stubs/systemctl"
   printf '%s\n' '#!/bin/sh' 'echo "crontab $*" >>"$SCHED_LOG"' 'case "$1" in' \
-    '  -l) if [ -f "$CRON_STORE" ]; then cat "$CRON_STORE"; else echo "no crontab for user" >&2; exit 1; fi ;;' \
+    '  -l) if [ -n "$CRON_FAIL" ]; then echo "crontab: permission denied" >&2; exit 1; elif [ -f "$CRON_STORE" ]; then cat "$CRON_STORE"; else echo "no crontab for user" >&2; exit 1; fi ;;' \
     '  -) cat >"$CRON_STORE" ;;' '  *) exit 2 ;;' 'esac' >"$stubs/crontab"
   chmod +x "$stubs/launchctl" "$stubs/systemctl" "$stubs/crontab"
 }
@@ -293,14 +298,17 @@ h0="$(hash_tree)"; : >"$work/sched.log"
 run "${senv[@]}" -- --schedule --scheduler launchd
 { [[ $rc -eq 0 && "$out" == *"com.arcaven.director-tick"* && "$out" == *"<key>StartInterval</key>"* && "$out" == *"<integer>1800</integer>"* && "$out" == *"$tick_path"* ]]; } \
   || miss "S1 --schedule on launchd prints the entry (label, StartInterval 1800, the tick path $tick_path) and exits 0: rc=$rc out=$out"
+[[ "$out" == *"<string>$py_abs</string>"*"<string>$tick_path</string>"* ]] || miss "F1 the plist runs the interpreter that ran director-init ($py_abs) on the tick: $out"
+[[ "$out" == *"<key>EnvironmentVariables</key>"* && "$out" == *"<key>PATH</key>"* && "$out" == *"<string>$(filter_path "$stubs:$pydir:/usr/bin:/bin")</string>"* ]] || miss "F1 the plist carries the captured PATH, filtered: $out"
 { [[ ! -e "$plist" && ! -d "$home/Library" && "$(hash_tree)" == "$h0" && ! -s "$work/sched.log" ]]; } \
   || miss "S1 without --yes nothing is written and no scheduler tool is called: $(tr '\n' ';' <"$work/sched.log")"
 
 # S2: cron, no --yes
 fresh; sched_fakes; run -- --entry-role builder; h0="$(hash_tree)"; : >"$work/sched.log"
 run "${senv[@]}" -- --schedule --scheduler cron
-{ [[ $rc -eq 0 && "$out" == *"*/30 * * * * $tick_path # director-tick"* ]]; } || miss "S2 --schedule on cron prints one marked line every 30 minutes: rc=$rc out=$out"
-{ [[ ! -e "$work/cron.store" && "$(calls 'crontab -$')" == 0 && "$(hash_tree)" == "$h0" ]]; } || miss "S2 without --yes the crontab is not written: $(tr '\n' ';' <"$work/sched.log")"
+cronline="*/30 * * * * PATH=$(filter_path "$stubs:$pydir:/usr/bin:/bin") $py_abs $tick_path # director-tick"
+{ [[ $rc -eq 0 && "$out" == *"$cronline"* ]]; } || miss "S2 --schedule on cron prints one marked line every 30 minutes, with the interpreter ($py_abs) and the captured PATH: rc=$rc out=$out want=$cronline"
+{ [[ ! -e "$work/cron.store" && ! -s "$work/sched.log" && "$(hash_tree)" == "$h0" ]]; } || miss "S2 without --yes no scheduler tool is called and nothing is written (F4): $(tr '\n' ';' <"$work/sched.log")"
 
 # S3: --schedule alone picks the host's scheduler: launchd on Darwin, cron elsewhere
 fresh; sched_fakes; run -- --entry-role builder; : >"$work/sched.log"
@@ -320,8 +328,9 @@ ls "$state"/operating-profile.toml.bak-* >/dev/null 2>&1 || miss "S4 a backup of
 
 # S5: --yes on cron appends one marked line and keeps every other line
 fresh; sched_fakes; run -- --entry-role builder; printf '0 3 * * * /usr/bin/true\n' >"$work/cron.store"; : >"$work/sched.log"
+cronline="*/30 * * * * PATH=$(filter_path "$stubs:$pydir:/usr/bin:/bin") $py_abs $tick_path # director-tick"
 run "${senv[@]}" -- --schedule --scheduler cron --yes
-{ [[ $rc -eq 0 && "$(grep -c '# director-tick' "$work/cron.store")" == 1 && "$(grep -c '/usr/bin/true' "$work/cron.store")" == 1 && "$(grep -c "\*/30 \* \* \* \* $tick_path # director-tick" "$work/cron.store")" == 1 ]]; } \
+{ [[ $rc -eq 0 && "$(grep -c '# director-tick' "$work/cron.store")" == 1 && "$(grep -c '/usr/bin/true' "$work/cron.store")" == 1 && "$(grep -cF "$cronline" "$work/cron.store")" == 1 ]]; } \
   || miss "S5 --yes on cron adds exactly one marked line and keeps the others: rc=$rc store=$(cat "$work/cron.store" 2>/dev/null)"
 grep -q '^scheduler = "cron"' "$prof" || miss "S5 the profile records scheduler = \"cron\""
 
@@ -355,6 +364,34 @@ fresh; sched_fakes; run -- --entry-role builder; plist="$home/Library/LaunchAgen
 mkdir -p "$home/Library/LaunchAgents"; printf 'someone else\n' >"$plist"; : >"$work/sched.log"
 run "${senv[@]}" -- --schedule --scheduler launchd --yes
 { [[ $rc -eq 1 && "$(cat "$plist")" == "someone else" && "$(calls 'launchctl load')" == 0 ]]; } || miss "S10 a different plist at the path is refused and left alone: rc=$rc out=$out"
+
+# F1: the PATH captured in the entry keeps absolute entries and drops relative ones and scratch directories
+fresh; sched_fakes; run -- --entry-role builder
+set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="/usr/bin:/opt/x/bin:rel/bin:.::/tmp/a:/private/tmp/b:/var/folders/c:/tmp:/bin:/Users/x/bin" "$PY" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
+{ [[ $frc -eq 0 && "$fout" == *"PATH=/usr/bin:/opt/x/bin:/bin:/Users/x/bin $py_abs $tick_path # director-tick"* ]]; } || miss "F1 the captured PATH drops relative entries, empty entries and anything under /tmp, /private/tmp or /var/folders: rc=$frc out=$fout"
+# an all-scratch PATH falls back to /usr/bin:/bin
+set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="/tmp/a:rel" "$PY" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
+[[ "$fout" == *"PATH=/usr/bin:/bin "* ]] || miss "F1 a PATH with nothing usable falls back to /usr/bin:/bin: rc=$frc out=$fout"
+
+# F2: the profile edit is checked before anything is installed
+fresh; sched_fakes; run -- --entry-role builder; sed -i.bak 's/^schema_version = 1$/schema_version = 1\nloop.tick_interval = 5/' "$prof"; rm -f "$prof.bak"
+[[ "$(check_profile "$prof")" == "profile ok"* ]] || miss "F2 setup: the dotted-key profile is valid on its own: $(check_profile "$prof")"
+plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"; p0="$(sum_of "$prof")"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler launchd --yes
+{ [[ $rc -eq 1 && ! -e "$plist" && "$(calls 'launchctl load')" == 0 && "$(sum_of "$prof")" == "$p0" ]]; } || miss "F2 a profile edit that fails director-profile check installs nothing and leaves the profile alone: rc=$rc out=$out $(tr '\n' ';' <"$work/sched.log")"
+
+# F3: cron with no crontab yet installs; a crontab -l that fails for another reason touches nothing
+fresh; sched_fakes; run -- --entry-role builder; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 0 && "$(grep -c '# director-tick' "$work/cron.store" 2>/dev/null || true)" == 1 ]]; } || miss "F3 with no crontab at all, --yes installs one marked line: rc=$rc out=$out"
+fresh; sched_fakes; run -- --entry-role builder; printf '0 3 * * * /usr/bin/true\n' >"$work/cron.store"; c0="$(sum_of "$work/cron.store")"; p0="$(sum_of "$prof")"; : >"$work/sched.log"
+run "${senv[@]}" CRON_FAIL=1 -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 1 && "$(sum_of "$work/cron.store")" == "$c0" && "$(calls 'crontab -$')" == 0 && "$(sum_of "$prof")" == "$p0" && "$out" == *"permission denied"* ]]; } || miss "F3 a failing crontab -l is refused with its message, writes no crontab and no profile: rc=$rc out=$out"
+
+# a commented-out or renamed user line that merely mentions the mark does not block the install
+fresh; sched_fakes; run -- --entry-role builder; printf '# old note: # director-tick was here\n#*/5 * * * * /x/director-tick # director-tick\n0 3 * * * /usr/bin/true # director-tick-cleanup\n' >"$work/cron.store"
+run "${senv[@]}" -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 0 && "$(grep -c ' # director-tick$' "$work/cron.store")" == 2 && "$(grep -c 'director-tick-cleanup' "$work/cron.store")" == 1 ]]; } || miss "F-open a line that only mentions the mark (commented out, or director-tick-cleanup) does not block the install: rc=$rc out=$out store=$(cat "$work/cron.store")"
 
 # ---- the python rule ----
 fresh
