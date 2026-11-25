@@ -314,7 +314,7 @@ run "${senv[@]}" -- --schedule --scheduler launchd --yes
 { [[ $rc -eq 0 && -f "$plist" ]] && grep -q "$tick_path" "$plist" && grep -q '<integer>1800</integer>' "$plist"; } || miss "S4 --yes writes the plist with the tick path and 1800 seconds: rc=$rc out=$out"
 [[ "$(calls "launchctl load -w $plist")" == 1 ]] || miss "S4 launchctl load -w <plist> is called once: $(tr '\n' ';' <"$work/sched.log")"
 grep -q '^scheduler = "launchd"' "$prof" && grep -q '^\[loop\]' "$prof" || miss "S4 the profile records scheduler = \"launchd\" under [loop]: $(cat "$prof")"
-[[ "$(check_profile "$prof")" != *"loop.scheduler"* ]] || miss "S4 the profile still passes director-profile check: $(check_profile "$prof")"
+[[ "$(check_profile "$prof")" == "profile ok"* && "$(check_profile "$prof")" != *"must be"* ]] || miss "S4 the profile still passes director-profile check: $(check_profile "$prof")"
 ls "$state"/operating-profile.toml.bak-* >/dev/null 2>&1 || miss "S4 a backup of the profile is kept before it changes"
 [[ "$(calls systemctl)" == 0 ]] || miss "S4 systemctl is never called"
 
