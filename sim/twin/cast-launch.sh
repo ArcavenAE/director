@@ -445,10 +445,20 @@ fi
 echo "cast-launch: $MARVEL_SESSION -> role/$WROLE identity=${IDENTITY:-none} as agent://$DIRECTOR_TEAM/$DIRECTOR_AGENT_ID${GLOBAL_ADDR:+ and $GLOBAL_ADDR} on $NATS_URL, cwd $TWIN_CWD$cue_note$devch_note$bedrock_note" >&2
 # The role mark (aae-orc-20062): this pid survives the exec, so it is the
 # shim's parent pid; the shim holds a director identity only with it.
+# Supervisor casts (research-supervisors too) may read and type into the panes
+# they supervise without a classifier prompt: the operator's ruling of
+# 2026-11-25, "I want you to get ALL supervisors the ability to marvel
+# capture/marvel inject". An allow rule, so the auto mode classifier is not
+# asked; a deny rule elsewhere still wins.
+sup_args=()
+if [[ "$GROLE" == supervisor ]]; then
+  sup_args=(--allowedTools "Bash(marvel capture:*)" --allowedTools "Bash(marvel inject:*)")
+fi
 export DIRECTOR_ROLE_MARK=$$
 exec claude -n "$DIRECTOR_AGENT_ID" \
   --strict-mcp-config --mcp-config "$mcp_json" \
   --append-system-prompt "$prompt" \
   "$@" \
   ${settings_args[@]+"${settings_args[@]}"} \
+  ${sup_args[@]+"${sup_args[@]}"} \
   ${cue_args[@]+"${cue_args[@]}"}
