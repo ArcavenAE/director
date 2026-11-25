@@ -229,3 +229,31 @@ func TestBrokerDrainReturnedBatchCarriesTiersAndTheLine(t *testing.T) {
 		t.Errorf("fact_line = %v, want %q", m["fact_line"], "no board change; no reply owed")
 	}
 }
+
+// The single-message wait keeps its shape: no tier, reason or fact line (aae-orc-b0uw2, reading 1, accepted by the
+// supervisor at 01M88ZXYWY; guard owed with the green by the architect's Red Gate, F2).
+func TestBrokerSingleWaitKeepsItsShape(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	t.Setenv("DIRECTOR_STATE", t.TempDir())
+	t.Setenv("RELAY_LOG", filepath.Join(t.TempDir(), "none.md"))
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	bus, err := connect(ctx, url, Sender{AgentID: "operator", Workspace: "aae-orc", Team: "ops"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bus.close()
+	pubEnv(t, ctx, js, "agent.aae-orc.ops.operator.inbox", "one", "INFORM", "status: working")
+	m := drainJSON(t, ctx, bus, `{"timeout_seconds":2}`)
+	for _, k := range []string{"proposed_tier", "reason", "fact_line"} {
+		if _, has := m[k]; has {
+			t.Errorf("single form carries %q: %v", k, m)
+		}
+	}
+	if inner, _ := m["message"].(map[string]any); inner == nil {
+		t.Fatalf("single form lost its message: %v", m)
+	} else if _, has := inner["proposed_tier"]; has {
+		t.Errorf("single form message carries proposed_tier: %v", inner)
+	}
+}
