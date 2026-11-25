@@ -225,9 +225,11 @@ def main():
     start = time.monotonic()
     pane.until = start + after
     still_shown = True
+    read_any = False
     while True:
         text = pane.capture()
         if text is not None:  # an unknown capture keeps the last real verdict
+            read_any = True
             still_shown = classify(text)[0] != "other" or TITLE in text
         if text is not None and not still_shown and pane.composer_empty(checker):
             say("devch: dismissed, composer reached")
@@ -235,7 +237,9 @@ def main():
         if time.monotonic() - start >= after:
             break
         time.sleep(poll)
-    if still_shown:
+    if not read_any:
+        say("devch: the screen could not be read after the press")
+    elif still_shown:
         say("devch: dialog still shown after the press")
     else:
         say("devch: dialog gone but the composer was not reached")

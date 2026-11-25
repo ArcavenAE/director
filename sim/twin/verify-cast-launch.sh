@@ -699,6 +699,7 @@ echo "$*" >> "$FAKE/calls"
 while [[ "${1:-}" == -S || "${1:-}" == -L ]]; do shift 2; done
 case "${1:-}" in
   capture-pane) [[ -f "$FAKE/hang_capture" ]] && sleep 8
+                [[ -f "$FAKE/fail_capture_after_press" && -f "$FAKE/keys" ]] && exit 1
                 if [[ -f "$FAKE/late_dialog" && ! -f "$FAKE/slept" ]]; then touch "$FAKE/slept"; sleep 1.7; fi
                 [[ -f "$FAKE/slow_capture" && -f "$FAKE/keys" ]] && sleep 0.3
                 if [[ -f "$FAKE/pressed" ]]; then cat "$FAKE/after"; else cat "$FAKE/before"; fi ;;
@@ -791,6 +792,16 @@ hrun 5
 [[ "$hrc" == 3 && "$(nkeys)" == 1 && "$hout" == *"devch: dialog still shown after the press"* ]] \
   && ok "devch: a slow last capture does not turn a dialog that stays into one that went" \
   || bad "devch: dialog stays, slow last capture" "rc=$hrc keys=$(nkeys) out=$hout"
+
+# the key is sent and every capture after it fails: the screen after the press was never
+# seen, so the helper must say it could not read it and must not claim the dialog is
+# still shown. One key, exit 3.
+hreset; good_dialog > "$fake/before"; : > "$fake/fail_capture_after_press"
+hrun 5
+[[ "$hrc" == 3 && "$(nkeys)" == 1 && "$hout" == *"devch: the screen could not be read after the press"* \
+   && "$hout" != *"dialog still shown"* ]] \
+  && ok "devch: unreadable captures after the press are not reported as a dialog still shown" \
+  || bad "devch: unreadable after the press" "rc=$hrc keys=$(nkeys) out=$hout"
 
 # the dialog goes but no composer appears: reported, exit 3
 hreset; good_dialog > "$fake/before"; printf '%s\n' ' starting up' > "$fake/after"
