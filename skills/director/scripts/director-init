@@ -3,6 +3,7 @@
 
   director-init [--profile FILE] [--entry-role ROLE] [--team GLOB=ROLE]... [--yes]
   director-init --check [--profile FILE]
+  director-init --schedule [--scheduler launchd|cron] [--profile FILE] [--yes]
 
 First build (aae-orc-d2sol, sim/design/director-bootstrap.md section 4a.2, and
 director's rulings of 2026-11-12 recorded on that ticket). It does five things:
@@ -22,7 +23,17 @@ director's rulings of 2026-11-12 recorded on that ticket). It does five things:
   5. --check re-reads all of it and prints one "drift:" line per fault, writing
      nothing. Exit 1 on drift, 0 when clean.
 
-It installs nothing: the launcher is install.sh's. Not in the first build, and
+--schedule (slice 16 of sim/design/director-standing-loop.md, operator card i652r-2, choice 1) is
+opt-in per install. It needs an existing profile. It prints the entry that would run `director-tick`
+(the one beside this script) every [loop] tick_interval minutes (30 by default) on the host's
+scheduler: launchd on Darwin (a user agent, StartInterval), cron elsewhere (one line marked
+`# director-tick`), or the one --scheduler names. Without --yes that is all it does: it writes
+nothing and calls no scheduler tool. With --yes it installs the entry (launchctl load -w, or
+crontab with the old lines kept), then records [loop] scheduler in the profile atomically, with
+the backup. A second --yes changes nothing; a different file at the plist path is refused. A
+systemd timer is not built, and neither is an uninstall: the owner removes the plist or the cron line.
+
+Plain director-init never installs a schedule: the launcher is install.sh's. Not in the first build, and
 refused as such: --manifests.
 
 Exit: 0 ok, 1 refused or drift, 2 usage or an interpreter that is too old.
@@ -317,13 +328,203 @@ def do_check(opts):
     return 1 if drift else 0
 
 
+# ---- --schedule (slice 16) ----
+
+SCHEDULE_LABEL = "com.arcaven.director-tick"
+CRON_MARK = "# director-tick"
+DEFAULT_TICK_MINUTES = 30
+
+
+def tick_minutes(target):
+    """tick_interval from the profile's [loop], else the default (director-profile check has passed it)."""
+    with open(target, "rb") as fh:
+        n = tomllib.load(fh).get("loop", {}).get("tick_interval", DEFAULT_TICK_MINUTES)
+    return n
+
+
+def plist_text(tick, minutes):
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0">\n<dict>\n'
+        "  <key>Label</key>\n  <string>%s</string>\n"
+        "  <key>ProgramArguments</key>\n  <array>\n    <string>%s</string>\n  </array>\n"
+        "  <key>StartInterval</key>\n  <integer>%d</integer>\n"
+        "</dict>\n</plist>\n" % (SCHEDULE_LABEL, tick, minutes * 60)
+    )
+
+
+def cron_line(tick, minutes):
+    return "*/%d * * * * %s %s" % (minutes, tick, CRON_MARK)
+
+
+def set_loop_scheduler(text, kind):
+    """The profile text with [loop] scheduler set to kind: the line replaced, added under [loop], or a [loop] table appended."""
+    line = 'scheduler = "%s"' % kind
+    lines = text.splitlines()
+    table, header_at = None, None
+    for i, raw in enumerate(lines):
+        stripped = raw.strip()
+        if stripped.startswith("["):
+            table = stripped
+            if stripped == "[loop]":
+                header_at = i
+        elif table == "[loop]" and re.match(r"^scheduler\s*=", stripped):
+            lines[i] = line
+            return "\n".join(lines) + "\n"
+    if header_at is not None:
+        lines.insert(header_at + 1, line)
+        return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n\n[loop]\n" + line + "\n"
+
+
+def write_profile_scheduler(target, kind):
+    """Atomically set scheduler in the profile, after check passes, keeping a backup. Returns (changed, backup)."""
+    with open(target, encoding="utf-8") as fh:
+        old = fh.read()
+    new = set_loop_scheduler(old, kind)
+    if new == old:
+        return False, None
+    fd, tmp = tempfile.mkstemp(prefix=".operating-profile.", suffix=".tmp", dir=os.path.dirname(os.path.abspath(target)))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(new)
+            fh.flush()
+            os.fsync(fh.fileno())
+        ok, shown = check_profile(tmp)
+        if not ok:
+            err("the profile with the scheduler set does not pass director-profile check:")
+            sys.stderr.write(shown)
+            return None, None
+        saved = backup(target)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, target)
+        tmp = None
+    finally:
+        if tmp and os.path.exists(tmp):
+            os.unlink(tmp)
+    return True, saved
+
+
+def default_scheduler():
+    return "launchd" if sys.platform == "darwin" else "cron"
+
+
+def install_launchd(tick, minutes):
+    path = os.path.join(home(), "Library", "LaunchAgents", SCHEDULE_LABEL + ".plist")
+    want = plist_text(tick, minutes)
+    if os.path.exists(path):
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            have = fh.read()
+        if have == want:
+            print("already installed: %s" % path)
+            return True
+        err("a different file is already at %s; it is left alone (remove it first to install this entry)" % path)
+        return False
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".plist.", suffix=".tmp", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(want)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+        tmp = None
+    finally:
+        if tmp and os.path.exists(tmp):
+            os.unlink(tmp)
+    try:
+        res = subprocess.run(["launchctl", "load", "-w", path], capture_output=True, text=True, timeout=TOOL_TIMEOUT)
+        loaded = res.returncode == 0
+        why = (res.stderr or res.stdout).strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        loaded, why = False, str(e)
+    if not loaded:
+        os.unlink(path)
+        err("launchctl load -w %s failed (%s); the plist was removed again" % (path, why or "no message"))
+        return False
+    print("installed: %s" % path)
+    return True
+
+
+def install_cron(tick, minutes):
+    line = cron_line(tick, minutes)
+    try:
+        res = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=TOOL_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        err("crontab -l failed: %s" % e)
+        return False
+    if res.returncode == 0:
+        old = res.stdout
+    elif "no crontab" in res.stderr.lower():
+        old = ""
+    else:
+        err("crontab -l failed (exit %d): %s" % (res.returncode, res.stderr.strip()))
+        return False
+    marked = [l for l in old.splitlines() if CRON_MARK in l]
+    if marked:
+        if marked == [line]:
+            print("already installed: one %s line in the crontab" % CRON_MARK)
+            return True
+        err("the crontab already has a %s line that differs from this entry; it is left alone" % CRON_MARK)
+        return False
+    new = old + ("" if old == "" or old.endswith("\n") else "\n") + line + "\n"
+    try:
+        res = subprocess.run(["crontab", "-"], input=new, capture_output=True, text=True, timeout=TOOL_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        err("crontab - failed: %s" % e)
+        return False
+    if res.returncode != 0:
+        err("crontab - failed (exit %d): %s" % (res.returncode, res.stderr.strip()))
+        return False
+    print("installed: one %s line added to the crontab" % CRON_MARK)
+    return True
+
+
+def do_schedule(opts):
+    target = profile_path(opts["profile"])
+    if not os.path.isfile(target):
+        err("no profile at %s (run director-init first)" % target)
+        return 1
+    ok, shown = check_profile(target)
+    if not ok:
+        err("the profile does not pass director-profile check:")
+        sys.stderr.write(shown)
+        return 1
+    kind = opts["scheduler"] or default_scheduler()
+    if kind not in ("launchd", "cron"):
+        err("--scheduler must be launchd or cron (a systemd timer is not built)")
+        return 2
+    minutes = tick_minutes(target)
+    if kind == "cron" and not 1 <= minutes <= 59:
+        err("cron cannot run every %d minutes from tick_interval: it must be 1 to 59 (the limit of */N); nothing installed" % minutes)
+        return 1
+    tick = os.path.join(os.path.dirname(os.path.realpath(__file__)), "director-tick")
+    entry = plist_text(tick, minutes) if kind == "launchd" else cron_line(tick, minutes) + "\n"
+    print("scheduler: %s, every %d minutes, running %s" % (kind, minutes, tick))
+    sys.stdout.write(entry)
+    if not opts["yes"]:
+        print("not installed: pass --yes to install this entry and record scheduler = \"%s\" in %s" % (kind, target))
+        return 0
+    if not (install_launchd(tick, minutes) if kind == "launchd" else install_cron(tick, minutes)):
+        return 1
+    changed, saved = write_profile_scheduler(target, kind)
+    if changed is None:
+        return 1
+    if changed:
+        print("profile: scheduler = \"%s\" in %s" % (kind, target))
+        print("backup kept: %s" % saved)
+    return 0
+
+
 def usage():
-    err("usage: director-init [--profile FILE] [--entry-role ROLE] [--team GLOB=ROLE]... [--yes] | --check [--profile FILE]")
+    err("usage: director-init [--profile FILE] [--entry-role ROLE] [--team GLOB=ROLE]... [--yes] | --check [--profile FILE] | --schedule [--scheduler launchd|cron] [--profile FILE] [--yes]")
     return 2
 
 
 def main(argv):
-    opts = {"profile": None, "teams": [], "yes": False, "check": False}
+    opts = {"profile": None, "teams": [], "yes": False, "check": False, "schedule": False, "scheduler": None}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -334,7 +535,9 @@ def main(argv):
             opts["check"] = True
         elif a == "--yes":
             opts["yes"] = True
-        elif a in ("--profile", "--entry-role", "--team", "--manifests"):
+        elif a == "--schedule":
+            opts["schedule"] = True
+        elif a in ("--profile", "--scheduler", "--entry-role", "--team", "--manifests"):
             if a == "--manifests":
                 err("not in the first build: --manifests")
                 return 2
@@ -343,11 +546,17 @@ def main(argv):
             i += 1
             if a == "--profile":
                 opts["profile"] = argv[i]
+            elif a == "--scheduler":
+                opts["scheduler"] = argv[i]
             else:
                 opts["teams"].append((a, argv[i]))
         else:
             return usage()
         i += 1
+    if opts["scheduler"] and not opts["schedule"]:
+        return usage()
+    if opts["schedule"]:
+        return do_schedule(opts)
     return do_check(opts) if opts["check"] else do_init(opts)
 
 

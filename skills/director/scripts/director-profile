@@ -15,7 +15,8 @@ printed, not interpreted. Unknown keys are refused, with the key named.
 A [loop] table (the standing loop, slice 4) is checked and printed as loop.<key>:
 value, written as in the file. Every key is optional: state_dir, ticket_pattern and
 workspace are strings, idea_roots a list of strings, tick_interval whole minutes,
-digest_max_age whole hours, scheduler only "none". No script reads it yet.
+digest_max_age whole hours, scheduler one of "none", "launchd" or "cron" (director-init --schedule
+writes it). Only director-init reads scheduler; no other script reads [loop] yet.
 
 Paths in handoff, rules_text, doc_domain and write_domain expand ~ and
 $DIRECTOR_STATE only; a relative path is relative to the profile file's directory.
@@ -65,7 +66,7 @@ PATH_LISTS = ("rules_text", "doc_domain", "write_domain")
 LOOP_STRINGS = ("state_dir", "ticket_pattern", "workspace")
 LOOP_INTS = ("tick_interval", "digest_max_age")  # minutes, hours
 LOOP_LISTS = ("idea_roots",)
-LOOP_SCHEDULERS = ("none",)  # slice 16 widens it
+LOOP_SCHEDULERS = ("none", "launchd", "cron")  # slice 16
 LOOP_KEYS = LOOP_STRINGS + LOOP_INTS + LOOP_LISTS + ("scheduler",)
 
 
@@ -179,7 +180,7 @@ def validate_loop(loop):
             if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
                 errs.append("loop.%s must be a list of strings" % key)
         elif key == "scheduler" and val not in LOOP_SCHEDULERS:
-            errs.append('loop.scheduler must be "none" (got %r)' % (val,))
+            errs.append('loop.scheduler must be one of "none", "launchd" or "cron" (got %r)' % (val,))
     return errs
 
 
