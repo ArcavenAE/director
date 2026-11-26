@@ -22,6 +22,21 @@ for pair in unresolved.yaml:nonesuch-builder unresolved.toml:nonesuch-worker; do
   if [[ "$rc" == 1 ]] && grep -q "UNRESOLVED role '$r'" <<<"$out" && ! grep -q "UNRESOLVED role 'supervisor'" <<<"$out"; then
     ok "$f: exit 1 and only '$r' is named"; else bad "$f" "rc=$rc $out"; fi
 done
+# A table-only role under a wrapper that is not cast-launch is not credited the table.
+rc=0; out="$("$V" "${W[@]}" "$fx/unresolved-wrapper.yaml" 2>&1)" || rc=$?
+if [[ "$rc" == 1 ]] && grep -q "UNRESOLVED role 'scoped-builder'.*not cast-launch" <<<"$out" && ! grep -q "UNRESOLVED role 'supervisor'" <<<"$out"; then
+  ok "unresolved-wrapper.yaml: a table-only role under a wrapper exits 1 and only it is named"; else bad "unresolved-wrapper.yaml" "rc=$rc $out"; fi
+# --table credits a wrapper's own case table to its basename, and only to it.
+if out="$("$V" "${W[@]}" --table cast-fixture.sh="$fx/wrapper-table.sh" "$fx/unresolved-wrapper.yaml" 2>&1)"; then
+  ok "--table: the wrapper's own case table resolves the table-only role"; else bad "--table credit" "$out"; fi
+rc=0; "$V" "${W[@]}" --table cast-other.sh="$fx/wrapper-table.sh" "$fx/unresolved-wrapper.yaml" >/dev/null 2>&1 || rc=$?
+[[ "$rc" == 1 ]] && ok "--table for another wrapper name credits nothing here" || bad "--table other name" "rc=$rc"
+rc=0; "$V" "${W[@]}" --table "cast-fixture.sh=$fx/no-such-file" "$fx/resolves.yaml" >/dev/null 2>&1 || rc=$?
+[[ "$rc" == 2 ]] && ok "--table with a missing file is exit 2" || bad "--table missing file" "rc=$rc"
+# A table row whose wardrobe target is missing is unresolved.
+rc=0; out="$("$V" --wardrobe "$fx/wardrobe-no-builder" "$fx/resolves.yaml" 2>&1)" || rc=$?
+if [[ "$rc" == 1 ]] && grep -q "UNRESOLVED role 'builder'.*maps it to 'builder'" <<<"$out"; then
+  ok "a table row whose WROLE target is not in the wardrobe exits 1"; else bad "missing WROLE target" "rc=$rc $out"; fi
 rc=0; "$V" "${W[@]}" "$fx/resolves.yaml" "$fx/unresolved.yaml" >/dev/null 2>&1 || rc=$?
 [[ "$rc" == 1 ]] && ok "one bad manifest among several fails the run" || bad "mixed run" "rc=$rc"
 rc=0; "$V" "${W[@]}" >/dev/null 2>&1 || rc=$?
