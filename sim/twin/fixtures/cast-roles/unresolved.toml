@@ -1,0 +1,16 @@
+# Fixture: the toml shape, one unresolvable role.
+[workspace]
+name = "fixture"
+
+[[team]]
+name = "fixture"
+
+  [[team.role]]
+  name = "supervisor"
+    [team.role.runtime]
+    command = "/home/x/.marvel/manifests/cast-fixture.sh"
+
+  [[team.role]]
+  name = "nonesuch-worker"
+    [team.role.runtime]
+    command = "/home/x/.marvel/manifests/cast-fixture.sh"

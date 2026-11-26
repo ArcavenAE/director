@@ -1,6 +1,8 @@
 # What this workflow does not cover, so a green check is read for what it is:
 #   - scripts/: its verifiers (verify-install.sh and director-install) are not run here;
 #     verify-skill-ledger.sh is, in the skill-verifiers job. draft-sweep and its verifier live in skills/director/scripts/.
+#   - sim/twin/verify-cast-roles-test.sh runs in the cast-roles job over fixtures only; the real
+#     manifests are in a private repository, so run sim/twin/verify-cast-roles.sh on them by hand.
 #   - sim/twin/verify-cast-launch.sh is not run here; the recipes job runs its cases 4 and 6
 #     as a data table (sim/twin/parity-table.sh) against cast-launch.sh.
 #   - probe/: 23 shell scripts, 8 of them verify-*.sh, most of which need a live broker or
@@ -129,6 +131,27 @@ jobs:
         # Structural checks over a data file, so they may gate a merge. The script
         # runs every case even after a miss and exits nonzero on any.
         run: bash scripts/verify-recipes.sh
+
+  cast-roles:
+    name: Cast roles resolve (fixtures, not required)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run the cast-role cases over the fixtures
+        # Structural: does each fixture role resolve to a wardrobe role. It reads the
+        # fixtures in sim/twin/fixtures/cast-roles and not the real manifests, which
+        # live in a private repository. It is not a required check; whether it
+        # becomes one is the operator's setting.
+        run: bash sim/twin/verify-cast-roles-test.sh
 
   hub-verifiers:
     name: Hub provisioning verifiers

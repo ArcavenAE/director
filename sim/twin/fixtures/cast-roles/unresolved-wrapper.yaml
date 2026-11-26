@@ -1,0 +1,13 @@
+# Fixture: scoped-builder is a row of the cast-launch case table but has no wardrobe
+# role of its own, and here it runs under a wrapper whose table is not credited.
+workspace:
+  name: fixture
+teams:
+- name: fixture
+  roles:
+  - name: supervisor
+    runtime:
+      command: /home/x/.marvel/manifests/cast-fixture.sh
+  - name: scoped-builder
+    runtime:
+      command: /home/x/.marvel/manifests/cast-fixture.sh
