@@ -1,0 +1,20 @@
+# Fixture: every cast role resolves. supervisor by a same-name wardrobe role,
+# builder and scoped-builder by the case table; the last role is not cast through
+# a cast-* command and is skipped.
+workspace:
+  name: fixture
+teams:
+- name: fixture
+  roles:
+  - name: supervisor
+    runtime:
+      command: /home/x/.director/bin/cast-launch
+  - name: builder
+    runtime:
+      command: /home/x/.marvel/manifests/cast-fixture.sh
+  - name: scoped-builder
+    runtime:
+      command: /home/x/.director/bin/cast-launch
+  - name: sleeper
+    runtime:
+      command: /bin/sleep

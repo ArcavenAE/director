@@ -1,0 +1,16 @@
+# Fixture: the toml shape, every cast role resolves (claude-reviewer is a table row).
+[workspace]
+name = "fixture"
+
+[[team]]
+name = "fixture"
+
+  [[team.role]]
+  name = "supervisor"
+    [team.role.runtime]
+    command = "/home/x/.marvel/manifests/cast-fixture.sh"
+
+  [[team.role]]
+  name = "claude-reviewer"
+    [team.role.runtime]
+    command = "/home/x/.marvel/manifests/cast-fixture.sh"
