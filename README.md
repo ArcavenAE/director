@@ -4,17 +4,22 @@ Supervisor communications and multi-agent coordination for the Dark Atelier
 platform. The human's assistive agent for running work across many agent
 sessions on many machines, under many harnesses.
 
-**Status: simulation, with a proven transport and a cross-host tier.** The
-director software does not exist yet. What exists:
+**Status: simulation, with a proven transport and a cross-host tier.** There is
+no standalone director program: a Claude Code session plays the role, using the
+skill. What exists:
 
 - a skill that has a session play the role by hand, plus the instruments it
   uses and the requirements that fall out (`skills/director/`,
   `sim/requirements.md`);
-- a Phase 0 probe that proves the message bus the software will ride: a
-  local NATS broker and a small MCP shim carry the director envelope between
-  sessions end to end, across Claude Code and codex, with store-and-forward,
-  deduplication, presence, and broker-enforced authorization
-  (`probe/nats-phase-0/`);
+- `scripts/director`, the launcher that starts a session as the director (see
+  "Start the director");
+- `cmd/director-mcp/`, a small MCP server (the shim), published from main as
+  prereleases (see "The bus seat, by hand");
+- a Phase 0 probe that proves the message bus: a local NATS broker and the
+  shim carry the director envelope between sessions end to end, across Claude
+  Code and codex, with store-and-forward, deduplication, presence, and
+  broker-enforced authorization (broker config and checks in
+  `probe/nats-phase-0/`);
 - a global tier that connects one host's broker to another's through a hub,
   so a director reaches a remote supervisor without a rename and without
   holding a hub credential (`probe/nats-global-tier/`, design brief 8);
@@ -270,6 +275,17 @@ server comes from this repo and not from the folder the session opened in.
 Identity never sits in the repo or in a session folder. It comes from one small
 file per host, `$HOME/.director/seat.env`, or from flags.
 
+**Commands.** `scripts/director` takes six. `start` starts the session. `env`
+prints the validated seat file lines that are set and starts nothing. `prove`,
+run inside a started session, checks that the director MCP server is up under it
+and writes the proof. `status` prints what the standing hook prints before each
+answer. `doctor` checks the standing loop, reading only. `hub user ...` and
+`hub settings ...` pass to the installed `director-mcp` and run on the hub's
+host. `director hub settings init` is a hub step, separate from starting a
+director: it runs once per hub, writes the hub's `settings.conf`, and adds that
+file's include and the managed user region to the hub conf
+(`sim/design/hub-user-lifecycle.md`).
+
 **First start.** Install the server and its seat launcher (see "The bus seat,
 by hand"), then write the seat file. One `KEY=value` per line, blank lines and
 whole-line `#` comments allowed, nothing executed; no comment after a value.
@@ -292,11 +308,11 @@ Three optional keys give the hub observer a home, so a plain shell or a schedule
 can read hub mail without a `director start` session: `DIRECTOR_HUB_OBSERVER_URL`,
 `DIRECTOR_HUB_OBSERVER_NKEY` (the absolute path of the seed file, never the seed) and
 `DIRECTOR_HUB_OBSERVER_CA` (an absolute path). The observer is off while the URL is
-unset, and install and `director init` write no value for any key. `director env`
-prints the validated lines that are set, from the same reader as `start`, and
-`freebusy` uses it to fill `DIRECTOR_CLUSTER` and these three keys when its own
-environment lacks them. It never derives a cluster name. `director-mcp` does not
-read the file.
+unset, and neither `install.sh` nor `director-init` writes a value for any key.
+`director env` prints the validated lines that are set, from the same reader as
+`start`, and `freebusy` uses it to fill `DIRECTOR_CLUSTER` and these three keys
+when its own environment lacks them. It never derives a cluster name.
+`director-mcp` does not read the file.
 
 The launcher also sets `DIRECTOR_ROLE_MARK` to its own pid before it execs
 claude. Do not put it in the seat file: the shim holds the director identity
