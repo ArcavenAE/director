@@ -99,6 +99,9 @@ type Bus struct {
 	// sentCls is the cue's receiver classifier, set by attachCue when the
 	// class-aware cue is on; nil otherwise.
 	sentCls *classifier
+	// ownCls is the drain's classifier when the cue has none (drain_tier.go).
+	ownCls     *classifier
+	ownClsOnce sync.Once
 	// cueSampling reports whether the cue watcher samples the pending tracker;
 	// nil when the cue is off.
 	cueSampling func() bool
@@ -1175,11 +1178,9 @@ func (b *Bus) publish(ctx context.Context, e *Envelope, wsHint string) (*sendRes
 }
 
 // noteSent tells the receiver classifier about an accepted send, so the first
-// reply to an ask is act. With the class-aware cue off there is no classifier.
+// reply to an ask is act. With the class-aware cue off the drain's own classifier takes it.
 func (b *Bus) noteSent(e *Envelope) {
-	if b.sentCls != nil {
-		b.sentCls.noteSent(e.MessageID, e.Performative)
-	}
+	b.classifier().noteSent(e.MessageID, e.Performative)
 }
 
 func (b *Bus) publishSend(ctx context.Context, e *Envelope, wsHint string) (*sendResult, error) {

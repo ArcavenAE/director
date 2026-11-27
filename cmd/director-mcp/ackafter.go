@@ -41,6 +41,16 @@ type ackLater struct {
 	mu      sync.Mutex
 	held    []fetchedMsg
 	carried []drained // returned-queue mail this call's reply also carries
+	// discarded counts the unreadable messages this call dropped; items()
+	// stamps what the call fetched with it.
+	discarded int
+}
+
+// noteDiscarded records that this call discarded n unreadable messages.
+func (a *ackLater) noteDiscarded(n int) {
+	a.mu.Lock()
+	a.discarded += n
+	a.mu.Unlock()
 }
 
 func withAckLater(ctx context.Context) (context.Context, *ackLater) {
@@ -72,7 +82,9 @@ func (a *ackLater) items() []drained {
 	defer a.mu.Unlock()
 	out := append([]drained(nil), a.carried...)
 	for _, h := range a.held {
-		out = append(out, h.item)
+		it := h.item
+		it.AfterDiscard = it.AfterDiscard || a.discarded > 0
+		out = append(out, it)
 	}
 	return out
 }

@@ -56,6 +56,7 @@ type classKey struct {
 
 type classEntry struct {
 	class   msgClass
+	why     string    // the one reason the drain shows beside the class
 	replyBy time.Time // zero when the message carries none
 }
 
@@ -133,18 +134,25 @@ func (c *classifier) size() int {
 // classify returns the message's class. A message with no sequence, or one
 // that does not decode into an envelope with a message id, is act.
 func (c *classifier) classify(tier string, seq uint64, data []byte, now time.Time) msgClass {
+	class, _ := c.classifyWhy(tier, seq, data, now)
+	return class
+}
+
+// classifyWhy is classify with the reason: a fixed short phrase for the first
+// input that made the message act, or why it is routine.
+func (c *classifier) classifyWhy(tier string, seq uint64, data []byte, now time.Time) (msgClass, string) {
 	if seq == 0 {
-		return classAct
+		return classAct, "no stream sequence"
 	}
 	k := classKey{tier, seq}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e, ok := c.memo[k]; ok {
 		if e.class == classRoutine && !e.replyBy.IsZero() && e.replyBy.Before(now) {
-			e.class = classAct
+			e.class, e.why = classAct, "reply_by passed"
 			c.memo[k] = e
 		}
-		return e.class
+		return e.class, e.why
 	}
 	c.decodes++
 	e := c.decide(k, data, now)
@@ -152,13 +160,13 @@ func (c *classifier) classify(tier string, seq uint64, data []byte, now time.Tim
 		c.evict()
 	}
 	c.memo[k] = e
-	return e.class
+	return e.class, e.why
 }
 
 func (c *classifier) decide(k classKey, data []byte, now time.Time) classEntry {
 	var env Envelope
 	if json.Unmarshal(data, &env) != nil || env.MessageID == "" {
-		return classEntry{class: classAct}
+		return classEntry{class: classAct, why: "unreadable, fails open"}
 	}
 	// The ask check runs on every path below, so a first reply that is act for
 	// another reason (a passed reply_by, an unknown performative) still
@@ -166,35 +174,41 @@ func (c *classifier) decide(k classKey, data []byte, now time.Time) classEntry {
 	signal := env.Content.Type == "signal"
 	act := c.replyToOpenAsk(k, env.InReplyTo, signal)
 	if !performatives[env.Performative] {
-		return classEntry{class: classAct}
+		return classEntry{class: classAct, why: "unknown performative"}
 	}
 	var replyBy time.Time
 	if env.ReplyBy != "" {
 		t, err := time.Parse(time.RFC3339, env.ReplyBy)
 		if err != nil {
-			return classEntry{class: classAct}
+			return classEntry{class: classAct, why: "unreadable reply_by, fails open"}
 		}
 		replyBy = t
 		if t.Before(now) {
-			return classEntry{class: classAct, replyBy: t}
+			return classEntry{class: classAct, why: "reply_by passed", replyBy: t}
 		}
 	}
+	// The reason is the first input in this order: performative, gate line,
+	// signal, reply to an open ask. The ask check above has already run.
+	why := ""
 	switch env.Performative {
 	case "CANCEL", "FAILURE", "REFUSE", "REQUEST", "QUERY", "PROPOSE", "CFP", "NOT-UNDERSTOOD":
-		act = true
+		why = "performative " + env.Performative
 	}
-	if gateLine.MatchString(env.Content.Data) {
-		act = true
+	if why == "" && gateLine.MatchString(env.Content.Data) {
+		why = "gate line"
 	}
 	// A status signal changes nothing and owes no reply when it says
 	// "working"; any other signal value, blocked-on included, is act.
-	if signal && env.Content.Data != "working" {
-		act = true
+	if why == "" && signal && env.Content.Data != "working" {
+		why = "signal not working"
 	}
-	if act {
-		return classEntry{class: classAct, replyBy: replyBy}
+	if why == "" && act {
+		why = "reply to an open ask"
 	}
-	return classEntry{class: classRoutine, replyBy: replyBy}
+	if why != "" {
+		return classEntry{class: classAct, why: why, replyBy: replyBy}
+	}
+	return classEntry{class: classRoutine, why: "nothing asks for a turn", replyBy: replyBy}
 }
 
 // replyToOpenAsk reports whether a message with this in_reply_to is act on

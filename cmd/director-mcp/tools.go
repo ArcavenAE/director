@@ -551,10 +551,20 @@ func returnedResult(ctx context.Context, bus *Bus, a waitArgs, items []drained) 
 	if a.Max > 1 {
 		rem, failed := bus.remainingRead(ctx)
 		beatLastDrain(rem, failed, time.Now())
-		return map[string]any{
+		out := map[string]any{
 			"messages": items, "count": len(items), "order": batchOrderNote,
 			"returned": len(items), "returned_note": note, "remaining": rem,
 		}
+		discarded := 0
+		for _, it := range items {
+			if it.AfterDiscard {
+				discarded++
+			}
+		}
+		if line := bus.tierDrain(items, discarded); line != "" {
+			out["fact_line"] = line
+		}
+		return out
 	}
 	out := map[string]any{
 		"message": items[0].Env, "tier": items[0].Tier,
@@ -580,10 +590,17 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 	for _, it := range items {
 		resolveRelaySession(ctx, it.Env)
 	}
+	if al := ackLaterFrom(ctx); al != nil && res.Discarded > 0 {
+		al.noteDiscarded(res.Discarded)
+	}
+	line := bus.tierDrain(items, res.Discarded)
 	out := map[string]any{
 		"messages": items,
 		"count":    len(items),
 		"order":    batchOrderNote,
+	}
+	if line != "" {
+		out["fact_line"] = line
 	}
 	if len(items) == 0 {
 		out["note"] = "no message within the window; this is silence, not failure"
