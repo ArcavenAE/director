@@ -70,8 +70,8 @@ func TestBrokerDrainThreeStatusInformsCarryTheLine(t *testing.T) {
 			t.Errorf("message %v: proposed_tier %v reason %v, want routine with a reason", x["sequence"], x["proposed_tier"], x["reason"])
 		}
 	}
-	if m["fact_line"] != "no board change; no reply owed" {
-		t.Errorf("fact_line = %v, want %q", m["fact_line"], "no board change; no reply owed")
+	if m["fact_line"] != "no reply owed in this batch" {
+		t.Errorf("fact_line = %v, want %q", m["fact_line"], "no reply owed in this batch")
 	}
 }
 
@@ -225,8 +225,8 @@ func TestBrokerDrainReturnedBatchCarriesTiersAndTheLine(t *testing.T) {
 			t.Errorf("returned message %v: proposed_tier %v reason %v, want routine with a reason", x["sequence"], x["proposed_tier"], x["reason"])
 		}
 	}
-	if m["fact_line"] != "no board change; no reply owed" {
-		t.Errorf("fact_line = %v, want %q", m["fact_line"], "no board change; no reply owed")
+	if m["fact_line"] != "no reply owed in this batch" {
+		t.Errorf("fact_line = %v, want %q", m["fact_line"], "no reply owed in this batch")
 	}
 }
 

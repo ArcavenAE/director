@@ -27,12 +27,12 @@ func statusInforms() []drained {
 }
 
 func TestTierBatchThreeStatusInformsEndWithTheFactLine(t *testing.T) {
-	if allRoutineLine != "no board change; no reply owed" {
+	if allRoutineLine != "no reply owed in this batch" {
 		t.Fatalf("allRoutineLine = %q", allRoutineLine)
 	}
 	items := statusInforms()
 	line := tierBatch(newClassifier(), items, inboxLane{}, classifyNow)
-	if line != "no board change; no reply owed" {
+	if line != "no reply owed in this batch" {
 		t.Errorf("fact line = %q, want %q", line, allRoutineLine)
 	}
 	for _, it := range items {
