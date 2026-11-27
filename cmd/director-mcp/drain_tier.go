@@ -8,15 +8,17 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
 // allRoutineLine is the fact line a batch carries when nothing in it is act.
-const allRoutineLine = "no board change; no reply owed"
+const allRoutineLine = "no reply owed in this batch"
 
 // tierBatch sets ProposedTier and Reason on each item and returns the fact
 // line: allRoutineLine when the batch is not empty and every item is routine,
-// else "". A lane item (a reply to an open operator ask) is never routine: the
+// else "". The line states what is computed: the classifier proposes routine
+// and inbox_summary flags nothing, for every message in the batch. A lane item (a reply to an open operator ask) is never routine: the
 // lane wins over the classifier, which is still asked first so each message is
 // classified once, by tier and sequence.
 func tierBatch(cls *classifier, items []drained, lane inboxLane, now time.Time) string {
@@ -31,6 +33,14 @@ func tierBatch(cls *classifier, items []drained, lane inboxLane, now time.Time) 
 		class, why := cls.classifyWhy(it.Tier, it.Seq, data, now)
 		if ask, ok := inLane[classKey{it.Tier, it.Seq}]; ok {
 			class, why = classAct, "lane: reply to open ask "+ask
+		}
+		// inbox_summary flags a message that carries a reply_by, custody or an
+		// awaited answer; the drain never calls such a message routine, so it
+		// never says "no reply owed" while the summary says one is.
+		if class == classRoutine && it.Env != nil {
+			if flags := flagReasons(it.Env); len(flags) > 0 {
+				class, why = classAct, "flagged: "+strings.Join(flags, ", ")
+			}
 		}
 		it.ProposedTier, it.Reason = string(class), why
 		if class == classRoutine {

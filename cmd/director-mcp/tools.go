@@ -555,7 +555,13 @@ func returnedResult(ctx context.Context, bus *Bus, a waitArgs, items []drained) 
 			"messages": items, "count": len(items), "order": batchOrderNote,
 			"returned": len(items), "returned_note": note, "remaining": rem,
 		}
-		if line := bus.tierDrain(items, 0); line != "" {
+		discarded := 0
+		for _, it := range items {
+			if it.AfterDiscard {
+				discarded++
+			}
+		}
+		if line := bus.tierDrain(items, discarded); line != "" {
 			out["fact_line"] = line
 		}
 		return out
@@ -583,6 +589,9 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 	}
 	for _, it := range items {
 		resolveRelaySession(ctx, it.Env)
+	}
+	if al := ackLaterFrom(ctx); al != nil && res.Discarded > 0 {
+		al.noteDiscarded(res.Discarded)
 	}
 	line := bus.tierDrain(items, res.Discarded)
 	out := map[string]any{
