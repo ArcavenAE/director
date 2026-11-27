@@ -36,7 +36,9 @@ PY="$(command -v python3 || true)"
 
 work="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/director-init-verify.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$work"' EXIT
-pydir="$work/pybin"; mkdir -p "$pydir"; ln -s "$PY" "$pydir/python3"   # only python3, so no real marvel or sideshow is on the test PATH
+# Only python3 is on this dir, so no real marvel or sideshow is on the test PATH. It is a one-line exec, not a symlink: a
+# symlink here lives under scratch, where Linux keeps it in sys.executable and director-init rightly refuses it.
+pydir="$work/pybin"; mkdir -p "$pydir"; printf '#!/bin/sh\nexec "%s" "$@"\n' "$PY" >"$pydir/python3"; chmod +x "$pydir/python3"
 fail=0
 miss() { echo "MISS: $*"; fail=1; }
 
@@ -267,6 +269,314 @@ set +e
 out="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:$pydir:/usr/bin:/bin" "$PY" -c "$harness" "$BIN" 2>&1 </dev/null)"
 set -e
 [[ "$out" == *"timeouts [30]"* && "$out" == *"exit 1"* && "$out" != *"Traceback"* ]] || miss "L2 director-profile needs a 30 s timeout and a timeout must exit 1: $out"
+
+# ---- slice 16: --schedule prints the entry and installs it only on an explicit --yes ----
+# (operator card i652r-2, choice 1: opt-in per install; the profile's scheduler stays "none" until then.)
+# launchctl, crontab and systemctl are fakes that only log; the crontab fake keeps its table in a scratch file.
+# Nothing installs on a real host: every run is env -i with the scratch HOME, and the plist path is under it.
+tick_path="$(cd "$here" && pwd -P)/director-tick"
+# The entry names the interpreter that ran director-init and a PATH captured at install (director ruling 01M887991M):
+# absolute entries only, nothing under /tmp, /private/tmp or /var/folders, so it never points into a dead session's scratch.
+filter_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*|/private/var/folders|/private/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "${out:-/usr/bin:/bin}"; }
+run_path="$stubs:$pydir:/usr/bin:/bin"
+py_abs="$(env -i PATH="$pydir" python3 -c 'import sys; print(sys.executable)')"   # as given, never its realpath (director ruling 01M88ACQWC, revised)
+sched_fakes() {
+  : >"$work/sched.log"; rm -f "$work/cron.store"
+  printf '%s\n' '#!/bin/sh' 'echo "launchctl $*" >>"$SCHED_LOG"' '[ -n "$LAUNCHCTL_FAIL" ] && { echo "launchctl: load failed" >&2; exit 1; }' 'exit 0' >"$stubs/launchctl"
+  printf '%s\n' '#!/bin/sh' 'echo "systemctl $*" >>"$SCHED_LOG"' 'exit 0' >"$stubs/systemctl"
+  printf '%s\n' '#!/bin/sh' 'echo "crontab $*" >>"$SCHED_LOG"' 'case "$1" in' \
+    '  -l) if [ -n "$CRON_FAIL" ]; then echo "crontab: permission denied" >&2; exit 1; elif [ -f "$CRON_STORE" ]; then cat "$CRON_STORE"; else echo "no crontab for user" >&2; exit 1; fi ;;' \
+    '  -) cat >"$CRON_STORE" ;;' '  *) exit 2 ;;' 'esac' >"$stubs/crontab"
+  chmod +x "$stubs/launchctl" "$stubs/systemctl" "$stubs/crontab"
+}
+senv=(SCHED_LOG="$work/sched.log" CRON_STORE="$work/cron.store")
+plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"
+calls() { grep -c "^$1" "$work/sched.log" || true; }
+sum_of() { shasum -a 256 <"$1" 2>/dev/null || echo none; }
+
+# S1: launchd, no --yes: the entry is printed and nothing is installed or written
+fresh; stub_marvel; sched_fakes; run -- --entry-role builder; plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"
+h0="$(hash_tree)"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler launchd
+{ [[ $rc -eq 0 && "$out" == *"com.arcaven.director-tick"* && "$out" == *"<key>StartInterval</key>"* && "$out" == *"<integer>1800</integer>"* && "$out" == *"$tick_path"* ]]; } \
+  || miss "S1 --schedule on launchd prints the entry (label, StartInterval 1800, the tick path $tick_path) and exits 0: rc=$rc out=$out"
+[[ "$out" == *"<string>$py_abs</string>"*"<string>$tick_path</string>"* ]] || miss "F1 the plist runs the interpreter that ran director-init ($py_abs) on the tick: $out"
+[[ "$out" == *"<key>EnvironmentVariables</key>"* && "$out" == *"<key>PATH</key>"* && "$out" == *"<string>$(filter_path "$stubs:$pydir:/usr/bin:/bin")</string>"* ]] || miss "F1 the plist carries the captured PATH, filtered: $out"
+{ [[ ! -e "$plist" && ! -d "$home/Library" && "$(hash_tree)" == "$h0" && ! -s "$work/sched.log" ]]; } \
+  || miss "S1 without --yes nothing is written and no scheduler tool is called: $(tr '\n' ';' <"$work/sched.log")"
+
+# S2: cron, no --yes
+fresh; sched_fakes; run -- --entry-role builder; h0="$(hash_tree)"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler cron
+cronline="*/30 * * * * PATH=$(filter_path "$stubs:$pydir:/usr/bin:/bin") $py_abs $tick_path # director-tick"
+{ [[ $rc -eq 0 && "$out" == *"$cronline"* ]]; } || miss "S2 --schedule on cron prints one marked line every 30 minutes, with the interpreter ($py_abs) and the captured PATH: rc=$rc out=$out want=$cronline"
+{ [[ ! -e "$work/cron.store" && ! -s "$work/sched.log" && "$(hash_tree)" == "$h0" ]]; } || miss "S2 without --yes no scheduler tool is called and nothing is written (F4): $(tr '\n' ';' <"$work/sched.log")"
+
+# S3: --schedule alone picks the host's scheduler: launchd on Darwin, cron elsewhere
+fresh; sched_fakes; run -- --entry-role builder; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule
+if [[ "$(uname -s)" == Darwin ]]; then want=com.arcaven.director-tick; else want='# director-tick'; fi
+[[ $rc -eq 0 && "$out" == *"$want"* ]] || miss "S3 --schedule alone prints the host's entry ($want): rc=$rc out=$out"
+
+# S4: --yes installs on launchd, records scheduler = "launchd" in the profile, keeps a backup, and the profile still checks clean
+fresh; sched_fakes; run -- --entry-role builder; plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler launchd --yes
+{ [[ $rc -eq 0 && -f "$plist" ]] && grep -q "$tick_path" "$plist" && grep -q '<integer>1800</integer>' "$plist"; } || miss "S4 --yes writes the plist with the tick path and 1800 seconds: rc=$rc out=$out"
+[[ "$(calls "launchctl load -w $plist")" == 1 ]] || miss "S4 launchctl load -w <plist> is called once: $(tr '\n' ';' <"$work/sched.log")"
+grep -q '^scheduler = "launchd"' "$prof" && grep -q '^\[loop\]' "$prof" || miss "S4 the profile records scheduler = \"launchd\" under [loop]: $(cat "$prof")"
+[[ "$(check_profile "$prof")" == "profile ok"* && "$(check_profile "$prof")" != *"must be"* ]] || miss "S4 the profile still passes director-profile check: $(check_profile "$prof")"
+ls "$state"/operating-profile.toml.bak-* >/dev/null 2>&1 || miss "S4 a backup of the profile is kept before it changes"
+[[ "$(calls systemctl)" == 0 ]] || miss "S4 systemctl is never called"
+
+# S5: --yes on cron appends one marked line and keeps every other line
+fresh; sched_fakes; run -- --entry-role builder; printf '0 3 * * * /usr/bin/true\n' >"$work/cron.store"; : >"$work/sched.log"
+cronline="*/30 * * * * PATH=$(filter_path "$stubs:$pydir:/usr/bin:/bin") $py_abs $tick_path # director-tick"
+run "${senv[@]}" -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 0 && "$(grep -c '# director-tick' "$work/cron.store")" == 1 && "$(grep -c '/usr/bin/true' "$work/cron.store")" == 1 && "$(grep -cF "$cronline" "$work/cron.store")" == 1 ]]; } \
+  || miss "S5 --yes on cron adds exactly one marked line and keeps the others: rc=$rc store=$(cat "$work/cron.store" 2>/dev/null)"
+grep -q '^scheduler = "cron"' "$prof" || miss "S5 the profile records scheduler = \"cron\""
+
+# S6: a second --yes adds neither a second crontab line nor a second plist (director's idempotence case)
+cs="$(sum_of "$work/cron.store")"; run "${senv[@]}" -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 0 && "$(sum_of "$work/cron.store")" == "$cs" && "$(grep -c '# director-tick' "$work/cron.store")" == 1 ]]; } || miss "S6 a second cron install changes nothing: rc=$rc out=$out"
+fresh; sched_fakes; run -- --entry-role builder; plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"
+run "${senv[@]}" -- --schedule --scheduler launchd --yes; ps1="$(sum_of "$plist")"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler launchd --yes
+{ [[ $rc -eq 0 && "$(ls "$home/Library/LaunchAgents" | wc -l | tr -d ' ')" == 1 && "$(sum_of "$plist")" == "$ps1" && "$(calls 'launchctl load')" == 0 ]]; } \
+  || miss "S6 a second launchd install adds no plist, changes none and loads nothing again: rc=$rc out=$out $(tr '\n' ';' <"$work/sched.log")"
+
+# S7: a plain init, with or without --yes, never touches a scheduler and leaves scheduler at none
+fresh; sched_fakes; run "${senv[@]}" -- --entry-role builder --yes
+{ [[ $rc -eq 0 && ! -s "$work/sched.log" && ! -d "$home/Library" ]] && ! grep -q 'scheduler = "\(launchd\|cron\)"' "$prof"; } || miss "S7 plain init calls no scheduler tool and does not set a scheduler: $(tr '\n' ';' <"$work/sched.log")"
+
+# S8: --schedule needs an existing profile; with none, even --yes installs nothing
+fresh; sched_fakes; run "${senv[@]}" -- --schedule --scheduler launchd --yes
+{ [[ $rc -eq 1 && "$out" == *"no profile"* && ! -s "$work/sched.log" && ! -d "$home/Library" ]]; } || miss "S8 with no profile --schedule --yes is refused and installs nothing: rc=$rc out=$out"
+
+# S9: tick_interval from [loop] sets the period; cron cannot express more than 59 minutes and says so
+fresh; sched_fakes; run -- --entry-role builder; printf '\n[loop]\ntick_interval = 10\n' >>"$prof"
+run "${senv[@]}" -- --schedule --scheduler launchd; [[ "$out" == *"<integer>600</integer>"* ]] || miss "S9 tick_interval = 10 prints StartInterval 600: $out"
+run "${senv[@]}" -- --schedule --scheduler cron; [[ "$out" == *"*/10 * * * * "* ]] || miss "S9 tick_interval = 10 prints */10: $out"
+fresh; sched_fakes; run -- --entry-role builder; printf '\n[loop]\ntick_interval = 90\n' >>"$prof"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 1 && "$out" == *"tick_interval"* && "$out" == *"59"* && ! -e "$work/cron.store" ]]; } || miss "S9 cron with tick_interval = 90 is refused naming the 59 minute limit and installs nothing: rc=$rc out=$out"
+
+# S10: a different entry already at the plist path is not overwritten
+fresh; sched_fakes; run -- --entry-role builder; plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"
+mkdir -p "$home/Library/LaunchAgents"; printf 'someone else\n' >"$plist"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler launchd --yes
+{ [[ $rc -eq 1 && "$(cat "$plist")" == "someone else" && "$(calls 'launchctl load')" == 0 ]]; } || miss "S10 a different plist at the path is refused and left alone: rc=$rc out=$out"
+
+# F1: the PATH captured in the entry keeps absolute entries and drops relative ones and scratch directories.
+# The run goes through $pydir/python3 and is compared with the interpreter that same command reports, so the case
+# agrees on a Mac (symlink resolved) and on Linux (symlink kept). $stubs is first on PATH, so no real scheduler
+# binary can be reached from these runs even if a regression called one without --yes.
+raw_path() { local out="" e; local IFS=:; for e in $1; do case "$e" in /*) ;; *) continue ;; esac; case "$e" in /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/folders|/var/folders/*|/private/var/folders|/private/var/folders/*) continue ;; esac; out="${out:+$out:}$e"; done; printf '%s' "$out"; }
+fresh; sched_fakes; run -- --entry-role builder
+fpy="$(env -i PATH="$stubs" "$pydir/python3" -c 'import sys; print(sys.executable)')"
+fpath_in="$stubs:/usr/bin:/opt/x/bin:rel/bin:.::/tmp/a:/private/tmp/b:/var/folders/c:/tmp:/bin:/Users/x/bin"
+fwant="$(raw_path "$stubs")"; fwant="${fwant:+$fwant:}/usr/bin:/opt/x/bin:/bin:/Users/x/bin"
+set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$fpath_in" "$pydir/python3" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
+{ [[ $frc -eq 0 && "$fout" == *"PATH=$fwant $fpy $tick_path # director-tick"* ]]; } || miss "F1 the captured PATH drops relative entries, empty entries and anything under /tmp, /private/tmp or /var/folders: rc=$frc want PATH=$fwant $fpy out=$fout"
+# an all-scratch PATH falls back to /usr/bin:/bin
+fwant="$(raw_path "$stubs")"; fwant="${fwant:-/usr/bin:/bin}"
+set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:/tmp/a:rel" "$pydir/python3" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
+[[ "$fout" == *"PATH=$fwant "* ]] || miss "F1 a PATH with nothing usable falls back to /usr/bin:/bin: rc=$frc want PATH=$fwant out=$fout"
+
+# F2: the profile edit is checked before anything is installed
+fresh; sched_fakes; run -- --entry-role builder; sed -i.bak 's/^schema_version = 1$/schema_version = 1\nloop.tick_interval = 5/' "$prof"; rm -f "$prof.bak"
+[[ "$(check_profile "$prof")" == "profile ok"* ]] || miss "F2 setup: the dotted-key profile is valid on its own: $(check_profile "$prof")"
+plist="$home/Library/LaunchAgents/com.arcaven.director-tick.plist"; p0="$(sum_of "$prof")"; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler launchd --yes
+{ [[ $rc -eq 1 && ! -e "$plist" && "$(calls 'launchctl load')" == 0 && "$(sum_of "$prof")" == "$p0" ]]; } || miss "F2 a profile edit that fails director-profile check installs nothing and leaves the profile alone: rc=$rc out=$out $(tr '\n' ';' <"$work/sched.log")"
+
+# F3: cron with no crontab yet installs; a crontab -l that fails for another reason touches nothing
+fresh; sched_fakes; run -- --entry-role builder; : >"$work/sched.log"
+run "${senv[@]}" -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 0 && "$(grep -c '# director-tick' "$work/cron.store" 2>/dev/null || true)" == 1 ]]; } || miss "F3 with no crontab at all, --yes installs one marked line: rc=$rc out=$out"
+fresh; sched_fakes; run -- --entry-role builder; printf '0 3 * * * /usr/bin/true\n' >"$work/cron.store"; c0="$(sum_of "$work/cron.store")"; p0="$(sum_of "$prof")"; : >"$work/sched.log"
+run "${senv[@]}" CRON_FAIL=1 -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 1 && "$(sum_of "$work/cron.store")" == "$c0" && "$(calls 'crontab -$')" == 0 && "$(sum_of "$prof")" == "$p0" && "$out" == *"permission denied"* ]]; } || miss "F3 a failing crontab -l is refused with its message, writes no crontab and no profile: rc=$rc out=$out"
+
+# a commented-out or renamed user line that merely mentions the mark does not block the install
+fresh; sched_fakes; run -- --entry-role builder; printf '# old note: # director-tick was here\n#*/5 * * * * /x/director-tick # director-tick\n0 3 * * * /usr/bin/true # director-tick-cleanup\n' >"$work/cron.store"
+run "${senv[@]}" -- --schedule --scheduler cron --yes
+{ [[ $rc -eq 0 && "$(grep -c ' # director-tick$' "$work/cron.store")" == 2 && "$(grep -c 'director-tick-cleanup' "$work/cron.store")" == 1 ]]; } || miss "F-open a line that only mentions the mark (commented out, or director-tick-cleanup) does not block the install: rc=$rc out=$out store=$(cat "$work/cron.store")"
+
+# Review 6051212942 (director#755): a failing launchctl removes the plist this run wrote and leaves the profile alone;
+# a differing marked crontab line is refused with the store untouched. Each is a function of $BIN so a mutant can run it.
+case_load_fails() {
+  fresh; sched_fakes; run -- --entry-role builder
+  local pl="$home/Library/LaunchAgents/com.arcaven.director-tick.plist" p0; p0="$(sum_of "$prof")"; : >"$work/sched.log"
+  run "${senv[@]}" LAUNCHCTL_FAIL=1 -- --schedule --scheduler launchd --yes
+  [[ $rc -eq 1 && ! -e "$pl" && "$(sum_of "$prof")" == "$p0" && "$(calls 'launchctl load')" == 1 && "$out" == *"load failed"* ]]
+}
+case_differing_line() {
+  fresh; sched_fakes; run -- --entry-role builder
+  printf '0 3 * * * /usr/bin/true\n*/5 * * * * /other/tick # director-tick\n' >"$work/cron.store"
+  local c0 p0; c0="$(sum_of "$work/cron.store")"; p0="$(sum_of "$prof")"; : >"$work/sched.log"
+  run "${senv[@]}" -- --schedule --scheduler cron --yes
+  [[ $rc -eq 1 && "$(sum_of "$work/cron.store")" == "$c0" && "$(calls 'crontab -$')" == 0 && "$(sum_of "$prof")" == "$p0" && "$out" == *"differs"* ]]
+}
+case_load_fails && : || miss "R1 a failing launchctl load exits 1, removes the plist this run wrote, leaves the profile unchanged and says so: rc=$rc out=$out"
+case_differing_line && : || miss "R2 a differing marked crontab line is refused (rc 1), the store and the profile stay as they were, and crontab - is not called: rc=$rc out=$out"
+init_mutant() {  # name old new: a copy of director-init with one fault, beside the scripts it needs
+  local m="$work/imut-$1"; mkdir -p "$m"; cp "$here"/director-profile "$m/" 2>/dev/null || true
+  "$PY" -I -c '
+import sys
+src=open(sys.argv[1]).read()
+if src.count(sys.argv[2]) != 1: sys.exit(1)
+open(sys.argv[4],"w").write(src.replace(sys.argv[2], sys.argv[3]))' "$BIN" "$2" "$3" "$m/director-init" || { miss "mutant $1: the text to mutate is not in director-init"; return 1; }
+  chmod +x "$m/director-init"; printf '%s' "$m/director-init"
+}
+saved_bin="$BIN"
+mpath="$(init_mutant keeps_plist '        os.unlink(path)
+        err("launchctl load -w' '        err("launchctl load -w')" && { BIN="$mpath"; if case_load_fails; then miss "mutant keeps_plist survives: R1 did not catch a plist kept after a failed load"; else echo "ok  mutant keeps_plist is caught by R1"; fi; BIN="$saved_bin"; }
+mpath="$(init_mutant appends_differing '        err("the crontab already has a %s line that differs from this entry; it is left alone" % CRON_MARK)
+        return False' '        pass')" && { BIN="$mpath"; if case_differing_line; then miss "mutant appends_differing survives: R2 did not catch a differing line appended"; else echo "ok  mutant appends_differing is caught by R2"; fi; BIN="$saved_bin"; }
+
+# director ruling 01M88ACQWC on director#755 (a) and (b): the interpreter is resolved with realpath and refused when it is
+# still under a scratch prefix; /private/var/folders joins the scratch prefixes; and the captured PATH entries are
+# compared after realpath too, so a symlinked scratch directory cannot slip through. The functions are exercised by
+# loading director-init as a module (nothing runs at import), so the refusals are pinned without a scratch python.
+pyfn() {  # <python code using the module m>: prints its result; an exception prints ERR:<type>
+  env -i HOME="$home" PATH="$pydir:/usr/bin:/bin" "$PY" -I -c '
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("dinit", sys.argv[1])
+spec = importlib.util.spec_from_loader("dinit", loader); m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+try:
+    exec(sys.argv[2])
+except Exception as e:
+    print("ERR:" + type(e).__name__)' "$BIN" "$1" 2>&1
+}
+fresh
+# (a) a scratch interpreter is refused, naming the resolved path and what to do
+for bad in /private/var/folders/aa/scr4tch/python3 /var/folders/aa/scr4tch/python3 /tmp/scr4tch/python3 /private/tmp/scr4tch/python3; do
+  got="$(pyfn "print(m.resolve_interpreter(\"$bad\"))")"
+  { [[ "$got" == "(None, "*"scr4tch/python3"*"run director-init with the python the tick should keep"* ]]; } || miss "R3 (a) an interpreter at $bad is refused with its path and the instruction: $got"
+done
+# (a) revised: the entry keeps the interpreter as given. Homebrew's realpath is Cellar/<version>, which brew cleanup removes
+# after a patch upgrade, so a symlink from a stable path into a fake Cellar must come back as the stable path. The test
+# patches realpath: a stable non-scratch name cannot be created from the verifier's scratch-only write locations.
+got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/homebrew/bin/python3": "/opt/homebrew/Cellar/python@3.14/3.14.7/bin/python3"}.get(p, real(p))
+print(m.resolve_interpreter("/opt/homebrew/bin/python3"))')"
+[[ "$got" == "('/opt/homebrew/bin/python3', None)" ]] || miss "R3 (a) an interpreter symlinked from a stable path into a Cellar directory keeps the stable path: $got"
+# (a) refused when its realpath is scratch though its own name is not, and when its name is scratch though its realpath is not
+got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/link/python3": "/private/var/folders/aa/scr4tch/python3"}.get(p, real(p))
+print(m.resolve_interpreter("/opt/link/python3"))')"
+{ [[ "$got" == "(None, "*"scr4tch/python3"*"run director-init with the python the tick should keep"* ]]; } || miss "R3 (a) an interpreter whose realpath is under scratch is refused: $got"
+got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/tmp/scr4tch/python3": "/usr/bin/python3"}.get(p, real(p))
+print(m.resolve_interpreter("/tmp/scr4tch/python3"))')"
+{ [[ "$got" == "(None, "*"scr4tch/python3"*"run director-init with the python the tick should keep"* ]]; } || miss "R3 (a) an interpreter whose own name is under scratch is refused though its realpath is not: $got"
+# (a) without realpath nothing else makes the written path absolute, so a name that is not absolute is refused, and None
+# (some embeddings) is refused and not raised on (architect, Red Gate of the revised ruling, M1)
+for bad in '""' '"python3"' '"./python3"' 'None'; do
+  got="$(pyfn "print(m.resolve_interpreter($bad))")"
+  { [[ "$got" == "(None, "*"absolute"*"run director-init with the python the tick should keep"* ]]; } || miss "R3 (a) an interpreter that is not an absolute path ($bad) is refused and the message says absolute: $got"
+done
+# (a) on a host where the python3 is a Homebrew symlink into a Cellar directory, the real filesystem gives the same answer
+# without a patch; elsewhere the case prints SKIP
+hb=/opt/homebrew/bin/python3
+if [[ -L "$hb" || -e "$hb" ]] && [[ "$("$PY" -I -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$hb")" == *Cellar* ]]; then
+  got="$(pyfn "print(m.resolve_interpreter(\"$hb\"))")"
+  [[ "$got" == "('$hb', None)" ]] || miss "R3 (a) on this host $hb resolves into a Cellar directory and must come back as given: $got"
+else
+  echo "SKIP R3 (a) host case: $hb is absent or does not resolve into a Cellar directory"
+fi
+# (a) end to end: the printed launchd entry and cron line carry the stable path and never the Cellar path
+case_entry_keeps_given_path() {  # <launchd|cron>
+  fresh; sched_fakes; run -- --entry-role builder
+  set +e
+  out="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:$pydir:/usr/bin:/bin" "${senv[@]}" "$PY" -I -c '
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("dinit", sys.argv[1])
+spec = importlib.util.spec_from_loader("dinit", loader); m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+m.check_profile = lambda p: (True, "")  # the real check runs sys.executable, which is faked below
+real = os.path.realpath
+os.path.realpath = lambda p: "/opt/homebrew/Cellar/python@3.14/3.14.7/bin/python3" if p == "/opt/homebrew/bin/python3" else real(p)
+sys.executable = "/opt/homebrew/bin/python3"
+sys.exit(m.main(["--schedule", "--scheduler", sys.argv[2]]))' "$BIN" "$1" 2>&1 </dev/null)"
+  rc=$?
+  set -e
+  [[ $rc -eq 0 && "$out" == *"/opt/homebrew/bin/python3"* && "$out" != *"Cellar"* && ! -s "$work/sched.log" ]]
+}
+case_entry_keeps_given_path launchd && : || miss "R7 the launchd entry names the interpreter as given (/opt/homebrew/bin/python3), never its Cellar realpath: rc=$rc out=$out"
+case_entry_keeps_given_path cron && : || miss "R7 the cron line names the interpreter as given (/opt/homebrew/bin/python3), never its Cellar realpath: rc=$rc out=$out"
+# mutants for the revised rule: each one-replacement copy of director-init must make a case above fail
+saved_bin="$BIN"
+run_r_cases() {  # R3 (a) Cellar and absolute, R5 clean entry, R7: prints a MISS-free run as rc 0, any failure as rc 1
+  local r=0 got
+  got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/homebrew/bin/python3": "/opt/homebrew/Cellar/python@3.14/3.14.7/bin/python3"}.get(p, real(p))
+print(m.resolve_interpreter("/opt/homebrew/bin/python3"))')"
+  [[ "$got" == "('/opt/homebrew/bin/python3', None)" ]] || r=1
+  got="$(pyfn 'print(m.resolve_interpreter(""))')"; [[ "$got" == "(None, "*"absolute"* ]] || r=1
+  got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/link/bin": "/opt/real/bin"}.get(p, real(p))
+os.environ["PATH"] = "/opt/link/bin:/usr/bin"
+print(m.captured_path())')"
+  [[ "$got" == "/opt/link/bin:/usr/bin" ]] || r=1
+  case_entry_keeps_given_path launchd || r=1
+  case_entry_keeps_given_path cron || r=1
+  return $r
+}
+mpath="$(init_mutant writes_realpath '    return executable, None
+' '    return real, None
+')" && { BIN="$mpath"; if run_r_cases; then miss "mutant writes_realpath survives: no case caught the interpreter written as its realpath"; else echo "ok  mutant writes_realpath is caught by R3 and R7"; fi; BIN="$saved_bin"; }
+mpath="$(init_mutant ignores_isabs 'if not isinstance(executable, str) or not os.path.isabs(executable):' 'if not isinstance(executable, str):')" && { BIN="$mpath"; if run_r_cases; then miss "mutant ignores_isabs survives: an empty interpreter is accepted"; else echo "ok  mutant ignores_isabs is caught by R3"; fi; BIN="$saved_bin"; }
+mpath="$(init_mutant writes_realpath_entry '        keep.append(e)' '        keep.append(os.path.realpath(e))')" && { BIN="$mpath"; if run_r_cases; then miss "mutant writes_realpath_entry survives: a PATH entry written as its realpath"; else echo "ok  mutant writes_realpath_entry is caught by R5"; fi; BIN="$saved_bin"; }
+# (b) /private/var/folders is a scratch prefix, in the printed entry too
+fresh; sched_fakes; run -- --entry-role builder
+set +e; fout="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:/usr/bin:/private/var/folders/d:/private/var/folders:/bin" "$pydir/python3" "$BIN" --schedule --scheduler cron 2>&1 </dev/null)"; frc=$?; set -e
+fwant="$(raw_path "$stubs")"; fwant="${fwant:+$fwant:}/usr/bin:/bin"
+[[ "$fout" == *"PATH=$fwant "* ]] || miss "R4 (b) /private/var/folders and below are dropped from the captured PATH: rc=$frc want PATH=$fwant out=$fout"
+# (b) a PATH entry that is a symlink into a scratch directory is dropped, though its own name is not scratch
+got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/link/bin": "/private/var/folders/real/bin", "/usr/bin": "/usr/bin"}.get(p, real(p))
+os.environ["PATH"] = "/opt/link/bin:/usr/bin:/opt/ok/bin"
+print(m.captured_path())')"
+[[ "$got" == "/usr/bin:/opt/ok/bin" ]] || miss "R5 (b) a PATH entry whose realpath is under a scratch prefix is dropped: $got"
+# (b) a clean entry whose realpath is also clean is kept as written, not as its realpath (a control: it holds before and after)
+got="$(pyfn 'real = os.path.realpath
+os.path.realpath = lambda p: {"/opt/link/bin": "/opt/real/bin"}.get(p, real(p))
+os.environ["PATH"] = "/opt/link/bin:/usr/bin"
+print(m.captured_path())')"
+[[ "$got" == "/opt/link/bin:/usr/bin" ]] || miss "R5 (b) a clean PATH entry whose realpath differs is written as it was given: $got"
+# (b) the entry as written is kept for a clean entry, and a PATH of only scratch links falls back
+got="$(pyfn 'os.path.realpath = lambda p: "/private/tmp/x"
+os.environ["PATH"] = "/opt/a/bin:/opt/b/bin"
+print(m.captured_path())')"
+[[ "$got" == "/usr/bin:/bin" ]] || miss "R5 (b) a PATH whose entries all resolve into scratch falls back to /usr/bin:/bin: $got"
+
+# R6 (architect, director#755): do_schedule acts on the refusal. With sys.executable set to a scratch path that does not
+# exist (realpath of a missing file returns it, so it stays under /private/tmp), --schedule --yes exits 1, prints no entry,
+# calls no scheduler tool, and leaves the plist, the crontab store and the profile as they were.
+case_scratch_python() {  # <launchd|cron>
+  fresh; sched_fakes; run -- --entry-role builder
+  local pl="$home/Library/LaunchAgents/com.arcaven.director-tick.plist" p0; p0="$(sum_of "$prof")"; : >"$work/sched.log"
+  set +e
+  out="$(env -i HOME="$home" TMPDIR="$work/tmp" PATH="$stubs:$pydir:/usr/bin:/bin" "${senv[@]}" "$PY" -I -c '
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("dinit", sys.argv[1])
+spec = importlib.util.spec_from_loader("dinit", loader); m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+m.check_profile = lambda p: (True, "")  # the real check runs sys.executable, which is faked below
+sys.executable = "/private/tmp/scr4tch/python3"
+sys.exit(m.main(["--schedule", "--scheduler", sys.argv[2], "--yes"]))' "$BIN" "$1" 2>&1 </dev/null)"
+  rc=$?
+  set -e
+  [[ $rc -eq 1 && "$out" != *"scheduler:"* && "$out" == *"scr4tch/python3"* && "$out" == *"run director-init with the python the tick should keep"* && "$out" != *"Traceback"* && ! -s "$work/sched.log" && ! -e "$pl" && ! -e "$work/cron.store" && "$(sum_of "$prof")" == "$p0" ]]
+}
+case_scratch_python launchd && : || miss "R6 a scratch interpreter makes --schedule --yes (launchd) refuse with rc 1 and no entry, scheduler call, plist or profile change: rc=$rc out=$out log=$(tr '\n' ';' <"$work/sched.log")"
+case_scratch_python cron && : || miss "R6 a scratch interpreter makes --schedule --yes (cron) refuse with rc 1 and no entry, scheduler call, crontab or profile change: rc=$rc out=$out log=$(tr '\n' ';' <"$work/sched.log")"
+mpath="$(init_mutant ignores_refusal '    if python is None:
+        err(why)
+        return 1
+' '    if python is None:
+        python = sys.executable
+')" && { BIN="$mpath"; if case_scratch_python launchd && case_scratch_python cron; then miss "mutant ignores_refusal survives: R6 did not catch do_schedule using a scratch interpreter"; else echo "ok  mutant ignores_refusal is caught by R6"; fi; BIN="$saved_bin"; }
 
 # ---- the python rule ----
 fresh

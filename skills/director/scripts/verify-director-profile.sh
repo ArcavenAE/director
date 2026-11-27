@@ -21,7 +21,7 @@
 #    as a [[team]] key and as a rules entry;
 #  - path expansion: ~ and $DIRECTOR_STATE only, a relative path is relative to
 #    the profile file's directory;
-#  - the [loop] table: seven optional keys with their types, scheduler only "none", an unknown
+#  - the [loop] table: seven optional keys with their types, scheduler "none", "launchd" or "cron", an unknown
 #    key refused as loop.<key>, printed as loop.<key>: value (P22, standing-keys-accepted);
 #  - the python rule: python3 older than 3.11 is refused with one line, and a
 #    newer python3.N on PATH is used instead.
@@ -161,7 +161,7 @@ run -- check "$work/prof/paths.toml"
 # ---- P22 standing-keys-accepted: the [loop] table (standing-loop design slice 4) ----
 # A closed table, every key optional: state_dir and workspace and ticket_pattern are
 # strings, idea_roots a list of strings, tick_interval integer minutes, digest_max_age
-# integer hours, scheduler only "none" (slice 16 widens it). Printed as loop.<key>: value,
+# integer hours, scheduler one of "none", "launchd" or "cron" (slice 16). Printed as loop.<key>: value,
 # written as in the file (no expansion: no script reads [loop] yet, so nothing resolves it).
 wprof "$work/loop.toml" 'schema_version = 1' '[loop]' \
   'state_dir = "/var/lib/d"' 'idea_roots = ["/r/one/*.md", "/r/two/*.md"]' 'ticket_pattern = "PROJ-[0-9]+"' \
@@ -176,7 +176,12 @@ wprof "$work/loop0.toml" 'schema_version = 1' '[loop]'
 run -- check "$work/loop0.toml"
 [[ $rc -eq 0 && "$out" != *"loop."* ]] || miss "P22 an empty [loop] table is accepted and prints nothing of its own: rc=$rc out=$out"
 refuse "P22 unknown key in [loop]" "unknown key: loop.colour" 'schema_version = 1' '[loop]' 'colour = "red"'
-refuse "P22 scheduler other than none" 'loop.scheduler must be "none"' 'schema_version = 1' '[loop]' 'scheduler = "cron"'
+for sch in none launchd cron; do
+  wprof "$work/sch-$sch.toml" 'schema_version = 1' '[loop]' "scheduler = \"$sch\""
+  run -- check "$work/sch-$sch.toml"
+  [[ $rc -eq 0 && "$out" == *"loop.scheduler: $sch"* ]] || miss "P22 scheduler = \"$sch\" is accepted (slice 16): rc=$rc out=$out"
+done
+refuse "P22 scheduler outside none, launchd and cron" 'loop.scheduler must be one of "none", "launchd" or "cron"' 'schema_version = 1' '[loop]' 'scheduler = "systemd"'
 refuse "P22 tick_interval must be an integer" "loop.tick_interval must be an integer" 'schema_version = 1' '[loop]' 'tick_interval = "15m"'
 refuse "P22 tick_interval is not a boolean" "loop.tick_interval must be an integer" 'schema_version = 1' '[loop]' 'tick_interval = true'
 refuse "P22 digest_max_age must be an integer" "loop.digest_max_age must be an integer" 'schema_version = 1' '[loop]' 'digest_max_age = 1.5'
