@@ -189,12 +189,29 @@ func dial(url string, self Sender) (*nats.Conn, jetstream.JetStream, error) {
 	return dialRing(url, self, nil)
 }
 
+// The reconnect timing and the closed-connection report are variables so a test
+// can shorten the wait and capture the report; production never changes them
+// (aae-orc I-870).
+var (
+	dialReconnectWait      = nats.DefaultReconnectWait
+	dialReconnectJitter    = nats.DefaultReconnectJitter
+	dialReconnectJitterTLS = nats.DefaultReconnectJitterTLS
+	// closedReport says that a bus connection ended without being asked to.
+	closedReport = func(name string, err error) {
+		fmt.Fprintf(os.Stderr, "director-mcp: bus connection %s closed: %v\n", name, err)
+	}
+)
+
 // dialRing is dial with an error handler that records the broker's publish
 // permission violations in ring (nil keeps none). The violation is delivered
 // only on the async error callback; a denied JetStream publish itself returns a
 // bare timeout, so bus.go and global.go read the ring to say why.
 func dialRing(url string, self Sender, ring *violationRing) (*nats.Conn, jetstream.JetStream, error) {
-	opts := []nats.Option{nats.Name("director-mcp/" + self.AgentID)}
+	opts := []nats.Option{
+		nats.Name("director-mcp/" + self.AgentID),
+		nats.ReconnectWait(dialReconnectWait),
+		nats.ReconnectJitter(dialReconnectJitter, dialReconnectJitterTLS),
+	}
 	if ring != nil {
 		opts = append(opts, nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) { ring.note(err) }))
 	}
