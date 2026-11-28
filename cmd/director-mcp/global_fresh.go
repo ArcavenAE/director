@@ -23,10 +23,9 @@ var earlierDurableProbe = func(ctx context.Context, g *globalTier, agentID, self
 			return false
 		}
 		i := strings.LastIndexByte(rest, '_')
-		// A seat holding a role also has mcp_<agent>_<instance>-role (durableOf), so
-		// the "-role" suffix comes off before the instance compare: neither of this
-		// seat's own durables is an earlier one.
-		if i <= 0 || i == len(rest)-1 || strings.TrimSuffix(rest[i+1:], "-role") == self {
+		// A seat's own local durables can carry a suffix after the instance, so it
+		// comes off before the instance compare: none of them is an earlier one.
+		if i <= 0 || i == len(rest)-1 || trimLocalSuffix(rest[i+1:]) == self {
 			return false
 		}
 		agent := rest[:i]
@@ -52,6 +51,18 @@ var earlierDurableProbe = func(ctx context.Context, g *globalTier, agentID, self
 		}
 	}
 	return false, names.Err()
+}
+
+// trimLocalSuffix takes one local durable suffix off the end of a durable
+// name's instance part: "-role" on a role holder's second durable (durableOf),
+// "-inherit" on the durable that reads a predecessor's mail (startInherit).
+func trimLocalSuffix(inst string) string {
+	for _, suf := range []string{"-role", "-inherit"} {
+		if r, cut := strings.CutSuffix(inst, suf); cut {
+			return r
+		}
+	}
+	return inst
 }
 
 func (g *globalTier) hubHasEarlier(ctx context.Context, mine func(prefix, name string) bool, filters []string) (bool, error) {

@@ -80,7 +80,9 @@ func TestProbeEarlierInstanceDurableIsStillEarlier(t *testing.T) {
 }
 
 // A seat with a predecessor also holds mcp_<agent>_<instance>-inherit while it
-// reads the predecessor's mail. That durable is the seat's own too.
+// reads the predecessor's mail. That durable is the seat's own too. The probe
+// sees it on the local fallback, which runs because the seat user cannot list
+// the hub stream.
 func TestProbeOwnInheritDurableIsNotEarlier(t *testing.T) {
 	shortFloorList(t)
 	const pred = "alpha-builder-g1-0"

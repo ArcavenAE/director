@@ -48,7 +48,8 @@ func (d *deliverableState) fresh() (deliverableCounts, bool) {
 }
 
 // deliverableNow is the figure for the presence row: nil when no FOR filter is
-// attached, so the row carries no field, and nil when the tiers cannot be read.
+// attached, so the row carries no field, and nil when the tiers cannot be read
+// or the read stores no fresh figure (the global tier detached under it).
 func (b *Bus) deliverableNow(ctx context.Context) *deliverableCounts {
 	if b.globalCfg == nil {
 		return nil
@@ -65,7 +66,10 @@ func (b *Bus) deliverableNow(ctx context.Context) *deliverableCounts {
 	if _, err := b.pendingTiers(ctx); err != nil {
 		return nil
 	}
-	c, _ := b.deliverable.fresh()
+	c, ok := b.deliverable.fresh()
+	if !ok {
+		return nil
+	}
 	return &c
 }
 
