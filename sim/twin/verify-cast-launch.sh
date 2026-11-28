@@ -501,6 +501,18 @@ for pairrole in mythos-architect:architect builder-i804:builder; do
   fi
 done
 
+# builder-i804 carries no scope text of its own either, so it needs CAST_SCOPE too.
+if cast builder-i804; then
+  bad "builder-i804: a cast with CAST_SCOPE unset was allowed" "$(cat "$root/out/claude.args")"
+else
+  grep -q "CAST_SCOPE" "$root/out/stderr" \
+    && ok "builder-i804: with CAST_SCOPE unset the cast is refused, naming CAST_SCOPE" \
+    || bad "builder-i804: the refusal does not name CAST_SCOPE" "$(cat "$root/out/stderr")"
+  [[ ! -e "$root/out/claude.args" ]] \
+    && ok "builder-i804: the refused cast never launched claude" \
+    || bad "builder-i804: the refused cast launched claude"
+fi
+
 # --- clean-room mode: a per-seat config directory, no shim, a settings dry run ---
 # wardrobe finding-wardrobe-keku items 1, 3 and 4. CAST_CLEAN_ROOM_DIR names a
 # fresh per-seat CLAUDE_CONFIG_DIR outside the operator's; the seat gets no
