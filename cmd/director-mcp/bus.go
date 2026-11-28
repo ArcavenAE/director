@@ -218,7 +218,12 @@ func dialRing(url string, self Sender, ring *violationRing) (*nats.Conn, jetstre
 		// unreachable, and connect_retry.go retries the shim's startup.
 		nats.MaxReconnects(-1),
 		// A connection that ends without Close having been called is said so.
-		// An orderly Close leaves no last error and says nothing.
+		// NoCallbacksAfterClientClose keeps Close from running the handler: a
+		// permission violation or a slow consumer sets the last error without
+		// closing, so the last error alone cannot tell an exit the caller asked
+		// for from one it did not. The guard stays for the ends the client
+		// makes itself (a refused credential, a drain that times out).
+		nats.NoCallbacksAfterClientClose(),
 		nats.ClosedHandler(func(c *nats.Conn) {
 			if err := c.LastError(); err != nil {
 				closedReport(c.Opts.Name, err)
