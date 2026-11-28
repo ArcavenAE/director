@@ -580,6 +580,16 @@ fi
 
 [[ -n "$CR_DIR" ]] && settings_args=(--settings "$CR_SETTINGS")
 
+# Supervisor casts (research-supervisors too) may read and type into the panes
+# they supervise without a classifier prompt: the operator's ruling of
+# 2026-11-25, "I want you to get ALL supervisors the ability to marvel
+# capture/marvel inject". An allow rule, so the auto mode classifier is not
+# asked; a deny rule elsewhere still wins.
+sup_args=()
+if [[ "$GROLE" == supervisor ]]; then
+  sup_args=(--allowedTools "Bash(marvel capture:*)" --allowedTools "Bash(marvel inject:*)")
+fi
+
 # The development-channels prompt (aae-orc-d3rel, route R4; the operator's ruling of
 # 2026-11-09). A seat started with the dev-channels flag stops at a startup prompt until
 # someone answers it. This script ends in exec, so it cannot press a key afterwards: it
@@ -628,4 +638,5 @@ exec ${cr_env[@]+"${cr_env[@]}"} claude -n "$DIRECTOR_AGENT_ID" \
   --append-system-prompt "$prompt" \
   "$@" \
   ${settings_args[@]+"${settings_args[@]}"} \
+  ${sup_args[@]+"${sup_args[@]}"} \
   ${cue_args[@]+"${cue_args[@]}"}
