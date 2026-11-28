@@ -337,14 +337,23 @@ One wait at a time per session; a second open wait is refused and reads nothing.
 Result with a message:
 
 ```json
-{ "message": { "...the envelope..." }, "tier": "local" }
+{ "message": { "...the envelope..." }, "tier": "local", "polled": ["local"] }
 ```
 
 Result without one:
 
 ```json
-{ "message": null, "note": "no message within the window; this is silence, not failure" }
+{ "message": null, "note": "no message within the window; this is silence, not failure", "polled": ["local", "global"] }
 ```
+
+Every result, single or batch, carries `polled`: the tiers whose inbox this call
+read, local before global. A silent result without `global` in it did not watch
+the global inbox: global mode is off, or no read of it succeeded, and
+`global_warning`, when present, says why. A single-form hit can list one tier
+only, because that call stops at the first message. Returned mail (below) lists
+none. A listed tier means a read of it returned mail or came back empty without
+an error, not that the hub answered: across a leaf link an unanswered pull also
+looks empty.
 
 An empty poll also carries `expired_unread` when the local inbox stream has
 aged past this seat's last read position: mail for the seat inside that gap may

@@ -244,6 +244,7 @@ type batchResult struct {
 	Discarded  int // undecodable messages terminated during the drain
 	LocalWarn  string
 	GlobalWarn string
+	Polled     polledTiers // the tiers whose inbox the call read
 }
 
 // drainWaiting takes what is already waiting, up to n, without blocking. With
@@ -280,6 +281,7 @@ func (b *Bus) drainWaiting(ctx context.Context, n int, res *batchResult) error {
 		gitems, gdisc, err := g.drainNoWait(ctx, k, b.self.AgentID, b.instance)
 		res.Items = append(res.Items, gitems...)
 		res.Discarded += gdisc
+		res.Polled.read("global", len(gitems)+gdisc, err)
 		if err != nil {
 			res.GlobalWarn = joinWarn(res.GlobalWarn, fmt.Sprintf("global inbox drain failed: %v", err))
 		}
@@ -316,6 +318,7 @@ func (b *Bus) drainLocal(ctx context.Context, n int, res *batchResult) error {
 	}, n)
 	res.Items = append(res.Items, items...)
 	res.Discarded += disc
+	res.Polled.read("local", len(items)+disc, err)
 	if err != nil {
 		if len(res.Items) == 0 {
 			return err
@@ -340,6 +343,7 @@ func (b *Bus) receiveBatch(ctx context.Context, timeout time.Duration, max int) 
 			return res, err
 		}
 		res.GlobalWarn = joinWarn(res.GlobalWarn, first.GlobalWarn)
+		res.Polled.merge(first.Polled)
 		if first.Env == nil {
 			// The inherited durable can start while the call waits; its mail is
 			// waiting now, so one more look before the call returns empty.

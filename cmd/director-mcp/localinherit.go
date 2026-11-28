@@ -355,7 +355,9 @@ func (b *Bus) ownWaiting(ctx context.Context, res *pollResult) *drained {
 		res.GlobalWarn = joinWarn(res.GlobalWarn, notices)
 		return w
 	}
-	if items, _, _ := b.pullLocalNoWait(ctx, 1); len(items) > 0 {
+	items, discarded, err := b.pullLocalNoWait(ctx, 1)
+	res.Polled.read("local", len(items)+discarded, err)
+	if len(items) > 0 {
 		return &items[0]
 	}
 	return nil
