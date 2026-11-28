@@ -448,6 +448,49 @@ func (b *Bus) waitIsOpen() bool {
 	return !b.waitSince.IsZero()
 }
 
+// polledTiers records which tiers' inboxes a wait read, for the result's
+// polled field: without it a silent result from a seat with the global tier off
+// reads the same as one whose global inbox was watched and empty (director#52).
+// A tier is listed once a read of it returned a message or came back empty
+// without an error. It is not proof the hub answered: across a leaf link an
+// unanswered pull also comes back empty (director#66).
+type polledTiers struct{ local, global bool }
+
+// note lists tier.
+func (p *polledTiers) note(tier string) {
+	switch tier {
+	case "local":
+		p.local = true
+	case "global":
+		p.global = true
+	}
+}
+
+// read lists tier if a read of it got n messages (undecodable ones counted) or
+// ended with no error but an empty window.
+func (p *polledTiers) read(tier string, n int, err error) {
+	if n > 0 || err == nil || errors.Is(err, jetstream.ErrNoMessages) {
+		p.note(tier)
+	}
+}
+
+func (p *polledTiers) merge(o polledTiers) {
+	p.local = p.local || o.local
+	p.global = p.global || o.global
+}
+
+// list is the polled field: local before global, and empty rather than null.
+func (p polledTiers) list() []string {
+	out := []string{}
+	if p.local {
+		out = append(out, "local")
+	}
+	if p.global {
+		out = append(out, "global")
+	}
+	return out
+}
+
 func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 	release, since, ok := bus.openWait()
 	if !ok {
@@ -486,9 +529,10 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		}
 	}
 	if res.Env == nil {
-		warn := res.GlobalWarn
+		warn, polled := res.GlobalWarn, res.Polled
 		res, err = bus.receiveTiered(ctx, time.Duration(a.TimeoutSeconds)*time.Second)
 		res.GlobalWarn = joinWarn(warn, res.GlobalWarn)
+		res.Polled.merge(polled)
 		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
 			return nil, err
 		}
@@ -520,12 +564,15 @@ func toolWait(ctx context.Context, bus *Bus, raw json.RawMessage) (any, error) {
 		beatSilence(ctx, bus, time.Now())
 	} else {
 		out["tier"] = res.Tier
+		// Inherited mail is read outside res; its tier was read all the same.
+		res.Polled.note(res.Tier)
 		if bus.handled != nil {
 			// The handled mode needs the sequence to record the message.
 			out["sequence"] = res.Seq
 			out["handled_note"] = "not acked: record it with mark_handled (the message_id and tier above)"
 		}
 	}
+	out["polled"] = res.Polled.list()
 	// A global-tier failure is reported beside the answer rather than instead
 	// of it: the local tier keeps working through a hub outage, so the poll
 	// does too, and the caller still hears that the hub did not answer.
@@ -554,6 +601,7 @@ func returnedResult(ctx context.Context, bus *Bus, a waitArgs, items []drained) 
 		out := map[string]any{
 			"messages": items, "count": len(items), "order": batchOrderNote,
 			"returned": len(items), "returned_note": note, "remaining": rem,
+			"polled": polledTiers{}.list(), // no inbox is read for returned mail
 		}
 		discarded := 0
 		for _, it := range items {
@@ -569,6 +617,7 @@ func returnedResult(ctx context.Context, bus *Bus, a waitArgs, items []drained) 
 	out := map[string]any{
 		"message": items[0].Env, "tier": items[0].Tier,
 		"returned": true, "returned_note": note,
+		"polled": polledTiers{}.list(),
 	}
 	if items[0].InheritedFrom != "" {
 		out["inherited_from"] = items[0].InheritedFrom
@@ -589,6 +638,7 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 	}
 	for _, it := range items {
 		resolveRelaySession(ctx, it.Env)
+		res.Polled.note(it.Tier)
 	}
 	if al := ackLaterFrom(ctx); al != nil && res.Discarded > 0 {
 		al.noteDiscarded(res.Discarded)
@@ -598,6 +648,7 @@ func toolWaitBatch(ctx context.Context, bus *Bus, a waitArgs) (any, error) {
 		"messages": items,
 		"count":    len(items),
 		"order":    batchOrderNote,
+		"polled":   res.Polled.list(),
 	}
 	if line != "" {
 		out["fact_line"] = line

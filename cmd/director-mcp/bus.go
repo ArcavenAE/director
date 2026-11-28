@@ -1675,6 +1675,7 @@ type pollResult struct {
 	Tier       string
 	Seq        uint64 // stream sequence on the tier's stream; orders a batch
 	GlobalWarn string
+	Polled     polledTiers // the tiers whose inbox the call read
 }
 
 // receiveTiered polls local first, then global, in slices until the budget is
@@ -1682,10 +1683,12 @@ type pollResult struct {
 func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollResult, error) {
 	if b.globalCfg == nil {
 		e, seq, err := b.receive(ctx, timeout)
+		var polled polledTiers
+		polled.read("local", envCount(e), err)
 		if err != nil {
-			return pollResult{}, err
+			return pollResult{Polled: polled}, err
 		}
-		return pollResult{Env: e, Tier: tierOf(e, "local"), Seq: seq}, nil
+		return pollResult{Env: e, Tier: tierOf(e, "local"), Seq: seq, Polled: polled}, nil
 	}
 	// notices collects durable recreates across slices. GlobalWarn is reset
 	// each slice so a recovered hub stops being reported, but a recreate is
@@ -1713,6 +1716,7 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 			return done(), nil
 		}
 		e, seq, err := b.receive(ctx, slice)
+		res.Polled.read("local", envCount(e), err)
 		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
 			return done(), err
 		}
@@ -1736,6 +1740,7 @@ func (b *Bus) receiveTiered(ctx context.Context, timeout time.Duration) (pollRes
 		}
 		e, gseq, discarded, err := g.receive(ctx, slice, b.self.AgentID, b.instance)
 		notices = joinWarn(notices, g.takeNotice())
+		res.Polled.read("global", envCount(e)+discarded, err)
 		if err != nil && !errors.Is(err, jetstream.ErrNoMessages) {
 			res.GlobalWarn = fmt.Sprintf("global inbox poll failed: %v", err)
 			continue
@@ -1761,18 +1766,23 @@ func (b *Bus) takeWaiting(ctx context.Context, res *pollResult, notices *string)
 		order = []string{"global", "local"}
 	}
 	for _, tier := range order {
-		var items []drained
+		var (
+			items     []drained
+			discarded int
+			err       error
+		)
 		if tier == "local" {
-			items, _, _ = b.pullLocalNoWait(ctx, 1)
+			items, discarded, err = b.pullLocalNoWait(ctx, 1)
 		} else {
-			g, err := b.globalReady(ctx)
-			if err != nil {
-				res.GlobalWarn = err.Error()
+			g, gerr := b.globalReady(ctx)
+			if gerr != nil {
+				res.GlobalWarn = gerr.Error()
 				continue
 			}
-			items, _, _ = g.drainNoWait(ctx, 1, b.self.AgentID, b.instance)
+			items, discarded, err = g.drainNoWait(ctx, 1, b.self.AgentID, b.instance)
 			*notices = joinWarn(*notices, g.takeNotice())
 		}
+		res.Polled.read(tier, len(items)+discarded, err)
 		if len(items) > 0 {
 			return &items[0]
 		}
@@ -1790,6 +1800,14 @@ func sliceLeft(deadline time.Time) (time.Duration, bool) {
 		return remaining, true
 	}
 	return tierPollSlice, true
+}
+
+// envCount is the number of messages a single-message receive returned.
+func envCount(e *Envelope) int {
+	if e == nil {
+		return 0
+	}
+	return 1
 }
 
 func tierOf(e *Envelope, tier string) string {
