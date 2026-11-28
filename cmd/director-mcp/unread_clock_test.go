@@ -153,6 +153,37 @@ func TestUnreadIdleWindowOnTheReaderClockSaysSo(t *testing.T) {
 	}
 }
 
+// A role holder's two durables fold into one row. The idle-window note follows
+// the state through that fold, and is said once when both durables carry it.
+func TestUnreadRoleHolderRowKeepsTheReaderClockIdleNote(t *testing.T) {
+	real := brokerClock
+	brokerClock = func(*jetstream.ConsumerInfo, time.Time) time.Time { return time.Time{} }
+	t.Cleanup(func() { brokerClock = real })
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	url := startScratchServer(t)
+	_, js := provision(t, ctx, url)
+	roleOnly := liveSeat(t, ctx, url, Sender{AgentID: "rev-a", Workspace: "w", Team: "t", Role: "reviewer"})
+	both := liveSeat(t, ctx, url, Sender{AgentID: "rev-b", Workspace: "w", Team: "t", Role: "reviewer"})
+	pubEnv(t, ctx, js, "agent.w.t.role.reviewer.inbox", "role1", "REQUEST", "hello")
+	pubEnv(t, ctx, js, "agent.w.t.rev-b.inbox", "own1", "REQUEST", "hello")
+
+	r := mustRead(t, ctx, js, time.Now().Add(2*time.Hour))
+	for _, c := range []struct {
+		name     string
+		instance string
+		pending  uint64
+	}{{"mail on the role durable only", roleOnly.instance, 1}, {"mail on both durables", both.instance, 2}} {
+		d := rowFor(t, r, c.instance)
+		if d.State != stateDurableIdle || d.Pending != c.pending {
+			t.Fatalf("CONTROL FAILED: %s: state = %q pending %d, want %q pending %d", c.name, d.State, d.Pending, stateDurableIdle, c.pending)
+		}
+		if n := strings.Count(d.Note, idleOnReaderClock); n != 1 {
+			t.Errorf("%s: row note = %q, want it to say %q once, said %d times", c.name, d.Note, idleOnReaderClock, n)
+		}
+	}
+}
+
 // simulateAgreeingBrokerClock is for tests that stand in for elapsed time by
 // handing the reader a clock in the future: the broker's clock is then taken to
 // agree with that reader clock, which is what these tests were written against.
