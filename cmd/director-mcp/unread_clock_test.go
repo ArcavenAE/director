@@ -69,6 +69,10 @@ func TestBrokerClockFallsBackToReaderClockAndSaysSo(t *testing.T) {
 	}
 }
 
+// idleOnReaderClock is what a row says when the idle window was timed on the
+// reader clock.
+const idleOnReaderClock = "idle window uses the reader clock"
+
 // The durable-idle window runs from the durable's Created, a broker time, to
 // the broker's clock, so a reader host with a skewed clock neither raises the
 // state early nor hides it.
@@ -89,6 +93,9 @@ func TestUnreadReaderClockAheadDoesNotNameAYoungDurableIdle(t *testing.T) {
 	d := rowFor(t, mustRead(t, ctx, js, time.Now().Add(2*time.Hour)), seat.instance)
 	if d.State != stateBehind {
 		t.Fatalf("reader clock 2h ahead: state = %q, want %q: the broker clock says the durable is younger than the idle window", d.State, stateBehind)
+	}
+	if strings.Contains(d.Note, idleOnReaderClock) {
+		t.Fatalf("the broker supplied a time, yet the row says the reader clock timed the window: %q", d.Note)
 	}
 }
 
@@ -113,6 +120,9 @@ func TestUnreadReaderClockBehindStillNamesAnOldDurableIdle(t *testing.T) {
 	if d.State != stateDurableIdle {
 		t.Fatalf("reader clock 2h behind: state = %q, want %q: the broker clock says the durable is past the idle window", d.State, stateDurableIdle)
 	}
+	if strings.Contains(d.Note, idleOnReaderClock) {
+		t.Fatalf("the broker supplied a time, yet the row says the reader clock timed the window: %q", d.Note)
+	}
 }
 
 // When the server leaves the consumer info time zero, the idle window falls
@@ -135,11 +145,10 @@ func TestUnreadIdleWindowOnTheReaderClockSaysSo(t *testing.T) {
 	if d.State != stateDurableIdle {
 		t.Fatalf("no broker time, reader clock 2h ahead: state = %q, want %q from the reader clock", d.State, stateDurableIdle)
 	}
-	const want = "idle window uses the reader clock"
-	if !strings.Contains(d.Note, want) {
-		t.Fatalf("row note = %q, want it to say %q", d.Note, want)
+	if !strings.Contains(d.Note, idleOnReaderClock) {
+		t.Fatalf("row note = %q, want it to say %q", d.Note, idleOnReaderClock)
 	}
-	if d := rowFor(t, r, empty.instance); d.State != stateReading || strings.Contains(d.Note, want) {
+	if d := rowFor(t, r, empty.instance); d.State != stateReading || strings.Contains(d.Note, idleOnReaderClock) {
 		t.Fatalf("row with nothing waiting = state %q note %q, want %q and no idle-window note", d.State, d.Note, stateReading)
 	}
 }

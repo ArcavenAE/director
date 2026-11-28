@@ -217,6 +217,7 @@ func TestUnreadDeafSeatIsDurableIdle(t *testing.T) {
 // Design test 2, correlation: the session answers one of its pending
 // messages under its own sender.instance, so it reads elsewhere.
 func TestUnreadReplyFromTheSessionIsReadsOutside(t *testing.T) {
+	simulateAgreeingBrokerClock(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
@@ -249,6 +250,7 @@ func TestUnreadReplyFromTheSessionIsReadsOutside(t *testing.T) {
 // reads-outside-durable row rests on the sender's own claim, and the reader
 // says so in the JSON evidence and in both text views.
 func TestUnreadEvidenceSaysTheInstanceIsSelfAsserted(t *testing.T) {
+	simulateAgreeingBrokerClock(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
@@ -291,6 +293,7 @@ func TestUnreadEvidenceSaysTheInstanceIsSelfAsserted(t *testing.T) {
 // sender.session (the harness session UUID field), never reclasses a deaf
 // session.
 func TestUnreadSiblingOrSessionlessReplyLeavesIdle(t *testing.T) {
+	simulateAgreeingBrokerClock(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
@@ -317,6 +320,7 @@ func TestUnreadSiblingOrSessionlessReplyLeavesIdle(t *testing.T) {
 // Design test 2, truncated: a matching reply inside the capped scan does not
 // upgrade a row when the scan stopped short of the durable's Created.
 func TestUnreadTruncatedScanNeverUpgrades(t *testing.T) {
+	simulateAgreeingBrokerClock(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
@@ -400,6 +404,7 @@ func TestUnreadBehindReadingAndThreshold(t *testing.T) {
 // Design test 5: two live holders of one role, one behind and one reading
 // outside: one role line, two holders, the age from the behind holder only.
 func TestUnreadRoleRollup(t *testing.T) {
+	simulateAgreeingBrokerClock(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := startScratchServer(t)
