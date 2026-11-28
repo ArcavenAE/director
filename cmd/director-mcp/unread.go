@@ -360,6 +360,17 @@ type unreadDurable struct {
 	pendingIDs  map[string]bool
 }
 
+// addNote appends one note to the row's, and does nothing for an empty one.
+func (d *unreadDurable) addNote(note string) {
+	if note == "" {
+		return
+	}
+	if d.Note != "" {
+		d.Note += "; "
+	}
+	d.Note += note
+}
+
 // unreadEvidence is what reclassed a durable-idle row: the pending message ids
 // this session answered under its own sender.instance, and its latest such send.
 type unreadEvidence struct {
@@ -613,7 +624,8 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 			continue
 		}
 		d := durableRow(info, rest, presence, withRev)
-		var ageNote string
+		brokerNow := brokerClock(info, now)
+		var ageNote, idleNote string
 		if d.Pending > 0 {
 			// The first message the durable has not acked: after its ack floor,
 			// and never before where a resumed durable started.
@@ -632,18 +644,14 @@ func readDurables(ctx context.Context, stream jetstream.Stream, name func(string
 				if d.OldestSeq == 0 || m.Sequence < d.OldestSeq {
 					d.OldestSeq = m.Sequence
 					d.OldestAt = m.Time.UTC().Format(time.RFC3339)
-					d.OldestAgeSeconds, ageNote = ageOnBrokerClock(brokerClock(info, now), now, m.Time)
+					d.OldestAgeSeconds, ageNote = ageOnBrokerClock(brokerNow, now, m.Time)
 				}
 			}
 		}
-		if ageNote != "" {
-			if d.Note != "" {
-				d.Note += "; "
-			}
-			d.Note += ageNote
-		}
+		d.addNote(ageNote)
 		if d.Live {
-			d.State = liveState(d, now)
+			d.State, idleNote = liveState(d, brokerNow, now)
+			d.addNote(idleNote)
 			if d.State == stateDurableIdle {
 				d.pendingIDs = pendingIDs(ctx, stream, d, info.Config.OptStartSeq, r)
 			}
@@ -693,6 +701,9 @@ func mergeRoleDurables(r *unreadReport) {
 		}
 		if rank(d.State) > rank(o.State) {
 			o.State, o.pendingIDs = d.State, d.pendingIDs
+		}
+		if strings.Contains(d.Note, idleReaderClockNote) && !strings.Contains(o.Note, idleReaderClockNote) {
+			o.addNote(idleReaderClockNote)
 		}
 		o.Team, o.Role = teamAndRole(o.AgentID, o.Filters)
 	}
@@ -757,20 +768,33 @@ func ageOnBrokerClock(brokerNow, readerNow, stored time.Time) (float64, string) 
 	return brokerNow.Sub(stored).Seconds(), ""
 }
 
+// idleReaderClockNote is what a row says when its durable-idle window was
+// timed on the reader's clock.
+const idleReaderClockNote = "idle window uses the reader clock: the broker gave no consumer info time"
+
 // liveState names a live row (M2). The anchor is the durable's Created: the
 // per-session durable is made at shim start, while presence is renewed on a
 // timer and says nothing about whether the seat reads (R-56). With mail
 // waiting and nothing delivered since a Created older than the window, the
 // row is durable-idle, the alarming default; only evidence lifts it (classify).
-func liveState(d unreadDurable, now time.Time) string {
-	switch {
-	case d.Pending == 0:
-		return stateReading
-	case d.Delivered == 0 && !d.created.IsZero() && now.Sub(d.created) >= unreadIdleWindow:
-		return stateDurableIdle
-	default:
-		return stateBehind
+// Created is a broker time, so the window runs to the broker's clock, as the
+// age does. Where the server leaves that zero it runs to the reader's clock and
+// the returned note says so, for the row.
+func liveState(d unreadDurable, brokerNow, readerNow time.Time) (string, string) {
+	if d.Pending == 0 {
+		return stateReading, ""
 	}
+	if d.Delivered != 0 || d.created.IsZero() {
+		return stateBehind, ""
+	}
+	end, note := brokerNow, ""
+	if end.IsZero() {
+		end, note = readerNow, idleReaderClockNote
+	}
+	if end.Sub(d.created) >= unreadIdleWindow {
+		return stateDurableIdle, note
+	}
+	return stateBehind, note
 }
 
 // pendingIDs walks the durable's filter subjects from its first unacked
