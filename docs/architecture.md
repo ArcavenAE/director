@@ -89,9 +89,16 @@ flowchart TB
 The hub binds each leaf credential to its cluster's subject prefix, so a
 cluster can publish only into its own global subjects and the director's inbox.
 A down hub is an observable, never a health state: local traffic continues,
-global sends queue on the leaf side until the link returns. The hub's
-configuration, provisioning, and the per-host recipe are in
-`../probe/nats-global-tier/`.
+but global sends are not queued on the leaf side. A send the hub does not
+accept returns a tool error, and the shim keeps no copy to resend. The
+exception is the director's seat with the presence watch on
+(`DIRECTOR_PRESENCE_WATCH=1`): if its shim reached the global tier before the
+outage and the hub then does not answer the presence read, the shim holds the
+send in its own state directory instead, unless the send passed `fail_fast`
+(see `cancel_held` in `shim-reference.md`). A held send is not delivered: it
+goes out only if the recipient cluster's supervisor is seen again within the
+send's sell-by. The hub's configuration, provisioning, and the per-host recipe
+are in `../probe/nats-global-tier/`.
 
 ## Addressing
 
