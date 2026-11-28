@@ -41,13 +41,13 @@ type stallRingRunner struct {
 // stallSeatFromRow reads one presence record as a candidate seat. A row that is
 // not fresh, has no cue state, is this session's own, or names no workspace is
 // never a candidate: the ring needs the marvel session key (workspace/agent id).
-func stallSeatFromRow(key string, rec map[string]any, now time.Time, selfInstance string) (stallSeat, bool) {
+func stallSeatFromRow(key string, rec map[string]any, now time.Time, selfInstance, selfAgentID string) (stallSeat, bool) {
 	row, _ := rosterRowFromKey(key, rec, now)
 	if !row.Fresh || row.Cue == "" || row.Workspace == "" || row.AgentID == "" || row.Instance == selfInstance {
 		return stallSeat{}, false
 	}
 	oldest, _ := rec["oldest_pending_s"].(float64)
-	return stallSeat{AgentID: row.AgentID, Instance: row.Instance, Key: row.Workspace + "/" + row.AgentID,
+	return stallSeat{AgentID: row.AgentID, Team: row.Team, Instance: row.Instance, Key: row.Workspace + "/" + row.AgentID,
 		Cue: row.Cue, OldestS: int64(oldest)}, true
 }
 
@@ -103,12 +103,13 @@ func (b *Bus) startStallRing(logf func(string, ...any)) error {
 		if json.Unmarshal(e.Value(), &rec) != nil {
 			return stallSeat{}, false
 		}
-		return stallSeatFromRow(key, rec, time.Now(), b.instance)
+		return stallSeatFromRow(key, rec, time.Now(), b.instance, b.self.AgentID)
 	}
 	r := &stallRinger{
-		Now:    time.Now,
-		Bound:  defaultPendingAgeBound(),
-		MinGap: stallRingMinGap,
+		Now:     time.Now,
+		Bound:   defaultPendingAgeBound(),
+		MinGap:  stallRingMinGap,
+		Backoff: stallRingErrorBackoff,
 		List: func(ctx context.Context) ([]stallSeat, error) {
 			keys, err := quietKeys(ctx, b.js, "AGENT_STATE", b.kv)
 			if err != nil {
@@ -125,7 +126,7 @@ func (b *Bus) startStallRing(logf func(string, ...any)) error {
 			return seats, nil
 		},
 		Fresh: func(ctx context.Context, s stallSeat) (stallSeat, error) {
-			cur, ok := readRow(ctx, "presence."+b.self.Team+"."+s.AgentID+"."+s.Instance)
+			cur, ok := readRow(ctx, stallRowKey(s))
 			if !ok {
 				return stallSeat{}, fmt.Errorf("presence row for %s is gone or stale", s.AgentID)
 			}

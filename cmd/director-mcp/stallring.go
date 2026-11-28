@@ -28,6 +28,10 @@ import (
 // message: no sender, no id, no body.
 const stallRingLine = "director inbox: new mail waiting, read it with wait_for_message"
 
+// stallRingErrorBackoff is how long a seat is left alone after a ring that
+// ended in an error, so a marvel outage does not write a row per tick.
+const stallRingErrorBackoff = 15 * time.Minute
+
 // stallRingMinGap is the most often a seat is rung: once in any hour, counting
 // rings by hand as well.
 const stallRingMinGap = time.Hour
@@ -55,6 +59,7 @@ const (
 // stallSeat is one presence row, as far as the ring reads it.
 type stallSeat struct {
 	AgentID  string
+	Team     string
 	Instance string
 	// Key is the marvel session key the inject addresses.
 	Key     string
@@ -92,6 +97,8 @@ type stallRinger struct {
 	Composer func(ctx context.Context, s stallSeat) (string, error)
 	Inject   func(ctx context.Context, key, text string, keys ...string) error
 	Log      ringLog
+	// Backoff is how long a seat is left alone after an error result.
+	Backoff time.Duration
 
 	mu    sync.Mutex
 	local map[string]time.Time // rings this process sent, in case the log write after one fails
@@ -330,3 +337,7 @@ func newMarvelInject(run marvelExec) func(ctx context.Context, key, text string,
 		return nil
 	}
 }
+
+// stallRowKey is the presence key of a seat's row: its own team, not the
+// director's.
+func stallRowKey(s stallSeat) string { return "" }

@@ -72,10 +72,11 @@ func stalledSeat(id string, ageS int64) stallSeat {
 
 func (h *ringHarness) ringer() *stallRinger {
 	return &stallRinger{
-		Now:    func() time.Time { return h.now },
-		Bound:  defaultPendingAgeBound(),
-		MinGap: stallRingMinGap,
-		List:   func(context.Context) ([]stallSeat, error) { return h.seats, nil },
+		Now:     func() time.Time { return h.now },
+		Bound:   defaultPendingAgeBound(),
+		MinGap:  stallRingMinGap,
+		Backoff: stallRingErrorBackoff,
+		List:    func(context.Context) ([]stallSeat, error) { return h.seats, nil },
 		Fresh: func(_ context.Context, s stallSeat) (stallSeat, error) {
 			if f, ok := h.fresh[s.AgentID]; ok {
 				return f, nil
@@ -504,15 +505,15 @@ func TestStallSeatFromRowReadsAFreshStalledRowAndSkipsOwnAndStaleRows(t *testing
 	rec := map[string]any{"agent_id": "arcaven-kinu-builder-g35-1", "workspace": "aae", "team": "arcaven-kinu", "instance": "i1",
 		"cue": "stalled", "oldest_pending_s": float64(700), "ts": now.Add(-10 * time.Second).Format(time.RFC3339)}
 	key := "presence.arcaven-kinu.arcaven-kinu-builder-g35-1.i1"
-	s, ok := stallSeatFromRow(key, rec, now, "self")
+	s, ok := stallSeatFromRow(key, rec, now, "self", "director-self")
 	if !ok || s.Key != "aae/arcaven-kinu-builder-g35-1" || s.OldestS != 700 || s.Cue != "stalled" {
 		t.Fatalf("a fresh stalled row must read as a candidate with the session key workspace/id, got %+v, %v", s, ok)
 	}
-	if _, ok := stallSeatFromRow(key, rec, now, "i1"); ok {
+	if _, ok := stallSeatFromRow(key, rec, now, "i1", "director-self"); ok {
 		t.Fatalf("this session's own row must never be a candidate")
 	}
 	rec["ts"] = now.Add(-5 * time.Minute).Format(time.RFC3339)
-	if _, ok := stallSeatFromRow(key, rec, now, "self"); ok {
+	if _, ok := stallSeatFromRow(key, rec, now, "self", "director-self"); ok {
 		t.Fatalf("a stale row must never be a candidate")
 	}
 }
@@ -533,5 +534,73 @@ func TestRingLogFileCountsAResultlessHandRowOnItsOwn(t *testing.T) {
 	}
 	if last, err := openRingLog(t.TempDir()).LastRing("arcaven-kinu-builder-g35-1"); err != nil || !last.IsZero() {
 		t.Fatalf("a missing log is an empty history, not an error, got %v, %v", last, err)
+	}
+}
+
+func TestStallSeatCarriesItsOwnTeamAndBuildsItsRowKeyFromIt(t *testing.T) {
+	now := time.Date(2026, 11, 28, 1, 0, 0, 0, time.UTC)
+	rec := map[string]any{"agent_id": "other-builder-g1-0", "workspace": "aae", "team": "other-team", "instance": "i9",
+		"cue": "stalled", "oldest_pending_s": float64(700), "ts": now.Add(-10 * time.Second).Format(time.RFC3339)}
+	s, ok := stallSeatFromRow("presence.other-team.other-builder-g1-0.i9", rec, now, "self", "director-self")
+	if !ok || s.Team != "other-team" {
+		t.Fatalf("a seat outside the director's team must be a candidate carrying its own team, got %+v, %v", s, ok)
+	}
+	if got, want := stallRowKey(s), "presence.other-team.other-builder-g1-0.i9"; got != want {
+		t.Fatalf("the re-read key must use the seat's own team, got %q, want %q", got, want)
+	}
+}
+
+func TestStallSeatSkipsTheDirectorsOwnAgentIdUnderAnotherInstance(t *testing.T) {
+	now := time.Date(2026, 11, 28, 1, 0, 0, 0, time.UTC)
+	rec := map[string]any{"agent_id": "director-self", "workspace": "aae", "team": "arcaven-kinu", "instance": "stale-old-instance",
+		"cue": "stalled", "oldest_pending_s": float64(700), "ts": now.Add(-10 * time.Second).Format(time.RFC3339)}
+	if s, ok := stallSeatFromRow("presence.arcaven-kinu.director-self.stale-old-instance", rec, now, "live-instance", "director-self"); ok {
+		t.Fatalf("a stale row of the director's own agent id under another instance must never be rung, got %+v", s)
+	}
+}
+
+func TestStallRingLeavesASeatAloneFor15MinutesAfterAnError(t *testing.T) {
+	h := newRingHarness()
+	h.injectEr["aae/arcaven-kinu-builder-g35-1"] = errors.New("marvel unreachable")
+	h.tick()
+	attempts := func() int {
+		n := 0
+		for _, r := range h.log.rows {
+			if r.Event == "ring-attempt" {
+				n++
+			}
+		}
+		return n
+	}
+	if len(h.calls) != 1 || attempts() != 1 {
+		t.Fatalf("the first tick must try once, got %d injects and %d attempt rows", len(h.calls), attempts())
+	}
+	h.now = ringT0.Add(14 * time.Minute)
+	h.tick()
+	if len(h.calls) != 1 || attempts() != 1 {
+		t.Fatalf("14 minutes after an error the seat must be left alone, got %d injects and %d attempt rows", len(h.calls), attempts())
+	}
+	h.now = ringT0.Add(16 * time.Minute)
+	h.tick()
+	if len(h.calls) != 2 {
+		t.Fatalf("16 minutes after an error the seat may be tried again, got %d injects", len(h.calls))
+	}
+}
+
+func TestMarvelInjectLogsAnEnterThatFailsAfterAConfirmedLineAsUnconfirmed(t *testing.T) {
+	var n int
+	inj := newMarvelInject(func(_ context.Context, argv []string) (string, error) {
+		n++
+		if n == 2 {
+			return "marvel: session gone", errors.New("exit status 1")
+		}
+		return "", nil
+	})
+	err := inj(context.Background(), "aae/seat-0", stallRingLine, "Enter")
+	if !errors.Is(err, errRingUnconfirmed) {
+		t.Fatalf("an Enter that fails after a staged, confirmed line leaves the line unsent, so it maps to errRingUnconfirmed, got %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("want the line call and the Enter call, got %d", n)
 	}
 }
