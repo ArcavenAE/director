@@ -29,6 +29,10 @@
 #      a new symlink under a temporary name, then a rename over the old one, so
 #      a spawn never runs a mix of two versions.
 # The previous version directory stays, and --rollback switches back to it.
+# A file or a link already at that path that this installer did not put there is
+# kept under lib/cast-launch/legacy-<time>/ before the switch, and --rollback
+# returns to it. A kept file then runs from that directory, so it finds nothing
+# that sat beside it in bin/. If it cannot be kept, nothing is switched.
 # git archive reads the commit, so a dirty working tree cannot leak in.
 #
 # The shim, director-mcp, installs the same way from a commit: the recipe at that
@@ -124,11 +128,41 @@ resolve() {
     || die "cannot resolve ref $ref in $MIRROR"
 }
 
-# The sha the link points at now, or empty.
+# The sha (or legacy-<time>) directory the link points at now, or empty.
+# Only a link into $LIB is ours; anything else reads as empty here.
 current_sha() {
   local t
   t="$(readlink "$LINK" 2>/dev/null)" || return 0
+  [[ "$t" == "$LIB"/*/cast-launch.sh ]] || return 0
   basename "$(dirname "$t")"
+}
+
+# Keep what is at the link now when it is not one of ours, as a legacy
+# directory, and print its name. A regular file is copied with its mode. A
+# foreign symlink is recreated, never followed, with a relative target made
+# absolute because the copy sits in another directory. This runs inside $(...),
+# where set -e does not apply, so each failure stops here explicitly.
+keep_legacy_launcher() {
+  local name dir t
+  [[ -e "$LINK" || -L "$LINK" ]] || return 0
+  [[ -n "$(current_sha)" ]] && return 0
+  name="legacy-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  dir="$LIB/$name"
+  mkdir "$dir" || die "cannot keep $LINK under $LIB; nothing was switched"
+  if [[ -L "$LINK" ]]; then
+    t="$(readlink "$LINK")"
+    [[ "$t" == /* ]] || t="$BIN/$t"
+    ln -s "$t" "$dir/cast-launch.sh"
+  else
+    cp -p "$LINK" "$dir/cast-launch.sh"
+  fi || { rm -rf "$dir"; die "cannot keep $LINK under $LIB; nothing was switched"; }
+  {
+    echo "sha=unknown"
+    echo "source=found at $LINK, not installed by director-install"
+    echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$dir/STAMP"
+  echo "director-install: kept what was at $LINK in $dir" >&2
+  printf '%s\n' "$name"
 }
 
 # Point $LINK at a version directory atomically, and remember the one it left.
@@ -136,6 +170,7 @@ switch_to() {
   local sha="$1" prev tmp
   prev="$(current_sha)"
   mkdir -p "$BIN"
+  [[ -n "$prev" ]] || prev="$(keep_legacy_launcher)"
   tmp="$BIN/.cast-launch.new.$$"
   ln -sfn "$LIB/$sha/cast-launch.sh" "$tmp"
   mv -f "$tmp" "$LINK"
@@ -181,7 +216,7 @@ install_cast_launch() {
 rollback_cast_launch() {
   local prev
   prev="$(cat "$LIB/.previous" 2>/dev/null || true)"
-  [[ -n "$prev" && -d "$LIB/$prev" ]] || die "no previous install to roll back to"
+  [[ -n "$prev" && -e "$LIB/$prev/cast-launch.sh" ]] || die "no previous install to roll back to"
   switch_to "$prev"
   echo "director-install: cast-launch rolled back -> $prev"
 }
