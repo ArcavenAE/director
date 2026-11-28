@@ -642,20 +642,60 @@ func TestStallRingRingsNothingForAnUnknownOrAmbiguousSessionName(t *testing.T) {
 		"ambiguous": {[]marvelSession{{Name: "arcaven-kinu-builder-g35-1", Workspace: "aae"}, {Name: "arcaven-kinu-builder-g35-1", Workspace: "other"}}, "refused-ambiguous-session"},
 	}
 	for name, c := range cases {
-		h := newRingHarness()
-		h.sessions = c.sessions
-		rows := h.tick()
-		if len(h.calls) != 0 {
-			t.Fatalf("%s: nothing may be typed, got %d injects", name, len(h.calls))
-		}
-		if len(rows) != 1 || rows[0].Event != "ring-refused" || rows[0].Result != c.result {
-			t.Fatalf("%s: want one ring-refused row with result %s, got %+v", name, c.result, rows)
-		}
-		for _, r := range h.log.rows {
-			if r.Event == "ring-attempt" {
-				t.Fatalf("%s: no attempt row may be written for a seat that cannot be addressed", name)
+		c := c
+		t.Run(name, func(t *testing.T) {
+			h := newRingHarness()
+			h.sessions = c.sessions
+			rows := h.tick()
+			if len(h.calls) != 0 {
+				t.Fatalf("%s: nothing may be typed, got %d injects", name, len(h.calls))
 			}
-		}
+			if len(rows) != 1 || rows[0].Event != "ring-refused" || rows[0].Result != c.result {
+				t.Fatalf("%s: want one ring-refused row with result %s, got %+v", name, c.result, rows)
+			}
+			for _, r := range h.log.rows {
+				if r.Event == "ring-attempt" {
+					t.Fatalf("%s: no attempt row may be written for a seat that cannot be addressed", name)
+				}
+			}
+		})
+	}
+}
+
+func TestStallRingDoesNotMatchANearSessionName(t *testing.T) {
+	h := newRingHarness()
+	h.sessions = []marvelSession{{Name: "arcaven-kinu-builder-g35-10", Workspace: "aae"}}
+	rows := h.tick()
+	if len(h.calls) != 0 {
+		t.Fatalf("a session named ...-g35-10 must not take the ring meant for ...-g35-1, got %+v", h.calls)
+	}
+	if len(rows) != 1 || rows[0].Result != "refused-unknown-session" {
+		t.Fatalf("a near name is an unknown session, got %+v", rows)
+	}
+}
+
+func TestStallRingPicksTheExactNameWhenANearNameIsListed(t *testing.T) {
+	h := newRingHarness()
+	h.seats = []stallSeat{{AgentID: "arcaven-kinu-builder-g35-1", Instance: "i1", Key: "dir-ws/arcaven-kinu-builder-g35-1", Cue: cueStateStalled, OldestS: 700}}
+	h.sessions = []marvelSession{{Name: "arcaven-kinu-builder-g35-10", Workspace: "wrong"}, {Name: "arcaven-kinu-builder-g35-1", Workspace: "aae"}}
+	h.tick()
+	if len(h.calls) != 1 || h.calls[0].key != "aae/arcaven-kinu-builder-g35-1" {
+		t.Fatalf("the ring must use the workspace of the exactly named session, got %+v", h.calls)
+	}
+}
+
+func TestStallRingARefusedComposerDoesNotStartTheErrorBackoff(t *testing.T) {
+	h := newRingHarness()
+	h.verdict = composerHasText
+	h.tick()
+	if len(h.calls) != 0 {
+		t.Fatalf("a composer holding text must not be rung over, got %d injects", len(h.calls))
+	}
+	h.verdict = composerEmpty
+	h.now = ringT0.Add(time.Minute)
+	h.tick()
+	if len(h.calls) != 1 {
+		t.Fatalf("a refused composer is not an error: the next minute's empty composer must be rung, got %d injects", len(h.calls))
 	}
 }
 
@@ -666,6 +706,9 @@ func TestStallRingReadsTheSessionsOnceAPassAndLogsOneRefusalWhenItFails(t *testi
 	if h.sessN != 1 || len(h.calls) != 2 {
 		t.Fatalf("two stalled seats must cost one sessions read and two rings, got %d reads and %d injects", h.sessN, len(h.calls))
 	}
+}
+
+func TestStallRingLogsOneRefusalWhenTheSessionsReadFails(t *testing.T) {
 	h2 := newRingHarness()
 	h2.seats = []stallSeat{stalledSeat("arcaven-kinu-builder-g35-1", 700), stalledSeat("arcaven-kinu-author-g36-0", 700)}
 	h2.sessErr = errors.New("marvel unreachable")
