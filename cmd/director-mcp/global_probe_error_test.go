@@ -65,6 +65,46 @@ func TestGlobalDurableProbeErrorFreshSeatStartsAtHead(t *testing.T) {
 	}
 }
 
+// A first-generation seat restarted in place names itself in its predecessor
+// link. It had an earlier session whose unread mail a head start would drop, so
+// a probe error keeps the replay (director ruling 01M7R30K4C).
+func TestGlobalDurableProbeErrorRestartedG1KeepsTheReplay(t *testing.T) {
+	const self = "probeerr-g1-0"
+	for _, c := range []struct {
+		name             string
+		director, marvel string // DIRECTOR_PREDECESSOR and MARVEL_PREDECESSOR
+	}{
+		{"marvel link", "", "ws1/" + self},
+		{"director link", self, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			prev := earlierDurableProbe
+			earlierDurableProbe = func(context.Context, *globalTier, string, string) (bool, error) {
+				return false, fmt.Errorf("listing hub durables failed (no responders)")
+			}
+			t.Cleanup(func() { earlierDurableProbe = prev })
+
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			url := startScratchServer(t)
+			nc, _ := provision(t, ctx, url)
+			gjs, _ := jetstream.NewWithDomain(nc, "global")
+			gcfg := &globalConfig{Domain: "global", Cluster: "c1", Role: roleDirector}
+			t.Setenv("DIRECTOR_PREDECESSOR", c.director)
+			t.Setenv("MARVEL_PREDECESSOR", c.marvel)
+			pubEnv(t, ctx, gjs, "global.director.inbox", "g0", "INFORM", "unread by the session before the restart")
+			b, err := connect(ctx, url, freshSeat(self), gcfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer b.close()
+			if got := readIDs(t, ctx, b); fmt.Sprint(got) != "[global:g0]" {
+				t.Errorf("a g1 seat restarted in place with a probe error read %v, want its unread mail [global:g0]", got)
+			}
+		})
+	}
+}
+
 // Guard (director's narrowing of Q2): only a first-generation seat with no
 // predecessor starts at the head. A g2 seat with no predecessor set may be a
 // respawn whose lineage was lost, so a probe error keeps the replay.

@@ -34,14 +34,19 @@ func predecessorFromEnv() (link, source string) {
 	return "", ""
 }
 
-// predecessorID is the agent id of the session this one replaced: the name
-// after the last "/" of the lineage input. It is empty when there is no input,
-// when the value has no name, when the name is this seat's own id (a restart,
-// which the ordinary lookup already covers), or when the name is not a valid
-// identity, since it is built into a subject and a durable filter.
-func predecessorID(self string) string {
+// predecessorName is the name after the last "/" of the lineage input, as
+// given: empty when there is no input or the value has no name.
+func predecessorName() string {
 	link, _ := predecessorFromEnv()
-	name := link[strings.LastIndex(link, "/")+1:]
+	return link[strings.LastIndex(link, "/")+1:]
+}
+
+// predecessorID is the agent id of the session this one replaced. It is empty
+// when the lineage input has no name, when the name is this seat's own id (a
+// restart, which the ordinary lookup already covers), or when the name is not a
+// valid identity, since it is built into a subject and a durable filter.
+func predecessorID(self string) string {
+	name := predecessorName()
 	if name == "" || name == self || validToken("predecessor", name) != nil {
 		return ""
 	}

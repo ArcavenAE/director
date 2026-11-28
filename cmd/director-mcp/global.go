@@ -654,10 +654,12 @@ func (g *globalTier) startAtHead(ctx context.Context, cfg *jetstream.ConsumerCon
 
 // firstGenerationNoPredecessor reports whether the seat is generation 1 of its
 // replica and names no predecessor: the only seat for which a probe error
-// leaves nothing earlier that a head start could skip.
+// leaves nothing earlier that a head start could skip. A link that names the
+// seat itself is a restart in place, which does have an earlier session
+// (director ruling 01M7R30K4C), though predecessorID returns no link for it.
 func firstGenerationNoPredecessor(agentID string) bool {
 	me, ok := parseGenID(agentID)
-	return ok && me.gen == 1 && predecessorID(agentID) == ""
+	return ok && me.gen == 1 && predecessorName() != agentID && predecessorID(agentID) == ""
 }
 
 // skippedPhrase says how many earlier messages a head start did not deliver,
