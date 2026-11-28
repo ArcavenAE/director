@@ -44,8 +44,9 @@ command and fix this file.
    WORKSPACE column of `get sessions` and prepend it.
 
 4. **`marvel inject` submits with `-e`.** `marvel inject <key> "text" -e`
-   sends the literal text then a separate Enter (the doorbell fix, PR #323).
-   Without `-e` it stages a draft that never submits.
+   delivers the text as a bracketed paste and presses Enter in the same call
+   (marvel#357). Send no second Enter after it. Without `-e` it stages a draft
+   and does not submit it.
 
 5. **Accepted is not delivered or read (R-08).** `send_message` returning
    "accepted for delivery" means the bus took it, nothing more. Confirm via
@@ -81,8 +82,12 @@ Safe procedure, per seat, before injecting a real instruction:
 2. If a draft is present, clear it: `marvel inject <key> "C-u" -l=false [--cluster X]`.
    `Escape` does NOT clear an idle Claude composer; `C-u` kills the line.
 3. Re-capture to confirm the composer is empty (a keystroke forces the repaint).
-4. Inject the text, then submit as a separate step: `marvel inject <key> "<text>" [--cluster X]`
-   then `marvel inject <key> "Enter" -l=false [--cluster X]`.
+4. Inject the text and submit it in one call:
+   `marvel inject <key> "<text>" -e --verify [--cluster X]`. Send no second
+   Enter after it: a blind Enter can submit or cancel something you did not
+   intend. If it does not report `verify: confirmed`, read the composer. If
+   your own text is still there, clear it (step 2) and report the inject as
+   failed (R-227).
 
 Prefer the bus (`send_message`) over `inject` when the seat is polling: the bus
 never touches the composer. Reserve `inject` for waking a seat that is idle and
