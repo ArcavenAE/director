@@ -29,6 +29,10 @@ const stallRingMinGap = time.Hour
 // because another ring holds the seat's claim.
 var errRingClaimHeld = errors.New("ring claim held by another ring")
 
+// errRingUnconfirmed is what the inject reports when --verify could not see the
+// line staged in the composer. The adapter stops before Enter.
+var errRingUnconfirmed = errors.New("ring line not confirmed in the composer")
+
 // Composer verdicts, as composer-check prints them. Only EMPTY lets a ring go.
 const (
 	composerEmpty   = "EMPTY"

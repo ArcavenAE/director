@@ -207,10 +207,12 @@ func TestMarvelInjectMapsAHeldRingClaimAndStopsBeforeEnter(t *testing.T) {
 	var n int
 	// The text is marvel's own RingRefusal.Error (internal/api/ring_claim.go at
 	// marvel b379ca65): "ring refused: <session> was rung by <ringer> at
-	// <RFC3339> (<N>s ago, window <W>s)". The claim window there is 120 s.
+	// <RFC3339> (<N>s ago, window <W>s)", which the daemon wraps as
+	// "inject <key>: ring refused: ..." (daemon.go). The match is on the
+	// substring "ring refused:". The claim window there is 120 s.
 	inj := newMarvelInject(func(context.Context, []string) (string, error) {
 		n++
-		return "ring refused: aae/seat-0 was rung by director at 2026-11-28T01:00:00Z (30s ago, window 120s)", errors.New("exit status 1")
+		return "inject aae/seat-0: ring refused: aae/seat-0 was rung by director at 2026-11-28T01:00:00Z (30s ago, window 120s)", errors.New("exit status 1")
 	})
 	err := inj(context.Background(), "aae/seat-0", stallRingLine, "Enter")
 	if !errors.Is(err, errRingClaimHeld) {
@@ -227,6 +229,40 @@ func TestMarvelInjectMapsAHeldRingClaimAndStopsBeforeEnter(t *testing.T) {
 	err = inj(context.Background(), "aae/seat-0", stallRingLine, "Enter")
 	if err == nil || errors.Is(err, errRingClaimHeld) || m != 1 {
 		t.Fatalf("any other failure is a plain error and stops before Enter, got %v after %d calls", err, m)
+	}
+}
+
+func TestMarvelInjectStopsBeforeEnterWhenVerifyCannotSeeTheLine(t *testing.T) {
+	var n int
+	inj := newMarvelInject(func(context.Context, []string) (string, error) {
+		n++
+		return "unconfirmed: composer reads empty", errors.New("exit status 1")
+	})
+	err := inj(context.Background(), "aae/seat-0", stallRingLine, "Enter")
+	if !errors.Is(err, errRingUnconfirmed) {
+		t.Fatalf("a --verify that cannot see the line must map to errRingUnconfirmed, got %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("Enter must not be sent when the line was not confirmed, ran %d calls", n)
+	}
+}
+
+func TestStallRingLogsAnUnconfirmedRingAndDoesNotCountItOrTypeAgain(t *testing.T) {
+	h := newRingHarness()
+	h.injectEr["aae/arcaven-kinu-builder-g35-1"] = errRingUnconfirmed
+	rows := h.tick()
+	if len(rows) != 1 || rows[0].Event != "ring-refused" || rows[0].Result != "unconfirmed" {
+		t.Fatalf("an unconfirmed ring must leave one ring-refused row with result unconfirmed, got %+v", rows)
+	}
+	if last, _ := h.log.LastRing("arcaven-kinu-builder-g35-1"); !last.IsZero() {
+		t.Fatalf("an unconfirmed ring must not count toward the hour")
+	}
+	// The staged line now sits in the composer, so the next tick must read it and refuse.
+	h.verdict = composerHasText
+	h.injectEr = map[string]error{}
+	h.tick()
+	if len(h.calls) != 1 {
+		t.Fatalf("the next tick must not type again over the staged line, got %d injects in all", len(h.calls))
 	}
 }
 
