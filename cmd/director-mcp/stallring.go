@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -100,3 +101,21 @@ func (l *fileRingLog) LastRing(agentID string) (time.Time, error) {
 }
 
 func (l *fileRingLog) Append(row ringRow) error { return errors.New("not implemented") }
+
+// seatNamed says whether a ring row's free-text seat field names the agent id:
+// the id as a whole token, so "...-g35-10" does not name "...-g35-1".
+func seatNamed(text, id string) bool {
+	return strings.Contains(text, id)
+}
+
+// marvelExec runs one command and returns its combined output.
+type marvelExec func(ctx context.Context, argv []string) (string, error)
+
+// newMarvelInject is the production inject: it types the line with
+// `marvel inject <key> <line> --ring --verify`, then submits it with
+// `marvel inject <key> ” --enter`. Any other key is refused before anything runs.
+func newMarvelInject(run marvelExec) func(ctx context.Context, key, text string, keys ...string) error {
+	return func(ctx context.Context, key, text string, keys ...string) error {
+		return nil
+	}
+}
