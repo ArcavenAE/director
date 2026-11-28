@@ -168,9 +168,11 @@ What makes this hold together:
   drops the seed in the broker's environment. Either way the seed never
   crosses the wire in a message.
 - **A down hub degrades, it does not fail.** Local traffic continues; a
-  global send waits on the leaf side. Director sees the supervisor's presence
-  record age out and reports the cluster unreachable, which is a fact about
-  the link, not the fleet.
+  global send is not queued on the leaf side and returns a tool error (the
+  director's presence watch can hold one instead, see `architecture.md`, "The
+  two tiers"). Director sees the supervisor's presence record age out and
+  reports the cluster unreachable, which is a fact about the link, not the
+  fleet.
 
 ## UC6. The fleet as a manifest: the twin
 
