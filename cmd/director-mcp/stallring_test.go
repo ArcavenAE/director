@@ -504,3 +504,22 @@ func TestStallSeatFromRowReadsAFreshStalledRowAndSkipsOwnAndStaleRows(t *testing
 		t.Fatalf("a stale row must never be a candidate")
 	}
 }
+
+func TestRingLogFileCountsAResultlessHandRowOnItsOwn(t *testing.T) {
+	dir := t.TempDir()
+	row := `{"ts":"2026-11-28T00:30:00Z","actor":"director","event":"ring","seat":"arcaven-kinu-builder-g35-1 swept by hand","idle_minutes":10,"mail":1}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "rings.jsonl"), []byte(row), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	last, err := openRingLog(dir).LastRing("arcaven-kinu-builder-g35-1")
+	want := time.Date(2026, 11, 28, 0, 30, 0, 0, time.UTC)
+	if err != nil || !last.Equal(want) {
+		t.Fatalf("a hand ring with no result field counts on its own, got %v, %v", last, err)
+	}
+	if last, _ := openRingLog(dir).LastRing("arcaven-kinu-builder-g35-10"); !last.IsZero() {
+		t.Fatalf("a hand ring of ...-g35-1 must not count for ...-g35-10, got %v", last)
+	}
+	if last, err := openRingLog(t.TempDir()).LastRing("arcaven-kinu-builder-g35-1"); err != nil || !last.IsZero() {
+		t.Fatalf("a missing log is an empty history, not an error, got %v, %v", last, err)
+	}
+}
