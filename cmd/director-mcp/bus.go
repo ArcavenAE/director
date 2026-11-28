@@ -189,12 +189,49 @@ func dial(url string, self Sender) (*nats.Conn, jetstream.JetStream, error) {
 	return dialRing(url, self, nil)
 }
 
+// The reconnect timing and the closed-connection report are variables so a test
+// can shorten the wait and capture the report; production never changes them
+// (aae-orc I-870).
+var (
+	dialReconnectWait      = nats.DefaultReconnectWait
+	dialReconnectJitter    = nats.DefaultReconnectJitter
+	dialReconnectJitterTLS = nats.DefaultReconnectJitterTLS
+	// closedReport says that a bus connection ended without being asked to.
+	closedReport = func(name string, err error) {
+		fmt.Fprintf(os.Stderr, "director-mcp: bus connection %s closed: %v\n", name, err)
+	}
+)
+
 // dialRing is dial with an error handler that records the broker's publish
 // permission violations in ring (nil keeps none). The violation is delivered
 // only on the async error callback; a denied JetStream publish itself returns a
 // bare timeout, so bus.go and global.go read the ring to say why.
 func dialRing(url string, self Sender, ring *violationRing) (*nats.Conn, jetstream.JetStream, error) {
-	opts := []nats.Option{nats.Name("director-mcp/" + self.AgentID)}
+	opts := []nats.Option{
+		nats.Name("director-mcp/" + self.AgentID),
+		nats.ReconnectWait(dialReconnectWait),
+		nats.ReconnectJitter(dialReconnectJitter, dialReconnectJitterTLS),
+		// Never give up on a broker that went away: the nats.go default of 60
+		// attempts ended the connection about two minutes into a host outage
+		// and nothing dialed again (aae-orc I-870, director#768). The first
+		// connect is not retried here: preflight must fail when the broker is
+		// unreachable, and connect_retry.go retries the shim's startup.
+		nats.MaxReconnects(-1),
+		// A connection that ends without Close having been called is said so.
+		// NoCallbacksAfterClientClose keeps Close from running the handler: a
+		// permission violation or a slow consumer sets the last error without
+		// closing, so the last error alone cannot tell an exit the caller asked
+		// for from one it did not. The guard stays for the ends the client
+		// makes itself: a refused credential ends doReconnect and closes with
+		// the handler on (nats.go v1.55.0, lines 3584 and 3645). A drain ends
+		// in Close(), so a drain that times out is not reported.
+		nats.NoCallbacksAfterClientClose(),
+		nats.ClosedHandler(func(c *nats.Conn) {
+			if err := c.LastError(); err != nil {
+				closedReport(c.Opts.Name, err)
+			}
+		}),
+	}
 	if ring != nil {
 		opts = append(opts, nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) { ring.note(err) }))
 	}
