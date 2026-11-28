@@ -92,6 +92,8 @@ install_one "$SRC/skills/director/scripts/idle-shadow" "$DIRECTOR_HOME/bin/idle-
 install_one "$SRC/skills/director/scripts/sweep-firings" "$DIRECTOR_HOME/bin/sweep-firings"
 # dash-writer, the operations dashboard's writer step (ghxv2): the sweep's tick runs it from the bin home.
 install_one "$SRC/skills/director/scripts/dash-writer" "$DIRECTOR_HOME/bin/dash-writer"
+# seats-page, the local seats-and-hosts page (I-876): run by hand; it loads dash-writer from beside itself.
+install_one "$SRC/skills/director/scripts/seats-page" "$DIRECTOR_HOME/bin/seats-page"
 # dws is installed above; dash-writer reads it from beside itself.
 # director-tick (standing loop S5) runs dws, dbi and director-profile from beside itself, all installed here.
 install_one "$SRC/skills/director/scripts/director-tick" "$DIRECTOR_HOME/bin/director-tick"
