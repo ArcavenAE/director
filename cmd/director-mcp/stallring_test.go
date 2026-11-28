@@ -59,6 +59,7 @@ type ringHarness struct {
 	sessions []marvelSession
 	sessErr  error
 	sessN    int
+	cached   *stallRinger
 	calls    []ringCall
 	log      *ringFake
 }
@@ -73,7 +74,16 @@ func stalledSeat(id string, ageS int64) stallSeat {
 	return stallSeat{AgentID: id, Instance: "i1", Key: "aae/" + id, Cue: cueStateStalled, OldestS: ageS}
 }
 
+// ringer is built once, as the shim holds one for the life of the process, so the
+// error backoff and the local ring memory persist across ticks.
 func (h *ringHarness) ringer() *stallRinger {
+	if h.cached == nil {
+		h.cached = h.newRinger()
+	}
+	return h.cached
+}
+
+func (h *ringHarness) newRinger() *stallRinger {
 	return &stallRinger{
 		Now:     func() time.Time { return h.now },
 		Bound:   defaultPendingAgeBound(),
@@ -741,5 +751,21 @@ func TestMarvelSessionsReadsTheListOnceThroughMarvelGetSessions(t *testing.T) {
 	fail := marvelSessions(func(context.Context, []string) (string, error) { return "", errors.New("exit status 1") })
 	if _, err := fail(context.Background()); err == nil {
 		t.Fatalf("a failed marvel call must be an error")
+	}
+}
+
+func TestStallRingARefusedClaimDoesNotBackOffTheSeat(t *testing.T) {
+	h := newRingHarness()
+	h.injectEr["aae/arcaven-kinu-builder-g35-1"] = errRingClaimHeld
+	h.tick()
+	if len(h.calls) != 1 {
+		t.Fatalf("the first tick must try once, got %d injects", len(h.calls))
+	}
+	// past marvel's 120 s claim window the claim is free again
+	h.injectEr = map[string]error{}
+	h.now = ringT0.Add(3 * time.Minute)
+	h.tick()
+	if len(h.calls) != 2 {
+		t.Fatalf("a held claim is not an error: 3 minutes later the seat must be rung, got %d injects", len(h.calls))
 	}
 }

@@ -61,7 +61,8 @@ type stallSeat struct {
 	AgentID  string
 	Team     string
 	Instance string
-	// Key is the marvel session key the inject addresses.
+	// Key is the director's guess at the marvel session key; the ring ignores it and resolves
+	// the key from marvel's own session list.
 	Key     string
 	Cue     string
 	OldestS int64
@@ -103,8 +104,9 @@ type stallRinger struct {
 	// Backoff is how long a seat is left alone after an error result.
 	Backoff time.Duration
 
-	mu    sync.Mutex
-	local map[string]time.Time // rings this process sent, in case the log write after one fails
+	mu       sync.Mutex
+	local    map[string]time.Time // rings this process sent, in case the log write after one fails
+	errUntil map[string]time.Time // seats left alone after an error result, until then
 }
 
 // stalledEnough says whether a row still reads as a stalled seat at act time.
@@ -134,15 +136,36 @@ func (r *stallRinger) noteLocal(id string, t time.Time) {
 	r.local[id] = t
 }
 
-// Tick rings every seat that is stalled, due and has an empty composer, and
-// returns the outcome rows it wrote. A seat is skipped, and nothing is typed,
-// whenever anything it needs cannot be read or written.
+// resolveSession turns an agent id into marvel's session key. The name must
+// match exactly; the workspace is marvel's, not the director's.
+func resolveSession(list []marvelSession, agentID string) (key, refusal string) {
+	var found []marvelSession
+	for _, m := range list {
+		if m.Name == agentID {
+			found = append(found, m)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return "", "refused-unknown-session"
+	case 1:
+		return found[0].Workspace + "/" + found[0].Name, ""
+	}
+	return "", "refused-ambiguous-session"
+}
+
+// Tick rings every seat that is stalled, due and has a composer that is empty
+// or holds only a dim suggestion, and returns the outcome rows it wrote. A seat
+// is skipped, and nothing is typed, whenever anything it needs cannot be read or
+// written. The session list is read once, when the first seat needs it.
 func (r *stallRinger) Tick(ctx context.Context) []ringRow {
 	seats, err := r.List(ctx)
 	if err != nil {
 		return nil
 	}
 	var out []ringRow
+	var sessions []marvelSession
+	sessionsRead := false
 	for _, s := range seats {
 		if !r.stalledEnough(s) {
 			continue
@@ -153,12 +176,31 @@ func (r *stallRinger) Tick(ctx context.Context) []ringRow {
 		}
 		now := r.Now()
 		last, err := r.lastRing(cur.AgentID)
-		if err != nil || (!last.IsZero() && now.Sub(last) < r.MinGap) {
+		if err != nil || (!last.IsZero() && now.Sub(last) < r.MinGap) || r.backedOff(cur.AgentID, now) {
 			continue
 		}
 		row := ringRow{TS: now, Actor: "director-mcp", Seat: cur.AgentID, IdleMinutes: int(cur.OldestS / 60), Line: stallRingLine}
+		if !sessionsRead {
+			sessionsRead = true
+			if sessions, err = r.Sessions(ctx); err != nil {
+				sessions = nil
+				row.Seat, row.Event, row.Result, row.IdleMinutes = "*", "ring-refused", "refused-sessions", 0
+				_ = r.Log.Append(row)
+				return append(out, row)
+			}
+		} else if sessions == nil {
+			return out
+		}
+		key, refusal := resolveSession(sessions, cur.AgentID)
+		if refusal != "" {
+			row.Event, row.Result = "ring-refused", refusal
+			_ = r.Log.Append(row)
+			out = append(out, row)
+			continue
+		}
+		cur.Key = key
 		verdict, err := r.Composer(ctx, cur)
-		if err != nil || verdict != composerEmpty {
+		if err != nil || (verdict != composerEmpty && verdict != composerSuggestion) {
 			row.Event, row.Result = "ring-refused", "refused-composer"
 			_ = r.Log.Append(row)
 			out = append(out, row)
@@ -178,6 +220,7 @@ func (r *stallRinger) Tick(ctx context.Context) []ringRow {
 			row.Event, row.Result = "ring-refused", "refused-claim"
 		default:
 			row.Event, row.Result = "ring-refused", "error"
+			r.noteBackoff(cur.AgentID, now)
 		}
 		if row.Event == "ring" {
 			r.noteLocal(cur.AgentID, now)
@@ -186,6 +229,25 @@ func (r *stallRinger) Tick(ctx context.Context) []ringRow {
 		out = append(out, row)
 	}
 	return out
+}
+
+// backedOff says whether a seat is being left alone after an error result.
+func (r *stallRinger) backedOff(id string, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return now.Before(r.errUntil[id])
+}
+
+func (r *stallRinger) noteBackoff(id string, now time.Time) {
+	if r.Backoff <= 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.errUntil == nil {
+		r.errUntil = map[string]time.Time{}
+	}
+	r.errUntil[id] = now.Add(r.Backoff)
 }
 
 // stallRingEnabled is true only on the director seat with DIRECTOR_STALL_RING=1.
@@ -335,7 +397,8 @@ func newMarvelInject(run marvelExec) func(ctx context.Context, key, text string,
 			return fmt.Errorf("marvel inject: %w: %s", err, strings.TrimSpace(out))
 		}
 		if out, err := run(ctx, []string{"marvel", "inject", key, "", "--enter"}); err != nil {
-			return fmt.Errorf("marvel inject --enter: %w: %s", err, strings.TrimSpace(out))
+			// The line is staged and confirmed but not known to be sent.
+			return fmt.Errorf("%w: marvel inject --enter: %v: %s", errRingUnconfirmed, err, strings.TrimSpace(out))
 		}
 		return nil
 	}
@@ -343,7 +406,9 @@ func newMarvelInject(run marvelExec) func(ctx context.Context, key, text string,
 
 // stallRowKey is the presence key of a seat's row: its own team, not the
 // director's.
-func stallRowKey(s stallSeat) string { return "" }
+func stallRowKey(s stallSeat) string {
+	return "presence." + s.Team + "." + s.AgentID + "." + s.Instance
+}
 
 // marvelSession is the part of one `marvel get sessions -o json` entry the ring reads.
 type marvelSession struct {
@@ -351,9 +416,19 @@ type marvelSession struct {
 	Workspace string `json:"Workspace"`
 }
 
-// marvelSessions reads marvel's session list through run.
+// marvelSessions reads marvel's session list through run. Plain `get sessions
+// -o json` prints a list with a "Name" key (the object form appears only with
+// --cluster or --all-clusters), so anything that is not a list is an error.
 func marvelSessions(run marvelExec) func(ctx context.Context) ([]marvelSession, error) {
 	return func(ctx context.Context) ([]marvelSession, error) {
-		return nil, errors.New("not implemented")
+		out, err := run(ctx, []string{"marvel", "get", "sessions", "-o", "json"})
+		if err != nil {
+			return nil, fmt.Errorf("marvel get sessions: %w", err)
+		}
+		var list []marvelSession
+		if err := json.Unmarshal([]byte(out), &list); err != nil {
+			return nil, fmt.Errorf("marvel get sessions: output is not a session list: %w", err)
+		}
+		return list, nil
 	}
 }

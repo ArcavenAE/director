@@ -43,12 +43,20 @@ type stallRingRunner struct {
 // never a candidate: the ring needs the marvel session key (workspace/agent id).
 func stallSeatFromRow(key string, rec map[string]any, now time.Time, selfInstance, selfAgentID string) (stallSeat, bool) {
 	row, _ := rosterRowFromKey(key, rec, now)
-	if !row.Fresh || row.Cue == "" || row.Workspace == "" || row.AgentID == "" || row.Instance == selfInstance {
+	if !row.Fresh || row.Cue == "" || row.Workspace == "" || row.AgentID == "" || row.Instance == selfInstance || row.AgentID == selfAgentID {
 		return stallSeat{}, false
 	}
 	oldest, _ := rec["oldest_pending_s"].(float64)
 	return stallSeat{AgentID: row.AgentID, Team: row.Team, Instance: row.Instance, Key: row.Workspace + "/" + row.AgentID,
 		Cue: row.Cue, OldestS: int64(oldest)}, true
+}
+
+// runStdout is for reads whose output is parsed: stderr is not mixed in.
+func runStdout(ctx context.Context, argv []string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, stallRingCallTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
+	return string(out), err
 }
 
 func runCombined(ctx context.Context, argv []string) (string, error) {
@@ -134,6 +142,7 @@ func (b *Bus) startStallRing(logf func(string, ...any)) error {
 		},
 		Composer: func(ctx context.Context, s stallSeat) (string, error) { return composerVerdict(ctx, s.Key) },
 		Inject:   newMarvelInject(runCombined),
+		Sessions: marvelSessions(runStdout),
 		Log:      openRingLog(dir),
 	}
 	b.stall = &stallRingRunner{ringer: r, logf: logf}
