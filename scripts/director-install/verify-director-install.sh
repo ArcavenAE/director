@@ -158,6 +158,106 @@ else
   bad "reinstall same sha" "$(cat "$out/stderr")"
 fi
 
+# --- 9b. a launcher this installer did not make is kept for --rollback ---------
+lhome="$root/lhome"; llib="$lhome/lib/cast-launch"; llink="$lhome/bin/cast-launch"
+dl() {
+  env DIRECTOR_HOME="$lhome" DIRECTOR_SRC_URL="$src" \
+      DIRECTOR_MANIFESTS_DIR="$root/manifests" \
+      "$INSTALLER" "$@" >"$out/stdout" 2>"$out/stderr"
+}
+lprev() { cat "$llib/.previous" 2>/dev/null || true; }
+lt() { readlink "$llink" 2>/dev/null || echo "(no link)"; }
+lwant() { echo "$llib/$1/cast-launch.sh"; }
+lcount() { find "$llib" -maxdepth 1 -name 'legacy-*' 2>/dev/null | wc -l | tr -d ' '; }
+# hand_launcher PATH WORD: replace PATH with an executable stand-in that prints
+# WORD. The rm keeps the write from going through a link into a version directory.
+hand_launcher() {
+  mkdir -p "$(dirname "$1")"; rm -f "$1"
+  printf '#!/usr/bin/env bash\necho %s\n' "$2" > "$1"; chmod 755 "$1"
+}
+
+# Seed this home with the two versions the first home already verified.
+mkdir -p "$llib"
+cp -Rp "$home/lib/cast-launch/$A" "$home/lib/cast-launch/$B" "$llib/"
+
+hand_launcher "$llink" hand-one
+cp -p "$llink" "$out/hand-one"
+kept1=""
+if dl cast-launch --ref "$A"; then
+  kept1="$(lprev)"
+  [[ "$(lt)" == "$(lwant "$A")" && "$kept1" == legacy-* && ! -L "$llib/$kept1/cast-launch.sh" && -x "$llib/$kept1/cast-launch.sh" ]] \
+    && cmp -s "$out/hand-one" "$llib/$kept1/cast-launch.sh" \
+    && ok "a regular file at the launcher link is kept, executable, as the previous version" \
+    || bad "a regular file at the launcher link was not kept" "previous=${kept1:-none}"
+else
+  bad "install over a regular file" "$(cat "$out/stderr")"
+fi
+
+if dl cast-launch --rollback; then
+  [[ "$(lt)" == "$(lwant "$kept1")" && "$("$llink")" == hand-one ]] \
+    && ok "--rollback returns to the kept file, and the launcher runs it" \
+    || bad "--rollback did not return to the kept file" "$(lt)"
+else
+  bad "--rollback to a kept file" "$(cat "$out/stderr")"
+fi
+
+if dl cast-launch --rollback && [[ "$(lt)" == "$(lwant "$A")" ]] \
+   && dl cast-launch --rollback && [[ "$(lt)" == "$(lwant "$kept1")" ]] \
+   && [[ "$(lcount)" == 1 ]]; then
+  ok "--rollback toggles between the install and the kept file, and the installer's own links are not kept as legacy"
+else
+  bad "toggle with a kept file" "link=$(lt) legacy directories=$(lcount) $(cat "$out/stderr")"
+fi
+
+dl cast-launch --ref "$A" || true  # leave an installer link live
+hand_launcher "$llink" hand-two
+if dl cast-launch --ref "$B"; then
+  kept2="$(lprev)"
+  [[ "$kept2" == legacy-* && "$kept2" != "$kept1" && "$("$llib/$kept2/cast-launch.sh" 2>/dev/null)" == hand-two ]] \
+    && ok "a hand copy made over an earlier install is kept too, and becomes the previous version" \
+    || bad "a later hand copy was not kept" "previous=${kept2:-none}"
+else
+  bad "install over a later hand copy" "$(cat "$out/stderr")"
+fi
+
+hand_launcher "$root/elsewhere/cast-launch.sh" foreign-abs
+ln -sfn "$root/elsewhere/cast-launch.sh" "$llink"
+if dl cast-launch --ref "$A" && dl cast-launch --rollback; then
+  [[ "$(lt)" == "$llib"/legacy-*/cast-launch.sh && "$(readlink "$(lt)")" == "$root/elsewhere/cast-launch.sh" \
+     && "$("$llink")" == foreign-abs ]] \
+    && ok "a link outside lib/cast-launch is kept as a link, and --rollback returns to its target" \
+    || bad "a foreign link was not restored" "$(lt)"
+else
+  bad "--rollback to a foreign link" "$(cat "$out/stderr")"
+fi
+
+# A relative target is read from bin/, so a kept copy of the link must still
+# reach it from the legacy directory.
+hand_launcher "$root/elsewhere-rel/cast-launch.sh" foreign-rel
+ln -sfn ../../elsewhere-rel/cast-launch.sh "$llink"
+if dl cast-launch --ref "$A" && dl cast-launch --rollback; then
+  [[ "$(lt)" == "$llib"/legacy-*/cast-launch.sh && "$("$llink" 2>/dev/null)" == foreign-rel ]] \
+    && ok "a relative foreign link still reaches its target after --rollback" \
+    || bad "a relative foreign link was not restored" "$(lt)"
+else
+  bad "--rollback to a relative foreign link" "$(cat "$out/stderr")"
+fi
+
+if [[ "$(id -u)" == 0 ]]; then
+  echo "SKIP a launcher that cannot be copied: root reads any file"
+else
+  hand_launcher "$llink" hand-locked
+  cp -p "$llink" "$out/hand-locked"
+  chmod 000 "$llink"
+  n="$(lcount)"; rc=0
+  dl cast-launch --ref "$B" || rc=$?
+  [[ -L "$llink" ]] || chmod 755 "$llink"
+  [[ "$rc" != 0 && ! -L "$llink" && "$(lcount)" == "$n" ]] \
+    && cmp -s "$out/hand-locked" "$llink" && grep -q "cannot keep" "$out/stderr" \
+    && ok "a file that cannot be kept stops the install, with nothing switched and no empty legacy directory" \
+    || bad "a file that cannot be kept was replaced" "rc=$rc link=$(lt)"
+fi
+
 # --- 10. --status: lag counts only sim/twin/ commits, and exits 0 --------------
 if di --status; then
   grep -q "cast-launch.* 0 sim/twin/ commits behind main" "$out/stdout" \
