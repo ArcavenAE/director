@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // A seat with the FOR filter on is handed less mail than its durable holds: the
@@ -168,5 +171,72 @@ func TestUnreadForTakesTheSeatsFigureForTheRowsTier(t *testing.T) {
 		if got != c.want || src != c.src {
 			t.Errorf("%s: unreadFor = %d, %q; want %d, %q", c.name, got, src, c.want, c.src)
 		}
+	}
+}
+
+// detachingConsumer detaches the global tier when its Info is read. pendingTiers
+// reads the local tier first, so this lands after deliverableNow has seen the
+// filter and before pendingTiers looks for the global tier.
+type detachingConsumer struct {
+	jetstream.Consumer
+	b *Bus
+}
+
+func (c detachingConsumer) Info(ctx context.Context) (*jetstream.ConsumerInfo, error) {
+	c.b.globalMu.Lock()
+	c.b.global = nil
+	c.b.globalMu.Unlock()
+	return c.Consumer.Info(ctx)
+}
+
+func detachGlobalDuringTheNextRead(t *testing.T, b *Bus) {
+	t.Helper()
+	b.globalMu.Lock()
+	g := b.global
+	b.globalMu.Unlock()
+	b.localMu.Lock()
+	cons := b.consumer
+	b.consumer = detachingConsumer{Consumer: cons, b: b}
+	b.localMu.Unlock()
+	t.Cleanup(func() {
+		b.localMu.Lock()
+		b.consumer = cons
+		b.localMu.Unlock()
+		b.globalMu.Lock()
+		b.global = g
+		b.globalMu.Unlock()
+	})
+}
+
+func deliverableAfterDetach(t *testing.T, b *Bus, ctx context.Context) *deliverableCounts {
+	t.Helper()
+	detachGlobalDuringTheNextRead(t, b)
+	got := b.deliverableNow(ctx)
+	b.globalMu.Lock()
+	defer b.globalMu.Unlock()
+	if b.global != nil {
+		t.Fatal("the global tier did not detach during the read, so this test shows nothing")
+	}
+	return got
+}
+
+// A read that stores no figure leaves the presence row without one, not with zeros.
+func TestDeliverableNowIsNilWhenTheReadStoresNoFigure(t *testing.T) {
+	r, _ := forPathRig(t)
+	if got := deliverableAfterDetach(t, r.bus, r.ctx); got != nil {
+		t.Errorf("deliverableNow = %+v after a read that stored no figure, want nil so the row carries no zero figure", *got)
+	}
+}
+
+// A read that stores no figure does not bring back the stale one.
+func TestDeliverableNowIsNilWhenTheStoredFigureStaysStale(t *testing.T) {
+	r, _ := forPathRig(t)
+	d := &r.bus.deliverable
+	d.set(2, 7)
+	d.mu.Lock()
+	d.at = time.Now().Add(-2 * deliverableFreshness)
+	d.mu.Unlock()
+	if got := deliverableAfterDetach(t, r.bus, r.ctx); got != nil {
+		t.Errorf("deliverableNow = %+v after a read that left the figure stale, want nil so the row carries no stale figure", *got)
 	}
 }
