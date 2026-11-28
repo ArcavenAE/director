@@ -345,6 +345,10 @@ func TestStallRingTypesOnlyTheFixedLineAndEnter(t *testing.T) {
 func TestStallRingRingsAtMostOnceAnHour(t *testing.T) {
 	h := newRingHarness()
 	h.tick()
+	if last, _ := h.log.LastRing("arcaven-kinu-builder-g35-1"); !last.Equal(ringT0) {
+		t.Fatalf("the sent ring must reach the log, so a restart still sees it; last counted ring %v", last)
+	}
+	h.cached = nil // a shim restart: the in-memory ring memory is gone, the log is not
 	h.now = ringT0.Add(59 * time.Minute)
 	h.tick()
 	if len(h.calls) != 1 {
