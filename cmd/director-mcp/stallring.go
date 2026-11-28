@@ -113,7 +113,7 @@ type marvelExec func(ctx context.Context, argv []string) (string, error)
 
 // newMarvelInject is the production inject: it types the line with
 // `marvel inject <key> <line> --ring --verify`, then submits it with
-// `marvel inject <key> ” --enter`. Any other key is refused before anything runs.
+// `marvel inject <key> (empty text) --enter`. Any other key is refused before anything runs.
 func newMarvelInject(run marvelExec) func(ctx context.Context, key, text string, keys ...string) error {
 	return func(ctx context.Context, key, text string, keys ...string) error {
 		return nil
