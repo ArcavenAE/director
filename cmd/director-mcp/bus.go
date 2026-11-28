@@ -211,6 +211,19 @@ func dialRing(url string, self Sender, ring *violationRing) (*nats.Conn, jetstre
 		nats.Name("director-mcp/" + self.AgentID),
 		nats.ReconnectWait(dialReconnectWait),
 		nats.ReconnectJitter(dialReconnectJitter, dialReconnectJitterTLS),
+		// Never give up on a broker that went away: the nats.go default of 60
+		// attempts ended the connection about two minutes into a host outage
+		// and nothing dialed again (aae-orc I-870, director#768). The first
+		// connect is not retried here: preflight must fail when the broker is
+		// unreachable, and connect_retry.go retries the shim's startup.
+		nats.MaxReconnects(-1),
+		// A connection that ends without Close having been called is said so.
+		// An orderly Close leaves no last error and says nothing.
+		nats.ClosedHandler(func(c *nats.Conn) {
+			if err := c.LastError(); err != nil {
+				closedReport(c.Opts.Name, err)
+			}
+		}),
 	}
 	if ring != nil {
 		opts = append(opts, nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) { ring.note(err) }))
