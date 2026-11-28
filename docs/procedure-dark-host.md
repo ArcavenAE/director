@@ -47,7 +47,7 @@ The shim's bus connection sets no reconnect options (director `cmd/director-mcp/
 | Step | Where it belongs | State |
 |---|---|---|
 | Shim retries forever (`RetryOnFailedConnect`, `MaxReconnects(-1)`) and reports a closed connection | director code | recommended in `_bmad-output/nats-topology-party-2026-09-17/recommendation.md:363-374`; tracked as director#768 |
-| `marvel stop` rejects extra arguments (`Args: cobra.NoArgs`, as #732 did for `marvel daemon`) | marvel code | I-868, fix in progress |
+| `marvel stop` refuses any positional argument and names `marvel delete session` (a custom `Args` function, as ArcavenAE/marvel#732 did for `marvel daemon`) | marvel code | merged as ArcavenAE/marvel#1625 (squash f584b9a0) |
 | Secret files kept somewhere macOS does not purge, or rewritten on adopt | marvel code | I-868, fix in progress; marvel#314 open |
 | Dev-channels prompt detected on every claude version | marvel code | pattern for 2.1.310 only |
 | A missing bus beat or a dark host raises an alarm, not only a ring event | marvel and director code | marvel#580, director#659 open |
