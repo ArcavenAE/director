@@ -205,9 +205,12 @@ func TestMarvelInjectRefusesAnyOtherKeyBeforeRunningAnything(t *testing.T) {
 
 func TestMarvelInjectMapsAHeldRingClaimAndStopsBeforeEnter(t *testing.T) {
 	var n int
+	// The text is marvel's own RingRefusal.Error (internal/api/ring_claim.go at
+	// marvel b379ca65): "ring refused: <session> was rung by <ringer> at
+	// <RFC3339> (<N>s ago, window <W>s)". The claim window there is 120 s.
 	inj := newMarvelInject(func(context.Context, []string) (string, error) {
 		n++
-		return "marvel: ring claim held by another ring", errors.New("exit status 1")
+		return "ring refused: aae/seat-0 was rung by director at 2026-11-28T01:00:00Z (30s ago, window 120s)", errors.New("exit status 1")
 	})
 	err := inj(context.Background(), "aae/seat-0", stallRingLine, "Enter")
 	if !errors.Is(err, errRingClaimHeld) {
@@ -217,7 +220,10 @@ func TestMarvelInjectMapsAHeldRingClaimAndStopsBeforeEnter(t *testing.T) {
 		t.Fatalf("Enter must not be sent after a refused ring, ran %d calls", n)
 	}
 	var m int
-	inj = newMarvelInject(func(context.Context, []string) (string, error) { m++; return "boom", errors.New("exit status 1") })
+	inj = newMarvelInject(func(context.Context, []string) (string, error) {
+		m++
+		return "marvel: ring claim held by another ring", errors.New("exit status 1")
+	})
 	err = inj(context.Background(), "aae/seat-0", stallRingLine, "Enter")
 	if err == nil || errors.Is(err, errRingClaimHeld) || m != 1 {
 		t.Fatalf("any other failure is a plain error and stops before Enter, got %v after %d calls", err, m)
