@@ -88,6 +88,15 @@ func (s *scratchNats) stop() {
 	}
 }
 
+// noBusCredentials clears the four variables dialRing reads through natsAuthOption, so a
+// run on a seat host never presents the seat's own bus credential to the scratch server.
+func noBusCredentials(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"DIRECTOR_NATS_CREDS", "DIRECTOR_NATS_USER", "DIRECTOR_NATS_PASS_FILE", "DIRECTOR_NATS_PASS"} {
+		t.Setenv(name, "")
+	}
+}
+
 // shortReconnect sets a 10 ms reconnect wait with no jitter for the test, so the
 // old budget of 60 attempts is under a second.
 func shortReconnect(t *testing.T) {
@@ -127,6 +136,7 @@ func captureClosedReports(t *testing.T) *closedReports {
 }
 
 func TestShimReconnectsAfterAnOutageLongerThanTheOldAttemptBudget(t *testing.T) {
+	noBusCredentials(t)
 	shortReconnect(t)
 	srv := newScratchNats(t, "")
 	srv.start(t)
@@ -160,10 +170,9 @@ func TestAConnectionThatEndsUnaskedIsReported(t *testing.T) {
 	if err := os.WriteFile(pass, []byte("one\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	noBusCredentials(t)
 	t.Setenv("DIRECTOR_NATS_USER", "u")
 	t.Setenv("DIRECTOR_NATS_PASS_FILE", pass)
-	t.Setenv("DIRECTOR_NATS_CREDS", "")
-	t.Setenv("DIRECTOR_NATS_PASS", "")
 	nc, _, err := dialRing(srv.url(), Sender{AgentID: "reconnect-closed"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -193,6 +202,7 @@ func TestAConnectionThatEndsUnaskedIsReported(t *testing.T) {
 }
 
 func TestAnOrderlyCloseIsNotReported(t *testing.T) {
+	noBusCredentials(t)
 	shortReconnect(t)
 	reports := captureClosedReports(t)
 	srv := newScratchNats(t, "")
