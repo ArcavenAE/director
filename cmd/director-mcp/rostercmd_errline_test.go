@@ -50,6 +50,34 @@ func TestRosterConnectErrorLineCarriesNoCredential(t *testing.T) {
 	}
 }
 
+// A bad escape in the password makes the url package quote the whole raw URL,
+// password included. The url package quotes it with %q, so a backslash in the
+// password is doubled in the message and the plain replacement of the raw
+// address no longer matches; only the *url.Error branch of connectReason keeps
+// the password out. The cases above do not reach that gap.
+func TestRosterConnectErrorLineCarriesNoPasswordWithBadEscape(t *testing.T) {
+	const badPass = `sek\ret%zz`
+	raw := "nats://" + fakeUser + ":" + badPass + "@127.0.0.1:1"
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	var out, errb bytes.Buffer
+	code := runRosterCmd(ctx, raw, cliArgs{mode: "roster", json: true}, &out, &errb)
+	if code == 0 {
+		t.Errorf("exit 0, want a failure")
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout %q, want nothing", out.String())
+	}
+	for _, secret := range []string{fakeUser, "sek", "ret%zz"} {
+		if strings.Contains(out.String(), secret) || strings.Contains(errb.String(), secret) {
+			t.Errorf("output carries %q: stdout %q stderr %q", secret, out.String(), errb.String())
+		}
+	}
+	if !strings.HasPrefix(errb.String(), "director-mcp roster: ") {
+		t.Errorf("stderr %q does not start with the command's name", errb.String())
+	}
+}
+
 // connectReason is the general path: whatever error the dial returns, the text
 // it gives has no user or password of any part of the address.
 func TestConnectReasonStripsTheCredentialFromAnyError(t *testing.T) {
