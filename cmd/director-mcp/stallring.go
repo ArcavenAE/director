@@ -43,6 +43,9 @@ var errRingUnconfirmed = errors.New("ring line not confirmed in the composer")
 // Composer verdicts, as composer-check prints them. Only EMPTY lets a ring go.
 const (
 	composerEmpty   = "EMPTY"
+	// composerSuggestion is an idle composer holding only a dim suggestion: typed
+	// text replaces it, so composer-check calls it safe (exit 0).
+	composerSuggestion = "SUGGESTION"
 	composerHasText = "HAS-TEXT"
 	composerQueued  = "QUEUED"
 	composerMenu    = "MENU"

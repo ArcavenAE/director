@@ -282,6 +282,18 @@ func TestStallRingCountsAnUnverifiedRingTowardTheHourAndDoesNotRetry(t *testing.
 	}
 }
 
+func TestStallRingRingsAComposerThatHoldsOnlyADimSuggestion(t *testing.T) {
+	h := newRingHarness()
+	h.verdict = composerSuggestion
+	rows := h.tick()
+	if len(h.calls) != 1 {
+		t.Fatalf("composer-check calls a dim suggestion safe (typed text replaces it), so the seat must be rung, got %d injects", len(h.calls))
+	}
+	if len(rows) != 1 || rows[0].Event != "ring" || rows[0].Result != "sent" {
+		t.Fatalf("a ring over a suggestion is a sent ring, got %+v", rows)
+	}
+}
+
 func TestStallRingTypesOnlyTheFixedLineAndEnter(t *testing.T) {
 	h := newRingHarness()
 	h.tick()
@@ -332,12 +344,12 @@ func TestStallRingCountsARingMadeByHand(t *testing.T) {
 }
 
 func TestStallRingNeverTypesOverAComposerThatIsNotEmpty(t *testing.T) {
-	for _, v := range []string{composerHasText, composerQueued, composerMenu, composerUnclear, "", "empty", "EMPTY\n", " EMPTY", "BOGUS"} {
+	for _, v := range []string{composerHasText, composerQueued, composerMenu, composerUnclear, "", "empty", "EMPTY\n", " EMPTY", "BOGUS", "suggestion", "SUGGESTION\n", " SUGGESTION", "SUGGESTIONS"} {
 		h := newRingHarness()
 		h.verdict = v
 		rows := h.tick()
 		if len(h.calls) != 0 {
-			t.Fatalf("composer %q: only the exact verdict EMPTY may ring, got %d injects", v, len(h.calls))
+			t.Fatalf("composer %q: only the exact verdicts EMPTY and SUGGESTION may ring, got %d injects", v, len(h.calls))
 		}
 		if len(rows) != 1 || rows[0].Event != "ring-refused" || rows[0].Result != "refused-composer" {
 			t.Fatalf("composer %q: want one ring-refused row with result refused-composer, got %+v", v, rows)
