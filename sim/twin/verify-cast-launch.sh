@@ -462,6 +462,57 @@ else
   bad "test-architect-b cast" "$(cat "$root/out/stderr")"
 fi
 
+# --- I-852 A/B seats: a name pattern, the builder role, scope only from CAST_SCOPE ---
+# ab852-p1a to ab852-p3b have no wardrobe role of their own, so without a row each
+# slices a role named after itself and slice.sh refuses it. One pattern row maps them
+# to builder with an empty default scope, and they need CAST_SCOPE.
+for abrole in ab852-p1a ab852-p3b; do
+  if cast "$abrole" CAST_SCOPE="AB-SCOPE-MARK only"; then
+    grep -q "stub slice for builder$" "$root/out/claude.args" \
+      && ok "$abrole: slices the builder role" \
+      || bad "$abrole: slices the builder role" "$(cat "$root/out/claude.args")"
+    grep -q "recorded by the supervisor: AB-SCOPE-MARK only." "$root/out/claude.args" \
+      && ok "$abrole: the scope comes from CAST_SCOPE" \
+      || bad "$abrole: the scope comes from CAST_SCOPE" "$(cat "$root/out/claude.args")"
+  else
+    bad "$abrole cast with CAST_SCOPE" "$(cat "$root/out/stderr")"
+  fi
+  if cast "$abrole"; then
+    bad "$abrole: a cast with CAST_SCOPE unset was allowed" "$(cat "$root/out/claude.args")"
+  else
+    grep -q "CAST_SCOPE" "$root/out/stderr" \
+      && ok "$abrole: with CAST_SCOPE unset the cast is refused, naming CAST_SCOPE" \
+      || bad "$abrole: the refusal does not name CAST_SCOPE" "$(cat "$root/out/stderr")"
+    [[ ! -e "$root/out/claude.args" ]] \
+      && ok "$abrole: the refused cast never launched claude" \
+      || bad "$abrole: the refused cast launched claude"
+  fi
+done
+
+# --- rows carried over from the installed copy: mythos-architect and builder-i804 ----
+for pairrole in mythos-architect:architect builder-i804:builder; do
+  mrole="${pairrole%%:*}"; wrole="${pairrole##*:}"
+  if cast "$mrole" CAST_SCOPE="ROW-SCOPE-MARK"; then
+    grep -q "stub slice for $wrole$" "$root/out/claude.args" \
+      && ok "$mrole: slices the $wrole role" \
+      || bad "$mrole: slices the $wrole role" "$(cat "$root/out/claude.args")"
+  else
+    bad "$mrole cast" "$(cat "$root/out/stderr")"
+  fi
+done
+
+# builder-i804 carries no scope text of its own either, so it needs CAST_SCOPE too.
+if cast builder-i804; then
+  bad "builder-i804: a cast with CAST_SCOPE unset was allowed" "$(cat "$root/out/claude.args")"
+else
+  grep -q "CAST_SCOPE" "$root/out/stderr" \
+    && ok "builder-i804: with CAST_SCOPE unset the cast is refused, naming CAST_SCOPE" \
+    || bad "builder-i804: the refusal does not name CAST_SCOPE" "$(cat "$root/out/stderr")"
+  [[ ! -e "$root/out/claude.args" ]] \
+    && ok "builder-i804: the refused cast never launched claude" \
+    || bad "builder-i804: the refused cast launched claude"
+fi
+
 # --- clean-room mode: a per-seat config directory, no shim, a settings dry run ---
 # wardrobe finding-wardrobe-keku items 1, 3 and 4. CAST_CLEAN_ROOM_DIR names a
 # fresh per-seat CLAUDE_CONFIG_DIR outside the operator's; the seat gets no

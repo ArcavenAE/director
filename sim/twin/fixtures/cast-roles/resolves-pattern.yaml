@@ -1,0 +1,12 @@
+# Fixture: both roles resolve through the ab852-* pattern row of the case table.
+workspace:
+  name: fixture
+teams:
+- name: fixture
+  roles:
+  - name: ab852-p1a
+    runtime:
+      command: /home/x/.director/bin/cast-launch
+  - name: ab852-p3b
+    runtime:
+      command: /home/x/.director/bin/cast-launch

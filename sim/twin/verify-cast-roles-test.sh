@@ -22,6 +22,16 @@ for pair in unresolved.yaml:nonesuch-builder unresolved.toml:nonesuch-worker; do
   if [[ "$rc" == 1 ]] && grep -q "UNRESOLVED role '$r'" <<<"$out" && ! grep -q "UNRESOLVED role 'supervisor'" <<<"$out"; then
     ok "$f: exit 1 and only '$r' is named"; else bad "$f" "rc=$rc $out"; fi
 done
+# A pattern row (ab852-*) resolves the names it matches and no near miss of them.
+if out="$("$V" "${W[@]}" "$fx/resolves-pattern.yaml" 2>&1)" && grep -q '2 cast roles checked, 0 skipped' <<<"$out"; then
+  ok "resolves-pattern.yaml: a pattern row of the case table resolves the names it matches"; else bad "resolves-pattern.yaml" "$out"; fi
+rc=0; out="$("$V" "${W[@]}" "$fx/unresolved-pattern.yaml" 2>&1)" || rc=$?
+if [[ "$rc" == 1 ]] && grep -q "UNRESOLVED role 'ab852'" <<<"$out" && grep -q "UNRESOLVED role 'xab852-p1a'" <<<"$out" \
+   && grep -q '2 unresolved' <<<"$out"; then
+  ok "unresolved-pattern.yaml: near misses of a pattern row exit 1 and are named"; else bad "unresolved-pattern.yaml" "rc=$rc $out"; fi
+rc=0; out="$("$V" --wardrobe "$fx/wardrobe-no-builder" "$fx/resolves-pattern.yaml" 2>&1)" || rc=$?
+if [[ "$rc" == 1 ]] && grep -q "UNRESOLVED role 'ab852-p1a'.*maps it to 'builder'" <<<"$out"; then
+  ok "a pattern row whose WROLE target is not in the wardrobe exits 1"; else bad "pattern row missing WROLE target" "rc=$rc $out"; fi
 # A table-only role under a wrapper that is not cast-launch is not credited the table.
 rc=0; out="$("$V" "${W[@]}" "$fx/unresolved-wrapper.yaml" 2>&1)" || rc=$?
 if [[ "$rc" == 1 ]] && grep -q "UNRESOLVED role 'scoped-builder'.*not cast-launch" <<<"$out" && ! grep -q "UNRESOLVED role 'supervisor'" <<<"$out"; then

@@ -1,0 +1,13 @@
+# Fixture: neither role matches the ab852-* pattern row, and neither has a wardrobe
+# role of its own.
+workspace:
+  name: fixture
+teams:
+- name: fixture
+  roles:
+  - name: ab852
+    runtime:
+      command: /home/x/.director/bin/cast-launch
+  - name: xab852-p1a
+    runtime:
+      command: /home/x/.director/bin/cast-launch
