@@ -1,0 +1,343 @@
+#!/usr/bin/env python3
+"""seats-page - one local, static page of seats and hosts, with each account window's quota (I-876).
+
+  seats-page [--out FILE]   read each cluster once and write FILE (default $DIRECTOR_STATE/seats.html), mode 600
+  seats-page --help
+
+Every call is read only: `marvel config list` (the NAME column only, as dash-writer reads it), then for each
+cluster it names, and nothing else:
+
+  marvel --cluster C get sessions --columns team,role,name,state,health,last-active,account,7d
+  marvel --cluster C get vitals -o json
+  marvel --cluster C get account-readings -o json
+
+The page is a strip with one block per cluster (the host's vitals; for each account and window, the latest
+reading's percent used and time to reset), then each cluster's sessions, which is dash panel 4's content with
+two more columns. marvel's words are shown as it printed them. A read that fails shows as "GAP <read>: <why>"
+in its cluster's block, and no named cluster is left out. The page has no button, link or script and no red,
+does not refresh itself, and nothing reads it as a gate (ADR-007).
+
+Private names, as dash-writer and lane-ledger read them, from $DIRECTOR_STATE/dash-withhold.txt (whole words,
+any case): a value from marvel or the cluster list that holds one reads "withheld". A list that is absent,
+unreadable or wider than 0600 fails closed: no session rows, no reporting seat, and none of marvel's own error
+or unexpected output are drawn. Account labels and vitals text are still drawn then. The page is for the host it
+is written on: it can carry account keys and home paths, so do not publish it.
+
+dash-writer, beside this script, supplies the cluster list, the table parser, the list reader and the clock.
+
+Environment: DIRECTOR_STATE (default $HOME/.director/state), DASH_MARVEL (default marvel), DASH_MARVEL_TIMEOUT
+(seconds for each marvel call, 1 to 60, default 20). DWS_NOW overrides the clock only with DWS_TEST_CLOCK=1.
+
+A diagnostic: exit 0 whatever it could read; 1 when the page cannot be written; 2 for a usage error.
+"""
+import datetime
+import html
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+COLUMNS = "team,role,name,state,health,last-active,account,7d"
+HEADER = ["TEAM", "ROLE", "AGENT NAME", "STATE", "HEALTH", "LAST-ACTIVE", "ACCOUNT", "7D%"]
+QUOTA_HEADER = ["ACCOUNT", "WINDOW", "USED%", "TIME TO RESET", "RESETS", "OBSERVED", "SESSION"]
+VITALS_FIELDS = ("name", "state", "detail", "line")
+ERROR_MAX = 500
+STAMP_RE = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)")
+USAGE = "usage: seats-page [--out <file>] | --help"
+
+# Greys only: the page marks nothing by colour.
+CSS = """
+:root{color-scheme:light dark}
+body{font:14px/1.45 system-ui,sans-serif;margin:0 auto;max-width:1200px;padding:12px 16px;background:#fff;color:#111}
+h1{font-size:19px;margin:14px 0 4px}
+h2{font-size:16px;margin:16px 0 4px}
+h3{font-size:13.5px;margin:10px 0 4px}
+.note{color:#555;margin:2px 0}
+.gap{font-weight:700;border-left:4px solid #555;padding-left:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{border:1px solid #ccc;padding:3px 8px;text-align:left;vertical-align:top}
+th{background:#eee}
+section{border-top:1px solid #ccc;padding-bottom:6px}
+@media (prefers-color-scheme:dark){
+body{background:#151515;color:#e6e6e6}
+.note{color:#aaa}
+th{background:#2a2a2a}
+th,td,section{border-color:#444}
+.gap{border-color:#aaa}
+}
+"""
+
+
+def load_dash():
+    """dash-writer as a module, from beside this script, without writing bytecode there."""
+    sys.dont_write_bytecode = True
+    loader = importlib.machinery.SourceFileLoader("dash_writer", os.path.join(HERE, "dash-writer"))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader("dash_writer", loader))
+    loader.exec_module(module)
+    return module
+
+
+class Mask:
+    """The private-name list. `why` is None when it is usable, else dash-writer's word for why it is not."""
+
+    def __init__(self, dash):
+        names, self.why = dash.load_withhold()
+        self.hold = [re.compile(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(n), re.I) for n in names or []]
+
+    def __call__(self, text):
+        return "withheld" if any(p.search(text) for p in self.hold) else text
+
+
+class Cluster:
+    """One named cluster's two blocks and its gaps. A gap is counted where it is drawn."""
+
+    def __init__(self, name, mask):
+        self.name = name
+        self.label = mask(name)
+        self.mask = mask
+        self.gaps = 0
+
+    def gap(self, read, why, theirs=None):
+        """A GAP line: `why` is this script's own words; `theirs` is marvel's text, drawn only with a usable list."""
+        self.gaps += 1
+        if theirs is not None:
+            if self.mask.why is None:
+                why = f"{why}: {self.mask(theirs)}" if why else self.mask(theirs)
+            else:
+                why = f"{why or 'failed'}; marvel's text withheld"
+        return f'<p class="gap">{esc(f"GAP {read}: {why}")}</p>'
+
+
+def esc(value):
+    return html.escape(str(value), quote=True)
+
+
+def clean(text):
+    return "".join(c if c.isprintable() else " " for c in text).strip()
+
+
+def table(header, rows):
+    head = "".join(f"<th>{esc(c)}</th>" for c in header)
+    body = "".join("<tr>" + "".join(f"<td>{esc(c)}</td>" for c in row) + "</tr>\n" for row in rows)
+    return f'<div class="scroll"><table>\n<tr>{head}</tr>\n{body}</table></div>'
+
+
+def marvel(dash, args):
+    """(stdout, None) or (None, (this script's words, marvel's error text or None))."""
+    wait = dash.config_timeout()
+    try:
+        p = subprocess.run([os.environ.get("DASH_MARVEL", "marvel"), *args], capture_output=True, timeout=wait,
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return None, (f"timed out after {wait:g}s", None)
+    except OSError:
+        return None, ("unavailable", None)
+    if p.returncode == 0:
+        return p.stdout.decode("utf-8", "replace"), None
+    said = []
+    for line in p.stderr.decode("utf-8", "replace").splitlines():
+        if line.startswith("Usage:"):
+            break  # the help text that follows an error is not the error
+        if line.strip():
+            said.append(clean(line))
+    text = " ".join(said)[:ERROR_MAX]
+    return None, ("", text) if text else (f"failed: exit {p.returncode}, no message", None)
+
+
+def parse_stamp(value):
+    m = STAMP_RE.fullmatch(value) if isinstance(value, str) else None
+    if not m:
+        return None
+    zone = "+00:00" if m.group(2) == "Z" else m.group(2)
+    try:
+        return datetime.datetime.strptime(m.group(1) + zone, "%Y-%m-%dT%H:%M:%S%z")
+    except ValueError:
+        return None
+
+
+def time_to_reset(resets_at, t_now):
+    """In the form of marvel's reset columns: +2d3h, +3h5m, +47m, now once past; a dash with no readable time."""
+    when = parse_stamp(resets_at)
+    if when is None:
+        return "-"
+    seconds = (when - t_now).total_seconds()
+    if seconds <= 0:
+        return "now"
+    days, rest = divmod(int(seconds // 60), 1440)
+    hours, minutes = divmod(rest, 60)
+    if days:
+        return f"+{days}d{hours}h"
+    return f"+{hours}h{minutes}m" if hours else f"+{minutes}m"
+
+
+def vitals_block(dash, c):
+    out, failed = marvel(dash, ["--cluster", c.name, "get", "vitals", "-o", "json"])
+    if failed:
+        return c.gap("vitals", *failed)
+    try:
+        doc = json.loads(out)
+    except ValueError:
+        return c.gap("vitals", "the output was not the JSON document asked for")
+    if not isinstance(doc, dict):
+        return c.gap("vitals", "the JSON document was not an object")
+    for key in ("enabled", "sampled"):
+        if doc.get(key) is not True:
+            return c.gap("vitals", f"marvel reports {key} false" if doc.get(key) is False else f"the document has no {key} flag")
+    thresholds = doc.get("thresholds")
+    if not isinstance(thresholds, list):
+        return c.gap("vitals", "the document has no thresholds list")
+    rows = [[c.mask(clean(t[f])) for f in VITALS_FIELDS] for t in thresholds
+            if isinstance(t, dict) and all(isinstance(t.get(f), str) for f in VITALS_FIELDS)]
+    parts = []
+    at = doc.get("at")
+    if isinstance(at, str):
+        parts.append(f'<p class="note">{esc("Sampled at " + c.mask(clean(at)))}</p>')
+    else:
+        parts.append(c.gap("vitals", "the sample has no time"))
+    if rows:
+        parts.append(table([f.upper() for f in VITALS_FIELDS], rows))
+    if len(rows) != len(thresholds) or not rows:
+        parts.append(c.gap("vitals", f"{len(thresholds) - len(rows)} thresholds unreadable" if thresholds else "no thresholds listed"))
+    return "\n".join(parts)
+
+
+def quota_block(dash, c, t_now):
+    out, failed = marvel(dash, ["--cluster", c.name, "get", "account-readings", "-o", "json"])
+    if failed:
+        return c.gap("account-readings", *failed)
+    try:
+        readings = json.loads(out)
+    except ValueError:
+        return c.gap("account-readings", "the output was not the JSON document asked for")
+    if not isinstance(readings, list):
+        return c.gap("account-readings", "the JSON document was not a list")
+    latest, unreadable = {}, 0  # (account, window) -> (observed, reading), in the order first seen
+    for r in readings:
+        ok = isinstance(r, dict) and all(isinstance(r.get(k), str) for k in ("account", "window", "at"))
+        seen = parse_stamp(r["at"]) if ok else None
+        used = r.get("used_percent") if ok else None
+        if seen is None or isinstance(used, bool) or not isinstance(used, (int, float)):
+            unreadable += 1
+            continue
+        key = (r["account"], r["window"])
+        if key not in latest or seen > latest[key][0]:
+            latest[key] = (seen, r)
+    rows = []
+    for _, r in latest.values():
+        resets, session = r.get("resets_at"), r.get("session")
+        session = clean(session) if isinstance(session, str) and session else "-"
+        rows.append([c.mask(clean(r["account"])), c.mask(clean(r["window"])), f"{r['used_percent']:g}%",
+                     time_to_reset(resets, t_now), c.mask(clean(resets)) if isinstance(resets, str) else "-",
+                     c.mask(clean(r["at"])), c.mask(session) if c.mask.why is None else "withheld"])
+    parts = []
+    if rows:
+        parts.append(table(QUOTA_HEADER, rows))
+    elif not unreadable:
+        parts.append('<p class="note">marvel lists no readings.</p>')
+    if unreadable:
+        parts.append(c.gap("account-readings", f"{unreadable} reading{'s' if unreadable != 1 else ''} unreadable"))
+    return "\n".join(parts)
+
+
+def sessions_block(dash, c):
+    out, failed = marvel(dash, ["--cluster", c.name, "get", "sessions", "--columns", COLUMNS])
+    parts = []
+    if c.mask.why is not None:
+        parts.append(f'<p class="gap">{esc(f"Sessions withheld: dash-withhold.txt {c.mask.why}; no session rows are drawn.")}</p>')
+    if failed:
+        parts.append(c.gap("sessions", *failed))
+        return "\n".join(parts)
+    rows, bad = dash.parse_table(out, HEADER)
+    if rows is None:
+        first = clean(out.split("\n", 1)[0])[:ERROR_MAX]
+        parts.append(c.gap("sessions", "the table header was not the one asked for", first))
+        return "\n".join(parts)
+    if c.mask.why is None:
+        parts.append(table(HEADER, [[c.mask(cell) for cell in row] for row in rows]))
+    if bad:
+        n = len(bad)
+        parts.append(c.gap("sessions", f"{n} row{'s' if n != 1 else ''} could not be cut cleanly and {'are' if n != 1 else 'is'} not shown"))
+    return "\n".join(parts)
+
+
+def section(kind, c, body):
+    return f'<section class="{kind}" data-cluster="{esc(c.label)}"><h2>{esc(c.label)}</h2>\n{body}\n</section>'
+
+
+def build(dash):
+    """(page text, the one line's counts)."""
+    t_text, t_now = dash.now()
+    mask = Mask(dash)
+    names, why = dash.cluster_names()
+    clusters = [Cluster(n, mask) for n in names or []]
+    parts = ['<!doctype html>', '<html lang="en"><head><meta charset="utf-8">',
+             '<meta name="viewport" content="width=device-width,initial-scale=1">',
+             f'<title>Seats and hosts</title><style>{CSS}</style></head><body>', '<h1>Seats and hosts</h1>',
+             f'<p class="note">{esc(f"Read at {t_text} (UTC). This page is static and does not refresh itself; run seats-page again.")}</p>',
+             '<p class="note">Values are marvel\'s words as it printed them. Diagnostic only: nothing gates or acts on this page.</p>']
+    gaps = 0
+    if names is None:
+        gaps += 1
+        parts.append(f'<p class="gap">{esc(f"GAP cluster list: {why}")}</p>')
+    for c in clusters:
+        body = ["<h3>Host</h3>", vitals_block(dash, c), "<h3>Account quota</h3>", quota_block(dash, c, t_now)]
+        parts.append(section("host", c, "\n".join(body)))
+    if clusters:
+        parts.append("<h1>Sessions</h1>")
+    for c in clusters:
+        parts.append(section("sessions", c, sessions_block(dash, c)))
+    parts.append("</body></html>\n")
+    full = sum(1 for c in clusters if not c.gaps)
+    gaps += sum(c.gaps for c in clusters)
+    counts = f"clusters: {len(clusters)} named, {full} read in full; {gaps} GAP"
+    if mask.why is not None:
+        counts += f"; sessions withheld: {mask.why}"
+    return "\n".join(parts), counts
+
+
+def write(path, text):
+    """Replace path whole, mode 600."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".seats-page.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def main():
+    a = sys.argv[1:]
+    if a in (["--help"], ["-h"]):
+        print(__doc__)
+        return 0
+    if a and not (len(a) == 2 and a[0] == "--out" and a[1]):
+        print(USAGE, file=sys.stderr)
+        return 2
+    try:
+        dash = load_dash()
+    except OSError as err:
+        print(f"seats-page: dash-writer cannot be read from beside this script: {err.strerror}", file=sys.stderr)
+        return 1
+    page, counts = build(dash)
+    path = a[1] if a else os.path.join(dash.STATE, "seats.html")
+    try:
+        if not a:
+            os.makedirs(dash.STATE, mode=0o700, exist_ok=True)
+        write(path, page)
+    except OSError as err:
+        print(f"seats-page: cannot write {path}: {err.strerror}", file=sys.stderr)
+        return 1
+    print(f"seats-page: {counts}; page: {path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

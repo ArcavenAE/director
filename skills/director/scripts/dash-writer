@@ -233,8 +233,8 @@ def ledger():
         return None, "dws show could not be read"
 
 
-def parse_table(text):
-    """(rows of six cells, refusal reasons). Refuses the whole table on a header mismatch and a row alone
+def parse_table(text, header=HEADER):
+    """(rows of one cell per column of header, refusal reasons). Refuses the whole table on a header mismatch and a row alone
     when it cannot be cut cleanly; never draws a shifted value."""
     lines = text.split("\n")
     if lines and lines[-1] == "":
@@ -243,12 +243,12 @@ def parse_table(text):
         return None, ["header"]
     head = lines[0].rstrip("\n")
     offs, pos = [], 0
-    for i, lab in enumerate(HEADER):
+    for i, lab in enumerate(header):
         if not head.startswith(lab, pos):
             return None, ["header"]
         offs.append(pos)
         pos += len(lab)
-        if i < len(HEADER) - 1:
+        if i < len(header) - 1:
             spaces = len(head[pos:]) - len(head[pos:].lstrip(" "))
             if spaces < 2:
                 return None, ["header"]
