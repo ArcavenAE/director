@@ -28,6 +28,7 @@ type scratchNats struct {
 	port int
 	dir  string
 	pass string // when set, the server requires user "u" with this password
+	deny string // when set (with pass), user "u" may not publish to this subject
 	cmd  *exec.Cmd
 }
 
@@ -55,7 +56,10 @@ func (s *scratchNats) url() string { return fmt.Sprintf("nats://127.0.0.1:%d", s
 func (s *scratchNats) start(t *testing.T) {
 	t.Helper()
 	body := fmt.Sprintf("listen: 127.0.0.1:%d\n", s.port)
-	if s.pass != "" {
+	switch {
+	case s.pass != "" && s.deny != "":
+		body += fmt.Sprintf("authorization { users: [ { user: u, password: %q, permissions: { publish: { deny: [%q] } } } ] }\n", s.pass, s.deny)
+	case s.pass != "":
 		body += fmt.Sprintf("authorization { user: u, password: %q }\n", s.pass)
 	}
 	conf := filepath.Join(s.dir, "s.conf")
@@ -215,5 +219,42 @@ func TestAnOrderlyCloseIsNotReported(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if names, _ := reports.snapshot(); len(names) != 0 {
 		t.Fatalf("a close the caller asked for must not be reported: %v", names)
+	}
+}
+
+// A permission violation sets the connection's last error without closing it, and a
+// later Close() would run the ClosedHandler with that error still set. An exit the
+// caller asked for must say nothing (director#770 review, Q2).
+func TestAnOrderlyCloseAfterADeniedPublishIsNotReported(t *testing.T) {
+	noBusCredentials(t)
+	t.Setenv("DIRECTOR_NATS_USER", "u")
+	t.Setenv("DIRECTOR_NATS_PASS", "pw")
+	shortReconnect(t)
+	reports := captureClosedReports(t)
+	srv := newScratchNats(t, "pw")
+	srv.deny = "denied.>"
+	srv.start(t)
+	nc, _, err := dialRing(srv.url(), Sender{AgentID: "reconnect-denied"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.Publish("denied.subject", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	_ = nc.Flush()
+	deadline := time.Now().Add(5 * time.Second)
+	for nc.LastError() == nil && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if nc.LastError() == nil {
+		t.Fatal("the broker did not deny the publish, so the case is not set up")
+	}
+	if nc.IsClosed() {
+		t.Fatal("a permission violation must not close the connection")
+	}
+	nc.Close()
+	time.Sleep(500 * time.Millisecond)
+	if names, errs := reports.snapshot(); len(names) != 0 {
+		t.Fatalf("a close the caller asked for must not be reported, got %v (%v)", names, errs)
 	}
 }
