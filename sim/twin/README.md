@@ -70,7 +70,9 @@ Seats should exec an installed launcher, not this checkout:
 `director-install` archives `sim/twin` at the ref from a bare mirror into
 `~/.director/lib/cast-launch/<sha>/`, runs that copy's verify against that
 copy's launcher, and only then switches `~/.director/bin/cast-launch` to it
-by an atomic rename. The previous version stays for `--rollback`. Running
+by an atomic rename. The previous version stays for `--rollback`. A file or a
+link at that path that `director-install` did not make is kept under
+`lib/cast-launch/legacy-<time>/`, and `--rollback` returns to it. Running
 seats need no restart: the launcher runs only at spawn, then execs the
 harness. Backend overlays are state, not code, and live under
 `${DIRECTOR_HOME:-~/.director}/overlays/by-role/`. Proof:
