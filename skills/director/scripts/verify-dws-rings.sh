@@ -122,5 +122,24 @@ sys.exit(1 if bad else 0)
 P
 "$DWS" rings --json | python3 -c "import json,sys; d=json.load(sys.stdin); b=d['seats']['team-c/reader']['blocker']; sys.exit(0 if '\u202e' in b and '\u0085' in b else 1)" && ok "the escaped JSON parses back to the words as given" || bad "JSON round trip"
 
+# round 4 (review 6095728471 on director#765): the stall ring writes ring-attempt and ring-refused rows, and a
+# refusal for the whole pass carries seat "*". dws folds only the events it knows, so none of those rows
+# makes a seat, counts as torn, or lets ring-note follow a ring that never happened.
+export DIRECTOR_STATE="$root/st4"; mkdir -p "$DIRECTOR_STATE"; RINGS="$DIRECTOR_STATE/rings.jsonl"
+printf '%s\n' \
+  '{"ts":"2026-10-22T10:00:00Z","actor":"director-mcp","event":"ring-attempt","seat":"team-d/attempted"}' \
+  '{"ts":"2026-10-22T10:00:01Z","actor":"director-mcp","event":"ring-refused","seat":"team-d/refused","result":"refused-composer"}' \
+  '{"ts":"2026-10-22T10:00:02Z","actor":"director-mcp","event":"ring-refused","seat":"*","result":"refused-sessions"}' >"$RINGS"
+at 2026-10-22T10:05:00Z
+"$DWS" rings --json >"$root/j4" 2>/dev/null
+[[ "$(q "len(d['seats'])" <"$root/j4")" == "0" ]] && ok "a ring-attempt, a ring-refused and a seat * refusal make no seat entry" || bad "stall ring rows make a seat entry" "$(cat "$root/j4")"
+[[ "$(q "d['torn']" <"$root/j4")" == "0" ]] && ok "an event dws does not know is skipped, not counted as torn" || bad "unknown events counted as torn"
+refuses "ring-note refuses a seat that only has a ring-attempt row" "no ring" "$DWS" ring-note team-d/attempted ack
+refuses "ring-note refuses a seat that only has a ring-refused row" "no ring" "$DWS" ring-note team-d/refused ack
+refuses "ring-note refuses the seat *" "no ring" "$DWS" ring-note '*' ack
+"$DWS" ring team-d/real --idle-minutes 20 --mail 1 >/dev/null 2>&1 && ok "a real ring beside those rows is still recorded" || bad "a real ring beside those rows is still recorded"
+"$DWS" rings --json >"$root/j4" 2>/dev/null
+[[ "$(q "sorted(d['seats'])" <"$root/j4")" == "['team-d/real']" ]] && ok "only the rung seat is listed" || bad "only the rung seat is listed" "$(cat "$root/j4")"
+
 echo "dws rings: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
