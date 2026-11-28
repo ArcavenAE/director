@@ -97,6 +97,9 @@ type stallRinger struct {
 	Composer func(ctx context.Context, s stallSeat) (string, error)
 	Inject   func(ctx context.Context, key, text string, keys ...string) error
 	Log      ringLog
+	// Sessions lists marvel's sessions, read once per pass, to turn a seat's agent
+	// id into the marvel session key (workspace/name).
+	Sessions func(ctx context.Context) ([]marvelSession, error)
 	// Backoff is how long a seat is left alone after an error result.
 	Backoff time.Duration
 
@@ -341,3 +344,16 @@ func newMarvelInject(run marvelExec) func(ctx context.Context, key, text string,
 // stallRowKey is the presence key of a seat's row: its own team, not the
 // director's.
 func stallRowKey(s stallSeat) string { return "" }
+
+// marvelSession is the part of one `marvel get sessions -o json` entry the ring reads.
+type marvelSession struct {
+	Name      string `json:"Name"`
+	Workspace string `json:"Workspace"`
+}
+
+// marvelSessions reads marvel's session list through run.
+func marvelSessions(run marvelExec) func(ctx context.Context) ([]marvelSession, error) {
+	return func(ctx context.Context) ([]marvelSession, error) {
+		return nil, errors.New("not implemented")
+	}
+}

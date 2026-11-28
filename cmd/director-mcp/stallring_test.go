@@ -56,6 +56,9 @@ type ringHarness struct {
 	verdict  string
 	compErr  error
 	injectEr map[string]error
+	sessions []marvelSession
+	sessErr  error
+	sessN    int
 	calls    []ringCall
 	log      *ringFake
 }
@@ -94,6 +97,20 @@ func (h *ringHarness) ringer() *stallRinger {
 			return h.injectEr[key]
 		},
 		Log: h.log,
+		Sessions: func(context.Context) ([]marvelSession, error) {
+			h.sessN++
+			if h.sessErr != nil {
+				return nil, h.sessErr
+			}
+			if h.sessions != nil {
+				return h.sessions, nil
+			}
+			var out []marvelSession
+			for _, s := range h.seats {
+				out = append(out, marvelSession{Name: s.AgentID, Workspace: "aae"})
+			}
+			return out, nil
+		},
 	}
 }
 
@@ -602,5 +619,84 @@ func TestMarvelInjectLogsAnEnterThatFailsAfterAConfirmedLineAsUnconfirmed(t *tes
 	}
 	if n != 2 {
 		t.Fatalf("want the line call and the Enter call, got %d", n)
+	}
+}
+
+func TestStallRingAddressesTheMarvelWorkspaceFromTheSessionList(t *testing.T) {
+	h := newRingHarness()
+	// the director's workspace for the seat is dir-ws; marvel's is aae
+	h.seats = []stallSeat{{AgentID: "arcaven-kinu-builder-g35-1", Instance: "i1", Key: "dir-ws/arcaven-kinu-builder-g35-1", Cue: cueStateStalled, OldestS: 700}}
+	h.sessions = []marvelSession{{Name: "arcaven-kinu-builder-g35-1", Workspace: "aae"}}
+	h.tick()
+	if len(h.calls) != 1 || h.calls[0].key != "aae/arcaven-kinu-builder-g35-1" {
+		t.Fatalf("the ring must address the workspace marvel reports for the session, got %+v", h.calls)
+	}
+}
+
+func TestStallRingRingsNothingForAnUnknownOrAmbiguousSessionName(t *testing.T) {
+	cases := map[string]struct {
+		sessions []marvelSession
+		result   string
+	}{
+		"unknown":   {[]marvelSession{{Name: "someone-else", Workspace: "aae"}}, "refused-unknown-session"},
+		"ambiguous": {[]marvelSession{{Name: "arcaven-kinu-builder-g35-1", Workspace: "aae"}, {Name: "arcaven-kinu-builder-g35-1", Workspace: "other"}}, "refused-ambiguous-session"},
+	}
+	for name, c := range cases {
+		h := newRingHarness()
+		h.sessions = c.sessions
+		rows := h.tick()
+		if len(h.calls) != 0 {
+			t.Fatalf("%s: nothing may be typed, got %d injects", name, len(h.calls))
+		}
+		if len(rows) != 1 || rows[0].Event != "ring-refused" || rows[0].Result != c.result {
+			t.Fatalf("%s: want one ring-refused row with result %s, got %+v", name, c.result, rows)
+		}
+		for _, r := range h.log.rows {
+			if r.Event == "ring-attempt" {
+				t.Fatalf("%s: no attempt row may be written for a seat that cannot be addressed", name)
+			}
+		}
+	}
+}
+
+func TestStallRingReadsTheSessionsOnceAPassAndLogsOneRefusalWhenItFails(t *testing.T) {
+	h := newRingHarness()
+	h.seats = []stallSeat{stalledSeat("arcaven-kinu-builder-g35-1", 700), stalledSeat("arcaven-kinu-author-g36-0", 700)}
+	h.tick()
+	if h.sessN != 1 || len(h.calls) != 2 {
+		t.Fatalf("two stalled seats must cost one sessions read and two rings, got %d reads and %d injects", h.sessN, len(h.calls))
+	}
+	h2 := newRingHarness()
+	h2.seats = []stallSeat{stalledSeat("arcaven-kinu-builder-g35-1", 700), stalledSeat("arcaven-kinu-author-g36-0", 700)}
+	h2.sessErr = errors.New("marvel unreachable")
+	rows := h2.tick()
+	if len(h2.calls) != 0 {
+		t.Fatalf("a failed sessions read must ring nothing, got %d injects", len(h2.calls))
+	}
+	if len(rows) != 1 || rows[0].Event != "ring-refused" || rows[0].Result != "refused-sessions" {
+		t.Fatalf("a failed sessions read must log one ring-refused row (not one per seat), got %+v", rows)
+	}
+}
+
+func TestMarvelSessionsReadsTheListOnceThroughMarvelGetSessions(t *testing.T) {
+	var argvs [][]string
+	list := marvelSessions(func(_ context.Context, argv []string) (string, error) {
+		argvs = append(argvs, argv)
+		return `[{"Name":"arcaven-kinu-builder-g35-1","Workspace":"aae","Team":"arcaven-kinu","Generation":35},{"Name":"x","Workspace":"w"}]`, nil
+	})
+	got, err := list(context.Background())
+	if err != nil || len(got) != 2 || got[0].Name != "arcaven-kinu-builder-g35-1" || got[0].Workspace != "aae" {
+		t.Fatalf("the session list must parse Name and Workspace, got %+v, %v", got, err)
+	}
+	if len(argvs) != 1 || strings.Join(argvs[0], " ") != "marvel get sessions -o json" {
+		t.Fatalf("want one call to `marvel get sessions -o json`, got %v", argvs)
+	}
+	bad := marvelSessions(func(context.Context, []string) (string, error) { return "not json", nil })
+	if _, err := bad(context.Background()); err == nil {
+		t.Fatalf("output that is not JSON must be an error")
+	}
+	fail := marvelSessions(func(context.Context, []string) (string, error) { return "", errors.New("exit status 1") })
+	if _, err := fail(context.Background()); err == nil {
+		t.Fatalf("a failed marvel call must be an error")
 	}
 }
