@@ -486,3 +486,21 @@ func TestRingLogFileCountsHandRowsAndSurvivesATornLine(t *testing.T) {
 		t.Fatalf("a sent row appended by director-mcp must be the last counted ring, got %v, %v", last, err)
 	}
 }
+
+func TestStallSeatFromRowReadsAFreshStalledRowAndSkipsOwnAndStaleRows(t *testing.T) {
+	now := time.Date(2026, 11, 28, 1, 0, 0, 0, time.UTC)
+	rec := map[string]any{"agent_id": "arcaven-kinu-builder-g35-1", "workspace": "aae", "team": "arcaven-kinu", "instance": "i1",
+		"cue": "stalled", "oldest_pending_s": float64(700), "ts": now.Add(-10 * time.Second).Format(time.RFC3339)}
+	key := "presence.arcaven-kinu.arcaven-kinu-builder-g35-1.i1"
+	s, ok := stallSeatFromRow(key, rec, now, "self")
+	if !ok || s.Key != "aae/arcaven-kinu-builder-g35-1" || s.OldestS != 700 || s.Cue != "stalled" {
+		t.Fatalf("a fresh stalled row must read as a candidate with the session key workspace/id, got %+v, %v", s, ok)
+	}
+	if _, ok := stallSeatFromRow(key, rec, now, "i1"); ok {
+		t.Fatalf("this session's own row must never be a candidate")
+	}
+	rec["ts"] = now.Add(-5 * time.Minute).Format(time.RFC3339)
+	if _, ok := stallSeatFromRow(key, rec, now, "self"); ok {
+		t.Fatalf("a stale row must never be a candidate")
+	}
+}

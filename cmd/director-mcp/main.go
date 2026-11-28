@@ -326,6 +326,9 @@ func main() {
 	if err := bus.startPresenceWatch(logf); err != nil {
 		logf("presence watch not started: %v", err)
 	}
+	if err := bus.startStallRing(logf); err != nil {
+		logf("stall ring not started: %v", err)
+	}
 	go bus.heartbeat(ctx, 30*time.Second, logf)
 	logf("connected to %s as agent://%s/%s instance %s in workspace %s", url, self.Team, self.AgentID, bus.instance, self.Workspace)
 	if gcfg != nil {
