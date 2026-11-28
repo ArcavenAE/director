@@ -57,12 +57,15 @@ MARVEL_OVERLAY_ROOT="${MARVEL_OVERLAY_ROOT:-${DIRECTOR_HOME:-$HOME/.director}/ov
 # published (this file is public) is passed in from the private seat file.
 case "$MARVEL_ROLE" in
   maintainer)        WROLE=reader;  SCOPE="";;
+  mythos-architect)  WROLE=architect; SCOPE="";;  # I-797 operator 2026-11-25 (Mythos architect)
   builder)           WROLE=builder; SCOPE="general (kos, director, fleet CI, stave, sidestep, bloomctl, critic, beadle, curtain, ThreeDoors, BetterDials)";;
   marvel-builder)    WROLE=builder; SCOPE="marvel";;
   sideshow-builder)  WROLE=builder; SCOPE="sideshow and sideshow-packs";;
   infra-builder)     WROLE=builder; SCOPE="the infra checkout and its MCP, as named in the private seat file; production is read-only";;
   scoped-builder)    WROLE=builder; SCOPE="";;
   usher-track-2-builder|usher-track-3-builder) WROLE=builder; SCOPE="";;
+  builder-i804)      WROLE=builder; SCOPE="";;  # I-804 director 2026-11-25 (/ship A/B seats; scope from CAST_SCOPE)
+  ab852-*)           WROLE=builder; SCOPE="";;  # I-852 director 2026-11-28 (/ship A/B seats; scope from CAST_SCOPE)
   test-architect-b)  WROLE=test-architect; SCOPE="";;
   claude-reviewer)   WROLE=reviewer; SCOPE="";;
   daily-sweep)       WROLE=worker; SCOPE="";;
@@ -71,10 +74,10 @@ case "$MARVEL_ROLE" in
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
 esac
 [[ -n "${CAST_SCOPE:-}" ]] && SCOPE="$CAST_SCOPE"
-# scoped-builder and the usher track builders carry no scope text of their own,
-# so they need CAST_SCOPE; a cast without one would be an unscoped builder,
-# which is refused.
-if [[ ( "$MARVEL_ROLE" == scoped-builder || "$MARVEL_ROLE" == usher-track-2-builder || "$MARVEL_ROLE" == usher-track-3-builder ) && -z "$SCOPE" ]]; then
+# scoped-builder, the usher track builders and the ab852-* seats carry no scope
+# text of their own, so they need CAST_SCOPE; a cast without one would be an
+# unscoped builder, which is refused.
+if [[ ( "$MARVEL_ROLE" == scoped-builder || "$MARVEL_ROLE" == usher-track-2-builder || "$MARVEL_ROLE" == usher-track-3-builder || "$MARVEL_ROLE" == ab852-* ) && -z "$SCOPE" ]]; then
   echo "cast-launch: role $MARVEL_ROLE needs CAST_SCOPE (its scope comes only from the private seat file); set CAST_SCOPE and cast again" >&2
   exit 1
 fi

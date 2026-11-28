@@ -48,11 +48,13 @@ command -v yq >/dev/null || { echo "verify-cast-roles: yq not on PATH" >&2; exit
 
 # The rows of the first `case "$MARVEL_ROLE" in` block of a file, one "role<TAB>target"
 # per line, target being the WROLE the row sets (empty when the row sets none).
+# A row may be a pattern such as ab852-*. A row label starts with a letter or a
+# digit, so the `*)` catch-all is never read as a row.
 extract_table() {
   awk '
     /^case "\$MARVEL_ROLE" in/ { on=1; next }
     on && /^esac/ { exit }
-    on && /^  [a-z0-9|-]+\)/ {
+    on && /^  [a-z0-9][a-z0-9|*-]*\)/ {
       s=$1; sub(/\).*/, "", s); t=""
       if (match($0, /WROLE=[a-z0-9-]+/)) t=substr($0, RSTART+6, RLENGTH-6)
       n=split(s, a, "|"); for (i=1;i<=n;i++) print a[i] "\t" t
@@ -89,7 +91,9 @@ for m in "${manifests[@]}"; do
     seen=$((seen+1))
     base="$(basename "$cmd")"
     if table="$(table_for "$base")"; then
-      row="$(awk -F'\t' -v r="$role" '$1 == r { print "row\t" $2; exit }' <<<"$table")"
+      # The first row that matches wins, as in a shell case; "*" is the only
+      # pattern character a row label can carry.
+      row="$(awk -F'\t' -v r="$role" '{ re=$1; gsub(/\*/, ".*", re) } r ~ ("^" re "$") { print "row\t" $2; exit }' <<<"$table")"
       if [[ -n "$row" ]]; then
         target="${row#row$'\t'}"
         if [[ -n "$target" && ! -f "$wdir/$target.md" ]]; then
