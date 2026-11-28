@@ -31,7 +31,7 @@ type ringFake struct {
 func (f *ringFake) LastRing(id string) (time.Time, error) {
 	var last time.Time
 	for _, r := range f.rows {
-		if r.Event == "ring" && (r.Result == "sent" || r.Result == "") && seatNamed(r.Seat, id) && r.TS.After(last) {
+		if r.Event == "ring" && (r.Result == "sent" || r.Result == "unverified" || r.Result == "") && seatNamed(r.Seat, id) && r.TS.After(last) {
 			last = r.TS
 		}
 	}
@@ -234,9 +234,12 @@ func TestMarvelInjectMapsAHeldRingClaimAndStopsBeforeEnter(t *testing.T) {
 
 func TestMarvelInjectStopsBeforeEnterWhenVerifyCannotSeeTheLine(t *testing.T) {
 	var n int
+	// Marvel's own output (cmd/marvel/inject.go at marvel b379ca65): stderr
+	// "verify: unconfirmed (composer <STATE>)", then the error "injected into
+	// <key> but the effect was not confirmed: the composer reads <STATE>".
 	inj := newMarvelInject(func(context.Context, []string) (string, error) {
 		n++
-		return "unconfirmed: composer reads empty", errors.New("exit status 1")
+		return "verify: unconfirmed (composer empty)\nError: injected into aae/seat-0 but the effect was not confirmed: the composer reads empty", errors.New("exit status 1")
 	})
 	err := inj(context.Background(), "aae/seat-0", stallRingLine, "Enter")
 	if !errors.Is(err, errRingUnconfirmed) {
@@ -245,24 +248,37 @@ func TestMarvelInjectStopsBeforeEnterWhenVerifyCannotSeeTheLine(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("Enter must not be sent when the line was not confirmed, ran %d calls", n)
 	}
+	var m int
+	inj = newMarvelInject(func(context.Context, []string) (string, error) { m++; return "boom", errors.New("exit status 1") })
+	err = inj(context.Background(), "aae/seat-0", stallRingLine, "Enter")
+	if err == nil || errors.Is(err, errRingUnconfirmed) || errors.Is(err, errRingClaimHeld) || m != 1 {
+		t.Fatalf("any other failure is a plain error and stops before Enter, got %v after %d calls", err, m)
+	}
 }
 
-func TestStallRingLogsAnUnconfirmedRingAndDoesNotCountItOrTypeAgain(t *testing.T) {
+func TestStallRingCountsAnUnverifiedRingTowardTheHourAndDoesNotRetry(t *testing.T) {
 	h := newRingHarness()
 	h.injectEr["aae/arcaven-kinu-builder-g35-1"] = errRingUnconfirmed
 	rows := h.tick()
-	if len(rows) != 1 || rows[0].Event != "ring-refused" || rows[0].Result != "unconfirmed" {
-		t.Fatalf("an unconfirmed ring must leave one ring-refused row with result unconfirmed, got %+v", rows)
+	if len(rows) != 1 || rows[0].Event != "ring" || rows[0].Result != "unverified" {
+		t.Fatalf("an unverified ring must leave one row with event ring and result unverified, got %+v", rows)
 	}
-	if last, _ := h.log.LastRing("arcaven-kinu-builder-g35-1"); !last.IsZero() {
-		t.Fatalf("an unconfirmed ring must not count toward the hour")
+	for _, c := range h.calls {
+		for _, k := range c.keys {
+			if k != "Enter" {
+				t.Fatalf("no key but Enter is ever sent, got %v", c.keys)
+			}
+		}
 	}
-	// The staged line now sits in the composer, so the next tick must read it and refuse.
-	h.verdict = composerHasText
+	if last, _ := h.log.LastRing("arcaven-kinu-builder-g35-1"); !last.Equal(ringT0) {
+		t.Fatalf("an unverified ring counts toward the hour, so the seat is not retried every tick; last counted ring %v", last)
+	}
+	// The composer reads empty again (the line never landed): still no retry inside the hour.
 	h.injectEr = map[string]error{}
+	h.now = ringT0.Add(5 * time.Minute)
 	h.tick()
 	if len(h.calls) != 1 {
-		t.Fatalf("the next tick must not type again over the staged line, got %d injects in all", len(h.calls))
+		t.Fatalf("an unverified ring must not be retried inside the hour, got %d injects in all", len(h.calls))
 	}
 }
 
@@ -447,6 +463,7 @@ func TestRingLogFileCountsHandRowsAndSurvivesATornLine(t *testing.T) {
 		`{"ts":"2026-11-28T00:40:00Z","actor":"director-mcp","event":"ring-refused","seat":"arcaven-kinu-builder-g35-1","result":"refused-composer"}` + "\n" +
 		`{"ts":"2026-11-28T00:41:00Z","actor":"director-mcp","event":"ring-refused","seat":"arcaven-kinu-builder-g35-1","result":"refused-claim"}` + "\n" +
 		`{"ts":"2026-11-28T00:42:00Z","actor":"director-mcp","event":"ring-attempt","seat":"arcaven-kinu-builder-g35-1"}` + "\n" +
+		`{"ts":"2026-11-28T00:45:00Z","actor":"director-mcp","event":"ring","seat":"arcaven-kinu-builder-g35-1","result":"unverified"}` + "\n" +
 		`{"ts":"2026-11-28T00:50:00Z","actor":"director","event":"ring","seat":"arcaven-kinu-builder-g35-10"}` + "\n" +
 		`{"ts":"2026-11-28T00:5`
 	if err := os.WriteFile(filepath.Join(dir, "rings.jsonl"), []byte(hand), 0o600); err != nil {
@@ -457,9 +474,9 @@ func TestRingLogFileCountsHandRowsAndSurvivesATornLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a torn last line must be skipped, not fatal: %v", err)
 	}
-	want := time.Date(2026, 11, 28, 0, 30, 0, 0, time.UTC)
+	want := time.Date(2026, 11, 28, 0, 45, 0, 0, time.UTC)
 	if !last.Equal(want) {
-		t.Fatalf("the resultless hand ring at 00:30 is the last counted ring (a refusal, an attempt and a ring of ...-g35-10 never count for ...-g35-1), got %v", last)
+		t.Fatalf("the unverified ring at 00:45 is the last counted ring (it counts; a refusal, an attempt and a ring of ...-g35-10 never count for ...-g35-1), got %v", last)
 	}
 	if err := l.Append(ringRow{TS: ringT0, Actor: "director-mcp", Event: "ring", Seat: "arcaven-kinu-builder-g35-1", Result: "sent", Line: stallRingLine}); err != nil {
 		t.Fatalf("append must succeed on a writable directory: %v", err)
