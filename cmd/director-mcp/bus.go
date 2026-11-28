@@ -222,7 +222,9 @@ func dialRing(url string, self Sender, ring *violationRing) (*nats.Conn, jetstre
 		// permission violation or a slow consumer sets the last error without
 		// closing, so the last error alone cannot tell an exit the caller asked
 		// for from one it did not. The guard stays for the ends the client
-		// makes itself (a refused credential, a drain that times out).
+		// makes itself: a refused credential ends doReconnect and closes with
+		// the handler on (nats.go v1.55.0, lines 3584 and 3645). A drain ends
+		// in Close(), so a drain that times out is not reported.
 		nats.NoCallbacksAfterClientClose(),
 		nats.ClosedHandler(func(c *nats.Conn) {
 			if err := c.LastError(); err != nil {
