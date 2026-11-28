@@ -129,17 +129,19 @@ export DIRECTOR_STATE="$root/st4"; mkdir -p "$DIRECTOR_STATE"; RINGS="$DIRECTOR_
 printf '%s\n' \
   '{"ts":"2026-10-22T10:00:00Z","actor":"director-mcp","event":"ring-attempt","seat":"team-d/attempted"}' \
   '{"ts":"2026-10-22T10:00:01Z","actor":"director-mcp","event":"ring-refused","seat":"team-d/refused","result":"refused-composer"}' \
-  '{"ts":"2026-10-22T10:00:02Z","actor":"director-mcp","event":"ring-refused","seat":"*","result":"refused-sessions"}' >"$RINGS"
+  '{"ts":"2026-10-22T10:00:02Z","actor":"director-mcp","event":"ring-refused","seat":"*","result":"refused-sessions"}' \
+  '{"ts":"2026-10-22T10:00:03Z","actor":"director-mcp","event":"ring","seat":"team-d/auto","result":"sent"}' >"$RINGS"
 at 2026-10-22T10:05:00Z
 "$DWS" rings --json >"$root/j4" 2>/dev/null
-[[ "$(q "len(d['seats'])" <"$root/j4")" == "0" ]] && ok "a ring-attempt, a ring-refused and a seat * refusal make no seat entry" || bad "stall ring rows make a seat entry" "$(cat "$root/j4")"
+[[ "$(q "sorted(d['seats'])" <"$root/j4")" == "['team-d/auto']" ]] && ok "a ring-attempt, a ring-refused and a seat * refusal make no seat entry; the stall ring's own ring row does" || bad "stall ring rows make a seat entry, or its ring row is dropped" "$(cat "$root/j4")"
+[[ "$(q "d['seats']['team-d/auto']['rings_in_window']" <"$root/j4")" == "1" ]] && ok "a ring row by actor director-mcp counts toward the cap like a hand ring (the event decides, not the actor)" || bad "a director-mcp ring row is not counted"
 [[ "$(q "d['torn']" <"$root/j4")" == "0" ]] && ok "an event dws does not know is skipped, not counted as torn" || bad "unknown events counted as torn"
 refuses "ring-note refuses a seat that only has a ring-attempt row" "no ring" "$DWS" ring-note team-d/attempted ack
 refuses "ring-note refuses a seat that only has a ring-refused row" "no ring" "$DWS" ring-note team-d/refused ack
 refuses "ring-note refuses the seat *" "no ring" "$DWS" ring-note '*' ack
 "$DWS" ring team-d/real --idle-minutes 20 --mail 1 >/dev/null 2>&1 && ok "a real ring beside those rows is still recorded" || bad "a real ring beside those rows is still recorded"
 "$DWS" rings --json >"$root/j4" 2>/dev/null
-[[ "$(q "sorted(d['seats'])" <"$root/j4")" == "['team-d/real']" ]] && ok "only the rung seat is listed" || bad "only the rung seat is listed" "$(cat "$root/j4")"
+[[ "$(q "sorted(d['seats'])" <"$root/j4")" == "['team-d/auto', 'team-d/real']" ]] && ok "only the two rung seats are listed" || bad "only the two rung seats are listed" "$(cat "$root/j4")"
 
 echo "dws rings: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
