@@ -39,8 +39,10 @@ type stallRingRunner struct {
 }
 
 // stallSeatFromRow reads one presence record as a candidate seat. A row that is
-// not fresh, has no cue state, is this session's own, or names no workspace is
-// never a candidate: the ring needs the marvel session key (workspace/agent id).
+// not fresh, has no cue state, is this session's own (by instance or agent id), or
+// names no workspace is never a candidate. The workspace here is only a filter: the
+// marvel session key comes from marvel's own session list (resolveSession), and the
+// Key set below is a guess the ring ignores.
 func stallSeatFromRow(key string, rec map[string]any, now time.Time, selfInstance, selfAgentID string) (stallSeat, bool) {
 	row, _ := rosterRowFromKey(key, rec, now)
 	if !row.Fresh || row.Cue == "" || row.Workspace == "" || row.AgentID == "" || row.Instance == selfInstance || row.AgentID == selfAgentID {

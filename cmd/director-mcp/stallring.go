@@ -44,7 +44,7 @@ var errRingClaimHeld = errors.New("ring claim held by another ring")
 // line staged in the composer. The adapter stops before Enter.
 var errRingUnconfirmed = errors.New("ring line not confirmed in the composer")
 
-// Composer verdicts, as composer-check prints them. Only EMPTY lets a ring go.
+// Composer verdicts, as composer-check prints them. Only EMPTY and SUGGESTION let a ring go.
 const (
 	composerEmpty = "EMPTY"
 	// composerSuggestion is an idle composer holding only a dim suggestion: typed

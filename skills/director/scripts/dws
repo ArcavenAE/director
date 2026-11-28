@@ -2222,6 +2222,7 @@ RING_IDLE_MINUTES = 10
 RING_CAP = 3
 RING_WINDOW_HOURS = 1
 RING_NOTES = ("first-turn", "ack", "blocker")
+RING_EVENTS = ("ring",) + RING_NOTES
 
 
 def rings_lock():
@@ -2249,6 +2250,11 @@ def fold_rings(path=None):
                 continue
             if not isinstance(e, dict) or not isinstance(e.get("seat"), str):
                 torn += 1
+                continue
+            # Only the events dws writes make or update a seat. Other rows share the file (the
+            # stall ring's ring-attempt and ring-refused rows, one of them with seat "*") and are
+            # skipped without being counted as torn.
+            if e.get("event") not in RING_EVENTS:
                 continue
             r = seats.setdefault(e["seat"], {"rings": [], "last_ring": None, "first_turn": None,
                                              "ack": None, "blocker": None, "blocker_at": None})
