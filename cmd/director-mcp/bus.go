@@ -118,6 +118,8 @@ type Bus struct {
 	handled *handledState
 	// watch is the presence watch (presencewatch_shim.go); nil when off.
 	watch *presenceWatcher
+	// stall is the stall ring (stallring_shim.go); nil when off.
+	stall *stallRingRunner
 	// localMu guards consumer and local: a rebuild replaces the consumer
 	// (localrecover.go), and the cue watcher reads it on another goroutine.
 	localMu sync.Mutex
@@ -2052,6 +2054,7 @@ func (b *Bus) heartbeat(ctx context.Context, every time.Duration, logf func(stri
 			}
 			b.reportGlobalWarn(b.writeGlobalPresenceView(ctx, s, view), logf)
 			b.watchTick(ctx)
+			b.stallTick(ctx)
 		}
 	}
 }
