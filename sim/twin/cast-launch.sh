@@ -74,10 +74,10 @@ case "$MARVEL_ROLE" in
   *)                 WROLE="$MARVEL_ROLE"; SCOPE="";;
 esac
 [[ -n "${CAST_SCOPE:-}" ]] && SCOPE="$CAST_SCOPE"
-# scoped-builder, the usher track builders and the ab852-* seats carry no scope
-# text of their own, so they need CAST_SCOPE; a cast without one would be an
-# unscoped builder, which is refused.
-if [[ ( "$MARVEL_ROLE" == scoped-builder || "$MARVEL_ROLE" == usher-track-2-builder || "$MARVEL_ROLE" == usher-track-3-builder || "$MARVEL_ROLE" == ab852-* ) && -z "$SCOPE" ]]; then
+# scoped-builder, the usher track builders, builder-i804 and the ab852-* seats
+# carry no scope text of their own, so they need CAST_SCOPE; a cast without one
+# would be an unscoped builder, which is refused.
+if [[ ( "$MARVEL_ROLE" == scoped-builder || "$MARVEL_ROLE" == usher-track-2-builder || "$MARVEL_ROLE" == usher-track-3-builder || "$MARVEL_ROLE" == builder-i804 || "$MARVEL_ROLE" == ab852-* ) && -z "$SCOPE" ]]; then
   echo "cast-launch: role $MARVEL_ROLE needs CAST_SCOPE (its scope comes only from the private seat file); set CAST_SCOPE and cast again" >&2
   exit 1
 fi
